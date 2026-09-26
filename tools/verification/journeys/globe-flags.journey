@@ -1,0 +1,10 @@
+# Map selection globe with flags, captured for review of rear-facing flags (#182).
+phase splash
+wait 300
+click "splashbutton0"
+phase main-menu
+wait 120
+click "Freeform Button"
+phase map-selection
+wait 180
+capture globe

@@ -1,0 +1,19 @@
+diff --git a/mojoshader.c b/mojoshader.c
+index 2423a92..93d0b68 100644
+--- a/mojoshader.c
++++ b/mojoshader.c
+@@ -1115,6 +1115,14 @@ static int parse_args_DCL(Context *ctx)
+             ctx->dwords[0] = usage;
+             ctx->dwords[1] = index;
+         } // if
++        else if (regtype == REG_TYPE_SAMPLER)
++        {
++            const uint32 ttype = ((token >> 27) & 0xF);
++            if (!valid_texture_type(ttype))
++                fail(ctx, "unknown sampler texture type");
++            reserved_mask = 0x7FFFFFF;
++            ctx->dwords[0] = ttype;
++        } // else if
+         else
+         {
+             unsupported = 1;

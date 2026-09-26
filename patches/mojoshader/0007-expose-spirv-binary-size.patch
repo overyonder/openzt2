@@ -1,0 +1,39 @@
+diff --git a/mojoshader.c b/mojoshader.c
+index 82aa2a0..4fffe61 100644
+--- a/mojoshader.c
++++ b/mojoshader.c
+@@ -4008,5 +4008,14 @@ void MOJOSHADER_freePreshader(const MOJOSHADER_preshader *preshader)
+ } // MOJOSHADER_freePreshader
+-
++
++int MOJOSHADER_spirvBinarySize(const MOJOSHADER_parseData *spirv)
++{
++#if SUPPORT_PROFILE_SPIRV
++    if (spirv && spirv->output_len >= (int) sizeof(SpirvPatchTable))
++        return spirv->output_len - (int) sizeof(SpirvPatchTable);
++#endif
++    return 0;
++} // MOJOSHADER_spirvBinarySize
++
+ #if SUPPORT_PROFILE_SPIRV
+ #include <spirv/spirv.h> /* SpvOp, SpvOpConvertUToF, SpvOpConvertSToF, SpvOpCopyObject */
+ #endif
+diff --git a/mojoshader.h b/mojoshader.h
+index 6ad8db9..af4fd4c 100644
+--- a/mojoshader.h
++++ b/mojoshader.h
+@@ -917,6 +917,13 @@ typedef struct MOJOSHADER_vertexAttribute
+     int usageIndex;
+ } MOJOSHADER_vertexAttribute;
+-
++
++/*
++ * Returns the byte length of the executable SPIR-V module in parseData output,
++ * excluding MojoShader's trailing link patch table. Returns zero when the
++ * parse data is not a SPIR-V module.
++ */
++DECLSPEC int MOJOSHADER_spirvBinarySize(const MOJOSHADER_parseData *spirv);
++
+ /*
+  * You almost certainly don't need this function, unless you absolutely know
+  *  why you need it without hesitation. This is useful if you're doing

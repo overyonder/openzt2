@@ -1,0 +1,22 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index f5f3171..7d7039c 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2869,6 +2869,7 @@ static bool replace_state_block_constant(struct hlsl_ctx *ctx, struct hlsl_ir_no
+     struct replace_state_context *replace_context = context;
+     struct hlsl_ir_stateblock_constant *state_constant;
+     struct hlsl_ir_node *c;
++    struct hlsl_constant_value constant = {0};
+     unsigned int value;
+ 
+     if (instr->type != HLSL_IR_STATEBLOCK_CONSTANT)
+@@ -2888,7 +2889,8 @@ static bool replace_state_block_constant(struct hlsl_ctx *ctx, struct hlsl_ir_no
+         return false;
+     }
+ 
+-    if (!(c = hlsl_new_uint_constant(ctx, value, &replace_context->var->loc)))
++    constant.u[0].u = value;
++    if (!(c = hlsl_new_constant(ctx, instr->data_type, &constant, &replace_context->var->loc)))
+         return false;
+ 
+     list_add_before(&state_constant->node.entry, &c->entry);

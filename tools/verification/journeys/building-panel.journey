@@ -1,0 +1,21 @@
+# A placed building opens Building Info without the animal-only recommendations button (#65).
+include boot-to-freeform-map.steps
+click "construction"
+wait 30
+click "Building Tab"
+wait 30
+click "icon" 1
+move 1150 300
+wait 60
+capture building-preview
+click 1150 300
+wait 60
+expect placed_objects > @entered-map
+key ESCAPE
+wait 30
+click 1150 300
+wait 180
+expect selected == 1
+expect-visible "Building Info"
+expect-hidden "in game sort button"
+capture building-selected

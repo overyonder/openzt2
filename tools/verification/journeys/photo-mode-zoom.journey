@@ -1,0 +1,24 @@
+# Photo mode zooms in and out within its limits and restores the view on exit (#159).
+include boot-to-freeform-map.steps
+click "photo"
+wait 120
+snapshot photo-start
+capture photo-start
+wheel 3
+wait 60
+expect camera_fov_deg < @photo-start
+snapshot zoomed-in
+wheel -6
+wait 60
+expect camera_fov_deg > @zoomed-in
+wheel 1 120                     # far past the zoom-in limit, one notch at a time
+wait 60
+snapshot zoom-limit
+wheel 1 10
+wait 60
+expect camera_fov_deg == @zoom-limit
+capture zoom-limit
+key ESCAPE
+wait 120
+expect camera_fov_deg == @entered-map
+capture photo-left

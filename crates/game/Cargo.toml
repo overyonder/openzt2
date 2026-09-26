@@ -1,0 +1,106 @@
+[package]
+name = "openzt2_game"
+default-run = "openzt2"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[features]
+default = []
+trace-tracy-gpu = ["bevy/trace", "bevy/trace_tracy", "bevy/debug"]
+trace-tracy-memory = ["bevy/trace", "bevy/trace_tracy_memory", "bevy/debug"]
+ui-verification-remote = ["bevy/bevy_remote", "bevy/sysinfo_plugin"]
+dev-tools = [
+    "dep:bevy-inspector-egui",
+    "bevy/bevy_dev_tools",
+    "bevy/bevy_ui_debug",
+    "bevy/track_location",
+    "bevy/debug",
+    "bevy/picking",
+    "avian3d/bevy_diagnostic",
+    "avian3d/debug-plugin",
+    "avian3d/diagnostic_ui",
+]
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "openzt2"
+path = "src/main.rs"
+
+[dependencies]
+d3d9-effects = { path = "../d3d9-effects" }
+openzt2_game_data = { path = "../game-data" }
+z2f = { path = "../z2f" }
+futures-lite = "2.6"
+dirs = "7"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+ron.workspace = true
+arrayvec = "0.7"
+async-channel = "2.5"
+anyhow = "1.0"
+avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "collider-from-mesh"] }
+bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"] }
+bevy-inspector-egui = { version = "0.37", optional = true }
+blake3 = "1.8"
+ico = "0.5"
+image = { version = "0.25", default-features = false, features = ["bmp", "ico", "jpeg", "png", "tga"] }
+image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
+lunify = "1.1"
+mlua = { version = "0.11", features = ["lua51", "vendored"] }
+quick-xml = { version = "0.38", features = ["serialize"] }
+rayon = "1.11"
+roxmltree = "0.20"
+smol_str = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2.0"
+gltf = { version = "1.4", default-features = false, features = ["extras", "names"] }
+sysinfo = { version = "0.38", default-features = false, features = ["system"] }
+ureq = { version = "3.3", default-features = false, features = ["json", "rustls"] }
+bevy = { version = "0.19.0", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "async-io",
+    "bevy_winit",
+    "bevy_gilrs",
+    "wayland",
+    "default_font",
+    "system_font_discovery",
+    "3d_bevy_render",
+    "bevy_scene",
+    "ui_bevy_render",
+    "bevy_ui_widgets",
+    "bevy_picking",
+    "mesh_picking",
+    "custom_cursor",
+    "keyboard",
+    "mouse",
+    "touch",
+    "serialize",
+    "audio",
+    "mp3",
+    "vorbis",
+    "wav",
+    "dds",
+    "jpeg",
+    "shader_format_spirv",
+    "bmp",
+    "png",
+    "tga",
+] }
+
+# Apple's wgpu backend is Metal; raw Vulkan initialization is unavailable there.
+[target.'cfg(not(target_vendor = "apple"))'.dependencies]
+bevy = { version = "0.19.0", default-features = false, features = ["raw_vulkan_init"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+
+[dev-dependencies]
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }

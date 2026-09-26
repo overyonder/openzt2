@@ -1,0 +1,13 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 76dd42b..660ef57 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -3291,6 +3291,8 @@ static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var,
+
+     /* Turn named constants into actual constants. */
+     hlsl_transform_ir(ctx, lower_null_constant, entry->instrs, NULL);
++    if (entry->args->node->type == HLSL_IR_CONSTANT)
++        lower_null_constant(ctx, entry->args->node, NULL);
+     hlsl_transform_ir(ctx, replace_state_block_constant, entry->instrs, &replace_context);
+     if (entry->args->node->type == HLSL_IR_STATEBLOCK_CONSTANT)
+         replace_state_block_constant(ctx, entry->args->node, &replace_context);

@@ -1,0 +1,35 @@
+# Animals, food and enrichment show a placement preview that follows the pointer over terrain.
+include boot-to-freeform-map.steps
+click "animals"
+wait 60
+# The first adoption row starts selected and ignores clicks (#184), so select another row first.
+click "icon" 1
+move 800 450
+wait 30
+expect placement_visible_previews == 1
+capture animal-variant-preview
+click "icon" 0
+move 820 440
+wait 30
+expect cursor_over_terrain == 1
+expect placement_visible_previews == 1
+capture animal-species-preview
+click "Animal Food Tab"
+wait 30
+click "icon" 1
+move 800 450
+wait 30
+# Switching catalogue tabs replaces the previous preview instead of leaving it behind (#98).
+expect placement_previews == 1
+expect placement_visible_previews == 1
+capture food-preview
+click "Animal Enrichment Tab"
+wait 30
+click "icon" 1
+move 820 440
+wait 30
+expect placement_visible_previews == 1
+capture enrichment-preview
+key ESCAPE
+wait 30
+expect placement_previews == 0

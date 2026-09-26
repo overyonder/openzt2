@@ -1,0 +1,28 @@
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+index c3b6f28..b70fd1d 100644
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -350,4 +350,5 @@ typedef struct MOJOSHADER_effectState
+ {
+     MOJOSHADER_renderStateType type;
++    unsigned int index;
+     MOJOSHADER_effectValue value;
+ } MOJOSHADER_effectState;
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+index 12eefc7..31f72f4 100644
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -559,11 +559,12 @@ static void readstates(const uint32 numstates,
+         MOJOSHADER_effectState *state = &(*states)[i];
+
+         const uint32 type = readui32(ptr, len);
+-        /*const uint32 FIXME =*/ readui32(ptr, len);
++        const uint32 index = readui32(ptr, len);
+         const uint32 typeoffset = readui32(ptr, len);
+         const uint32 valoffset = readui32(ptr, len);
+
+         state->type = (MOJOSHADER_renderStateType) type;
++        state->index = index;
+         readvalue(base, typeoffset, valoffset,
+                   &state->value, objects,
+                   m, d);

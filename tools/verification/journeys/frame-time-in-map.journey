@@ -1,0 +1,7 @@
+# Frame time on the default Freeform map once loading has settled.
+# run-alone
+include boot-to-freeform-map.steps
+wait 600
+measure-frame-time 600
+snapshot frame-time
+expect frame_time_p95_ms <= 16.7              # 60 fps; measured alone at 14.1 ms

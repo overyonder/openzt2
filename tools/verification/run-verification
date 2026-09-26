@@ -1,0 +1,231 @@
+#!/usr/bin/env bash
+# Runs headless verification journeys and the map-load suite against a profiling build.
+#
+#   tools/verification/run-verification                 build, then run every journey
+#   tools/verification/run-verification placement      run journeys whose names contain "placement"
+#   tools/verification/run-verification --maps         load every catalogue map
+#   tools/verification/run-verification --perf NAME    record one journey with perf
+#   tools/verification/run-verification --tracy NAME   capture one journey with Tracy
+#
+# Options: --no-build, --jobs N (default 1), --windowed. Results go to
+# $OPENZT2_VERIFICATION_OUTPUT (default /tmp/openzt2-verification)/<timestamp>/, with a
+# `latest` link beside it. Each run writes summary.txt (results and the captures to
+# review) and status (the exit code), so it can run unattended and be reviewed later.
+#
+# Each game instance needs several GB of memory, so a game starts only when
+# $OPENZT2_VERIFICATION_MINIMUM_FREE_MEMORY_GIB (default 6) is available, and builds
+# refuse to start below 15% free disk. Only the five newest result folders are kept.
+set -uo pipefail
+
+# Run as a process-group leader so every game this run starts dies with it.
+if [[ $(ps -o pgid= -p $$ | tr -d ' ') != "$$" ]]; then
+    exec setsid "$0" "$@"
+fi
+stop_every_game_in_this_run() {
+    trap - EXIT
+    trap '' TERM
+    kill -TERM -- -$$ 2>/dev/null
+}
+trap stop_every_game_in_this_run EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+
+repository=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+journey_directory="$repository/tools/verification/journeys"
+build=true
+jobs=1
+maps=false
+windowed=false
+profiler=none
+filters=()
+
+while (($#)); do
+    case "$1" in
+        --no-build) build=false ;;
+        --jobs) jobs=$2; shift ;;
+        --maps) maps=true ;;
+        --windowed) windowed=true ;;
+        --perf) profiler=perf; jobs=1 ;;
+        --tracy) profiler=tracy; jobs=1 ;;
+        -h|--help) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) filters+=("$1") ;;
+    esac
+    shift
+done
+
+run_in_development_shell() {
+    (cd "$repository" && direnv exec . "$@")
+}
+
+target_directory=$(run_in_development_shell printenv CARGO_TARGET_DIR) || exit 1
+executable="$target_directory/profiling/openzt2"
+if $build; then
+    mkdir -p "$target_directory"
+    free_disk_percent=$(df --output=pcent "$target_directory" | tail -1 | tr -dc '0-9')
+    if ((100 - free_disk_percent < 15)); then
+        echo "refusing to build: $target_directory has less than 15% free disk"
+        exit 1
+    fi
+    features=()
+    [[ $profiler == tracy ]] && features=(--features trace-tracy-gpu)
+    # Incremental caches for this profile grow to tens of GB and rarely pay off here.
+    # Build in the background and wait, so stopping the runner stops the build too.
+    CARGO_INCREMENTAL=0 run_in_development_shell \
+        cargo build --profile profiling -p openzt2_game "${features[@]}" &
+    wait $! || exit 1
+fi
+
+output_parent="${OPENZT2_VERIFICATION_OUTPUT:-/tmp/openzt2-verification}"
+output_root="$output_parent/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$output_root"
+ln -sfn "$output_root" "$output_parent/latest"
+find "$output_parent" -mindepth 1 -maxdepth 1 -type d -name '[0-9]*-[0-9]*' \
+    | sort | head -n -5 | xargs -r rm -rf
+# Agent and CI shells have no audio device; a null ALSA device keeps rodio quiet.
+printf 'pcm.!default { type null }\nctl.!default { type hw card 0 }\n' >"$output_root/asound-null.conf"
+export ALSA_CONFIG_PATH="$output_root/asound-null.conf"
+export NO_COLOR=1
+export RUST_LOG="${RUST_LOG:-warn,openzt2_verification=info,openzt2_map_load_suite=info}"
+export OPENZT2_VERIFICATION_EXECUTABLE="$executable"
+export OPENZT2_VERIFICATION_PROFILER="$profiler"
+export OPENZT2_VERIFICATION_WINDOWED="$windowed"
+export OPENZT2_VERIFICATION_REPOSITORY="$repository"
+export OPENZT2_VERIFICATION_MINIMUM_FREE_MEMORY_GIB="${OPENZT2_VERIFICATION_MINIMUM_FREE_MEMORY_GIB:-6}"
+
+# Waits up to ten minutes for enough free memory to start another game.
+wait_for_free_memory() {
+    local required_kib=$((OPENZT2_VERIFICATION_MINIMUM_FREE_MEMORY_GIB * 1024 * 1024))
+    local attempt
+    for attempt in $(seq 120); do
+        (($(awk '/^MemAvailable:/ {print $2}' /proc/meminfo) >= required_kib)) && return 0
+        sleep 5
+    done
+    echo "not enough free memory: ${OPENZT2_VERIFICATION_MINIMUM_FREE_MEMORY_GIB} GiB not available after ten minutes"
+    return 1
+}
+
+run_one_journey() {
+    local journey=$1 output=$2
+    local name
+    name=$(basename "$journey" .journey)
+    mkdir -p "$output/$name"
+    local command=("$OPENZT2_VERIFICATION_EXECUTABLE" --verify-journey "$journey"
+        --verification-output "$output/$name")
+    [[ $OPENZT2_VERIFICATION_WINDOWED == true ]] && command+=(--verification-windowed)
+    wait_for_free_memory || { printf 'FAIL  %s (not started)\n' "$name"; return 1; }
+    local capture_pid=""
+    case "$OPENZT2_VERIFICATION_PROFILER" in
+        perf) command=(perf record -g -F 499 -o "$output/$name/perf.data" -- "${command[@]}") ;;
+        tracy)
+            nix shell nixpkgs#tracy -c tracy-capture -f -o "$output/$name/trace.tracy" \
+                >"$output/$name/tracy-capture.log" 2>&1 &
+            capture_pid=$!
+            ;;
+    esac
+    (cd "$OPENZT2_VERIFICATION_REPOSITORY" && timeout --foreground 1800 direnv exec . "${command[@]}") \
+        >"$output/$name/game.log" 2>&1
+    local status=$?
+    if [[ -n $capture_pid ]]; then
+        wait "$capture_pid"
+    fi
+    local log_failures=""
+    while IFS= read -r pattern; do
+        if grep -a -q -F -- "$pattern" "$output/$name/game.log"; then
+            log_failures+="        log contains: $pattern"$'\n'
+            ((status == 0)) && status=1
+        fi
+    done < <(sed -n -E 's/^expect-log-absent[[:space:]]+"(.*)"[[:space:]]*(#.*)?$/\1/p' "$journey")
+    local summary
+    if ((status == 0)); then
+        summary=$(printf 'PASS  %s' "$name")
+    else
+        summary=$(
+            printf 'FAIL  %s (exit %s)\n' "$name" "$status"
+            grep -a 'verification failure' "$output/$name/game.log" \
+                | sed -E 's/.*verification failure location=([^ ]+) detail=(.*)$/        \1: \2/' \
+                | head -20
+            grep -a -m3 'panicked' "$output/$name/game.log" | grep -v 'main.rs' | sed 's/^/        /'
+            printf '%s' "$log_failures"
+        )
+    fi
+    printf '%s\n' "$summary"
+    return "$status"
+}
+
+run_one_map_load() {
+    local index=$1 output=$2
+    local log="$output/maps/$index.log"
+    wait_for_free_memory || { printf 'FAIL  map %3s  (not started)\n' "$index"; return 1; }
+    (cd "$OPENZT2_VERIFICATION_REPOSITORY" && timeout --foreground 300 direnv exec . \
+        "$OPENZT2_VERIFICATION_EXECUTABLE" --verify-map-load "$index") >"$log" 2>&1
+    local status=$?
+    local detail
+    if ((status == 0)); then
+        detail=$(grep -a -m1 -o 'load_seconds=[0-9.]*' "$log" | sed 's/load_seconds=/loaded in /; s/$/ s/')
+        printf 'PASS  map %3s  %s\n' "$index" "$detail"
+    else
+        detail=$(grep -a -o 'reason: [A-Za-z]*\|unresolved_joint_attachments=[1-9][0-9]*\|Caught rendering error\|map_load_result=timeout' "$log" | head -1)
+        printf 'FAIL  map %3s  exit %s  %s\n' "$index" "$status" "${detail:-see $log}"
+        grep -a 'Failed to load asset' "$log" | sed -E "s/.*Failed to load asset '([^']*)'.*: ([^:]*)$/        \1: \2/" | sort -u | head -5
+    fi
+    return "$status"
+}
+export -f wait_for_free_memory run_one_journey run_one_map_load
+
+run_selected_verification() {
+    local failed=0
+    if $maps; then
+        mkdir -p "$output_root/maps"
+        run_one_map_load 0 "$output_root" || failed=1
+        local map_count
+        map_count=$(grep -a -m1 -o 'map_count=[0-9]*' "$output_root/maps/0.log" | cut -d= -f2)
+        if [[ -z $map_count ]]; then
+            echo "could not read the map count from $output_root/maps/0.log"
+            return 1
+        fi
+        seq 1 $((map_count - 1)) \
+            | xargs -P "$jobs" -I{} bash -c 'run_one_map_load "$1" "$2"' _ {} "$output_root" \
+            || failed=1
+    else
+        local journeys=() journey name filter
+        for journey in "$journey_directory"/*.journey; do
+            name=$(basename "$journey" .journey)
+            if ((${#filters[@]} == 0)); then
+                journeys+=("$journey")
+            else
+                for filter in "${filters[@]}"; do
+                    [[ $name == *"$filter"* ]] && journeys+=("$journey") && break
+                done
+            fi
+        done
+        if ((${#journeys[@]} == 0)); then
+            echo "no journeys matched: ${filters[*]}"
+            return 1
+        fi
+        # Journeys marked `# run-alone` measure timing, so they run after the parallel batch.
+        local parallel=() alone=()
+        for journey in "${journeys[@]}"; do
+            if grep -q '^# run-alone' "$journey"; then alone+=("$journey"); else parallel+=("$journey"); fi
+        done
+        if ((${#parallel[@]})); then
+            printf '%s\n' "${parallel[@]}" \
+                | xargs -P "$jobs" -I{} bash -c 'run_one_journey "$1" "$2"' _ {} "$output_root" \
+                || failed=1
+        fi
+        for journey in "${alone[@]}"; do
+            run_one_journey "$journey" "$output_root" || failed=1
+        done
+        echo
+        echo "captures to review:"
+        find "$output_root" -name '*.png' | sort | sed 's/^/    /'
+    fi
+    return "$failed"
+}
+
+# Run in the background and wait, so a signal reaches the trap straight away.
+run_selected_verification > >(tee "$output_root/summary.txt") 2>&1 &
+wait $!
+status=$?
+echo "$status" >"$output_root/status"
+echo "results: $output_root (exit $status)"
+exit "$status"

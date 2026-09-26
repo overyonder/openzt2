@@ -1,0 +1,89 @@
+[workspace]
+members = [
+    "crates/z2f",
+    "crates/d3d9-effects",
+    "crates/game-data",
+    "crates/game",
+]
+default-members = ["crates/game"]
+# Keep upstream code out of first-party workspace checks while allowing its
+# focused GPU-resource tests to run through its own manifest.
+exclude = ["vendor/bevy_render", "vendor/bevy_image", "vendor/lunify"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0-alpha.2"
+edition = "2021"
+rust-version = "1.96"
+publish = false
+license = "MIT"
+
+[workspace.dependencies]
+ron = "0.12"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+unreachable_pub = "deny"
+
+[workspace.lints.clippy]
+all = "deny"
+pedantic = "deny"
+nursery = "deny"
+cargo = "deny"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+large_enum_variant = "deny"
+too_many_arguments = "deny"
+type_complexity = "deny"
+
+[profile.dev]
+# Fast first-party edit/build cycles. Dependencies retain optimization below so
+# Bevy, Avian, and codecs remain representative enough for interactive use.
+opt-level = 1
+debug = 1
+incremental = true
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "debuginfo"
+
+[profile.profiling]
+# Tracy/perf builds need optimized hot loops and symbols, but whole-program LTO
+# obscures iteration time without materially changing which systems are hot.
+inherits = "release"
+debug = 1
+strip = "none"
+incremental = true
+codegen-units = 16
+lto = false
+
+[profile.release-profiling]
+# Use this only to measure the exact final release optimization strategy.
+inherits = "release"
+debug = 1
+strip = "none"
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+strip = "debuginfo"
+
+[patch.crates-io]
+# Stripped Lua chunks retain executable instructions and closure upvalue counts.
+lunify = { path = "vendor/lunify" }
+# Preserve legacy 24-bit DDS BGR channel order during alpha expansion.
+bevy_image = { path = "vendor/bevy_image" }
+# Reuse wgpu staging allocations for repeated ShaderBuffer uploads.
+bevy_render = { path = "vendor/bevy_render" }
+# Narrow tracked extension: per-instance effect delta time. Hanabi remains the
+# sole particle simulator and renderer; OpenZT2 does not own a particle runtime.
+bevy_hanabi = { path = "vendor/bevy_hanabi" }

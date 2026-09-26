@@ -1,0 +1,15 @@
+pub(super) mod camera_action_intent_projection;
+pub(super) mod camera_definition_hydration;
+mod camera_ground_fit_surface_sampling;
+pub(super) mod camera_mode_transitions;
+pub(super) mod camera_motion_reporting;
+mod camera_pose_comparison;
+pub(super) mod default_ui_camera_routing;
+pub(super) mod ground_fitted_free_camera_initialization;
+pub(super) mod mouse_look_cursor_projection;
+pub(super) mod overhead_camera_advancement;
+pub(super) mod overhead_camera_return_without_snapshot;
+pub(super) mod overhead_camera_zoom_policy;
+pub(super) mod pointer_ray_projection;
+pub(super) mod subject_camera_following;
+pub(super) mod zoo_camera_spawning;

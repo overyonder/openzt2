@@ -1,0 +1,12 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 660ef57..5fc90c2 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2244,6 +2244,8 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+
+     while (value_node->type == HLSL_IR_EXPR && hlsl_ir_expr(value_node)->op == HLSL_OP1_CAST)
+         value_node = hlsl_ir_expr(value_node)->operands[0].node;
++    while (value_node->type == HLSL_IR_SWIZZLE)
++        value_node = hlsl_ir_swizzle(value_node)->val.node;
+
+     put_u32(buffer, entry->name_id);

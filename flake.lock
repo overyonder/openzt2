@@ -1,0 +1,84 @@
+{
+  "nodes": {
+    "mojoshader-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1760375865,
+        "narHash": "sha256-22uurnEaSkbv6zHvDFuBHH6JYtLaw02UH7FxnxNf7TQ=",
+        "owner": "icculus",
+        "repo": "mojoshader",
+        "rev": "cf2661bcb55d9a8732e86f79922592d7efdf5383",
+        "type": "github"
+      },
+      "original": {
+        "owner": "icculus",
+        "repo": "mojoshader",
+        "rev": "cf2661bcb55d9a8732e86f79922592d7efdf5383",
+        "type": "github"
+      }
+    },
+    "nixpkgs": {
+      "locked": {
+        "lastModified": 1786384358,
+        "narHash": "sha256-RzPPiWeUtuvymnpuEWsdtzli5w4kjZs49FqEs3/1u+I=",
+        "owner": "NixOS",
+        "repo": "nixpkgs",
+        "rev": "2fcb964de67fcf60b43471c55d5d99e61a9ccb5a",
+        "type": "github"
+      },
+      "original": {
+        "owner": "NixOS",
+        "ref": "nixos-unstable",
+        "repo": "nixpkgs",
+        "type": "github"
+      }
+    },
+    "root": {
+      "inputs": {
+        "mojoshader-src": "mojoshader-src",
+        "nixpkgs": "nixpkgs",
+        "rust-overlay": "rust-overlay",
+        "vkd3d-src": "vkd3d-src"
+      }
+    },
+    "rust-overlay": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1786507911,
+        "narHash": "sha256-w5aZRLbiu7H6TqsYXVMdRKg0S4DRaJpxyqxx86AwxVk=",
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "rev": "39db48099ad16834af7e27485a4babf9c28b3897",
+        "type": "github"
+      },
+      "original": {
+        "owner": "oxalica",
+        "repo": "rust-overlay",
+        "type": "github"
+      }
+    },
+    "vkd3d-src": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1786524363,
+        "narHash": "sha256-wjP0eaPdvRRADgLRgoWTLGHVInsBZU4PpEG+LGzjYR0=",
+        "ref": "refs/heads/master",
+        "rev": "9a673d0b43acf51940e745ad156b4cd2f3a9799d",
+        "revCount": 9349,
+        "type": "git",
+        "url": "https://gitlab.winehq.org/wine/vkd3d.git"
+      },
+      "original": {
+        "rev": "9a673d0b43acf51940e745ad156b4cd2f3a9799d",
+        "type": "git",
+        "url": "https://gitlab.winehq.org/wine/vkd3d.git"
+      }
+    }
+  },
+  "root": "root",
+  "version": 7
+}

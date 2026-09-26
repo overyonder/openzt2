@@ -1,0 +1,4 @@
+msrv = "1.96.0"
+too-many-arguments-threshold = 8
+type-complexity-threshold = 300
+standard-macro-braces = [{ name = "children", brace = "[" }]

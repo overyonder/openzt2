@@ -1,0 +1,34 @@
+//! Model and animation format conversion.
+
+mod animation;
+mod bf_animation_glb_and_metadata_lowering;
+mod bf_animation_keyframe_decoding;
+mod bf_animation_keyframe_interpolation;
+mod bf_animation_primitive_reading;
+mod bf_animation_root_motion_calculation;
+mod bf_animation_source_parsing;
+mod bf_animation_source_types;
+mod blue_fang_bfb_source;
+pub(in crate::assets) mod conversion_error;
+pub(in crate::assets) mod gltf_binary_buffer;
+mod kf_animation;
+mod kf_animation_curve_sampling;
+mod kf_animation_glb_and_metadata_lowering;
+mod kf_animation_keyframe_sampling;
+mod kf_animation_source_extraction;
+mod kf_animation_source_types;
+mod model;
+pub(super) mod native_animation_source_lowering;
+mod native_geometry;
+mod native_geometry_lowering_error;
+mod native_model_glb_encoding;
+pub(super) mod native_model_source_lowering;
+pub(super) mod native_model_source_lowering_types;
+mod native_scene;
+mod native_source_byte_reading;
+mod native_source_byte_reading_error;
+mod netimmerse_bone_level_of_detail_selection;
+mod netimmerse_fixed_function_material_effect_lowering;
+mod netimmerse_nif_source;
+mod netimmerse_texture_coordinate_animation_lowering;
+mod particles;

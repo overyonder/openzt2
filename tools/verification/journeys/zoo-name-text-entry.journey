@@ -1,0 +1,18 @@
+# The zoo name field takes keyboard focus and typed text (#81).
+include boot-to-freeform-map.steps
+click 560 450                   # the entrance opens zoo information
+wait 180
+expect-visible "zoo status"
+click "userstring_zooname"
+wait 30
+key END
+key BACKSPACE 40                # the field starts with the map's zoo name
+type "AB CD"
+wait 30
+expect-text "userstring_zooname" "AB CD"
+key BACKSPACE 5
+type "Verification Zoo"
+key ENTER
+wait 30
+expect-text "userstring_zooname" "Verification Zoo"
+capture zoo-name-typed

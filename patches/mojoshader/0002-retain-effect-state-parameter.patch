@@ -1,0 +1,54 @@
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+index d85f9e1..2dd364d 100644
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -351,5 +351,6 @@ typedef struct MOJOSHADER_effectState
+ {
+     MOJOSHADER_renderStateType type;
+     unsigned int index;
++    const char *parameter;
+     MOJOSHADER_effectValue value;
+ } MOJOSHADER_effectState;
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+index ca1d086..21a92e3 100644
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -801,6 +801,8 @@ static void readlargeobjects(const uint32 numlargeobjects,
+         /*const uint32 FIXME =*/ readui32(ptr, len);
+         const uint32 state = readui32(ptr, len);
+         const uint32 type = readui32(ptr, len);
++        const uint8 *data;
+         const uint32 length = readui32(ptr, len);
++        data = *ptr;
+
+         uint32 objectIndex;
+@@ -809,5 +811,17 @@ static void readlargeobjects(const uint32 numlargeobjects,
+         else
+             objectIndex = effect->techniques[technique].passes[index].states[state].value.valuesI[0];
+
++        if (type == 1 && technique != (uint32) -1)
++        {
++            MOJOSHADER_effectState *effect_state =
++                &effect->techniques[technique].passes[index].states[state];
++            char *parameter = (char *) m(length, d);
++            if (parameter != NULL)
++            {
++                memcpy(parameter, data, length);
++                effect_state->parameter = parameter;
++            }
++        }
++
+         MOJOSHADER_effectObject *object = &effect->objects[objectIndex];
+         if (object->type == MOJOSHADER_SYMTYPE_PIXELSHADER
+@@ -1150,4 +1164,5 @@ void MOJOSHADER_deleteEffect(MOJOSHADER_effect *effect)
+             for (k = 0; k < pass->state_count; k++)
+             {
+                 freevalue(&pass->states[k].value, f, d);
++                f((void *) pass->states[k].parameter, d);
+             } // for
+@@ -1499,4 +1514,5 @@ MOJOSHADER_effect *MOJOSHADER_cloneEffect(const MOJOSHADER_effect *effect)
+             for (k = 0; k < clone->techniques[i].passes[j].state_count; k++)
+             {
+                 clone->techniques[i].passes[j].states[k].type = effect->techniques[i].passes[j].states[k].type;
++                COPY_STRING(techniques[i].passes[j].states[k].parameter)
+                 copyvalue(&clone->techniques[i].passes[j].states[k].value,

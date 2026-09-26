@@ -1,0 +1,96 @@
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+index 5e64f00..eff690e 100644
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -353,5 +353,8 @@ typedef struct MOJOSHADER_effectState
+     MOJOSHADER_renderStateType type;
+     unsigned int index;
+     const char *parameter;
++    const MOJOSHADER_preshader *preshader;
++    unsigned int preshader_param_count;
++    unsigned int *preshader_params;
+     MOJOSHADER_effectValue value;
+ } MOJOSHADER_effectState;
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+index d16e10c..924c9a9 100644
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -825,5 +825,24 @@ static void readlargeobjects(const uint32 numlargeobjects,
+             }
+         }
+
++        if (type == 0 && technique != (uint32) -1 && objectIndex < (uint32) numobjects
++                && effect->techniques[technique].passes[index].states[state].type != MOJOSHADER_RS_VERTEXSHADER
++                && effect->techniques[technique].passes[index].states[state].type != MOJOSHADER_RS_PIXELSHADER)
++        {
++            MOJOSHADER_effectState *effect_state =
++                &effect->techniques[technique].passes[index].states[state];
++            effect_state->preshader = MOJOSHADER_parsePreshader(*ptr, length, m, f, d);
++            if (effect_state->preshader != NULL)
++            {
++                effect_state->preshader_param_count = effect_state->preshader->symbol_count;
++                effect_state->preshader_params = (uint32 *) m(
++                        sizeof(uint32) * effect_state->preshader_param_count, d);
++                for (j = 0; j < effect_state->preshader_param_count; ++j)
++                    effect_state->preshader_params[j] = findparameter(effect->params,
++                            effect->param_count, effect_state->preshader->symbols[j].name);
++            }
++            goto next_object;
++        }
++
+         if (type == 1)
+             goto next_object;
+@@ -1165,4 +1184,7 @@ void MOJOSHADER_deleteEffect(MOJOSHADER_effect *effect)
+             {
+                 freevalue(&pass->states[k].value, f, d);
+                 f((void *) pass->states[k].parameter, d);
++                if (pass->states[k].preshader)
++                    MOJOSHADER_freePreshader(pass->states[k].preshader);
++                f(pass->states[k].preshader_params, d);
+             } // for
+@@ -1515,3 +1537,12 @@ MOJOSHADER_effect *MOJOSHADER_cloneEffect(const MOJOSHADER_effect *effect)
+                 clone->techniques[i].passes[j].states[k].type = effect->techniques[i].passes[j].states[k].type;
+                 COPY_STRING(techniques[i].passes[j].states[k].parameter)
++                if (effect->techniques[i].passes[j].states[k].preshader)
++                    clone->techniques[i].passes[j].states[k].preshader = copypreshader(
++                            effect->techniques[i].passes[j].states[k].preshader, m, d);
++                clone->techniques[i].passes[j].states[k].preshader_param_count =
++                        effect->techniques[i].passes[j].states[k].preshader_param_count;
++                siz = sizeof(uint32) * clone->techniques[i].passes[j].states[k].preshader_param_count;
++                clone->techniques[i].passes[j].states[k].preshader_params = (uint32 *) m(siz, d);
++                memcpy(clone->techniques[i].passes[j].states[k].preshader_params,
++                        effect->techniques[i].passes[j].states[k].preshader_params, siz);
+                 copyvalue(&clone->techniques[i].passes[j].states[k].value,
+@@ -1737,5 +1767,32 @@ void MOJOSHADER_effectBeginPass(MOJOSHADER_effect *effect,
+             if (parameter >= 0)
+                 state->value.valuesI[0] = effect->params[parameter].value.valuesI[0];
+         }
++        if (state->preshader)
++        {
++            float output[4] = {0};
++            for (unsigned int symbol = 0; symbol < state->preshader_param_count; ++symbol)
++            {
++                const MOJOSHADER_symbol *description = &state->preshader->symbols[symbol];
++                const MOJOSHADER_effectValue *parameter =
++                        &effect->params[state->preshader_params[symbol]].value;
++                float *registers = state->preshader->registers + description->register_index * 4;
++                for (unsigned int component = 0; component < description->register_count * 4; ++component)
++                {
++                    if (parameter->type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
++                        registers[component] = parameter->valuesF[component];
++                    else if (parameter->type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
++                        registers[component] = parameter->valuesI[component] != 0;
++                    else
++                        registers[component] = parameter->valuesI[component];
++                }
++            }
++            MOJOSHADER_runPreshader(state->preshader, output);
++            if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
++                state->value.valuesF[0] = output[0];
++            else if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
++                state->value.valuesI[0] = output[0] != 0.0f;
++            else
++                state->value.valuesI[0] = (int) output[0];
++        }
+
+         if (state->type == MOJOSHADER_RS_VERTEXSHADER)

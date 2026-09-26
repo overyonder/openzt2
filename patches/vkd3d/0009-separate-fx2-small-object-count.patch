@@ -1,0 +1,28 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index b742cab..86c4474 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -296,6 +296,7 @@ struct fx_write_context
+     struct vkd3d_bytecode_buffer objects;
+ 
+     uint32_t object_variable_count;
++    uint32_t small_object_count;
+     uint32_t shared_object_count;
+     uint32_t shader_count;
+     uint32_t parameter_count;
+@@ -2030,5 +2031,6 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+             }
+             id = fx->object_variable_count++;
++            ++fx->small_object_count;
+ 
+             put_u32(&fx->unstructured, id);
+ 
+@@ -2566,7 +2568,7 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     object_count = put_u32(structured, 0);
+ 
+     write_fx_2_parameters(&fx);
+-    small_object_count = fx.object_variable_count - 1;
++    small_object_count = fx.small_object_count;
+     write_techniques(ctx->globals, &fx);
+     put_u32(structured, small_object_count);
+     put_u32(structured, fx.object_variable_count - 1 - small_object_count);

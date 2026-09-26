@@ -1,0 +1,14 @@
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -838,2 +838,2 @@
+-        if (type == 1)
++        if (type == 1 && technique != (uint32) -1)
+             goto next_object;
+diff --git a/mojoshader_common.c b/mojoshader_common.c
+--- a/mojoshader_common.c
++++ b/mojoshader_common.c
+@@ -1160,1 +1160,1 @@
+-    if (texcoord0Loc)
++    if (texcoord0Loc && pTable->pointcoord_var_offset && pTable->pointcoord_load_offset)
+

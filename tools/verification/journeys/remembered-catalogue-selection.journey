@@ -1,0 +1,12 @@
+# Returning to a catalogue tab keeps its previous selection (#98).
+include boot-to-freeform-map.steps
+click "animals"
+wait 60
+click "icon" 3
+wait 60
+capture animal-selected
+click "Animal Food Tab"
+wait 60
+click "Buy Animal Tab"
+wait 60
+capture animal-tab-returned

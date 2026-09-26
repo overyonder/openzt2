@@ -1,0 +1,339 @@
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2245,6 +2245,308 @@
+     return offset;
+ }
+
++struct fx_2_expression_variable
++{
++    const struct hlsl_ir_var *var;
++    uint32_t register_index;
++};
++
++struct fx_2_expression
++{
++    struct fx_write_context *fx;
++    struct vkd3d_bytecode_buffer code;
++    struct vkd3d_bytecode_buffer literals;
++    struct fx_2_expression_variable *variables;
++    size_t variable_count, variable_capacity;
++    uint32_t instruction_count, temporary_count;
++};
++
++struct fx_2_expression_operand
++{
++    uint32_t type, address;
++};
++
++static void write_fx_2_expression_operand(struct vkd3d_bytecode_buffer *buffer,
++        const struct fx_2_expression_operand *operand)
++{
++    put_u32(buffer, 0);
++    put_u32(buffer, operand->type);
++    put_u32(buffer, operand->address);
++}
++
++static struct fx_2_expression_operand write_fx_2_expression_instruction(struct fx_2_expression *expression,
++        uint32_t opcode, const struct fx_2_expression_operand *operands, uint32_t operand_count)
++{
++    struct fx_2_expression_operand result = {7, expression->temporary_count++};
++
++    put_u32(&expression->code, opcode << 20 | 1);
++    put_u32(&expression->code, operand_count);
++    for (uint32_t i = 0; i < operand_count; ++i)
++        write_fx_2_expression_operand(&expression->code, &operands[i]);
++    write_fx_2_expression_operand(&expression->code, &result);
++    ++expression->instruction_count;
++    return result;
++}
++
++static double fx_2_constant_as_double(const struct hlsl_ir_constant *constant)
++{
++    switch (constant->node.data_type->e.numeric.type)
++    {
++        case HLSL_TYPE_BOOL:
++        case HLSL_TYPE_UINT:
++            return constant->value.u[0].u;
++        case HLSL_TYPE_INT:
++            return constant->value.u[0].i;
++        case HLSL_TYPE_FLOAT:
++        case HLSL_TYPE_HALF:
++            return constant->value.u[0].f;
++        case HLSL_TYPE_DOUBLE:
++            return constant->value.u[0].d;
++        default:
++            return 0.0;
++    }
++}
++
++static struct fx_2_expression_operand write_fx_2_expression_literal(struct fx_2_expression *expression,
++        double value)
++{
++    struct fx_2_expression_operand result = {1, expression->literals.size / sizeof(double)};
++    bytecode_put_bytes(&expression->literals, &value, sizeof(value));
++    return result;
++}
++
++static bool evaluate_fx_2_integer_expression(const struct hlsl_ir_node *node, uint32_t *value)
++{
++    const struct hlsl_ir_expr *expr;
++    uint32_t left, right;
++
++    if (node->type == HLSL_IR_CONSTANT)
++    {
++        if (node->data_type->e.numeric.type != HLSL_TYPE_UINT
++                && node->data_type->e.numeric.type != HLSL_TYPE_INT
++                && node->data_type->e.numeric.type != HLSL_TYPE_BOOL)
++            return false;
++        *value = hlsl_ir_constant(node)->value.u[0].u;
++        return true;
++    }
++    if (node->type != HLSL_IR_EXPR)
++        return false;
++    expr = hlsl_ir_expr(node);
++    if (expr->op == HLSL_OP1_CAST)
++        return evaluate_fx_2_integer_expression(expr->operands[0].node, value);
++    if (expr->op != HLSL_OP2_BIT_OR && expr->op != HLSL_OP2_BIT_AND)
++        return false;
++    if (!evaluate_fx_2_integer_expression(expr->operands[0].node, &left)
++            || !evaluate_fx_2_integer_expression(expr->operands[1].node, &right))
++        return false;
++    switch (expr->op)
++    {
++        case HLSL_OP2_BIT_OR:
++            *value = left | right;
++            return true;
++        case HLSL_OP2_BIT_AND:
++            *value = left & right;
++            return true;
++        default:
++            return false;
++    }
++}
++
++static struct fx_2_expression_operand write_fx_2_expression_node(struct fx_2_expression *expression,
++        const struct hlsl_ir_node *node)
++{
++    struct fx_2_expression_operand operands[3], invalid = {0};
++    struct hlsl_ctx *ctx = expression->fx->ctx;
++    const struct hlsl_ir_expr *expr;
++    uint32_t integer;
++
++    if (node->type != HLSL_IR_CONSTANT && evaluate_fx_2_integer_expression(node, &integer))
++        return write_fx_2_expression_literal(expression,
++                node->data_type->e.numeric.type == HLSL_TYPE_INT ? (double)(int32_t)integer : integer);
++    switch (node->type)
++    {
++        case HLSL_IR_CONSTANT:
++            return write_fx_2_expression_literal(expression, fx_2_constant_as_double(hlsl_ir_constant(node)));
++        case HLSL_IR_LOAD:
++        {
++            const struct hlsl_ir_load *load = hlsl_ir_load(node);
++            size_t i;
++
++            if (load->src.path_len)
++            {
++                hlsl_fixme(ctx, &node->loc, "Indexed FX2 expression loads are not implemented.");
++                return invalid;
++            }
++            for (i = 0; i < expression->variable_count; ++i)
++                if (expression->variables[i].var == load->src.var)
++                    return (struct fx_2_expression_operand){2, expression->variables[i].register_index * 4};
++            if (!vkd3d_array_reserve((void **)&expression->variables, &expression->variable_capacity,
++                    expression->variable_count + 1, sizeof(*expression->variables)))
++            {
++                set_status(expression->fx, VKD3D_ERROR_OUT_OF_MEMORY);
++                return invalid;
++            }
++            expression->variables[expression->variable_count] = (struct fx_2_expression_variable)
++                    {load->src.var, expression->variable_count};
++            return (struct fx_2_expression_operand){2, expression->variable_count++ * 4};
++        }
++        case HLSL_IR_EXPR:
++            break;
++        default:
++            hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression node %u.", node->type);
++            return invalid;
++    }
++
++    expr = hlsl_ir_expr(node);
++    if (expr->op == HLSL_OP1_CAST)
++        return write_fx_2_expression_node(expression, expr->operands[0].node);
++    switch (expr->op)
++    {
++        case HLSL_OP1_NEG:
++            operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node);
++            return operands[0].type
++                    ? write_fx_2_expression_instruction(expression, 0x101, operands, 1) : invalid;
++        case HLSL_OP2_ADD:
++        case HLSL_OP2_MUL:
++        case HLSL_OP2_LESS:
++        case HLSL_OP2_GEQUAL:
++        case HLSL_OP2_NEQUAL:
++        case HLSL_OP3_TERNARY:
++            break;
++        default:
++            hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression %s.", debug_hlsl_expr_op(expr->op));
++            return invalid;
++    }
++    operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node);
++    operands[1] = write_fx_2_expression_node(expression, expr->operands[1].node);
++    if (!operands[0].type || !operands[1].type)
++        return invalid;
++    switch (expr->op)
++    {
++        case HLSL_OP2_ADD:
++            return write_fx_2_expression_instruction(expression, 0x204, operands, 2);
++        case HLSL_OP2_MUL:
++            return write_fx_2_expression_instruction(expression, 0x205, operands, 2);
++        case HLSL_OP2_LESS:
++            return write_fx_2_expression_instruction(expression, 0x202, operands, 2);
++        case HLSL_OP2_GEQUAL:
++            return write_fx_2_expression_instruction(expression, 0x203, operands, 2);
++        case HLSL_OP2_NEQUAL:
++        {
++            struct fx_2_expression_operand comparisons[2];
++            comparisons[0] = write_fx_2_expression_instruction(expression, 0x202, operands, 2);
++            comparisons[1] = write_fx_2_expression_instruction(expression, 0x202,
++                    (struct fx_2_expression_operand[]){operands[1], operands[0]}, 2);
++            return write_fx_2_expression_instruction(expression, 0x204, comparisons, 2);
++        }
++        case HLSL_OP3_TERNARY:
++            operands[2] = write_fx_2_expression_node(expression, expr->operands[2].node);
++            if (!operands[2].type)
++                return invalid;
++            operands[0] = write_fx_2_expression_instruction(expression, 0x204,
++                    (struct fx_2_expression_operand[]){operands[0], write_fx_2_expression_literal(expression, -0.5)}, 2);
++            return write_fx_2_expression_instruction(expression, 0x300, operands, 3);
++        default:
++            hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression %s.", debug_hlsl_expr_op(expr->op));
++            return invalid;
++    }
++}
++
++static void write_fx_2_expression_section(struct vkd3d_bytecode_buffer *blob, uint32_t tag,
++        const void *data, size_t size)
++{
++    uint32_t words = size / sizeof(uint32_t) + 1;
++    put_u32(blob, words << 16 | 0xfffe);
++    put_u32(blob, tag);
++    bytecode_put_bytes(blob, data, size);
++}
++
++static void write_fx_2_expression_ctab(struct fx_2_expression *expression,
++        struct vkd3d_bytecode_buffer *ctab)
++{
++    size_t creator_offset, target_offset, variables_offset, variables_start;
++
++    put_u32(ctab, 7 * sizeof(uint32_t));
++    creator_offset = put_u32(ctab, 0);
++    put_u32(ctab, 0x46580200);
++    put_u32(ctab, expression->variable_count);
++    variables_offset = put_u32(ctab, 0);
++    put_u32(ctab, 0);
++    target_offset = put_u32(ctab, 0);
++    variables_start = bytecode_align(ctab);
++    set_u32(ctab, variables_offset, variables_start);
++    for (size_t i = 0; i < expression->variable_count; ++i)
++    {
++        put_u32(ctab, 0);
++        put_u32(ctab, vkd3d_make_u32(D3DXRS_FLOAT4, i));
++        put_u32(ctab, 1);
++        put_u32(ctab, 0);
++        put_u32(ctab, 0);
++    }
++    for (size_t i = 0; i < expression->variable_count; ++i)
++    {
++        const struct hlsl_ir_var *var = expression->variables[i].var;
++        size_t entry = variables_start + i * 5 * sizeof(uint32_t);
++        size_t name = put_string(ctab, var->name);
++        size_t type = bytecode_align(ctab);
++        set_u32(ctab, entry, name);
++        set_u32(ctab, entry + 3 * sizeof(uint32_t), type);
++        put_u32(ctab, vkd3d_make_u32(hlsl_sm1_class(var->data_type),
++                hlsl_sm1_base_type(var->data_type, false, HLSL_SAMPLER_DIM_GENERIC)));
++        put_u32(ctab, vkd3d_make_u32(1, 1));
++        put_u32(ctab, vkd3d_make_u32(1, 0));
++        put_u32(ctab, 1);
++    }
++    set_u32(ctab, creator_offset, put_string(ctab, "vkd3d-shader"));
++    set_u32(ctab, target_offset, put_string(ctab, "fx_2_0"));
++    bytecode_align(ctab);
++}
++
++static bool write_fx_2_expression(const struct hlsl_ir_node *node, struct fx_write_context *fx,
++        struct vkd3d_shader_code *out)
++{
++    struct vkd3d_bytecode_buffer blob = {0}, ctab = {0}, clit = {0};
++    struct fx_2_expression expression = {.fx = fx};
++    struct fx_2_expression_operand result;
++    size_t instruction_count;
++
++    instruction_count = put_u32(&expression.code, 0);
++    result = write_fx_2_expression_node(&expression, node);
++    if (!result.type)
++        goto fail;
++    write_fx_2_expression_instruction(&expression, 0x100, &result, 1);
++    set_u32(&expression.code, expression.code.size - 3 * sizeof(uint32_t), 0);
++    set_u32(&expression.code, expression.code.size - 2 * sizeof(uint32_t), 4);
++    set_u32(&expression.code, expression.code.size - sizeof(uint32_t), 0);
++    set_u32(&expression.code, instruction_count, expression.instruction_count);
++
++    write_fx_2_expression_ctab(&expression, &ctab);
++    put_u32(&clit, expression.literals.size / sizeof(double));
++    bytecode_put_bytes(&clit, expression.literals.data, expression.literals.size);
++    put_u32(&blob, 0x46580200);
++    write_fx_2_expression_section(&blob, TAG_CTAB, ctab.data, ctab.size);
++    write_fx_2_expression_section(&blob, TAG_CLIT, clit.data, clit.size);
++    write_fx_2_expression_section(&blob, TAG_FXLC, expression.code.data, expression.code.size);
++    put_u32(&blob, 0xffff);
++    out->code = blob.data;
++    out->size = blob.size;
++    vkd3d_free(ctab.data);
++    vkd3d_free(clit.data);
++    vkd3d_free(expression.code.data);
++    vkd3d_free(expression.literals.data);
++    vkd3d_free(expression.variables);
++    return true;
++
++fail:
++    vkd3d_free(blob.data);
++    vkd3d_free(ctab.data);
++    vkd3d_free(clit.data);
++    vkd3d_free(expression.code.data);
++    vkd3d_free(expression.literals.data);
++    vkd3d_free(expression.variables);
++    return false;
++}
++
+ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+         struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
+ {
+@@ -2329,6 +2631,27 @@
+             ++fx->shader_count;
+             break;
+         }
++        case HLSL_IR_EXPR:
++        {
++            struct vkd3d_shader_code code = {0};
++            uint32_t id = fx->object_variable_count++;
++
++            if (!write_fx_2_expression(value_node, fx, &code))
++                break;
++            type = write_fx_2_state_type(entry, fx);
++            value = put_u32(unstructured, id);
++            put_u32(&fx->objects, fx->current_technique);
++            put_u32(&fx->objects, fx->current_pass);
++            put_u32(&fx->objects, 0);
++            put_u32(&fx->objects, fx->current_state);
++            put_u32(&fx->objects, 0);
++            put_u32(&fx->objects, code.size);
++            bytecode_put_bytes(&fx->objects, code.code, code.size);
++            while (fx->objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            vkd3d_shader_free_shader_code(&code);
++            break;
++        }
+         default:
+             if (value_node->type == HLSL_IR_EXPR)
+                 hlsl_fixme(ctx, &var->loc, "Unsupported expression %s for state %s.",

@@ -1,0 +1,6 @@
+# The goals and challenges button opens without crashing the game (#85).
+include boot-to-freeform-map.steps
+click "scenariogoals"
+wait 120
+capture goals-open
+expect phase == 4

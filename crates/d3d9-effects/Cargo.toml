@@ -1,0 +1,22 @@
+[package]
+name = "d3d9-effects"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rspirv = "0.13"
+thiserror = "2.0"
+
+[build-dependencies]
+cc = "1.2"
+pkg-config = "0.3"
+
+[dev-dependencies]
+naga = { version = "29", features = ["spv-in"] }
+z2f = { path = "../z2f" }

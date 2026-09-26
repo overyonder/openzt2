@@ -1,0 +1,38 @@
+--- a/src/rendervulkan.hpp
++++ b/src/rendervulkan.hpp
+@@ -778,6 +778,7 @@
+ 	uint64_t submitInternal( CVulkanCmdBuffer* cmdBuf );
+ 	void wait(uint64_t sequence, bool reset = true);
+ 	void waitIdle(bool reset = true);
++	void releaseCommandBuffers();
+ 	void garbageCollect();
+ 	inline VkDescriptorSet descriptorSet()
+ 	{
+--- a/src/rendervulkan.cpp
++++ b/src/rendervulkan.cpp
+@@ -1533,6 +1533,14 @@
+ 	m_pendingCmdBufs.erase(m_pendingCmdBufs.begin(), ++last);
+ }
+ 
++void CVulkanDevice::releaseCommandBuffers()
++{
++	// Driver exit handlers can run before the global device's destructor.
++	// Release command buffers while the renderer and Vulkan entry points live.
++	waitIdle();
++	m_unusedCmdBufs.clear();
++}
++
+ CVulkanCmdBuffer::CVulkanCmdBuffer(CVulkanDevice *parent, VkCommandBuffer cmdBuffer, VkQueue queue, uint32_t queueFamily)
+ 	: m_cmdBuffer(cmdBuffer), m_device(parent), m_queue(queue), m_queueFamily(queueFamily)
+ {
+--- a/src/steamcompmgr.cpp
++++ b/src/steamcompmgr.cpp
+@@ -6764,6 +6764,8 @@
+ 
+ 	g_VirtualConnectorFocuses.clear();
+ 
++    g_device.releaseCommandBuffers();
++
+     gamescope::IBackend::Set( nullptr );
+ 
+     wlserver_lock();

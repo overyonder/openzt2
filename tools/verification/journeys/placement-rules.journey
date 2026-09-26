@@ -1,0 +1,16 @@
+# Scenery previews are valid on open ground and invalid over the road (#82).
+include boot-to-freeform-map.steps
+click "construction"
+wait 30
+click "Scenery Tab"
+wait 30
+click "icon" 1
+move 820 440
+wait 60
+expect placement_visible_previews == 1
+expect placement_valid_previews == 1
+capture scenery-open-ground
+move 700 300                    # asphalt road
+wait 60
+expect placement_valid_previews == 0
+capture scenery-over-road

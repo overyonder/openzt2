@@ -1,0 +1,21 @@
+# Selecting world objects opens the right panel, the close button hides it (#63),
+# and selecting the entrance does not keep showing the previous object (#73).
+include boot-to-freeform-map.steps
+click 930 425                   # tree beside the entrance path
+wait 180                        # the info panel document is projected on first use
+expect selected == 1
+expect-visible "Tree Info"
+capture tree-selected
+click "close"
+wait 60
+expect-hidden "Tree Info"
+expect selected == 0
+capture panel-closed
+click 930 425
+wait 60
+expect-visible "Tree Info"
+click 560 450                   # zoo entrance gate
+wait 60
+expect-hidden "Tree Info"
+expect-visible "zoo status"      # the entrance opens zoo information instead
+capture entrance-selected

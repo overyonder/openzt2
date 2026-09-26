@@ -1,0 +1,13 @@
+# The zookeeper recommendations panel reopens after it has been closed (#62).
+include boot-to-freeform-map.steps
+click "sort button"
+wait 180
+expect-visible "Sort Panel"
+capture recommendations-open
+click "sort button"
+wait 60
+expect-hidden "Sort Panel"
+click "sort button"
+wait 120
+expect-visible "Sort Panel"
+capture recommendations-reopened

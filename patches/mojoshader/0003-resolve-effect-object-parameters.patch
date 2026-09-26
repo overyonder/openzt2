@@ -1,0 +1,32 @@
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+index 21a92e3..d16e10c 100644
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -825,4 +825,7 @@ static void readlargeobjects(const uint32 numlargeobjects,
+             }
+         }
+
++        if (type == 1)
++            goto next_object;
++
+         MOJOSHADER_effectObject *object = &effect->objects[objectIndex];
+@@ -926,5 +929,6 @@ static void readlargeobjects(const uint32 numlargeobjects,
+             assert(0 && "Large object type unknown!");
+         } // else
+
++next_object:;
+         /* Object block is always a multiple of four */
+         const uint32 blocklen = (length + 3) - ((length - 1) % 4);
+@@ -1729,4 +1733,12 @@ void MOJOSHADER_effectBeginPass(MOJOSHADER_effect *effect,
+     for (i = 0; i < curPass->state_count; i++)
+     {
+         state = &curPass->states[i];
++        if (state->parameter)
++        {
++            const int parameter = findparameter(effect->params, effect->param_count,
++                    state->parameter);
++            if (parameter >= 0)
++                state->value.valuesI[0] = effect->params[parameter].value.valuesI[0];
++        }
++
+         if (state->type == MOJOSHADER_RS_VERTEXSHADER)

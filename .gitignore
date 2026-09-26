@@ -1,0 +1,13 @@
+/target/
+/vendor/*
+!/vendor/bevy_hanabi/
+!/vendor/bevy_image/
+!/vendor/bevy_render/
+!/vendor/lunify/
+/build/
+/artifacts/
+/state/
+/.direnv/
+/cache-manifest.bin
+/source-partials/
+__pycache__/

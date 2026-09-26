@@ -1,0 +1,36 @@
+diff --git a/mojoshader_common.c b/mojoshader_common.c
+--- a/mojoshader_common.c
++++ b/mojoshader_common.c
+@@ -1071,3 +1071,32 @@
+     const uint32 texcoord0Loc = pTable->attrib_offsets[MOJOSHADER_USAGE_TEXCOORD][0];
+ 
++    /* Shader model 1.x declares texture/color inputs implicitly. They have
++     * SPIR-V location patches even when parseData has no attribute records. */
++    if (pixel->major_ver < 2)
++    {
++        MOJOSHADER_attribute attributes[MOJOSHADER_USAGE_TOTAL * 16];
++        MOJOSHADER_parseData linked_pixel = *pixel;
++        int usage, index, count = 0;
++        for (usage = 0; usage < MOJOSHADER_USAGE_TOTAL; ++usage)
++        {
++            for (index = 0; index < 16; ++index)
++            {
++                if (!pTable->attrib_offsets[usage][index])
++                    continue;
++                attributes[count].usage = (MOJOSHADER_usage)usage;
++                attributes[count].index = index;
++                attributes[count].name = NULL;
++                ++count;
++            }
++        }
++        if (count)
++        {
++            linked_pixel.attributes = attributes;
++            linked_pixel.attribute_count = count;
++            linked_pixel.major_ver = 2; /* The temporary interface is now explicit. */
++            MOJOSHADER_spirv_link_attributes(vertex, &linked_pixel, is_glspirv);
++            return;
++        }
++    }
++
+     if (is_glspirv)

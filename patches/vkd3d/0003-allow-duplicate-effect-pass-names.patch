@@ -1,0 +1,14 @@
+diff --git a/libs/vkd3d-shader/hlsl.y b/libs/vkd3d-shader/hlsl.y
+index afebc33..e7dcf35 100644
+--- a/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d-shader/hlsl.y
+@@ -1378,4 +1378,7 @@ static void add_pass(struct hlsl_ctx *ctx, const char *name, struct hlsl_scope *
+     var->state_block_count = 1;
+     var->state_block_capacity = 1;
+-    hlsl_add_var(ctx, var);
++    /* Effect pass labels do not introduce HLSL identifiers. D3D9 Effects
++     * permits repeated labels within one technique and addresses passes by
++     * their declaration index. */
++    list_add_tail(&ctx->cur_scope->vars, &var->scope_entry);
+ }
+ static void add_technique(struct hlsl_ctx *ctx, const char *name, struct hlsl_scope *scope,

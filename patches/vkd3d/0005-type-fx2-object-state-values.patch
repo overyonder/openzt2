@@ -1,0 +1,20 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 6294c50..76dd42b 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2207,11 +2207,14 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
+
+     if (entry->name_id == 146)
+         offset = put_u32(buffer, D3DXPT_VERTEXSHADER);
+     else if (entry->name_id == 147)
+         offset = put_u32(buffer, D3DXPT_PIXELSHADER);
++    else if (entry->name_id == 164 || entry->name_id == 178)
++        offset = put_u32(buffer, D3DXPT_TEXTURE);
+     else
+         offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
+-    put_u32(buffer, entry->name_id == 146 || entry->name_id == 147 ? D3DXPC_OBJECT : D3DXPC_MATRIX_ROWS);
++    put_u32(buffer, entry->name_id == 146 || entry->name_id == 147
++            || entry->name_id == 164 || entry->name_id == 178 ? D3DXPC_OBJECT : D3DXPC_MATRIX_ROWS);
+     put_u32(buffer, 0); /* Name */
+     put_u32(buffer, 0); /* Semantic */
+     put_u32(buffer, 1); /* Element count */

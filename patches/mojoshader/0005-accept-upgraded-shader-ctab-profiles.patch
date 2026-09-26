@@ -1,0 +1,14 @@
+diff --git a/mojoshader.c b/mojoshader.c
+index 4ccf2ce..1512cdf 100644
+--- a/mojoshader.c
++++ b/mojoshader.c
+@@ -2324,7 +2324,8 @@ static void parse_constant_table(Context *ctx, const uint32 *tokens,
+     else if (constants > 1000000)  // sanity check.
+         goto corrupt_ctab;
+ 
+-    if (version != okay_version) goto corrupt_ctab;
++    if (version != okay_version && (version & 0xffff0000) != (okay_version & 0xffff0000))
++        goto corrupt_ctab;
+     if (creator >= bytes) goto corrupt_ctab;
+     if (constantinfo >= bytes) goto corrupt_ctab;
+     if ((bytes - constantinfo) < (constants * CINFO_SIZE)) goto corrupt_ctab;

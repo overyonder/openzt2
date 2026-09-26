@@ -1,0 +1,103 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 86c4474..f5f3171 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -293,6 +293,7 @@ struct fx_write_context
+     struct vkd3d_bytecode_buffer unstructured;
+     struct vkd3d_bytecode_buffer structured;
+     struct vkd3d_bytecode_buffer objects;
++    struct vkd3d_bytecode_buffer large_objects;
+ 
+     struct rb_tree strings;
+     struct list types;
+@@ -2290,15 +2291,15 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+             type = write_fx_2_state_type(entry, fx);
+             value = put_u32(unstructured, id);
+ 
+-            put_u32(&fx->objects, fx->in_sampler ? ~0u : fx->current_technique);
+-            put_u32(&fx->objects, fx->in_sampler ? fx->parameter_count : fx->current_pass);
+-            put_u32(&fx->objects, fx->in_sampler ? fx->current_sampler_element : 0);
+-            put_u32(&fx->objects, fx->current_state);
+-            put_u32(&fx->objects, 1);
+-            put_u32(&fx->objects, size);
+-            bytecode_put_bytes(&fx->objects, name, size);
+-            while (fx->objects.size % 4)
+-                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            put_u32(&fx->large_objects, fx->in_sampler ? ~0u : fx->current_technique);
++            put_u32(&fx->large_objects, fx->in_sampler ? fx->parameter_count : fx->current_pass);
++            put_u32(&fx->large_objects, fx->in_sampler ? fx->current_sampler_element : 0);
++            put_u32(&fx->large_objects, fx->current_state);
++            put_u32(&fx->large_objects, 1);
++            put_u32(&fx->large_objects, size);
++            bytecode_put_bytes(&fx->large_objects, name, size);
++            while (fx->large_objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->large_objects, "\0", 1);
+             break;
+         }
+         case HLSL_IR_COMPILE:
+@@ -2313,15 +2314,15 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+ 
+             type = write_fx_2_state_type(entry, fx);
+             value = put_u32(unstructured, id);
+-            put_u32(&fx->objects, fx->current_technique);
+-            put_u32(&fx->objects, fx->current_pass);
+-            put_u32(&fx->objects, 0);
+-            put_u32(&fx->objects, fx->current_state);
+-            put_u32(&fx->objects, 0);
+-            put_u32(&fx->objects, code.size);
+-            bytecode_put_bytes(&fx->objects, code.code, code.size);
+-            while (fx->objects.size % 4)
+-                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            put_u32(&fx->large_objects, fx->current_technique);
++            put_u32(&fx->large_objects, fx->current_pass);
++            put_u32(&fx->large_objects, 0);
++            put_u32(&fx->large_objects, fx->current_state);
++            put_u32(&fx->large_objects, 0);
++            put_u32(&fx->large_objects, code.size);
++            bytecode_put_bytes(&fx->large_objects, code.code, code.size);
++            while (fx->large_objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->large_objects, "\0", 1);
+             vkd3d_shader_free_shader_code(&code);
+             ++fx->shader_count;
+             break;
+@@ -2630,15 +2631,15 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+                 break;
+             type = write_fx_2_state_type(entry, fx);
+             value = put_u32(unstructured, id);
+-            put_u32(&fx->objects, fx->current_technique);
+-            put_u32(&fx->objects, fx->current_pass);
+-            put_u32(&fx->objects, 0);
+-            put_u32(&fx->objects, fx->current_state);
+-            put_u32(&fx->objects, 0);
+-            put_u32(&fx->objects, code.size);
+-            bytecode_put_bytes(&fx->objects, code.code, code.size);
+-            while (fx->objects.size % 4)
+-                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            put_u32(&fx->large_objects, fx->current_technique);
++            put_u32(&fx->large_objects, fx->current_pass);
++            put_u32(&fx->large_objects, 0);
++            put_u32(&fx->large_objects, fx->current_state);
++            put_u32(&fx->large_objects, 0);
++            put_u32(&fx->large_objects, code.size);
++            bytecode_put_bytes(&fx->large_objects, code.code, code.size);
++            while (fx->large_objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->large_objects, "\0", 1);
+             vkd3d_shader_free_shader_code(&code);
+             break;
+         }
+@@ -2574,6 +2575,7 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     put_u32(structured, fx.object_variable_count - 1 - small_object_count);
+ 
+     bytecode_put_bytes(structured, fx.objects.data, fx.objects.size);
++    bytecode_put_bytes(structured, fx.large_objects.data, fx.large_objects.size);
+     /* TODO: resources */
+ 
+     set_u32(structured, parameter_count, fx.parameter_count);
+@@ -2591,6 +2593,7 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     vkd3d_free(fx.unstructured.data);
+     vkd3d_free(fx.structured.data);
+     vkd3d_free(fx.objects.data);
++    vkd3d_free(fx.large_objects.data);
+ 
+     if (!fx.technique_count)
+         hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_MISSING_TECHNIQUE, "No techniques found.");

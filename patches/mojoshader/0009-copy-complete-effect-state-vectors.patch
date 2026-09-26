@@ -1,0 +1,38 @@
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -1793,2 +1793,12 @@
+-            if (parameter >= 0)
+-                state->value.valuesI[0] = effect->params[parameter].value.valuesI[0];
++            if (parameter >= 0)
++            {
++                const MOJOSHADER_effectValue *source = &effect->params[parameter].value;
++                if (state->value.type.parameter_class <= MOJOSHADER_SYMCLASS_MATRIX_COLUMNS)
++                {
++                    const unsigned int count = source->value_count < state->value.value_count
++                            ? source->value_count : state->value.value_count;
++                    memcpy(state->value.values, source->values, count * sizeof(float));
++                }
++                else
++                    state->value.valuesI[0] = source->valuesI[0];
++            }
+@@ -1798,1 +1798,1 @@
+-            float output[4] = {0};
++            float output[16] = {0};
+@@ -1816,6 +1816,9 @@
+-            if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
+-                state->value.valuesF[0] = output[0];
+-            else if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
+-                state->value.valuesI[0] = output[0] != 0.0f;
+-            else
+-                state->value.valuesI[0] = (int) output[0];
++            for (unsigned int component = 0; component < state->value.value_count; ++component)
++            {
++                if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
++                    state->value.valuesF[component] = output[component];
++                else if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
++                    state->value.valuesI[component] = output[component] != 0.0f;
++                else
++                    state->value.valuesI[component] = (int) output[component];
++            }
+

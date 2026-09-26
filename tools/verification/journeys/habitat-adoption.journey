@@ -1,0 +1,40 @@
+# A fenced habitat accepts adopted animals of the chosen sex (#183, captures for #91).
+include boot-to-freeform-map.steps
+click "construction"
+wait 30
+click "Fence Tab"
+wait 30
+click "icon" 3                  # chain-link fence; icon 0 is the staff gate
+click 1000 220                  # rubber-band fence: one click per corner, closing on the first
+wait 20
+click 1350 220
+wait 20
+click 1350 470
+wait 20
+click 1000 470
+wait 20
+click 1000 220
+wait 120
+expect fences > @entered-map
+capture habitat-built
+click "animals"
+wait 60
+click "icon" 1                  # the first row starts selected and ignores clicks (#184)
+click "icon" 0                  # aardvark species; the gender toggle is female
+move 1170 340
+wait 60
+expect placement_valid_previews == 1
+click 1170 340
+wait 180
+expect animals == 1
+expect female_animals == 1
+expect contained_animals == 1
+capture female-adopted
+click "icon" 1                  # Aardvark_Adult_M variant row
+move 1250 400
+wait 60
+click 1250 400
+wait 180
+expect animals == 2
+expect male_animals == 1
+capture male-adopted

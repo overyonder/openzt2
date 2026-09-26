@@ -1,0 +1,90 @@
+--- a/mojoshader.h
++++ b/mojoshader.h
+@@ -927,5 +927,9 @@
+ DECLSPEC int MOJOSHADER_spirvBinarySize(const MOJOSHADER_parseData *spirv);
+ 
++/* Returns a linked vertex output location, or -1 for a builtin or absent output. */
++DECLSPEC int MOJOSHADER_spirvVertexOutputLocation(const MOJOSHADER_parseData *spirv,
++                                                 MOJOSHADER_usage usage, int index);
++
+ /*
+  * You almost certainly don't need this function, unless you absolutely know
+  *  why you need it without hesitation. This is useful if you're doing
+@@ -932,6 +936,9 @@
+  * Call this to patch SPIR-V output returned from MOJOSHADER_parse to correctly
+  *  interpret vertex input and link vertex shader output to pixel shader input.
+  *
++ * A NULL pixel shader assigns consecutive locations to non-builtin vertex
++ *  outputs for consumers such as a fixed-function fragment implementation.
++ *
+  * On success, this returns the size of the shaders' internal "patch table",
+  *  which should be subtracted from the parseData's output_len when passing the
+  *  final SPIR-V to your shader compiler.
+--- a/mojoshader.c
++++ b/mojoshader.c
+@@ -4023,6 +4023,24 @@
+ #include <spirv/spirv.h> /* SpvOp, SpvOpConvertUToF, SpvOpConvertSToF, SpvOpCopyObject */
+ #endif
+ 
++int MOJOSHADER_spirvVertexOutputLocation(const MOJOSHADER_parseData *spirv,
++                                        MOJOSHADER_usage usage, int index)
++{
++#if SUPPORT_PROFILE_SPIRV
++    if (spirv && spirv->shader_type == MOJOSHADER_TYPE_VERTEX
++     && spirv->output_len >= (int) sizeof(SpirvPatchTable)
++     && usage >= 0 && usage < MOJOSHADER_USAGE_TOTAL && index >= 0 && index < 16)
++    {
++        const int length = spirv->output_len - sizeof(SpirvPatchTable);
++        const SpirvPatchTable *table = (const SpirvPatchTable *) &spirv->output[length];
++        const uint32 offset = table->attrib_offsets[usage][index];
++        if (offset && offset < (uint32) length / sizeof(uint32))
++            return (int) ((const uint32 *) spirv->output)[offset];
++    }
++#endif
++    return -1;
++}
++
+ int MOJOSHADER_linkSPIRVShaders(const MOJOSHADER_parseData *vertex_spirv,
+                                 const MOJOSHADER_parseData *pixel_spirv,
+                                 const MOJOSHADER_vertexAttribute *vertexAttributes,
+--- a/mojoshader_common.c
++++ b/mojoshader_common.c
+@@ -1067,13 +1067,14 @@
+     uint32 vOffset, pOffset;
+     int vDataLen = vertex->output_len - sizeof(SpirvPatchTable);
+-    int pDataLen = pixel->output_len - sizeof(SpirvPatchTable);
++    int pDataLen = pixel ? pixel->output_len - sizeof(SpirvPatchTable) : 0;
++    SpirvPatchTable empty_pixel_table = {0};
+     SpirvPatchTable *vTable = (SpirvPatchTable *) &vertex->output[vDataLen];
+-    SpirvPatchTable *pTable = (SpirvPatchTable *) &pixel->output[pDataLen];
++    SpirvPatchTable *pTable = pixel ? (SpirvPatchTable *) &pixel->output[pDataLen] : &empty_pixel_table;
+     const uint32 texcoord0Loc = pTable->attrib_offsets[MOJOSHADER_USAGE_TEXCOORD][0];
+ 
+     /* Shader model 1.x declares texture/color inputs implicitly. They have
+      * SPIR-V location patches even when parseData has no attribute records. */
+-    if (pixel->major_ver < 2)
++    if (pixel && pixel->major_ver < 2)
+     {
+         MOJOSHADER_attribute attributes[MOJOSHADER_USAGE_TOTAL * 16];
+         MOJOSHADER_parseData linked_pixel = *pixel;
+@@ -1102,6 +1103,6 @@
+     }
+ 
+-    if (is_glspirv)
++    if (is_glspirv && pixel)
+     {
+         // We need locations for color outputs first!
+         for (i = 0; i < pixel->output_count; i++)
+@@ -1131,6 +1132,6 @@
+ 
+     // Okay, now we can start linking pixel/vertex attributes
+-    for (i = 0; i < pixel->attribute_count; i++)
++    for (i = 0; pixel && i < pixel->attribute_count; i++)
+     {
+         const MOJOSHADER_attribute *pAttr = &pixel->attributes[i];
+         if (pAttr->usage == MOJOSHADER_USAGE_UNKNOWN)
+@@ -1168,2 +1169,3 @@
+             vOffset = vTable->attrib_offsets[vAttr->usage][vAttr->index];
+-            ((uint32 *) vertex->output)[vOffset] = attr_loc++;
++            if (vOffset) /* Builtin raster outputs have no location patch. */
++                ((uint32 *) vertex->output)[vOffset] = attr_loc++;

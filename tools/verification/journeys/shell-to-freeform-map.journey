@@ -1,0 +1,26 @@
+# Every shell screen appears, the loading screen shows progress, and the HUD loads.
+phase splash
+wait 300
+capture splash
+click "splashbutton0"
+phase main-menu
+wait 120
+capture main-menu
+click "Freeform Button"
+phase map-selection
+wait 120
+capture map-selection
+click "Play Map"
+phase loading
+wait 30                         # the loading screen is projected just after the phase change
+expect-visible "Loading Screen"
+expect-visible "Loading Bar"
+capture loading
+phase in-game
+wait 120
+capture in-game
+expect-hidden "Loading Screen"
+expect-visible "MainGUI"
+expect unlimited_cash == 1
+expect selected == 0
+expect construction_tool_active == 0

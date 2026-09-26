@@ -1,0 +1,12 @@
+pub(super) mod adoption_list_operations;
+pub(super) mod animal_care_subject_projection;
+pub(super) mod catalogue_filter_menu;
+pub(super) mod catalogue_page_projection;
+pub(super) mod catalogue_preview_scene_projection;
+pub(super) mod catalogue_selection_and_details_projection;
+pub(super) mod catalogue_type_list_activation;
+pub(super) mod catalogue_type_list_policy_operations;
+pub(super) mod catalogue_type_list_row_count_operations;
+pub(crate) mod catalogue_type_list_row_projection;
+pub(super) mod catalogue_world_availability_context;
+pub(super) mod type_list_filter_operations;

@@ -1,0 +1,11 @@
+# Zoo guest mode can be entered, and the overhead view button returns from it (#83).
+include boot-to-freeform-map.steps
+click "firstperson"
+wait 180
+expect immersive_mode_active == 1
+capture guest-mode
+click "overhead"
+wait 180
+expect immersive_mode_active == 0
+expect camera_pitch_deg > 45
+capture overhead

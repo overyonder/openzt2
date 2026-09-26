@@ -1,0 +1,301 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 36a0439..71f3184 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -47,6 +47,7 @@ enum state_property_component_type
+     FX_HULLSHADER,
+     FX_COMPUTESHADER,
+     FX_TEXTURE,
++    FX_SAMPLER,
+     FX_DEPTHSTENCILVIEW,
+     FX_RENDERTARGETVIEW,
+     FX_BLEND,
+@@ -297,6 +298,11 @@ struct fx_write_context
+     uint32_t shared_object_count;
+     uint32_t shader_count;
+     uint32_t parameter_count;
++    uint32_t current_technique;
++    uint32_t current_pass;
++    uint32_t current_state;
++    uint32_t current_sampler_element;
++    bool in_sampler;
+     uint32_t dsv_count;
+     uint32_t rtv_count;
+     uint32_t texture_count;
+@@ -1078,6 +1084,7 @@ static const struct fx_state fx_2_pass_states[] =
+     { "MaxAnisotropy", HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,    1, 261, 174 },
+     { "SRGBTexture",   HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,    1, 261, 175 },
+     { "ElementIndex",  HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,    1, 261, 176 },
++    { "Sampler",       HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_SAMPLER, 1, 261, 178 },
+ };
+
+ static const struct fx_state fx_2_sampler_states[] =
+@@ -1113,6 +1120,7 @@ static void write_fx_2_pass(struct hlsl_ir_var *var, struct fx_write_context *fx
+
+     /* For some reason every pass adds to the total shader object count. */
+     fx->shader_count++;
++    ++fx->current_pass;
+ }
+
+ enum fx_4_type_constants
+@@ -1822,6 +1830,7 @@ static void write_fx_2_technique(struct hlsl_ir_var *var, struct fx_write_contex
+
+     write_fx_2_annotations(var, annotation_count_offset, fx);
+
++    fx->current_pass = 0;
+     LIST_FOR_EACH_ENTRY(pass, &var->scope->vars, struct hlsl_ir_var, scope_entry)
+     {
+         write_pass(pass, fx);
+@@ -1829,6 +1838,7 @@ static void write_fx_2_technique(struct hlsl_ir_var *var, struct fx_write_contex
+     }
+
+     set_u32(buffer, pass_count_offset, count);
++    ++fx->current_technique;
+ }
+
+ /* Effects represent bool values as 1/0, as opposed to ~0u/0 as used by
+@@ -1932,6 +1942,14 @@ static bool compile_shader(const struct hlsl_ir_compile *compile, struct fx_writ
+         .minor = compile->profile->minor_version,
+     };
+
++    /* The SM1 writer cannot encode the normalized register form produced by
++     * the HLSL frontend for texture operations. SM2 preserves that form. */
++    if (d3dbc && version.major == 1)
++    {
++        version.major = 2;
++        version.minor = 0;
++    }
++
+     compile_info.target_type = d3dbc ? VKD3D_SHADER_TARGET_D3D_BYTECODE : VKD3D_SHADER_TARGET_DXBC_TPF;
+
+     if (!vsir_program_init(&program, &compile_info, &version, 0, VSIR_CF_STRUCTURED,
+@@ -1973,7 +1992,26 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+     {
+         if (type->class == HLSL_CLASS_SAMPLER)
+         {
+-            hlsl_fixme(ctx, &var->loc, "Writing fx_2_0 sampler objects initializers is not implemented.");
++            struct vkd3d_bytecode_buffer structured = fx->structured;
++            uint32_t count;
++
++            if (elements_count != 1)
++            {
++                hlsl_fixme(ctx, &var->loc, "Writing fx_2_0 sampler arrays is not implemented.");
++                return 0;
++            }
++
++            memset(&fx->structured, 0, sizeof(fx->structured));
++            fx->in_sampler = true;
++            fx->current_sampler_element = i;
++            count = write_state_block((struct hlsl_ir_var *)var, i, fx);
++            fx->in_sampler = false;
++
++            offset = fx->unstructured.size;
++            put_u32(&fx->unstructured, count);
++            bytecode_put_bytes(&fx->unstructured, fx->structured.data, fx->structured.size);
++            vkd3d_free(fx->structured.data);
++            fx->structured = structured;
+         }
+         else
+         {
+@@ -2199,6 +2237,9 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+     struct hlsl_ctx *ctx = fx->ctx;
+     struct hlsl_ir_constant *c;
+
++    while (value_node->type == HLSL_IR_EXPR && hlsl_ir_expr(value_node)->op == HLSL_OP1_CAST)
++        value_node = hlsl_ir_expr(value_node)->operands[0].node;
++
+     put_u32(buffer, entry->name_id);
+     put_u32(buffer, entry->lhs_index);
+     type_offset = put_u32(buffer, 0);
+@@ -2217,9 +2258,64 @@ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+                 put_u32(unstructured, c->value.u[0].u);
+             }
+             break;
++        }
++        case HLSL_IR_LOAD:
++        {
++            struct hlsl_ir_load *load = hlsl_ir_load(value_node);
++            const char *name = load->src.var->name;
++            uint32_t id = fx->object_variable_count++;
++            uint32_t size = strlen(name) + 1;
++
++            if (load->src.path_len)
++            {
++                hlsl_fixme(ctx, &var->loc, "Indexed state parameter references are not implemented.");
++                break;
++            }
++
++            type = write_fx_2_state_type(entry, fx);
++            value = put_u32(unstructured, id);
++
++            put_u32(&fx->objects, fx->in_sampler ? ~0u : fx->current_technique);
++            put_u32(&fx->objects, fx->in_sampler ? fx->parameter_count : fx->current_pass);
++            put_u32(&fx->objects, fx->in_sampler ? fx->current_sampler_element : 0);
++            put_u32(&fx->objects, fx->current_state);
++            put_u32(&fx->objects, 1);
++            put_u32(&fx->objects, size);
++            bytecode_put_bytes(&fx->objects, name, size);
++            while (fx->objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            break;
++        }
++        case HLSL_IR_COMPILE:
++        {
++            struct vkd3d_shader_code code = {0};
++            uint32_t id = fx->object_variable_count++;
++
++            if (!compile_shader(hlsl_ir_compile(value_node), fx, &code))
++                break;
++
++            type = write_fx_2_state_type(entry, fx);
++            value = put_u32(unstructured, id);
++            put_u32(&fx->objects, fx->current_technique);
++            put_u32(&fx->objects, fx->current_pass);
++            put_u32(&fx->objects, 0);
++            put_u32(&fx->objects, fx->current_state);
++            put_u32(&fx->objects, 0);
++            put_u32(&fx->objects, code.size);
++            bytecode_put_bytes(&fx->objects, code.code, code.size);
++            while (fx->objects.size % 4)
++                bytecode_put_bytes_unaligned(&fx->objects, "\0", 1);
++            vkd3d_shader_free_shader_code(&code);
++            ++fx->shader_count;
++            break;
+         }
+         default:
+-            hlsl_fixme(ctx, &var->loc, "Unsupported assignment type for state %s.", entry->name);
++            if (value_node->type == HLSL_IR_EXPR)
++                hlsl_fixme(ctx, &var->loc, "Unsupported expression %s for state %s.",
++                        debug_hlsl_expr_op(hlsl_ir_expr(value_node)->op), entry->name);
++            else
++                hlsl_fixme(ctx, &var->loc, "Unsupported assignment type %u for state %s.",
++                        value_node->type, entry->name);
+     }
+
+     set_u32(buffer, type_offset, type);
+@@ -2752,13 +2843,16 @@ static bool replace_state_block_constant(struct hlsl_ctx *ctx, struct hlsl_ir_no
+     struct hlsl_ir_node *c;
+     unsigned int value;
+
+-    if (!replace_context->values)
+-        return false;
+     if (instr->type != HLSL_IR_STATEBLOCK_CONSTANT)
+         return false;
+
+     state_constant = hlsl_ir_stateblock_constant(instr);
+-    if (!get_fx_4_state_enum_value(replace_context->values, state_constant->name, &value))
++    if (!ascii_strcasecmp(state_constant->name, "false"))
++        value = 0;
++    else if (!ascii_strcasecmp(state_constant->name, "true"))
++        value = 1;
++    else if (!replace_context->values
++            || !get_fx_4_state_enum_value(replace_context->values, state_constant->name, &value))
+     {
+         hlsl_error(ctx, &replace_context->var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
+                 "Unrecognized state constant %s.", state_constant->name);
+@@ -2784,6 +2878,7 @@ static inline bool is_object_fx_type(enum state_property_component_type type)
+         case FX_HULLSHADER:
+         case FX_COMPUTESHADER:
+         case FX_TEXTURE:
++        case FX_SAMPLER:
+         case FX_RENDERTARGETVIEW:
+         case FX_DEPTHSTENCILVIEW:
+         case FX_BLEND:
+@@ -2812,6 +2907,8 @@ static inline enum hlsl_type_class hlsl_type_class_from_fx_type(enum state_prope
+             return HLSL_CLASS_COMPUTE_SHADER;
+         case FX_TEXTURE:
+             return HLSL_CLASS_TEXTURE;
++        case FX_SAMPLER:
++            return HLSL_CLASS_SAMPLER;
+         case FX_RENDERTARGETVIEW:
+             return HLSL_CLASS_RENDER_TARGET_VIEW;
+         case FX_DEPTHSTENCILVIEW:
+@@ -3189,6 +3286,8 @@ static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var,
+     /* Turn named constants into actual constants. */
+     hlsl_transform_ir(ctx, lower_null_constant, entry->instrs, NULL);
+     hlsl_transform_ir(ctx, replace_state_block_constant, entry->instrs, &replace_context);
++    if (entry->args->node->type == HLSL_IR_STATEBLOCK_CONSTANT)
++        replace_state_block_constant(ctx, entry->args->node, &replace_context);
+     hlsl_run_const_passes(ctx, entry->instrs);
+
+     /* Now cast and run folding again. */
+@@ -3199,7 +3298,7 @@ static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var,
+
+         switch (node->type)
+         {
+-            case HLSL_IR_LOAD:
++        case HLSL_IR_LOAD:
+             {
+                 struct hlsl_ir_load *load = hlsl_ir_load(node);
+
+@@ -3623,6 +3722,7 @@ static uint32_t write_state_block(struct hlsl_ir_var *var, unsigned int block_in
+             /* Resolve special constant names and property names. */
+             resolve_state_block_values(var, entry, fx);
+
++            fx->current_state = count;
+             write_state_assignment(var, entry, fx);
+            ++count;
+        }
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+index 71f3184..8c1479a 100644
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2178,7 +2178,12 @@ static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry
+ 
+     /* TODO: only handles numeric types */
+ 
+-    offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
++    if (entry->name_id == 146)
++        offset = put_u32(buffer, D3DXPT_VERTEXSHADER);
++    else if (entry->name_id == 147)
++        offset = put_u32(buffer, D3DXPT_PIXELSHADER);
++    else
++        offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
+-    put_u32(buffer, D3DXPC_MATRIX_ROWS);
++    put_u32(buffer, entry->name_id == 146 || entry->name_id == 147 ? D3DXPC_OBJECT : D3DXPC_MATRIX_ROWS);
+     put_u32(buffer, 0); /* Name */
+     put_u32(buffer, 0); /* Semantic */
+@@ -2244,7 +2244,7 @@ static const struct fx_write_context_ops fx_2_ops =
+ 
+ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ {
+-    uint32_t offset, size, technique_count, shader_count, parameter_count, object_count;
++    uint32_t offset, size, technique_count, shader_count, parameter_count, object_count, small_object_count;
+     struct vkd3d_bytecode_buffer buffer = { 0 };
+     struct vkd3d_bytecode_buffer *structured;
+     struct fx_write_context fx;
+@@ -2262,8 +2262,9 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     object_count = put_u32(structured, 0);
+ 
+     write_fx_2_parameters(&fx);
++    small_object_count = fx.object_variable_count - 1;
+     write_techniques(ctx->globals, &fx);
+-    put_u32(structured, fx.object_variable_count - 1);
+-    put_u32(structured, 0); /* Resource count */
++    put_u32(structured, small_object_count);
++    put_u32(structured, fx.object_variable_count - 1 - small_object_count);
+ 
+     bytecode_put_bytes(structured, fx.objects.data, fx.objects.size);
+     /* TODO: resources */
+diff --git a/libs/vkd3d-shader/hlsl.l b/libs/vkd3d-shader/hlsl.l
+index 85f0d89..190cd5f 100644
+--- a/libs/vkd3d-shader/hlsl.l
++++ b/libs/vkd3d-shader/hlsl.l
+@@ -167,7 +167,16 @@ tbuffer                 {return KW_TBUFFER;             }
+ (?i:technique)          {return KW_TECHNIQUE;           }
+ technique10             {return KW_TECHNIQUE10;         }
+ technique11             {return KW_TECHNIQUE11;         }
+-texture                 {return KW_TEXTURE;             }
++[Tt][Ee][Xx][Tt][Uu][Rr][Ee] {
++                            struct hlsl_ctx *ctx = yyget_extra(yyscanner);
++
++                            if (ctx->in_state_block)
++                            {
++                                yylval->name = hlsl_strdup(ctx, yytext);
++                                return NEW_IDENTIFIER;
++                            }
++                            return KW_TEXTURE;
++                        }
+ Texture1D               {return KW_TEXTURE1D;           }
+ texture1D               {return KW_TEXTURE1D;           }
+ Texture1DArray          {return KW_TEXTURE1DARRAY;      }

@@ -1,0 +1,16 @@
+pub(in crate::plugins::information) mod zoopedia_body_text_node_projection;
+pub(in crate::plugins::information) mod zoopedia_hierarchy_operations;
+pub(in crate::plugins::information) mod zoopedia_localized_text_presentation_operations;
+pub(super) mod zoopedia_navigation_activation;
+pub(super) mod zoopedia_navigation_control_interaction_projection;
+pub(in crate::plugins::information) mod zoopedia_navigation_operations;
+pub(in crate::plugins::information) mod zoopedia_navigation_types;
+pub(super) mod zoopedia_page_hydration;
+pub(in crate::plugins::information) mod zoopedia_page_projection;
+pub(in crate::plugins::information) mod zoopedia_page_text_node_projection;
+pub(in crate::plugins::information) mod zoopedia_rich_content_record_projection;
+pub(in crate::plugins::information) mod zoopedia_rich_content_tree_projection;
+pub(in crate::plugins::information) mod zoopedia_rich_content_types;
+pub(super) mod zoopedia_table_of_contents_projection;
+mod zoopedia_table_of_contents_types;
+pub(in crate::plugins::information) mod zoopedia_title_text_node_projection;

@@ -1,0 +1,12 @@
+diff --git a/mojoshader_preprocessor.c b/mojoshader_preprocessor.c
+--- a/mojoshader_preprocessor.c
++++ b/mojoshader_preprocessor.c
+@@ -224,7 +224,7 @@
+ 
+     const DWORD share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+     const HANDLE handle = CreateFileW(wpath, FILE_GENERIC_READ, share,
+-                                      NULL, OPEN_EXISTING, NULL, NULL);
++                                      NULL, OPEN_EXISTING, 0, NULL);
+     if (handle == INVALID_HANDLE_VALUE)
+         return 0;
+ 

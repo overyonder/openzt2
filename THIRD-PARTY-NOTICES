@@ -1,0 +1,21 @@
+OpenZT2's own code is licensed under MIT; see LICENSE.
+
+Third-party code retains its own licenses:
+- vendor/bevy_hanabi, vendor/bevy_image, vendor/bevy_render: MIT OR Apache-2.0.
+- vendor/lunify: MIT.
+- patches/vkd3d patches: LGPL-2.1-or-later, like vkd3d.
+- patches/mojoshader patches: zlib, like MojoShader.
+- patches/gamescope patches: BSD-2-Clause, like Gamescope.
+- crates/game/assets/fonts/ComicNeue-Regular.ttf: SIL Open Font License 1.1;
+  see crates/game/assets/fonts/ComicNeue-OFL.txt.
+
+The root MIT license does not replace these licenses or grant any rights to
+Zoo Tycoon 2 content. Original game files are not distributed with OpenZT2.
+
+Binary distributions include dependency license notices and the corresponding
+modified shader-library sources and build scripts. MPL-2.0 Rust dependency
+sources are included in mpl-sources.tar.gz when used. vkd3d-shader is used under
+LGPL-2.1-or-later. Its shared library may be replaced with an ABI-compatible
+modified version. Modification and reverse engineering for debugging such
+modifications are permitted. Keep the library's filename and exported ABI when
+replacing it; rebuild and re-sign an application bundle locally if required.

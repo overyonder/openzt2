@@ -1,0 +1,189 @@
+name: Native release builds
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v[0-9]*']
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux
+            direnv: linux-amd64
+          - os: macos-14
+            platform: macos
+            direnv: darwin-arm64
+          - os: windows-2022
+            platform: windows
+            direnv: windows-amd64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    env:
+      OPENZT2_RELEASE_HOST: '1'
+      CARGO_BUILD_JOBS: '2'
+    defaults:
+      run:
+        working-directory: .
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Configure source-owned toolchain and staging
+        run: |
+          python3 - <<'PY'
+          import os, pathlib, re, tomllib
+          if os.environ["GITHUB_REF_TYPE"] == "tag":
+              version = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
+              if os.environ["GITHUB_REF_NAME"] != f"v{version}":
+                  raise SystemExit(f"Release tag must match Cargo.toml: v{version}")
+          version = re.search(r'rust-bin.stable."([0-9.]+)"', pathlib.Path('flake.nix').read_text())[1]
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              print(f'OPENZT2_RUST_VERSION={version}', file=output)
+              print(f'OPENZT2_NATIVE_DEPENDENCY_DIR={os.environ["RUNNER_TEMP"]}/openzt2-native', file=output)
+              print(f'KAI_CARGO_TARGET_ROOT={os.environ["RUNNER_TEMP"]}/cargo-targets', file=output)
+          PY
+      - name: Install pinned Rust
+        run: |
+          rustup toolchain install "$OPENZT2_RUST_VERSION" --profile minimal
+          rustup override set "$OPENZT2_RUST_VERSION"
+      - name: Linux native tools
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake libtool flex bison libjson-perl cmake ninja-build pkg-config spirv-headers libvulkan-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev patchelf dpkg-dev mingw-w64-tools
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> ${{ runner.temp }}/cargo-targets/openzt2-reimplementation
+          cache-on-failure: true
+      - name: macOS native tools
+        if: runner.os == 'macOS'
+        run: |
+          brew install autoconf automake libtool flex bison cmake ninja pkg-config spirv-headers vulkan-headers cpanminus gpatch mingw-w64
+          cpanm --local-lib="$RUNNER_TEMP/perl" JSON
+          echo "PERL5LIB=$RUNNER_TEMP/perl/lib/perl5" >> "$GITHUB_ENV"
+          echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
+          echo "CPPFLAGS=-I$(brew --prefix)/include" >> "$GITHUB_ENV"
+      - uses: msys2/setup-msys2@v2
+        if: runner.os == 'Windows'
+        with:
+          msystem: MINGW64
+          update: true
+          install: >-
+            git make patch python autoconf automake libtool flex bison perl-JSON
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja mingw-w64-x86_64-tools
+            mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-spirv-headers
+      - name: Build Windows shader dependencies
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: bash tools/release/build-native.sh
+      - name: Build Unix shader dependencies
+        if: runner.os != 'Windows'
+        run: bash tools/release/build-native.sh
+      - name: Install direnv
+        run: |
+          mkdir -p "$RUNNER_TEMP/release-tools"
+          suffix=''
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
+          curl --fail --location "https://github.com/direnv/direnv/releases/download/v2.37.1/direnv.${{ matrix.direnv }}" -o "$RUNNER_TEMP/release-tools/direnv$suffix"
+          chmod +x "$RUNNER_TEMP/release-tools/direnv$suffix"
+          echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
+          if [[ "$RUNNER_OS" == Windows ]]; then printf '%s\n' 'C:\msys64\mingw64\bin' >> "$GITHUB_PATH"; fi
+      - name: Install dependency license collector
+        run: cargo install --locked --features cli cargo-about --version 0.9.0
+      - name: Build and package
+        if: runner.os != 'Windows'
+        run: |
+          direnv allow .
+          direnv exec . python3 tools/release/package.py package
+      - name: Build and package Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          direnv allow .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # direnv exec uses Unix-only executable lookup. Activate the same
+          # .envrc through its structured exporter before invoking the packager.
+          $changes = direnv export json | ConvertFrom-Json -AsHashtable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($entry in $changes.GetEnumerator()) {
+            [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value, 'Process')
+          }
+          python tools/release/package.py package
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenZT2-${{ matrix.platform }}
+          path: |
+            build/releases/windows-amd64/OpenZT2-*.zip
+            build/releases/darwin-arm64/OpenZT2-*.dmg
+            build/releases/linux-x86_64/OpenZT2-*.deb
+            build/releases/windows-amd64/SHA256SUMS
+            build/releases/darwin-arm64/SHA256SUMS
+            build/releases/linux-x86_64/SHA256SUMS
+          if-no-files-found: error
+
+  publish:
+    needs: package
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: OpenZT2-*
+          path: artifacts
+      - name: Verify release packages
+        run: |
+          python3 - <<'PY'
+          import hashlib, pathlib, shutil
+          root = pathlib.Path('artifacts')
+          output = pathlib.Path('release')
+          output.mkdir()
+          checksums = []
+          for manifest in sorted(root.rglob('SHA256SUMS')):
+              for line in manifest.read_text().splitlines():
+                  expected, name = line.split(maxsplit=1)
+                  name = name.strip()
+                  package = manifest.parent / name
+                  if package.name != name or not package.is_file():
+                      raise SystemExit(f'Invalid package path: {name}')
+                  with package.open('rb') as stream:
+                      actual = hashlib.file_digest(stream, 'sha256').hexdigest()
+                  if actual != expected:
+                      raise SystemExit(f'Checksum mismatch: {name}')
+                  shutil.copy2(package, output / name)
+                  checksums.append(f'{actual}  {name}')
+          if len(checksums) != 3:
+              raise SystemExit('Expected Windows, macOS and Linux packages')
+          (output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
+          PY
+      - name: Publish tagged release
+        run: |
+          options=()
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            options+=(--prerelease --latest=false)
+          fi
+          cat > release-notes.md <<'EOF'
+          Early alpha. Gameplay remains incomplete and known bugs are tracked in Issues.
+
+          Packages: Windows x64 (.zip), macOS Apple Silicon (.dmg), Linux x64 (.deb, Ubuntu 24.04 or compatible).
+
+          Requires your own Zoo Tycoon 2 game files. They are not included. These packages have not yet been verified through complete gameplay sessions on all three platforms.
+          EOF
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
+            --notes-file release-notes.md "${options[@]}" release/*

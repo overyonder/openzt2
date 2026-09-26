@@ -1,0 +1,5 @@
+[alias]
+game = "run --bin openzt2"
+profile-cpu = "build --profile profiling -p openzt2_game --no-default-features"
+profile-gpu = "build --profile profiling -p openzt2_game --no-default-features --features trace-tracy-gpu"
+tracy-memory = "run --profile profiling -p openzt2_game --no-default-features --features trace-tracy-memory"

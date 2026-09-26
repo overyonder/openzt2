@@ -1,0 +1,12 @@
+# The campaign screen lists campaigns and the selected campaign's scenarios (#53).
+phase splash
+wait 300
+click "splashbutton0"
+phase main-menu
+wait 120
+click "Campaign Game Button"
+phase map-selection
+wait 600
+capture campaign-screen
+expect-rows "Campaign List" >= 1
+expect-rows "Campaign Scenario List" >= 1

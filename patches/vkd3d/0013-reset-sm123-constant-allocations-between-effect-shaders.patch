@@ -1,0 +1,20 @@
+diff --git a/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d-shader/hlsl_codegen.c
+--- a/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d-shader/hlsl_codegen.c
+@@ -8104,6 +8104,16 @@ static void allocate_const_registers(struct hlsl_ctx *ctx, struct hlsl_block *body)
+ 
+     sort_uniforms_by_bind_count(ctx, HLSL_REGSET_NUMERIC);
+ 
++    ctx->constant_defs.count = 0;
++
++    /* Effects compile multiple shaders using the same HLSL context. The
++     * allocator above is new for each shader; retained uniform allocations
++     * must not bypass it and overlap newly allocated constants. Explicit
++     * register reservations are reapplied by the following loop. */
++    LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
++    {
++        memset(&var->regs[HLSL_REGSET_NUMERIC], 0, sizeof(var->regs[HLSL_REGSET_NUMERIC]));
++    }
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+     {
+         unsigned int reg_size = var->data_type->reg_size[HLSL_REGSET_NUMERIC];

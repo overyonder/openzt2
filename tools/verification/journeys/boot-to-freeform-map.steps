@@ -1,0 +1,13 @@
+# Splash, main menu and map selection into the default Freeform map.
+phase splash
+wait 300
+click "splashbutton0"           # the splash tiles are the continue buttons
+phase main-menu
+wait 120
+click "Freeform Button"
+phase map-selection
+wait 120
+click "Play Map"
+phase in-game
+wait 120
+snapshot entered-map

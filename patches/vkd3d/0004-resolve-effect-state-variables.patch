@@ -1,0 +1,32 @@
+diff --git a/libs/vkd3d-shader/hlsl.y b/libs/vkd3d-shader/hlsl.y
+index 0f9a5ac..6985439 100644
+--- a/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d-shader/hlsl.y
+@@ -9656,13 +9656,22 @@ primary_expr:
+     | NEW_IDENTIFIER
+         {
+             if (ctx->in_state_block)
+             {
+-                struct hlsl_ir_node *constant;
++                struct hlsl_ir_var *var = hlsl_get_var(ctx->globals, $1);
++                struct hlsl_ir_node *node;
+ 
+-                if (!(constant = hlsl_new_stateblock_constant(ctx, $1, &@1)))
+-                    YYABORT;
++                if (var)
++                {
++                    if (!(node = &hlsl_new_var_load(ctx, var, &@1)->node))
++                        YYABORT;
++                }
++                else
++                {
++                    if (!(node = hlsl_new_stateblock_constant(ctx, $1, &@1)))
++                        YYABORT;
++                }
+                 vkd3d_free($1);
+ 
+-                if (!($$ = make_block(ctx, constant)))
++                if (!($$ = make_block(ctx, node)))
+                     YYABORT;
+             }
+             else

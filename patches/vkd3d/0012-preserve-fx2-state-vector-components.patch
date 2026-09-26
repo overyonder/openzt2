@@ -1,0 +1,18 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2190,2 +2190,7 @@
+-    put_u32(buffer, entry->args_count); /* Rows */
+-    put_u32(buffer, 1); /* Columns */
++    /* FX2 stores columns before rows. A vector argument is one expression,
++     * not one scalar; preserve its complete component count. */
++    {
++        const unsigned int components = entry->args_count * hlsl_type_component_count(data_type);
++        put_u32(buffer, components < 4 ? components : 4);
++        put_u32(buffer, (components + 3) / 4);
++    }
+@@ -2229,1 +2229,3 @@
+-                put_u32(unstructured, c->value.u[0].u);
++                for (unsigned int component = 0;
++                        component < hlsl_type_component_count(c->node.data_type); ++component)
++                    put_u32(unstructured, c->value.u[component].u);

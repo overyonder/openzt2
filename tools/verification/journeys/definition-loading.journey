@@ -1,0 +1,10 @@
+# World definitions, audio and cameras load without the errors fixed in #176-#181.
+include boot-to-freeform-map.steps
+expect-log-absent "more than one distinct guest service container"           # 176
+expect-log-absent "unsupported audio document root"                            # 177
+expect-log-absent "has no resolved model scene"                                # 178
+expect-log-absent "has no input component"                                     # 179
+expect-log-absent "camera has no perspective component"                        # 179
+expect-log-absent "elephanthuge"                                               # 180
+expect-log-absent "requires unsupported attachment transform policy"           # 181
+expect-log-absent "Failed to load asset"
