@@ -85,7 +85,7 @@ fn execute_short_render_world_systems_without_per_system_task_dispatch(app: &mut
     use bevy::{
         core_pipeline::schedule::{Core2d, Core3d},
         ecs::schedule::{ScheduleLabel, SingleThreadedExecutor},
-        render::{renderer::RenderGraph, ExtractSchedule, Render, RenderApp},
+        render::{renderer::RenderGraph, ExtractSchedule, RenderApp},
     };
 
     // Preserve the render thread, query-level parallelism and topological
@@ -93,7 +93,10 @@ fn execute_short_render_world_systems_without_per_system_task_dispatch(app: &mut
     let render_app = app.sub_app_mut(RenderApp);
     for label in [
         ExtractSchedule.intern(),
-        Render.intern(),
+        // macOS needs Bevy's multi-threaded executor to move NonSend
+        // `create_surfaces` onto the main thread; NSView access panics elsewhere.
+        #[cfg(not(target_vendor = "apple"))]
+        bevy::render::Render.intern(),
         RenderGraph.intern(),
         Core3d.intern(),
         Core2d.intern(),
