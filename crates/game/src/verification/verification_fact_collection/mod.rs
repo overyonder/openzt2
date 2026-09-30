@@ -21,6 +21,13 @@ use crate::{
         information::entity_selection_types::SelectedEntity,
         photos::{photo_album_types::CameraRollPhoto, photo_capture_types::Photo},
         placement::placed_object_types::PlacedObjectDefinitionReference,
+        settings::{
+            display_settings_types::{DisplayMode, DisplaySettings},
+            graphics_settings_types::GraphicsSettings,
+            online_message_policy_types::OnlineMessagePolicy,
+            options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
+        },
+        simulation_time::simulation_control_types::SimulationControl,
         staff::staff_employment_types::Employment,
         topology::topology_graph_types::{FenceEdge, PathTile},
         ui::picking::UiPointerCapture,
@@ -44,6 +51,11 @@ pub(crate) struct VerificationWorldFactQueries<'w, 's> {
     selected: Res<'w, SelectedEntity>,
     construction_tool: Res<'w, ConstructionTool>,
     ui_pointer_capture: Res<'w, UiPointerCapture>,
+    display: Res<'w, DisplaySettings>,
+    graphics: Res<'w, GraphicsSettings>,
+    online_messages: Res<'w, OnlineMessagePolicy>,
+    settings_draft: Res<'w, OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    simulation: Option<Res<'w, SimulationControl>>,
     cursors: Query<'w, 's, &'static ConstructionCursor>,
     previews: Query<'w, 's, (&'static ConstructionPreview, &'static Visibility)>,
     fences: Query<'w, 's, (), With<FenceEdge>>,
@@ -86,6 +98,30 @@ pub(crate) fn collect_requested_verification_facts(
         flag(world.admissions.is_some_and(|open| open.0)),
     );
     fact("selected", flag(world.selected.0.is_some()));
+    fact(
+        "settings_windowed",
+        flag(world.display.mode == DisplayMode::Windowed),
+    );
+    fact(
+        "settings_highest_detail",
+        flag(*world.graphics == GraphicsSettings::from_source_highest_detail_preset()),
+    );
+    fact("settings_motd", flag(world.online_messages.enabled));
+    fact(
+        "settings_draft_matches_accepted",
+        flag(
+            world.settings_draft.display == *world.display
+                && world.settings_draft.graphics == *world.graphics
+                && world.settings_draft.message_of_the_day == world.online_messages.enabled,
+        ),
+    );
+    fact(
+        "settings_draft_clean",
+        flag(!world.settings_draft.dirty_display && !world.settings_draft.dirty_graphics),
+    );
+    if let Some(simulation) = &world.simulation {
+        fact("simulation_paused", flag(simulation.paused));
+    }
     fact(
         "construction_tool_active",
         flag(*world.construction_tool != ConstructionTool::Inspect),
@@ -131,6 +167,8 @@ pub(crate) fn collect_requested_verification_facts(
     }
     if let Ok((transform, camera)) = world.zoo_cameras.single() {
         let forward = transform.forward();
+        fact("camera_x_m", f64::from(transform.translation().x));
+        fact("camera_z_m", f64::from(transform.translation().z));
         fact("camera_height_m", f64::from(transform.translation().y));
         fact("camera_pitch_deg", f64::from((-forward.y).asin().to_degrees()));
         // Read the field of view from the clip matrix so custom projections count too.

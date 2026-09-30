@@ -1,0 +1,46 @@
+# Reuse the purchase information panel across animals and buildings (#64).
+# Inspect the captures for text/control overlap as well as asserted visibility.
+include boot-to-freeform-map.steps
+click "animals"
+wait 60
+click "icon" 3
+wait 180
+expect-visible "Buy Info Panel"
+expect-visible "sort button"
+expect-hidden "Upkeep Panel"
+capture purchase-animal
+click "construction"
+wait 30
+click "Building Tab"
+wait 30
+click "icon" 1
+wait 180
+expect-visible "Buy Info Panel"
+expect-hidden "sort button"
+capture purchase-building
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+capture purchase-closed
+click "icon" 1
+wait 120
+expect-visible "Buy Info Panel"
+expect-hidden "sort button"
+capture purchase-building-reopened
+click "animals"
+wait 60
+click "icon" 3
+wait 120
+expect-visible "Buy Info Panel"
+expect-visible "sort button"
+expect-hidden "Upkeep Panel"
+capture purchase-animal-returned
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+click "icon" 3
+wait 120
+expect-visible "Buy Info Panel"
+expect-visible "sort button"
+expect-hidden "Upkeep Panel"
+capture purchase-animal-reopened

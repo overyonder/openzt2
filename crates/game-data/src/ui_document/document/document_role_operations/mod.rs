@@ -24,6 +24,7 @@ impl UiDocumentRole {
             Self::Options => "options",
             Self::InGameOptions => "in-game-options",
             Self::SavedGames => "saved-games",
+            Self::SaveGame => "save-game",
             Self::InGameHud => "in-game-hud",
             Self::InGamePersistentStatus => "in-game-persistent-status",
             Self::TranquilizerHud => "tranquilizer-hud",

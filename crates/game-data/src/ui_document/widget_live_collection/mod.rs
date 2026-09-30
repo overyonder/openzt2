@@ -28,4 +28,5 @@ pub enum UiWidgetLiveCollectionSource {
     FinanceDonationsBySpecies,
     FinanceTourDonations,
     FinanceShowDonations,
+    SavedGameSlots,
 }

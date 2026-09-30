@@ -89,6 +89,7 @@ impl Plugin for InformationPlugin {
                     )
                         .chain(),
                     (
+                        catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_tool_request,
                         catalogue::catalogue_selection_and_details_projection::project_selected_catalogue_entry_to_purchase_information_document,
                         catalogue::catalogue_selection_and_details_projection::position_visible_purchase_information_rows_from_authored_dynamic_start,
                     )

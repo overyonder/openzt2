@@ -120,6 +120,7 @@ impl Plugin for PersistencePlugin {
                         select_persisted_profile_or_create_localized_first_profile,
                     profile_request_execution::begin_persisting_changed_active_profile_options,
                     persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests,
+                    save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
                     save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates,
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
                     persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor,

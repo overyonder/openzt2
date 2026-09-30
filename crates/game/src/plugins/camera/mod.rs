@@ -17,7 +17,8 @@ use systems::{
     camera_definition_hydration::apply_authored_camera_definition_to_runtime_components,
     camera_mode_transitions::{
         advance_camera_transition, apply_free_camera_pose, begin_camera_transition,
-        capture_camera_return_state, restore_camera_return_state, validate_camera_mode_targets,
+        capture_camera_return_state, clear_camera_input_on_return, restore_camera_return_state,
+        validate_camera_mode_targets,
     },
     camera_motion_reporting::report_camera_motion,
     default_ui_camera_routing::route_default_ui_camera,
@@ -60,7 +61,7 @@ impl Plugin for ZooCameraPlugin {
                     project_camera_actions_into_camera_intent
                         .after(ui_actions::route_camera_ui_actions),
                     project_camera_mouse_look_onto_primary_window_cursor
-                        .after(ui_actions::route_camera_ui_actions),
+                        .after(clear_camera_input_on_return),
                     capture_camera_return_state
                         .after(crate::plugins::immersive_modes::ImmersiveModeTransitions),
                     begin_camera_transition.after(capture_camera_return_state),
@@ -68,6 +69,10 @@ impl Plugin for ZooCameraPlugin {
                         .after(begin_camera_transition)
                         .before(restore_authored_overhead_camera_without_snapshot),
                     restore_camera_return_state,
+                    clear_camera_input_on_return
+                        .after(apply_free_camera_pose)
+                        .after(project_camera_actions_into_camera_intent)
+                        .before(restore_authored_overhead_camera_without_snapshot),
                     restore_authored_overhead_camera_without_snapshot
                         .before(restore_camera_return_state),
                     validate_camera_mode_targets

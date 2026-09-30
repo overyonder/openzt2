@@ -1,0 +1,29 @@
+# Load presents the load dialog and can be cancelled and reopened (#39).
+phase splash
+wait 300
+click "splashbutton0"
+phase main-menu
+wait 120
+click "Load Save Game Button"
+wait 180
+expect-visible "LoadGameGUI"
+expect-visible "SavedGamesList"
+expect-visible "TextButton Load"
+capture load-save-popup
+click "TextButton Load"          # no selected row: stay in the dialog
+wait 60
+phase main-menu
+expect-visible "LoadGameGUI"
+click "TextButton Cancel"
+wait 60
+phase main-menu
+expect-hidden "Load Game Shell"
+click "Load Save Game Button"
+wait 180
+expect-visible "Load Game Shell"
+expect-visible "TextButton Load"
+capture load-save-popup-reopened
+click "TextButton Cancel"
+wait 60
+expect-hidden "Load Game Shell"
+phase main-menu

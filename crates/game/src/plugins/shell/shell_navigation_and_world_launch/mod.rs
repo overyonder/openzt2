@@ -142,6 +142,7 @@ pub(super) fn begin_loading_selected_world(
             let map = match mode {
                 WorldSessionMode::Campaign => catalogue
                     .campaign_scenario(scenario)
+                    .filter(|_| catalogue.scenario(scenario).is_some())
                     .and_then(|scenario| catalogue.map(scenario.map)),
                 WorldSessionMode::Freeform | WorldSessionMode::Challenge => catalogue.map(scenario),
             };

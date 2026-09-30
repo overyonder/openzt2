@@ -108,25 +108,79 @@ pub(crate) fn advance_pan_accumulators(
     Vec2::new(smoothed[2] - smoothed[3], smoothed[0] - smoothed[1])
 }
 
-pub(crate) fn queue_wheel_zoom(queue_seconds: &mut f32, wheel_notches: f32) {
-    const SECONDS_PER_NOTCH: f32 = 0.08;
-    let impulse = wheel_notches * SECONDS_PER_NOTCH;
-    if impulse != 0.0 {
-        if queue_seconds.signum() != 0.0 && queue_seconds.signum() != impulse.signum() {
-            *queue_seconds = 0.0;
+/// Which way the wheel turned, from the sign of its notches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WheelDirection {
+    Up,
+    Down,
+}
+
+impl WheelDirection {
+    fn of(notches: f32) -> Option<Self> {
+        if notches > 0.0 {
+            Some(Self::Up)
+        } else if notches < 0.0 {
+            Some(Self::Down)
         } else {
-            *queue_seconds += impulse;
+            None
+        }
+    }
+
+    fn sign(self) -> f32 {
+        match self {
+            Self::Up => 1.0,
+            Self::Down => -1.0,
         }
     }
 }
 
-pub(crate) fn consume_wheel_zoom(queue_seconds: &mut f32, delta_seconds: f32) -> f32 {
-    if *queue_seconds == 0.0 {
+/// Zoom queued by wheel notches. An idle queue has no direction, so a notch in
+/// either direction starts a new queue, and an opposite notch empties it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) enum WheelZoomQueue {
+    #[default]
+    Idle,
+    Pending {
+        direction: WheelDirection,
+        seconds: f32,
+    },
+}
+
+pub(crate) fn queue_wheel_zoom(queue: &mut WheelZoomQueue, wheel_notches: f32) {
+    const SECONDS_PER_NOTCH: f32 = 0.08;
+    let Some(notch) = WheelDirection::of(wheel_notches) else {
+        return;
+    };
+    let impulse = wheel_notches.abs() * SECONDS_PER_NOTCH;
+    *queue = match *queue {
+        WheelZoomQueue::Pending { direction, seconds } if direction == notch => {
+            WheelZoomQueue::Pending {
+                direction,
+                seconds: seconds + impulse,
+            }
+        }
+        WheelZoomQueue::Pending { .. } => WheelZoomQueue::Idle,
+        WheelZoomQueue::Idle => WheelZoomQueue::Pending {
+            direction: notch,
+            seconds: impulse,
+        },
+    };
+}
+
+pub(crate) fn consume_wheel_zoom(queue: &mut WheelZoomQueue, delta_seconds: f32) -> f32 {
+    let WheelZoomQueue::Pending { direction, seconds } = *queue else {
         return 0.0;
-    }
-    let direction = queue_seconds.signum();
-    *queue_seconds -= direction * delta_seconds.min(queue_seconds.abs());
-    direction * 2.0
+    };
+    let remaining = seconds - delta_seconds.min(seconds);
+    *queue = if remaining > 0.0 {
+        WheelZoomQueue::Pending {
+            direction,
+            seconds: remaining,
+        }
+    } else {
+        WheelZoomQueue::Idle
+    };
+    direction.sign() * 2.0
 }
 
 pub(crate) fn overhead_eye_and_target(rig: &OverheadRig) -> (Vec3, Vec3) {

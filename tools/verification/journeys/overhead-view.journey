@@ -1,4 +1,4 @@
-# Zoo guest mode can be entered, and the overhead view button returns from it (#83).
+# First-person/staff entry returns through Overhead and Escape (#82).
 include boot-to-freeform-map.steps
 click "firstperson"
 wait 180
@@ -8,4 +8,25 @@ click "overhead"
 wait 180
 expect immersive_mode_active == 0
 expect camera_pitch_deg > 45
+expect camera_pitch_deg == @entered-map
+expect camera_height_m == @entered-map
+expect camera_fov_deg == @entered-map
 capture overhead
+click "firstperson"
+wait 180
+expect immersive_mode_active == 1
+capture reentered-first-person
+key ESCAPE
+wait 180
+expect immersive_mode_active == 0
+expect camera_pitch_deg == @entered-map
+expect camera_height_m == @entered-map
+expect camera_fov_deg == @entered-map
+capture overhead-after-escape
+click "overhead"
+wait 60
+expect immersive_mode_active == 0
+expect camera_pitch_deg == @entered-map
+expect camera_height_m == @entered-map
+expect camera_fov_deg == @entered-map
+capture repeated-overhead

@@ -11,6 +11,7 @@ use crate::{
             display_settings_types::DisplayMode, graphics_settings_types::GraphicsSettings,
         },
         ui::{
+            authored_ui_change_activation_dispatch::UiPreviousSelection,
             authored_ui_node_projection_components::UiDocumentOwner,
             authored_ui_node_projection_components::UiDocumentRoot,
             authored_ui_selection_state::UiSelected,
@@ -30,10 +31,15 @@ pub(in crate::plugins) fn project_settings_to_authored_controls(
         Has<CameraMouseLook>,
         With<crate::plugins::camera::camera_runtime_state_types::ZooCamera>,
     >,
-    mut authored_controls: Query<(Ref<UiInformationActions>, &UiDocumentOwner, &mut UiSelected)>,
+    mut authored_controls: Query<(
+        Ref<UiInformationActions>,
+        &UiDocumentOwner,
+        &mut UiSelected,
+        Option<&mut UiPreviousSelection>,
+    )>,
 ) {
     let free_mouse_look_enabled = zoo_cameras.iter().next().unwrap_or(true);
-    for (authored_actions, document_owner, mut selected) in &mut authored_controls {
+    for (authored_actions, document_owner, mut selected, previous) in &mut authored_controls {
         if !draft_settings.is_changed() && !authored_actions.is_added() {
             continue;
         }
@@ -59,6 +65,11 @@ pub(in crate::plugins) fn project_settings_to_authored_controls(
         );
         if selected.0 != should_be_selected {
             selected.0 = should_be_selected;
+        }
+        // This mirrors the draft; it is not a player choice. Replaying the
+        // control's authored On action would mark the fresh draft dirty.
+        if let Some(mut previous) = previous {
+            previous.synchronize_with_non_authored_selection_change(should_be_selected);
         }
     }
 }

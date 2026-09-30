@@ -41,6 +41,7 @@ pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
             WorldSessionMode::Campaign => catalogue
                 .campaigns()
                 .flat_map(|campaign| &campaign.scenarios)
+                .filter(|scenario| catalogue.scenario(scenario.id).is_some())
                 .filter_map(|scenario| catalogue.map(scenario.map).map(|map| (scenario.id, map)))
                 .collect::<Vec<_>>(),
             WorldSessionMode::Freeform | WorldSessionMode::Challenge => catalogue

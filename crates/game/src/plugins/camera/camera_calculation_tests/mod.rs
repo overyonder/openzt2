@@ -7,6 +7,7 @@ use super::{
     math::{
         advance_pan_accumulators, advance_transition, apply_camera_relative_pan_to_overhead_focus,
         apply_overhead_zoom_delta, consume_wheel_zoom, overhead_pose, queue_wheel_zoom,
+        WheelZoomQueue,
     },
 };
 
@@ -126,31 +127,17 @@ fn pan_ramp_reaches_the_same_full_scale_at_60_and_144_hz() {
 
 #[test]
 fn one_wheel_notch_queues_eight_hundredths_at_double_zoom_rate() {
-    let mut queued_zoom_seconds_at_60_hz = 0.0;
-    queue_wheel_zoom(&mut queued_zoom_seconds_at_60_hz, 1.0);
-    let mut integrated_zoom_at_60_hz = 0.0;
-    while queued_zoom_seconds_at_60_hz > 0.0 {
-        integrated_zoom_at_60_hz +=
-            consume_wheel_zoom(&mut queued_zoom_seconds_at_60_hz, 1.0 / 60.0) / 60.0;
-    }
-
-    let mut queued_zoom_seconds_at_144_hz = 0.0;
-    queue_wheel_zoom(&mut queued_zoom_seconds_at_144_hz, 1.0);
-    let mut integrated_zoom_at_144_hz = 0.0;
-    while queued_zoom_seconds_at_144_hz > 0.0 {
-        integrated_zoom_at_144_hz +=
-            consume_wheel_zoom(&mut queued_zoom_seconds_at_144_hz, 1.0 / 144.0) / 144.0;
-    }
-
-    assert!((integrated_zoom_at_60_hz - 0.16).abs() <= 2.0 / 60.0);
-    assert!((integrated_zoom_at_144_hz - 0.16).abs() <= 2.0 / 144.0);
-}
-
-#[test]
-fn opposite_wheel_notch_cancels_the_pending_queue_before_reversing() {
-    let mut queued_zoom_seconds = 0.08;
-    queue_wheel_zoom(&mut queued_zoom_seconds, -1.0);
-    assert_eq!(queued_zoom_seconds, 0.0);
+    let integrated_zoom = |hertz: f32| {
+        let mut queue = WheelZoomQueue::Idle;
+        queue_wheel_zoom(&mut queue, 1.0);
+        let mut integrated = 0.0;
+        while queue != WheelZoomQueue::Idle {
+            integrated += consume_wheel_zoom(&mut queue, 1.0 / hertz) / hertz;
+        }
+        integrated
+    };
+    assert!((integrated_zoom(60.0) - 0.16).abs() <= 2.0 / 60.0);
+    assert!((integrated_zoom(144.0) - 0.16).abs() <= 2.0 / 144.0);
 }
 
 #[test]

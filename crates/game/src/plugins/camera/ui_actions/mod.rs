@@ -255,10 +255,6 @@ pub(super) fn route_camera_ui_actions(
         restore_mode.write(RestoreCameraMode {
             transition_seconds: None,
         });
-        for (camera, _, mut intent, _) in &mut cameras {
-            *intent = CameraIntent::default();
-            commands.entity(camera).remove::<CameraMouseLook>();
-        }
     }
 }
 

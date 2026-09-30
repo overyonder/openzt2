@@ -191,8 +191,8 @@ pub(crate) struct CameraIntent {
     pub(crate) turn: f32,
     pub(crate) pitch: f32,
     pub(crate) zoom: f32,
-    /// Signed duration queued by mouse-wheel notches.
-    pub(crate) wheel_zoom_seconds: f32,
+    /// Zoom queued by mouse-wheel notches.
+    pub(crate) wheel_zoom: super::math::WheelZoomQueue,
     /// Latched axes owned by authored UI press/release actions. The input system's
     /// frame-local input is combined with these without overwriting it.
     pub(crate) ui_pan: Vec2,

@@ -8,12 +8,32 @@ use super::super::{
         AimFreeCameraAt, FocusCamera, PositionFreeCamera, RestoreCameraMode, SetCameraMode,
     },
     camera_runtime_state_types::{
-        CameraBounds, CameraDefinition, CameraEasing, CameraMode, CameraReturnState,
-        CameraTransition, CameraTuning, OverheadRig, RemoveReturnStateOnComplete, ZooCamera,
+        CameraBounds, CameraDefinition, CameraEasing, CameraIntent, CameraMode, CameraMouseLook,
+        CameraReturnState, CameraTransition, CameraTuning, OverheadRig,
+        RemoveReturnStateOnComplete, ZooCamera,
     },
     math::advance_transition,
 };
 use super::camera_pose_comparison::camera_pose_materially_changed;
+
+pub(in crate::plugins::camera) fn clear_camera_input_on_return(
+    mut commands: Commands,
+    mut requests: MessageReader<RestoreCameraMode>,
+    mut cameras: Query<(Entity, &mut CameraIntent), With<ZooCamera>>,
+) {
+    let mut returning = false;
+    for request in requests.read() {
+        returning |= requested_duration_is_valid(request.transition_seconds);
+    }
+    if !returning {
+        return;
+    }
+    // Escape and mode-owner exits must release the same held controls as Overhead.
+    for (camera, mut intent) in &mut cameras {
+        *intent = CameraIntent::default();
+        commands.entity(camera).remove::<CameraMouseLook>();
+    }
+}
 
 pub(in crate::plugins::camera) fn capture_camera_return_state(
     mut commands: Commands,

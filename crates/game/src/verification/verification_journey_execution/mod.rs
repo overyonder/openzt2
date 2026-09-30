@@ -7,6 +7,9 @@ use crate::plugins::ui::{
     authored_reusable_list_and_table_runtime_types::UiListRow,
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
 };
+use crate::plugins::world_spawn::{
+    selected_world_identity::SelectedWorldIdentity, world_membership_types::WorldRoot,
+};
 
 use super::{
     verification_game_phase_readiness::{game_phase_order, VerificationGamePhaseReadiness},
@@ -53,7 +56,8 @@ pub(crate) fn advance_verification_journey_by_one_frame(
     mut report: ResMut<VerificationJourneyReport>,
     readiness: VerificationGamePhaseReadiness,
     nodes: VerificationUiNodeQuery,
-    list_rows: Query<(&UiListRow, &InheritedVisibility)>,
+    list_rows: Query<(Entity, &UiListRow, &InheritedVisibility)>,
+    worlds: Query<&SelectedWorldIdentity, With<WorldRoot>>,
     names: Query<&Name>,
     texts: Query<(
         &Name,
@@ -106,7 +110,14 @@ pub(crate) fn advance_verification_journey_by_one_frame(
             }
         }
         VerificationJourneyAction::MovePointer(pointer_target) => {
-            match resolve_step_pointer_position(&mut run, pointer_target, &nodes, frame) {
+            match resolve_step_pointer_position(
+                &mut run,
+                pointer_target,
+                &nodes,
+                &list_rows,
+                &names,
+                frame,
+            ) {
                 Err(message) => VerificationStepProgress::Failed(message),
                 Ok(None) => VerificationStepProgress::Running,
                 Ok(Some(position)) => {
@@ -118,7 +129,14 @@ pub(crate) fn advance_verification_journey_by_one_frame(
             }
         }
         VerificationJourneyAction::Click(pointer_target) => {
-            match resolve_step_pointer_position(&mut run, pointer_target, &nodes, frame) {
+            match resolve_step_pointer_position(
+                &mut run,
+                pointer_target,
+                &nodes,
+                &list_rows,
+                &names,
+                frame,
+            ) {
                 Err(message) => VerificationStepProgress::Failed(message),
                 Ok(None) => VerificationStepProgress::Running,
                 Ok(Some(position)) => {
@@ -148,7 +166,7 @@ pub(crate) fn advance_verification_journey_by_one_frame(
             }
         }
         VerificationJourneyAction::Drag { from, to } => {
-            match resolve_step_pointer_position(&mut run, from, &nodes, frame) {
+            match resolve_step_pointer_position(&mut run, from, &nodes, &list_rows, &names, frame) {
                 Err(message) => VerificationStepProgress::Failed(message),
                 Ok(None) => VerificationStepProgress::Running,
                 Ok(Some(start)) => {
@@ -277,7 +295,7 @@ pub(crate) fn advance_verification_journey_by_one_frame(
         } => {
             let visible_rows = list_rows
                 .iter()
-                .filter(|(row, visibility)| {
+                .filter(|(_, row, visibility)| {
                     visibility.get()
                         && names
                             .get(row.list)
@@ -317,6 +335,25 @@ pub(crate) fn advance_verification_journey_by_one_frame(
             }
             VerificationStepProgress::Complete
         }
+        VerificationJourneyAction::ExpectCampaignWorld { scenario, map } => {
+            let expected_scenario = openzt2_game_data::AssetId::from_key(scenario);
+            let expected_map = openzt2_game_data::AssetId::from_key(map);
+            if !worlds.iter().any(|world| {
+                world.mode == crate::game_session_types::WorldSessionMode::Campaign
+                    && world.requested == expected_scenario
+                    && world.map == expected_map
+            }) {
+                record_verification_failure(
+                    &mut report,
+                    &step.source_location,
+                    format!(
+                        "expected campaign scenario {scenario:?} on map {map:?}, found {:?}",
+                        worlds.iter().collect::<Vec<_>>()
+                    ),
+                );
+            }
+            VerificationStepProgress::Complete
+        }
         VerificationJourneyAction::ExpectNodeVisibility { node_name, visible } => {
             let actually_visible = nodes
                 .iter()
@@ -324,7 +361,9 @@ pub(crate) fn advance_verification_journey_by_one_frame(
             if actually_visible != *visible {
                 let mut visible_names = nodes
                     .iter()
-                    .filter(|(name, _, _, visibility, _)| visibility.get() && !name.as_str().starts_with("ui visual"))
+                    .filter(|(name, _, _, visibility, _)| {
+                        visibility.get() && !name.as_str().starts_with("ui visual")
+                    })
                     .map(|(name, ..)| name.as_str())
                     .collect::<Vec<_>>();
                 visible_names.sort_unstable();
@@ -396,6 +435,8 @@ fn resolve_step_pointer_position(
     run: &mut VerificationJourneyRun,
     pointer_target: &VerificationPointerTarget,
     nodes: &VerificationUiNodeQuery,
+    list_rows: &Query<(Entity, &UiListRow, &InheritedVisibility)>,
+    names: &Query<&Name>,
     frame: u32,
 ) -> Result<Option<Vec2>, String> {
     if let Some(position) = run.step_pointer_position {
@@ -403,6 +444,22 @@ fn resolve_step_pointer_position(
     }
     let position = match pointer_target {
         VerificationPointerTarget::Position(position) => Some(*position),
+        VerificationPointerTarget::ListRow { list_name, index } => list_rows
+            .iter()
+            .find(|(_, row, visibility)| {
+                row.index == *index
+                    && visibility.get()
+                    && names
+                        .get(row.list)
+                        .is_ok_and(|name| name.as_str() == list_name)
+            })
+            .and_then(|(entity, _, _)| nodes.get(entity).ok())
+            .filter(|(_, computed, _, visibility, enabled)| {
+                visibility.get()
+                    && computed.size() != Vec2::ZERO
+                    && enabled.is_none_or(|enabled| enabled.0)
+            })
+            .map(|(_, _, transform, _, _)| transform.translation),
         VerificationPointerTarget::NamedNode { node_name, index } => {
             let mut matches = nodes
                 .iter()

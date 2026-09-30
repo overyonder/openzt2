@@ -170,11 +170,9 @@ impl<'a> WorldScenariosView<'a> {
         id: AssetId,
     ) -> Option<&'a openzt2_game_data::world_scenario::ScenarioCampaignRecord> {
         let asset = self.asset(&self.owner.campaigns, id)?;
-        asset
-            .campaign_scenarios
-            .iter()
-            .all(|scenario| self.assets.get(&scenario.handle).is_some())
-            .then(|| asset.document.find_campaign_record(id))?
+        // Campaign labels and map references belong to this document. A slow
+        // or failed goal document must not hide the campaign or its siblings.
+        asset.document.find_campaign_record(id)
     }
 
     pub fn document_for_scenario(self, id: AssetId) -> Option<&'a WorldScenarioDocumentAsset> {

@@ -191,12 +191,13 @@ pub(super) fn project_widget(
             if !matches!(node.kind, UiNodeKind::DropList) {
                 commands.entity(entity).insert(Interaction::None);
             }
-            // The campaign lists are authored toggle sets: selecting one row
+            // These lists are authored toggle sets: selecting one row
             // deselects the others.
             if matches!(
                 *source,
                 UiWidgetLiveCollectionSource::Campaigns
                     | UiWidgetLiveCollectionSource::CampaignScenarios
+                    | UiWidgetLiveCollectionSource::SavedGameSlots
             ) {
                 commands
                     .entity(entity)

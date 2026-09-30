@@ -13,14 +13,6 @@ use super::{
     },
 };
 
-/// Marks an owner whose saved-games document is presenting save slots.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct SaveSlotCataloguePresentedForSaving;
-
-/// Marks an owner whose saved-games document is presenting load slots.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct SaveSlotCataloguePresentedForLoading;
-
 /// Open the load-slot menu after the save succeeds.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct OpenLoadSlotCatalogueAfterWorldSnapshotSave;

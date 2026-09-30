@@ -25,10 +25,16 @@ pub(crate) enum VerificationJourneyAction {
         from: VerificationPointerTarget,
         to: Vec2,
     },
-    Key { key_code: KeyCode, repeat: u32 },
+    Key {
+        key_code: KeyCode,
+        repeat: u32,
+    },
     /// Types characters into the focused text field without triggering key-code hotkeys.
     TypeText(String),
-    Wheel { lines: f32, repeat: u32 },
+    Wheel {
+        lines: f32,
+        repeat: u32,
+    },
     Snapshot(String),
     Capture(String),
     MeasureFrameTime(u32),
@@ -48,6 +54,10 @@ pub(crate) enum VerificationJourneyAction {
         node_name: String,
         visible: bool,
     },
+    ExpectCampaignWorld {
+        scenario: String,
+        map: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -55,7 +65,14 @@ pub(crate) enum VerificationPointerTarget {
     /// Physical pixel position in the 1600x900 verification target.
     Position(Vec2),
     /// Nth visible, enabled UI node with this name, ordered top-to-bottom then left-to-right.
-    NamedNode { node_name: String, index: usize },
+    NamedNode {
+        node_name: String,
+        index: usize,
+    },
+    ListRow {
+        list_name: String,
+        index: u16,
+    },
 }
 
 #[derive(Debug, Clone)]

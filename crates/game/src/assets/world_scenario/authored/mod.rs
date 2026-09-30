@@ -9,6 +9,7 @@ use std::{collections::BTreeMap, io};
 use crate::assets::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentNode,
 };
+use crate::assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::{
     world_definitions::simulation_time::SimulationTimingDefinition,
     world_scenario::{
@@ -616,31 +617,38 @@ fn lower_campaign(document: &OrderedSourceDocument) -> io::Result<ScenarioCampai
         return Err(invalid(format!("{path}: campaign has no entries")));
     }
     let description = entries[0].attribute("description").unwrap_or(name);
-    let scenarios = entries
-        .iter()
-        .map(|entry| {
-            let id = required(document, entry, "key")?;
-            let map = required(document, entry, "map")?;
-            let cash = required(document, entry, "cash")?
-                .parse::<i64>()
-                .ok()
-                .and_then(|dollars| dollars.checked_mul(100))
-                .ok_or_else(|| at(document, entry, "campaign cash is not whole dollars"))?;
-            Ok(CampaignScenarioRecord {
-                id: AssetId::from_key(id),
-                map: AssetId::from_key(map),
-                starting_zoo: AssetId::from_key(&format!("start:{map}")),
-                starting_cash_cents: cash,
-                difficulty: AssetId::from_key(required(document, entry, "difficulty")?),
-                name_key: AssetId::from_key(required(document, entry, "name")?),
-                description_key: AssetId::from_key(entry.attribute("description").unwrap_or(id)),
+    let scenarios =
+        entries
+            .iter()
+            .map(|entry| {
+                let id = required(document, entry, "key")?;
+                let map = required(document, entry, "map")?;
+                let cash = required(document, entry, "cash")?
+                    .parse::<i64>()
+                    .ok()
+                    .and_then(|dollars| dollars.checked_mul(100))
+                    .ok_or_else(|| at(document, entry, "campaign cash is not whole dollars"))?;
+                Ok(CampaignScenarioRecord {
+                    id: AssetId::from_key(id),
+                    map: AssetId::from_key(map),
+                    starting_zoo: AssetId::from_key(&format!("start:{map}")),
+                    starting_cash_cents: cash,
+                    difficulty: AssetId::from_key(&canonicalize_source_document_record_key(
+                        required(document, entry, "difficulty")?,
+                    )),
+                    name_key: AssetId::from_key(&canonicalize_source_document_record_key(
+                        required(document, entry, "name")?,
+                    )),
+                    description_key: AssetId::from_key(&canonicalize_source_document_record_key(
+                        entry.attribute("description").unwrap_or(id),
+                    )),
+                })
             })
-        })
-        .collect::<io::Result<Vec<_>>>()?;
+            .collect::<io::Result<Vec<_>>>()?;
     Ok(ScenarioCampaignRecord {
         id: AssetId::from_key(id),
-        name_key: AssetId::from_key(name),
-        description_key: AssetId::from_key(description),
+        name_key: AssetId::from_key(&canonicalize_source_document_record_key(name)),
+        description_key: AssetId::from_key(&canonicalize_source_document_record_key(description)),
         scenarios,
     })
 }

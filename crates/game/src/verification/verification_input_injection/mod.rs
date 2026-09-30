@@ -93,7 +93,7 @@ impl VerificationInputInjection<'_, '_> {
     pub(crate) fn press_or_release_text_character(&mut self, character: char, pressed: bool) {
         let text: smol_str::SmolStr = character.to_string().into();
         self.keyboard_inputs.write(KeyboardInput {
-            key_code: KeyCode::Unidentified(bevy::input::keyboard::NativeKeyCode::Unidentified),
+            key_code: physical_key_for_verification_text_character(character),
             logical_key: if character == ' ' {
                 Key::Space
             } else {
@@ -139,6 +139,41 @@ impl VerificationInputInjection<'_, '_> {
 
     pub(crate) fn primary_window_entity(&self) -> Entity {
         self.primary_window.0
+    }
+}
+
+// Use US letter positions so typed text also exercises gameplay shortcut capture.
+// Other Unicode text still reaches the editor without assuming a keyboard layout.
+fn physical_key_for_verification_text_character(character: char) -> KeyCode {
+    match character.to_ascii_lowercase() {
+        'a' => KeyCode::KeyA,
+        'b' => KeyCode::KeyB,
+        'c' => KeyCode::KeyC,
+        'd' => KeyCode::KeyD,
+        'e' => KeyCode::KeyE,
+        'f' => KeyCode::KeyF,
+        'g' => KeyCode::KeyG,
+        'h' => KeyCode::KeyH,
+        'i' => KeyCode::KeyI,
+        'j' => KeyCode::KeyJ,
+        'k' => KeyCode::KeyK,
+        'l' => KeyCode::KeyL,
+        'm' => KeyCode::KeyM,
+        'n' => KeyCode::KeyN,
+        'o' => KeyCode::KeyO,
+        'p' => KeyCode::KeyP,
+        'q' => KeyCode::KeyQ,
+        'r' => KeyCode::KeyR,
+        's' => KeyCode::KeyS,
+        't' => KeyCode::KeyT,
+        'u' => KeyCode::KeyU,
+        'v' => KeyCode::KeyV,
+        'w' => KeyCode::KeyW,
+        'x' => KeyCode::KeyX,
+        'y' => KeyCode::KeyY,
+        'z' => KeyCode::KeyZ,
+        ' ' => KeyCode::Space,
+        _ => KeyCode::Unidentified(bevy::input::keyboard::NativeKeyCode::Unidentified),
     }
 }
 

@@ -13,9 +13,9 @@ use crate::{
         },
         ui_document::source::lower::authored_ui_document_lowering::{
             UiResolvedDependencies, CAMPAIGN_ROW_DOCUMENT, CAMPAIGN_SCENARIO_ROW_DOCUMENT,
-            DISPLAY_RESOLUTION_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
-            FINANCE_VALUE_ROW_DOCUMENT, MULTILIST_ROW_DOCUMENTS, NATIVE_FINANCE_ROW_DOCUMENTS,
-            OVERVIEW_LEGEND_ROW_DOCUMENT,
+            DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT,
+            MULTILIST_ROW_DOCUMENTS, NATIVE_FINANCE_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT,
+            PROFILE_ROW_DOCUMENT,
         },
     },
 };
@@ -276,10 +276,31 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
         // These lists are filled from native code with row documents that no
         // layout references, so the rows are planned with their owning layout.
         for (layout_path, row_source_path, canonical_row_document) in [
-            ("ui/layout/freeformselection.xml", "ui/layout/campaign/campaign.xml", CAMPAIGN_ROW_DOCUMENT),
-            ("ui/layout/freeformselection.xml", "ui/layout/scenariobutton.xml", CAMPAIGN_SCENARIO_ROW_DOCUMENT),
-            ("ui/layout/profiledialog.xml", "ui/layout/profileentry.xml", PROFILE_ROW_DOCUMENT),
-            ("ui/layout/options.xml", "ui/layout/resolution.xml", DISPLAY_RESOLUTION_ROW_DOCUMENT),
+            (
+                "ui/layout/load.xml",
+                "ui/layout/loadentry.xml",
+                LOAD_SLOT_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/freeformselection.xml",
+                "ui/layout/campaign/campaign.xml",
+                CAMPAIGN_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/freeformselection.xml",
+                "ui/layout/scenariobutton.xml",
+                CAMPAIGN_SCENARIO_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/profiledialog.xml",
+                "ui/layout/profileentry.xml",
+                PROFILE_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/options.xml",
+                "ui/layout/resolution.xml",
+                DISPLAY_RESOLUTION_ROW_DOCUMENT,
+            ),
         ] {
             if source_document_path == layout_path {
                 insert_native_created_ui_document_dependency_selected_through_archive_overlay(

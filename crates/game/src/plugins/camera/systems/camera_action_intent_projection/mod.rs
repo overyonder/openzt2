@@ -10,7 +10,7 @@ use crate::{
 
 use super::super::{
     camera_runtime_state_types::{CameraIntent, CameraMode, CameraMouseLook, ZooCamera},
-    math::queue_wheel_zoom,
+    math::{queue_wheel_zoom, WheelZoomQueue},
 };
 
 pub(in crate::plugins::camera) fn project_camera_actions_into_camera_intent(
@@ -63,13 +63,13 @@ pub(in crate::plugins::camera) fn project_camera_actions_into_camera_intent(
             intent.turn = (turn + intent.ui_turn).clamp(-1.0, 1.0);
             intent.pitch = if mouse_look { -axes.look.y } else { 0.0 };
             intent.zoom = (zoom + intent.ui_zoom).clamp(-1.0, 1.0);
-            queue_wheel_zoom(&mut intent.wheel_zoom_seconds, pointer.wheel_y);
+            queue_wheel_zoom(&mut intent.wheel_zoom, pointer.wheel_y);
         } else {
             intent.pan_directions = [0.0; 4];
             intent.turn = 0.0;
             intent.pitch = 0.0;
             intent.zoom = 0.0;
-            intent.wheel_zoom_seconds = 0.0;
+            intent.wheel_zoom = WheelZoomQueue::Idle;
         }
     }
 }

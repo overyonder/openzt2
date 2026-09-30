@@ -16,7 +16,7 @@ pub(super) fn lower_persistence_command(
     input: &AuthoredUiDocument,
 ) -> io::Result<Option<UiActionRecord>> {
     let result = match event.message.as_str() {
-        "ZT_SAVEGAME" if event.string.as_deref() == Some("cancel") => {
+        "ZT_SAVEGAME" | "ZT_LOADGAME" if event.string.as_deref() == Some("cancel") => {
             Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
                 trigger,
                 action: UiPresentationAction::HideOwningDocument,

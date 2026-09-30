@@ -1,0 +1,94 @@
+# Back and Apply stay visible until they leave the options screen (#41, #46).
+phase splash
+wait 300
+click "splashbutton0"
+phase main-menu
+wait 120
+click "Game Options Button"
+wait 180
+expect-visible "Back"
+expect-visible "Apply"
+capture options-opened
+move "Back"
+wait 30
+expect-visible "Back"
+capture options-back-hovered
+click "High Detail"
+click "Windowed"
+wait 30
+expect-visible "Back"
+expect-visible "Apply"
+capture options-before-apply
+click "Apply"
+wait 120
+expect-hidden "Settings Panel"
+expect-visible "Game Options Button"
+expect settings_highest_detail == 1
+expect settings_windowed == 1
+snapshot accepted-options
+capture options-after-apply
+click "Game Options Button"
+wait 180
+expect-visible "Back"
+expect-visible "Apply"
+expect settings_draft_matches_accepted == 1
+expect settings_draft_clean == 1
+capture options-reopened-after-apply
+click "Medium Detail"
+click "Fullscreen"
+click "MOTDEnabledButton"
+wait 30
+expect-visible "Back"
+expect-visible "Apply"
+expect settings_draft_matches_accepted == 0
+expect settings_draft_clean == 0
+expect settings_highest_detail == @accepted-options
+expect settings_windowed == @accepted-options
+expect settings_motd == @accepted-options
+capture options-before-cancel
+click "Back"
+wait 120
+expect-hidden "Settings Panel"
+expect-visible "Game Options Button"
+expect settings_highest_detail == @accepted-options
+expect settings_windowed == @accepted-options
+expect settings_motd == @accepted-options
+expect settings_draft_matches_accepted == 1
+expect settings_draft_clean == 1
+capture options-after-cancel
+click "Game Options Button"
+wait 180
+expect-visible "Back"
+expect-visible "Apply"
+expect settings_draft_matches_accepted == 1
+expect settings_draft_clean == 1
+capture options-reopened-after-cancel
+click "Medium Detail"
+click "Fullscreen"
+click "MOTDEnabledButton"
+expect settings_draft_matches_accepted == 0
+expect settings_draft_clean == 0
+click "Back"
+wait 120
+expect-hidden "Settings Panel"
+expect-visible "Game Options Button"
+expect settings_highest_detail == @accepted-options
+expect settings_windowed == @accepted-options
+expect settings_motd == @accepted-options
+expect settings_draft_matches_accepted == 1
+expect settings_draft_clean == 1
+capture options-after-back
+click "Game Options Button"
+wait 180
+expect-visible "Back"
+expect-visible "Apply"
+expect settings_draft_matches_accepted == 1
+expect settings_draft_clean == 1
+capture options-reopened-after-back
+click "Apply"
+wait 120
+expect-hidden "Settings Panel"
+expect-visible "Game Options Button"
+expect settings_highest_detail == @accepted-options
+expect settings_windowed == @accepted-options
+capture options-after-second-apply

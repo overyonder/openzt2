@@ -20,7 +20,8 @@ pub(in crate::assets::ui_document) const UI_DOCUMENT_ROLE_AND_SOURCE_PATH_DECLAR
     (UiDocumentRole::Loading, "ui/layout/loadingscreen.xml"),
     (UiDocumentRole::Options, "ui/layout/options.xml"),
     (UiDocumentRole::InGameOptions, "ui/layout/ingameoptions.xml"),
-    (UiDocumentRole::SavedGames, "ui/layout/save.xml"),
+    (UiDocumentRole::SavedGames, "ui/layout/load.xml"),
+    (UiDocumentRole::SaveGame, "ui/layout/save.xml"),
     (UiDocumentRole::InGameHud, "ui/layout/shell.xml"),
     (
         UiDocumentRole::InGamePersistentStatus,

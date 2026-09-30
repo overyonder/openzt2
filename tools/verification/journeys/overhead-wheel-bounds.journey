@@ -1,0 +1,47 @@
+# Wheel input must escape the close-in limit and stop at the far limit (#78, #94).
+include boot-to-freeform-map.steps
+wheel 1 120
+wait 1200
+snapshot close-limit
+capture close-limit
+wheel 1 10
+wait 120
+expect camera_height_m == @close-limit
+# Drain the whole queue before comparing or reversing direction.
+wheel -1 120
+wait 1200
+expect camera_height_m > @close-limit
+snapshot far-limit
+capture far-limit
+wheel -1 10
+wait 120
+expect camera_height_m == @far-limit
+expect camera_x_m == @far-limit
+expect camera_z_m == @far-limit
+wheel 3
+wait 120
+expect camera_height_m < @far-limit
+expect camera_fov_deg == @entered-map
+snapshot after-inward-notch
+capture after-inward-notch
+wheel -1
+wait 120
+expect camera_height_m > @after-inward-notch
+expect camera_height_m < @far-limit
+snapshot after-outward-notch
+capture after-outward-notch
+wait 120
+expect camera_height_m == @after-outward-notch
+# Preserve the zoomed overhead pose across an immersive round trip.
+click "firstperson"
+wait 180
+expect immersive_mode_active == 1
+key ESCAPE
+wait 180
+expect immersive_mode_active == 0
+expect camera_height_m == @after-outward-notch
+expect camera_x_m == @after-outward-notch
+expect camera_z_m == @after-outward-notch
+expect camera_pitch_deg == @after-outward-notch
+expect camera_fov_deg == @after-outward-notch
+capture restored-overhead

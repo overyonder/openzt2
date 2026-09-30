@@ -1,18 +1,108 @@
-# The zoo name field takes keyboard focus and typed text (#81).
+# Click/type, shortcut capture, live rename, cancellation and save/load (#80).
+# Use a fresh TMPDIR: verification persistence lives in TMPDIR/openzt2-capture.
 include boot-to-freeform-map.steps
 click 560 450                   # the entrance opens zoo information
 wait 180
 expect-visible "zoo status"
 click "userstring_zooname"
 wait 30
+snapshot editing-name
 key END
-key BACKSPACE 40                # the field starts with the map's zoo name
-type "AB CD"
+key BACKSPACE 40
+type "www p g z"
 wait 30
-expect-text "userstring_zooname" "AB CD"
-key BACKSPACE 5
+expect-text "userstring_zooname" "www p g z"
+expect simulation_paused == @editing-name
+expect immersive_mode_active == 0
+expect construction_tool_active == 0
+expect camera_x_m == @editing-name
+expect camera_z_m == @editing-name
+expect camera_height_m == @editing-name
+expect camera_pitch_deg == @editing-name
+expect camera_fov_deg == @editing-name
+capture zoo-name-shortcut-letters
+key BACKSPACE 40
 type "Verification Zoo"
 key ENTER
 wait 30
 expect-text "userstring_zooname" "Verification Zoo"
-capture zoo-name-typed
+click "close"
+wait 60
+expect-hidden "userstring_zooname"
+click 560 450
+wait 180
+expect-text "userstring_zooname" "Verification Zoo"
+capture zoo-name-reopened
+
+# Zoo names commit on text change. Escape dismisses the panel, not the rename.
+click "userstring_zooname"
+key END
+key BACKSPACE 40
+type "Retained Zoo"
+wait 30
+key ESCAPE
+wait 60
+expect-hidden "userstring_zooname"
+click 560 450
+wait 180
+expect-text "userstring_zooname" "Retained Zoo"
+click "close"
+wait 60
+
+# A save dialog draft must not rename the world when cancelled.
+key F5
+wait 180
+expect-visible "SaveName"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Cancelled Zoo"
+key ESCAPE
+wait 120
+expect-hidden "Save Game Shell"
+click 560 450
+wait 180
+expect-text "userstring_zooname" "Retained Zoo"
+capture zoo-name-after-save-cancel
+click "close"
+wait 60
+
+# Save the same name, change the live world, then restore the saved name.
+key F5
+wait 180
+expect-visible "SaveName"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Retained Zoo"
+click "Save Game Button"
+wait 300
+expect-hidden "Save Game Shell"
+click 560 450
+wait 180
+expect-text "userstring_zooname" "Retained Zoo"
+click "userstring_zooname"
+key END
+key BACKSPACE 40
+type "Unsaved Zoo"
+wait 30
+expect-text "userstring_zooname" "Unsaved Zoo"
+click "close"
+wait 60
+key F6
+wait 180
+expect-visible "save current game"
+click "no_button"
+wait 180
+expect-visible "SavedGamesList"
+expect-rows "SavedGamesList" == 1
+click-row "SavedGamesList" 0
+click "TextButton Load"
+wait 300
+phase in-game
+wait 180
+expect-hidden "Load Game Shell"
+click 560 450
+wait 180
+expect-text "userstring_zooname" "Retained Zoo"
+capture zoo-name-after-load

@@ -1,4 +1,4 @@
-# The campaign screen lists campaigns and the selected campaign's scenarios (#53).
+# Campaign metadata, native rows, selection and the requested map (#52).
 phase splash
 wait 300
 click "splashbutton0"
@@ -10,3 +10,22 @@ wait 600
 capture campaign-screen
 expect-rows "Campaign List" >= 1
 expect-rows "Campaign Scenario List" >= 1
+click-row "Campaign List" 1
+wait 120
+capture second-campaign
+expect-rows "Campaign Scenario List" == 1
+expect-text "node-0" "African Adventure Tutorial"
+expect-text "Map Name Label" "Jeep® Vehicles"
+click-row "Campaign List" 0
+wait 120
+expect-rows "Campaign Scenario List" == 3
+expect-text "node-0" "Zoo Tycoon 2 Tutorials"
+click-row "Campaign Scenario List" 2
+wait 120
+expect-text "Map Name Label" "Tutorial 3: Getting Information"
+capture selected-campaign-scenario
+click "Play Map"
+phase in-game
+wait 120
+expect-campaign-world Tutorial3 tutorialscen3
+capture campaign-map-started

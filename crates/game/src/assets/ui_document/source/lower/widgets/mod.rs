@@ -8,8 +8,9 @@ use crate::assets::ui_document::source::lower::authored_ui_asset_dependency_reso
 };
 use crate::assets::ui_document::source::lower::authored_ui_document_lowering::{
     list_row_document_path, AuthoredUiDocument, ADOPTION_SLOT_ROW_DOCUMENT, CAMPAIGN_ROW_DOCUMENT,
-    CAMPAIGN_SCENARIO_ROW_DOCUMENT, DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_CATEGORY_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT,
-    PHOTO_ALBUM_CHOICE_ROW_DOCUMENT, PHOTO_CAMERA_ROLL_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
+    CAMPAIGN_SCENARIO_ROW_DOCUMENT, DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_CATEGORY_ROW_DOCUMENT,
+    FINANCE_VALUE_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT, PHOTO_ALBUM_CHOICE_ROW_DOCUMENT,
+    PHOTO_CAMERA_ROLL_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
 };
 use crate::assets::ui_document::source::lower::authored_ui_event_collection_lowering::authored_graph_type;
 use crate::assets::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
@@ -276,6 +277,7 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
             // These toggle sets are empty in their documents; the original game
             // fills them with rows loaded from these native row documents.
             let native_row_document = match live_collection_source {
+                UiWidgetLiveCollectionSource::SavedGameSlots => Some(LOAD_SLOT_ROW_DOCUMENT),
                 UiWidgetLiveCollectionSource::PhotoCameraRoll => Some(PHOTO_CAMERA_ROLL_ROW_DOCUMENT),
                 UiWidgetLiveCollectionSource::PhotoAlbums => Some(PHOTO_ALBUM_CHOICE_ROW_DOCUMENT),
                 UiWidgetLiveCollectionSource::Campaigns => Some(CAMPAIGN_ROW_DOCUMENT),

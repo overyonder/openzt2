@@ -8,10 +8,12 @@ use openzt2_game_data::ui_document::{
 use crate::{
     assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     plugins::ui::{
+        authored_reusable_list_and_table_runtime_types::{UiListPolicy, UiListRow},
         authored_text_edit_bevy_adaptation::UiTextEditPolicy,
         authored_ui_node_projection_components::UiDocumentOwner,
         authored_ui_node_projection_components::UiDocumentRoot,
         authored_ui_node_projection_components::UiValue,
+        authored_ui_selection_state::UiSelected,
         ui_document_lifecycle_contracts::ShowUiRole,
     },
 };
@@ -23,7 +25,6 @@ use super::{
     },
     persistence_ui_types::{
         OpenLoadSlotCatalogueAfterWorldSnapshotSave, PersistenceUiActionMessageWriters,
-        SaveSlotCataloguePresentedForLoading, SaveSlotCataloguePresentedForSaving,
     },
     profile_types::{CreateProfile, DeleteProfile, ProfileIndex, SelectProfile},
     save_slot_types::{
@@ -38,16 +39,13 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     persistence_action_nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
-    ui_document_roots: Query<&UiDocumentRoot>,
+    ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
+    selected_rows: Query<(&UiListRow, &UiSelected, &UiValue)>,
+    lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     mut persistence_action_messages: PersistenceUiActionMessageWriters,
     mut commands: Commands,
     ui_values: Query<&UiValue>,
-    editable_text_nodes: Query<(
-        Entity,
-        &EditableText,
-        &UiDocumentOwner,
-        Option<&UiTextEditPolicy>,
-    )>,
+    editable_text_nodes: Query<(&EditableText, &UiDocumentOwner, Option<&UiTextEditPolicy>)>,
     profile_index: Res<ProfileIndex>,
     live_world_roots: Query<
         Entity,
@@ -60,7 +58,8 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
         else {
             continue;
         };
-        let Ok(ui_document_root) = ui_document_roots.get(ui_document_owner.0) else {
+        let Ok((ui_document_root, lifecycle_owner)) = ui_document_roots.get(ui_document_owner.0)
+        else {
             continue;
         };
         let Some(ui_document_asset) = ui_document_assets.get(&ui_document_root.document) else {
@@ -94,7 +93,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     let submitted_world_display_name =
                         editable_text_nodes
                             .iter()
-                            .find_map(|(_, text, text_owner, policy)| {
+                            .find_map(|(text, text_owner, policy)| {
                                 (text_owner.0 == ui_document_owner.0
                                     && policy.is_some_and(|policy| {
                                         policy.accepts_only_legal_filename_characters()
@@ -148,11 +147,9 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                         });
                 }
                 UiPersistenceAction::CreateProfileFromSubmittedDisplayName => {
-                    let requested_profile_display_name =
-                        editable_text_nodes.get(activated_ui_node.node).map_or_else(
-                            |_| String::new(),
-                            |(_, text, _, _)| text.value().to_string(),
-                        );
+                    let requested_profile_display_name = editable_text_nodes
+                        .get(activated_ui_node.node)
+                        .map_or_else(|_| String::new(), |(text, _, _)| text.value().to_string());
                     persistence_action_messages
                         .create_profile_requests
                         .write(CreateProfile {
@@ -184,49 +181,37 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     }
                 }
                 UiPersistenceAction::LoadWorldSnapshotFromSelectedSlot => {
-                    let slot = ui_values
-                        .get(activated_ui_node.node)
-                        .map_or(0, |value| value.0.max(0) as u32);
+                    let Some(slot) =
+                        super::save_slot_catalogue_ui_presentation::selected_save_slot_in_document(
+                            ui_document_owner.0,
+                            &selected_rows,
+                            &lists,
+                        )
+                    else {
+                        continue;
+                    };
                     persistence_action_messages
                         .load_world_snapshot_requests
                         .write(LoadWorldSnapshotFromSlot {
                             save_slot_identifier: SaveSlotId(slot),
                         });
                 }
-                UiPersistenceAction::OpenSaveSlotCatalogueForSaving => {
-                    commands
-                        .entity(ui_document_owner.0)
-                        .remove::<SaveSlotCataloguePresentedForLoading>()
-                        .insert(SaveSlotCataloguePresentedForSaving);
+                UiPersistenceAction::OpenSaveSlotCatalogueForSaving
+                | UiPersistenceAction::OpenSaveSlotCatalogueForLoading => {
+                    let role = if matches!(
+                        authored_persistence_action.action,
+                        UiPersistenceAction::OpenSaveSlotCatalogueForSaving
+                    ) {
+                        UiDocumentRole::SaveGame
+                    } else {
+                        UiDocumentRole::SavedGames
+                    };
+                    // Share the lifecycle owner so this document gets one canvas transform.
                     persistence_action_messages
                         .show_ui_document_requests
                         .write(ShowUiRole {
-                            role: UiDocumentRole::SavedGames,
-                            owner: ui_document_owner.0,
-                        });
-                    persistence_action_messages
-                        .load_save_slot_catalogue_requests
-                        .write(LoadSaveSlotCatalogue);
-                }
-                UiPersistenceAction::OpenSaveSlotCatalogueForLoading => {
-                    for (entity, _, text_owner, policy) in &editable_text_nodes {
-                        if text_owner.0 == ui_document_owner.0
-                            && policy.is_some_and(|policy| {
-                                policy.accepts_only_legal_filename_characters()
-                            })
-                        {
-                            commands.entity(entity).insert(EditableText::new(""));
-                        }
-                    }
-                    commands
-                        .entity(ui_document_owner.0)
-                        .remove::<SaveSlotCataloguePresentedForSaving>()
-                        .insert(SaveSlotCataloguePresentedForLoading);
-                    persistence_action_messages
-                        .show_ui_document_requests
-                        .write(ShowUiRole {
-                            role: UiDocumentRole::SavedGames,
-                            owner: ui_document_owner.0,
+                            role,
+                            owner: lifecycle_owner.parent(),
                         });
                     persistence_action_messages
                         .load_save_slot_catalogue_requests

@@ -1,0 +1,55 @@
+# The in-game options menu is a pause overlay, not the shell settings draft (#46).
+include boot-to-freeform-map.steps
+expect simulation_paused == 0
+key ESCAPE
+wait 180
+expect-visible "In Game Options"
+expect simulation_paused == 1
+expect-visible "TextButton Cancel Hover"
+capture in-game-options-open
+# Cancel is revealed by its authored hover control before it can receive a click.
+move "TextButton Cancel Hover"
+wait 30
+expect-visible "TextButton Cancel"
+capture in-game-options-cancel-revealed
+click "TextButton Cancel"
+wait 120
+expect-hidden "In Game Options"
+expect phase == @entered-map
+expect simulation_paused == 0
+capture in-game-options-cancelled
+key ESCAPE
+wait 180
+expect-visible "In Game Options"
+expect simulation_paused == 1
+key ESCAPE
+wait 120
+expect-hidden "In Game Options"
+expect phase == @entered-map
+expect simulation_paused == 0
+capture in-game-options-escaped
+# Dismissing the overlay must preserve a pause that preceded opening it.
+key P
+wait 60
+expect simulation_paused == 1
+key ESCAPE
+wait 180
+expect-visible "In Game Options"
+expect-visible "TextButton Cancel Hover"
+move "TextButton Cancel Hover"
+wait 30
+expect-visible "TextButton Cancel"
+click "TextButton Cancel"
+wait 120
+expect-hidden "In Game Options"
+expect phase == @entered-map
+expect simulation_paused == 1
+key ESCAPE
+wait 180
+expect-visible "In Game Options"
+key ESCAPE
+wait 120
+expect-hidden "In Game Options"
+expect phase == @entered-map
+expect simulation_paused == 1
+capture in-game-options-preserved-pause

@@ -71,4 +71,5 @@ pub enum UiDocumentRole {
     PhotoMode,
     AnimalCareCatalogue,
     ChallengeOffer,
+    SaveGame,
 }

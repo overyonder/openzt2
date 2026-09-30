@@ -21,6 +21,9 @@ use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::U
 use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
+use crate::plugins::construction::construction_tool_and_placement_policy_types::{
+    ConstructionTool, SelectConstructionTool,
+};
 use crate::plugins::economy::authored_economy_fact_hydration::find_authored_object_or_placeable_price;
 use crate::plugins::ui::authored_multi_icon_presentation::UiMultiIconPolicy;
 use crate::plugins::ui::authored_ui_image_content_binding::UiImageBinding;
@@ -40,6 +43,21 @@ use super::super::{
         text_replacement_operations::replace_projected_ui_text_if_changed,
     },
 };
+
+pub(in crate::plugins::information) fn dismiss_purchase_information_on_inspection_tool_request(
+    mut tool_requests: MessageReader<SelectConstructionTool>,
+    mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
+) {
+    // The authored purchase-panel close button returns to mode_selection.
+    // Placement cancellation alone leaves the information subject selected.
+    if tool_requests
+        .read()
+        .last()
+        .is_some_and(|request| request.0 == ConstructionTool::Inspect)
+    {
+        selected_catalogue_entry.0 = None;
+    }
+}
 
 /// Selects the last catalogue choice produced during this update and opens its
 /// authored purchase-information document under the active HUD owner.
@@ -115,6 +133,14 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
         &mut UiValue,
     )>,
 ) {
+    let Some(selected_definition) = selected_catalogue_entry.0 else {
+        for (_, mut visibility, _) in &mut catalogue_detail_panels {
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
+        }
+        return;
+    };
     let world_definitions_changed = world_definition_assets.is_changed();
     let localization_changed = localization_assets.is_changed() || active_localization.is_changed();
     let species_changed = species_assets.is_changed() || active_species.is_changed();
@@ -129,10 +155,11 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
     let species = active_species.get(&species_assets);
 
     for (document_owner, mut visibility, catalogue_details) in &mut catalogue_detail_panels {
-        let Some(selected_definition) = selected_catalogue_entry.0 else {
-            if *visibility != Visibility::Hidden {
-                *visibility = Visibility::Hidden;
-            }
+        let Some(catalogue_entry) = world_definitions
+            .catalogue()
+            .find(|entry| AssetId(entry.definition.0) == selected_definition)
+        else {
+            *visibility = Visibility::Hidden;
             continue;
         };
         if *visibility != Visibility::Inherited {
@@ -146,13 +173,6 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
         {
             continue;
         }
-        let Some(catalogue_entry) = world_definitions
-            .catalogue()
-            .find(|entry| AssetId(entry.definition.0) == selected_definition)
-        else {
-            *visibility = Visibility::Hidden;
-            continue;
-        };
         let authored_object = world_definitions.find_object(selected_definition);
         let ui_document = ui_document_roots
             .get(document_owner.0)

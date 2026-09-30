@@ -72,6 +72,9 @@ pub(super) fn resolve_ui_roles(
             .iter()
             .find(|(_, parent, root)| parent.parent() == request.owner && root.document == document)
         {
+            if let Ok(mut root_visibility) = visibility.get_mut(root_entity) {
+                *root_visibility = Visibility::Inherited;
+            }
             if let Some(entry) = children
                 .get(root_entity)
                 .ok()

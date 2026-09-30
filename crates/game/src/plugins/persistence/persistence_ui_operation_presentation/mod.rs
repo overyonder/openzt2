@@ -9,10 +9,7 @@ use super::{
     persistence_failure_types::{
         WorldSnapshotPersistenceFailed, WorldSnapshotPersistenceOperation,
     },
-    persistence_ui_types::{
-        OpenLoadSlotCatalogueAfterWorldSnapshotSave, SaveSlotCataloguePresentedForLoading,
-        SaveSlotCataloguePresentedForSaving,
-    },
+    persistence_ui_types::OpenLoadSlotCatalogueAfterWorldSnapshotSave,
     save_slot_types::{
         DeleteWorldSnapshotFromSlot, LoadWorldSnapshotFromSlot, SaveWorldSnapshotToSlot,
         WorldSnapshotDeletedFromSlot, WorldSnapshotLoadedFromSlot, WorldSnapshotSavedToSlot,
@@ -57,23 +54,19 @@ pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     mut saved_world_snapshot_messages: MessageReader<WorldSnapshotSavedToSlot>,
     mut world_snapshot_persistence_failures: MessageReader<WorldSnapshotPersistenceFailed>,
     pending_load_slot_catalogue_owners: Query<
-        Entity,
+        (Entity, &ChildOf),
         With<OpenLoadSlotCatalogueAfterWorldSnapshotSave>,
     >,
     mut show_ui_document_requests: MessageWriter<ShowUiRole>,
 ) {
     if saved_world_snapshot_messages.read().next().is_some() {
-        for ui_document_owner in &pending_load_slot_catalogue_owners {
+        for (ui_document_owner, lifecycle_owner) in &pending_load_slot_catalogue_owners {
             commands
                 .entity(ui_document_owner)
-                .remove::<(
-                    OpenLoadSlotCatalogueAfterWorldSnapshotSave,
-                    SaveSlotCataloguePresentedForSaving,
-                )>()
-                .insert(SaveSlotCataloguePresentedForLoading);
+                .remove::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>();
             show_ui_document_requests.write(ShowUiRole {
                 role: UiDocumentRole::SavedGames,
-                owner: ui_document_owner,
+                owner: lifecycle_owner.parent(),
             });
         }
     }
@@ -81,7 +74,7 @@ pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     if world_snapshot_persistence_failures.read().any(|failure| {
         failure.persistence_operation == WorldSnapshotPersistenceOperation::SaveToSlot
     }) {
-        for ui_document_owner in &pending_load_slot_catalogue_owners {
+        for (ui_document_owner, _) in &pending_load_slot_catalogue_owners {
             commands
                 .entity(ui_document_owner)
                 .remove::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>();

@@ -60,7 +60,7 @@ pub(in crate::plugins::camera) fn advance_overhead_camera(
             tuning.pan_stop_rate,
             dt,
         );
-        let wheel_zoom = consume_wheel_zoom(&mut intent.wheel_zoom_seconds, dt);
+        let wheel_zoom = consume_wheel_zoom(&mut intent.wheel_zoom, dt);
 
         let pan_delta = pan_axis * tuning.pan_speed_mps * speed_modifier * dt;
         apply_camera_relative_pan_to_overhead_focus(&mut rig, pan_delta);

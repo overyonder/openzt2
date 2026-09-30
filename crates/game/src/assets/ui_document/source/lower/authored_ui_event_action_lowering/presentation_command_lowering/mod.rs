@@ -59,12 +59,6 @@ pub(super) fn lower_presentation_command(
                 },
             }))
         }
-        // The settings panel's Back/Apply blocks broadcast UI_HIDE to their
-        // containing panel. Explicit UI_CHILD receivers retain their target.
-        "UI_HIDE" if role == UiDocumentRole::Options && event.target_child.is_none() && event.string.is_none() => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
-            trigger,
-            action: UiPresentationAction::HideOwningDocument,
-        })),
         "ZT_ACTIVATE_MODE_HELP" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::ShowDocumentRole {

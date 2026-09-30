@@ -51,7 +51,11 @@ fn append_journey_file_steps(
             let included = single(&tokens[1..])
                 .map_err(|detail| journey_script_error(path, source_line, &detail))?;
             if include_depth >= 8 {
-                return Err(journey_script_error(path, source_line, "includes nest too deeply"));
+                return Err(journey_script_error(
+                    path,
+                    source_line,
+                    "includes nest too deeply",
+                ));
             }
             let included_path = path
                 .parent()
@@ -112,6 +116,15 @@ fn parse_journey_action(tokens: &[String]) -> Result<VerificationJourneyAction, 
         "wait" => VerificationJourneyAction::WaitFrames(parse_number(single(arguments)?)?),
         "move" => VerificationJourneyAction::MovePointer(parse_pointer_target(arguments)?),
         "click" => VerificationJourneyAction::Click(parse_pointer_target(arguments)?),
+        "click-row" => {
+            let [list_name, index] = arguments else {
+                return Err("expected `click-row \"List Name\" INDEX`".to_owned());
+            };
+            VerificationJourneyAction::Click(VerificationPointerTarget::ListRow {
+                list_name: list_name.clone(),
+                index: parse_number(index)?,
+            })
+        }
         "drag" => {
             if arguments.len() < 3 {
                 return Err("drag needs a start target and an end position".to_owned());
@@ -171,6 +184,15 @@ fn parse_journey_action(tokens: &[String]) -> Result<VerificationJourneyAction, 
                 list_name: list_name.clone(),
                 comparison: parse_fact_comparison(comparison)?,
                 expected: parse_number(expected)?,
+            }
+        }
+        "expect-campaign-world" => {
+            let [scenario, map] = arguments else {
+                return Err("expected `expect-campaign-world SCENARIO MAP`".to_owned());
+            };
+            VerificationJourneyAction::ExpectCampaignWorld {
+                scenario: scenario.clone(),
+                map: map.clone(),
             }
         }
         "expect-text" => {

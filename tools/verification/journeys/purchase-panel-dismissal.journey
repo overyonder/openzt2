@@ -1,0 +1,51 @@
+# The purchase close button returns to inspection (#62). It is distinct from
+# Tree Info's selection-clearing close button. Inspect each preview and title.
+include boot-to-freeform-map.steps
+click "construction"
+wait 30
+click "Building Tab"
+wait 60
+click "icon" 1
+wait 180
+expect-visible "Buy Info Panel"
+capture purchase-before-close
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+expect placement_previews == 0
+capture purchase-dismissed
+wait 180
+expect-hidden "Buy Info Panel"
+click "icon" 1
+wait 120
+expect-visible "Buy Info Panel"
+capture purchase-same-entry-reopened
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+click "icon" 2
+wait 120
+expect-visible "Buy Info Panel"
+capture purchase-different-entry-reopened
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+click "animals"
+wait 60
+click "icon" 3
+wait 180
+expect-visible "Buy Info Panel"
+expect-visible "sort button"
+expect-hidden "Upkeep Panel"
+capture purchase-animal-before-close
+click "close"
+wait 120
+expect-hidden "Buy Info Panel"
+expect placement_previews == 0
+capture purchase-animal-dismissed
+click "icon" 3
+wait 120
+expect-visible "Buy Info Panel"
+expect-visible "sort button"
+expect-hidden "Upkeep Panel"
+capture purchase-animal-reopened

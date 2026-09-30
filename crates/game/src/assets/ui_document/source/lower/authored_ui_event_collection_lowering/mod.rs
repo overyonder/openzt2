@@ -81,6 +81,15 @@ pub(super) fn lower_events(
             {
                 continue;
             }
+            // The shell replaces the whole options screen with the main menu.
+            // Back and Apply's receiver-less UI_HIDE would otherwise hide only
+            // the pressed button, leaving the screen open without it.
+            if returns_from_options
+                && (source_event_hides_its_receiver(event)
+                    || source_event_shows_main_menu_layout(event))
+            {
+                continue;
+            }
             flatten_event(
                 trigger(&block.trigger),
                 event,
@@ -126,6 +135,10 @@ fn source_event_clears_scenario_selection(event: &SourceUiEvent) -> bool {
             .child
             .as_deref()
             .is_some_and(source_event_clears_scenario_selection)
+}
+
+fn source_event_hides_its_receiver(event: &SourceUiEvent) -> bool {
+    event.message == "UI_HIDE" && event.target_child.is_none() && event.string.is_none()
 }
 
 fn source_event_shows_main_menu_layout(event: &SourceUiEvent) -> bool {
