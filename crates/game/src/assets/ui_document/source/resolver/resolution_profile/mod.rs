@@ -20,6 +20,10 @@ pub(in crate::assets::ui_document::source) struct SelectedUiSourceResolutionProf
     pub(super) role_hotkey_modes: Vec<(UiDocumentRole, String)>,
     /// Hidden source nodes extracted as separate screens.
     pub(super) role_surfaces: Vec<(UiDocumentRole, String)>,
+    /// Nodes inside another role's document that other documents address by
+    /// name, such as dialogs they open. The names resolve to that role without
+    /// loading it.
+    pub(super) role_addressed_nodes: Vec<(UiDocumentRole, String)>,
     pub(super) theme: Option<String>,
     /// Expansion availability reported to the original UI loader. This is
     /// deliberately independent of which archives supplied data: Complete
@@ -72,6 +76,8 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::ModeHelp, "modehelpmainlayout".into()),
                 (UiDocumentRole::Overview, "overview_screen".into()),
             ],
+            // The main menu's Exit button opens this confirmation in confirm.xml.
+            role_addressed_nodes: vec![(UiDocumentRole::Modal, "exit_zoo".into())],
             theme: None,
             available_xpacks: BTreeSet::new(),
             available_assets: Vec::new(),

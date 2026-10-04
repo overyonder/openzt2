@@ -43,7 +43,11 @@ pub(super) fn collect_unique_authored_node_name_targets_by_ui_document_role(
     }
 
     let mut candidates: BTreeMap<String, Option<UiDocumentRole>> = BTreeMap::new();
-    for (role, authored_surface_name) in &profile.role_surfaces {
+    for (role, authored_surface_name) in profile
+        .role_surfaces
+        .iter()
+        .chain(&profile.role_addressed_nodes)
+    {
         let name = authored_surface_name.trim().to_ascii_lowercase();
         candidates
             .entry(name)

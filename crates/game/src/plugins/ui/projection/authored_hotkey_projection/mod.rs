@@ -1,8 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::{
-    ui_document::{action::UiActionRecord, hotkey::UiDocumentHotkeyTrigger},
-    AssetId,
-};
+use openzt2_game_data::ui_document::{action::UiActionRecord, hotkey::UiDocumentHotkeyTrigger};
 
 use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
@@ -13,7 +10,7 @@ use crate::plugins::ui::authored_ui_action_projection_components::{
     UiPresentationActions, UiResearchActions, UiScenarioActions, UiShellActions, UiShowActions,
     UiSimulationActions, UiStaffActions, UiTransportActions,
 };
-use crate::plugins::ui::authored_ui_node_projection_components::{UiDocumentOwner, UiNodeId};
+use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
 
 pub(super) fn project_authored_hotkey_action_proxies(
     commands: &mut Commands,
@@ -29,6 +26,7 @@ pub(super) fn project_authored_hotkey_action_proxies(
                 .spawn((
                     Name::new("ui hotkey"),
                     UiAuthoredHotkeyKeyboardActivationBinding::from_projected_authored_hotkey(
+                        node_index as u32,
                         key,
                         hotkey.control_state,
                         matches!(&hotkey.trigger, UiDocumentHotkeyTrigger::KeyReleased),
@@ -105,10 +103,6 @@ pub(super) fn project_authored_hotkey_action_proxies(
                     commands.entity(proxy).insert(UiSimulationActions(source));
                 }
             };
-            commands.entity(proxy).insert(UiNodeId {
-                index: node_index as u32,
-                id: AssetId(node.id.0),
-            });
         }
     }
 }
