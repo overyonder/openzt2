@@ -1,0 +1,81 @@
+name: Release fixed issues
+on:
+  workflow_run:
+    workflows: ['Native release builds']
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  update:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      startsWith(github.event.workflow_run.head_branch, 'v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      issues: read
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.event.workflow_run.head_branch }}
+    steps:
+      - name: Update fixed issues from the release milestone
+        shell: bash
+        run: |
+          set -euo pipefail
+          temporary_directory=$(mktemp -d)
+          trap 'rm -rf "$temporary_directory"' EXIT
+
+          gh api --paginate --slurp "repos/$GH_REPO/milestones?state=all&per_page=100" \
+            > "$temporary_directory/milestones.json"
+          milestone_number=$(jq -r --arg tag "$RELEASE_TAG" '
+            [.[][] | select(.title == $tag)] |
+            if length == 0 then empty
+            elif length == 1 then .[0].number
+            else error("multiple milestones match the release tag") end
+          ' "$temporary_directory/milestones.json")
+          if [[ -z "$milestone_number" ]]; then
+            echo 'No release milestone; notes unchanged.'
+            exit 0
+          fi
+
+          gh api --paginate --slurp \
+            "repos/$GH_REPO/issues?state=all&milestone=$milestone_number&per_page=100" \
+            > "$temporary_directory/issues.json"
+          jq '[.[][] | select(has("pull_request") | not)] | sort_by(.number)' \
+            "$temporary_directory/issues.json" > "$temporary_directory/fixed-issues.json"
+          if [[ $(jq 'length' "$temporary_directory/fixed-issues.json") == 0 ]]; then
+            echo 'No milestone issues; notes unchanged.'
+            exit 0
+          fi
+
+          encoded_tag=$(jq -rn --arg tag "$RELEASE_TAG" '$tag | @uri')
+          gh api "repos/$GH_REPO/releases/tags/$encoded_tag" > "$temporary_directory/release.json"
+          release_id=$(jq -r '.id' "$temporary_directory/release.json")
+          jq --slurpfile issues "$temporary_directory/fixed-issues.json" '
+            "<!-- fixed-issues:start -->" as $begin |
+            "<!-- fixed-issues:end -->" as $end |
+            ($issues[0] | map("- [#\(.number)](\(.html_url)) \(.title | gsub("[\r\n]"; " "))") | join("\n")) as $list |
+            ($begin + "\n## Fixed issues\n\n" + $list + "\n" + $end) as $section |
+            (.body // "") as $body |
+            ($body | split($begin)) as $before |
+            ($body | split($end)) as $after |
+            {body: (
+              if ($before | length) == 1 and ($after | length) == 1 then
+                $body + (if $body == "" then "" else "\n\n" end) + $section
+              elif ($before | length) == 2 and ($after | length) == 2 and
+                  ($body | index($begin)) < ($body | index($end)) then
+                $before[0] + $section + $after[1]
+              else error("fixed issues delimiters are incomplete or ambiguous") end
+            )}
+          ' "$temporary_directory/release.json" > "$temporary_directory/update.json"
+          if jq -e --slurpfile update "$temporary_directory/update.json" \
+              '.body == $update[0].body' "$temporary_directory/release.json" > /dev/null; then
+            echo 'Fixed issues already current.'
+          else
+            gh api --method PATCH "repos/$GH_REPO/releases/$release_id" \
+              --input "$temporary_directory/update.json" > /dev/null
+          fi
