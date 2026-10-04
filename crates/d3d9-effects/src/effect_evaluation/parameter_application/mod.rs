@@ -22,12 +22,30 @@ pub(super) fn apply_d3d9_effect_parameter_assignments_to_mojoshader_effect(
                 &parameter_assignment.parameter_value,
             )?;
         if let Some(parameter_data_bytes) = parameter_data_bytes {
-            unsafe {
+            let mut storage_byte_count = 0;
+            let assignment_result = unsafe {
                 openzt2_effect_set_raw(
                     native_effect_pointer,
                     native_parameter_name.as_ptr(),
                     parameter_data_bytes.as_ptr().cast(),
                     parameter_byte_count,
+                    &raw mut storage_byte_count,
+                )
+            };
+            if assignment_result == 0 {
+                return Err(
+                    D3d9EffectProcessingError::ParameterAssignmentExceedsStorage {
+                        parameter_name: parameter_assignment.parameter_name.to_owned(),
+                        assignment_byte_count: parameter_data_bytes.len(),
+                        storage_byte_count,
+                    },
+                );
+            }
+            if assignment_result == -1 {
+                return Err(
+                    D3d9EffectProcessingError::ParameterAssignmentUnsupportedStorage {
+                        parameter_name: parameter_assignment.parameter_name.to_owned(),
+                    },
                 );
             }
         }
@@ -49,6 +67,9 @@ fn convert_d3d9_effect_parameter_value_to_native_bytes(
         D3d9EffectParameterValue::FloatVector { vector_components }
         | D3d9EffectParameterValue::FloatMatrix {
             matrix_components: vector_components,
+        }
+        | D3d9EffectParameterValue::FloatAggregate {
+            aggregate_components: vector_components,
         } => vector_components
             .iter()
             .flat_map(|vector_component| vector_component.to_ne_bytes())

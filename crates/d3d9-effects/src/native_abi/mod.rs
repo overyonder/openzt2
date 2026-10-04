@@ -108,12 +108,44 @@ unsafe extern "C" {
         message: *mut *mut c_char,
     ) -> *mut NativeEffect;
     pub(crate) fn openzt2_effect_close(effect: *mut NativeEffect);
+    pub(crate) fn openzt2_effect_open_parameter_scratch(
+        effect: *const NativeEffect,
+    ) -> *mut NativeEffect;
+    pub(crate) fn openzt2_effect_transform_dependency_count(
+        effect: *const NativeEffect,
+        technique: u32,
+        pass: u32,
+        index: u32,
+    ) -> u32;
+    pub(crate) fn openzt2_effect_transform_dependency_index(
+        effect: *const NativeEffect,
+        technique: u32,
+        pass: u32,
+        index: u32,
+        dependency: u32,
+    ) -> u32;
+    pub(crate) fn openzt2_effect_transform_output_layout(
+        effect: *const NativeEffect,
+        technique: u32,
+        pass: u32,
+        index: u32,
+        layout: *mut u32,
+    );
+    pub(crate) fn openzt2_effect_evaluate_transform(
+        program: *const NativeEffect,
+        scratch: *const NativeEffect,
+        technique: u32,
+        pass: u32,
+        index: u32,
+        output: *mut f32,
+    ) -> c_int;
     pub(crate) fn openzt2_effect_set_raw(
         effect: *mut NativeEffect,
         name: *const c_char,
         data: *const c_void,
         size: u32,
-    );
+        storage_size: *mut usize,
+    ) -> c_int;
     pub(crate) fn openzt2_effect_parameter_count(effect: *const NativeEffect) -> u32;
     pub(crate) fn openzt2_effect_parameter_name(
         effect: *const NativeEffect,
@@ -133,6 +165,16 @@ unsafe extern "C" {
         effect: *const NativeEffect,
         index: u32,
     ) -> u32;
+    pub(crate) fn openzt2_effect_parameter_member_count(
+        effect: *const NativeEffect,
+        index: u32,
+    ) -> u32;
+    pub(crate) fn openzt2_effect_parameter_member(
+        effect: *const NativeEffect,
+        index: u32,
+        member: u32,
+        layout: *mut u32,
+    ) -> *const c_char;
     pub(crate) fn openzt2_effect_technique_count(effect: *const NativeEffect) -> u32;
     pub(crate) fn openzt2_effect_technique_name(
         effect: *const NativeEffect,
@@ -154,7 +196,12 @@ unsafe extern "C" {
         technique: u32,
         pass: u32,
     ) -> *const c_char;
-    pub(crate) fn openzt2_effect_begin_pass(effect: *mut NativeEffect, technique: u32, pass: u32);
+    pub(crate) fn openzt2_effect_begin_pass(
+        effect: *mut NativeEffect,
+        technique: u32,
+        pass: u32,
+    ) -> c_int;
+    pub(crate) fn openzt2_effect_execution_error(effect: *const NativeEffect) -> *const c_char;
     pub(crate) fn openzt2_effect_end_pass(effect: *mut NativeEffect);
     pub(crate) fn openzt2_effect_state_count(effect: *const NativeEffect) -> u32;
     pub(crate) fn openzt2_effect_state_type(effect: *const NativeEffect, index: u32) -> u32;

@@ -1,3 +1,4 @@
+#include <limits.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -44,6 +45,9 @@ struct openzt2_effect
     int pixel_int[16 * 4];
     uint8_t pixel_bool[16];
     char *error;
+    int parameter_scratch;
+    int execution_validated;
+    const struct openzt2_effect *scratch_source;
 };
 
 static void set_effect_error(struct openzt2_effect *owner, const char *message)
@@ -146,8 +150,15 @@ static void unmap_effect_registers(const void *context)
 static const char *effect_error(const void *context)
 {
     const struct openzt2_effect *owner = context;
-    return owner->error ? owner->error : "MojoShader Effects failed";
+    if (owner->error)
+        return owner->error;
+    return owner->effect && owner->effect->execution_error
+            ? owner->effect->execution_error : "MojoShader Effects failed";
 }
+
+static int fixed_state_parameter(const struct openzt2_effect *, const MOJOSHADER_effectState *);
+static size_t effect_value_storage_element_size(const MOJOSHADER_effectValue *);
+#include "effect_execution_validation.h"
 
 struct openzt2_effect *openzt2_effect_open(const uint8_t *bytecode, size_t size, char **message)
 {
@@ -170,7 +181,15 @@ struct openzt2_effect *openzt2_effect_open(const uint8_t *bytecode, size_t size,
     context.shaderContext = owner;
     owner->effect = MOJOSHADER_compileEffect(bytecode, (unsigned int)size,
             NULL, 0, NULL, 0, &context);
-    if (!owner->effect || owner->effect->error_count)
+    if (owner->effect && !owner->effect->error_count)
+    {
+        const char *validation_error = validate_parsed_effect_execution(owner);
+        if (validation_error)
+            set_effect_error(owner, validation_error);
+        else
+            owner->execution_validated = 1;
+    }
+    if (!owner->effect || owner->effect->error_count || !owner->execution_validated)
     {
         const char *error = owner->error;
         if (!error && owner->effect && owner->effect->error_count)
@@ -194,13 +213,201 @@ void openzt2_effect_close(struct openzt2_effect *owner)
 {
     if (!owner)
         return;
+    if (owner->parameter_scratch)
+    {
+        for (int i = 0; i < owner->effect->param_count; ++i)
+            free(owner->effect->params[i].value.values);
+        free(owner->effect->params);
+        free(owner->effect);
+        free(owner);
+        return;
+    }
     MOJOSHADER_deleteEffect(owner->effect);
     free(owner->error);
     free(owner);
 }
 
-void openzt2_effect_set_raw(struct openzt2_effect *owner, const char *name,
-        const void *data, unsigned int size)
+/* Only parameter value storage is mutable in this evaluation. Names, types
+ * and annotations remain borrowed from the retained allocation. */
+static size_t effect_value_storage_element_size(const MOJOSHADER_effectValue *value)
+{
+    const unsigned int type = value->type.parameter_type;
+    return type >= MOJOSHADER_SYMTYPE_SAMPLER && type <= MOJOSHADER_SYMTYPE_SAMPLERCUBE
+               ? sizeof(MOJOSHADER_effectSamplerState)
+               : sizeof(float);
+}
+
+struct openzt2_effect *openzt2_effect_open_parameter_scratch(const struct openzt2_effect *program)
+{
+    if (!program->execution_validated)
+        return NULL;
+    struct openzt2_effect *scratch = calloc(1, sizeof(*scratch));
+    if (!scratch)
+        return NULL;
+    scratch->effect = calloc(1, sizeof(*scratch->effect));
+    if (!scratch->effect)
+    {
+        free(scratch);
+        return NULL;
+    }
+    scratch->parameter_scratch = 1;
+    scratch->scratch_source = program;
+    const int count = program->effect->param_count;
+    if (count)
+    {
+        scratch->effect->params = calloc((size_t)count, sizeof(*scratch->effect->params));
+        if (!scratch->effect->params)
+        {
+            openzt2_effect_close(scratch);
+            return NULL;
+        }
+    }
+    scratch->effect->param_count = count;
+    for (int i = 0; i < count; ++i)
+    {
+        const MOJOSHADER_effectValue *source = &program->effect->params[i].value;
+        MOJOSHADER_effectValue *destination = &scratch->effect->params[i].value;
+        *destination = *source;
+        destination->values = NULL;
+        const size_t element_size = effect_value_storage_element_size(source);
+        if (source->value_count)
+        {
+            destination->values = calloc(source->value_count, element_size);
+            if (!destination->values)
+            {
+                openzt2_effect_close(scratch);
+                return NULL;
+            }
+            memcpy(destination->values, source->values, source->value_count * element_size);
+        }
+    }
+    return scratch;
+}
+
+static int fixed_state_parameter(const struct openzt2_effect *owner,
+                                 const MOJOSHADER_effectState *state)
+{
+    if (state->parameter)
+        for (int i = 0; i < owner->effect->param_count; ++i)
+            if (!strcmp(owner->effect->params[i].value.name, state->parameter))
+                return i;
+    return -1;
+}
+
+unsigned int openzt2_effect_transform_dependency_count(const struct openzt2_effect *owner,
+                                                       unsigned int technique, unsigned int pass,
+                                                       unsigned int index)
+{
+    const MOJOSHADER_effectState *state =
+        &owner->effect->techniques[technique].passes[pass].states[index];
+    return state->preshader ? state->preshader_param_count
+                            : fixed_state_parameter(owner, state) >= 0;
+}
+
+unsigned int openzt2_effect_transform_dependency_index(const struct openzt2_effect *owner,
+                                                       unsigned int technique, unsigned int pass,
+                                                       unsigned int index, unsigned int dependency)
+{
+    const MOJOSHADER_effectState *state =
+        &owner->effect->techniques[technique].passes[pass].states[index];
+    return state->preshader ? state->preshader_params[dependency]
+                            : (unsigned int)fixed_state_parameter(owner, state);
+}
+
+void openzt2_effect_transform_output_layout(const struct openzt2_effect *owner,
+                                            unsigned int technique, unsigned int pass,
+                                            unsigned int index, unsigned int *layout)
+{
+    const MOJOSHADER_effectValue *value =
+        &owner->effect->techniques[technique].passes[pass].states[index].value;
+    layout[0] = value->type.parameter_class;
+    layout[1] = value->type.rows;
+    layout[2] = value->type.columns;
+    layout[3] = value->value_count;
+}
+
+int openzt2_effect_evaluate_transform(const struct openzt2_effect *program,
+                                      const struct openzt2_effect *scratch, unsigned int technique,
+                                      unsigned int pass, unsigned int index, float *output)
+{
+    if (!program->execution_validated || scratch->scratch_source != program
+            || technique >= (unsigned int)program->effect->technique_count
+            || pass >= program->effect->techniques[technique].pass_count
+            || index >= program->effect->techniques[technique].passes[pass].state_count)
+        return -3;
+    const MOJOSHADER_effectState *state =
+        &program->effect->techniques[technique].passes[pass].states[index];
+    if (state->value.value_count > 16 ||
+        state->value.type.parameter_type != MOJOSHADER_SYMTYPE_FLOAT)
+        return -2;
+    memset(output, 0, 16 * sizeof(float));
+    if (state->preshader)
+    {
+        const MOJOSHADER_preshader *preshader = state->preshader;
+        float *registers = calloc(preshader->register_count, 4 * sizeof(float));
+        if (!registers && preshader->register_count)
+            return -1;
+        if (preshader->register_count)
+            memcpy(registers, preshader->registers,
+                   (size_t)preshader->register_count * 4 * sizeof(float));
+        for (unsigned int symbol = 0; symbol < state->preshader_param_count; ++symbol)
+        {
+            const MOJOSHADER_symbol *description = &preshader->symbols[symbol];
+            const unsigned int parameter_index = state->preshader_params[symbol];
+            const MOJOSHADER_effectValue *parameter =
+                &scratch->effect->params[parameter_index].value;
+            float *destination = registers + description->register_index * 4;
+            for (unsigned int component = 0; component < description->register_count * 4;
+                 ++component)
+            {
+                if (parameter->type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
+                    destination[component] = parameter->valuesF[component];
+                else if (parameter->type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
+                    destination[component] = parameter->valuesI[component] != 0 ? 1.0f : 0.0f;
+                else
+                    destination[component] = (float)parameter->valuesI[component];
+            }
+        }
+        const int evaluated = MOJOSHADER_evaluatePreshader(preshader, registers, output);
+        free(registers);
+        if (!evaluated)
+            return -1;
+    }
+    else
+    {
+        const int parameter = fixed_state_parameter(scratch, state);
+        const MOJOSHADER_effectValue *source =
+            parameter >= 0 ? &scratch->effect->params[parameter].value : &state->value;
+        MOJOSHADER_effectValue destination = state->value;
+        destination.valuesF = output;
+        MOJOSHADER_copyEffectNumericParameterToState(source, &destination);
+    }
+    /* Preserve the FX value's packed layout, including the existing tail padding. */
+    for (unsigned int component = state->value.value_count; component < 16; ++component)
+        output[component] = 0.0f;
+    return 1;
+}
+
+static int set_bounded_effect_parameter_raw(const MOJOSHADER_effectParam *parameter,
+                                            const void *data, unsigned int size,
+                                            size_t *storage_size)
+{
+    *storage_size =
+        (size_t)parameter->value.value_count * effect_value_storage_element_size(&parameter->value);
+    if (size > *storage_size)
+        return 0;
+    /* Object indices and sampler pointers remain immutable under the execution
+     * proof. Only numeric parameter values can accept raw assignments. */
+    if (size && (parameter->value.type.parameter_class == MOJOSHADER_SYMCLASS_OBJECT
+            || effect_value_storage_element_size(&parameter->value) != sizeof(float)))
+        return -1;
+    if (size)
+        MOJOSHADER_effectSetRawValueHandle(parameter, data, 0, size);
+    return 1;
+}
+
+int openzt2_effect_set_raw(struct openzt2_effect *owner, const char *name, const void *data,
+                           unsigned int size, size_t *storage_size)
 {
     int index;
     /* Blue Fang material assignments address FX semantics. These often differ
@@ -210,11 +417,18 @@ void openzt2_effect_set_raw(struct openzt2_effect *owner, const char *name,
         const MOJOSHADER_effectParam *parameter = &owner->effect->params[index];
         if (parameter->value.semantic && !strcmp(parameter->value.semantic, name))
         {
-            MOJOSHADER_effectSetRawValueHandle(parameter, data, 0, size);
-            return;
+            return set_bounded_effect_parameter_raw(parameter, data, size, storage_size);
         }
     }
+    for (index = 0; index < owner->effect->param_count; ++index)
+    {
+        const MOJOSHADER_effectParam *parameter = &owner->effect->params[index];
+        if (!strcmp(parameter->value.name, name))
+            return set_bounded_effect_parameter_raw(parameter, data, size, storage_size);
+    }
+    /* Keep the dependency's existing unknown-name behavior. */
     MOJOSHADER_effectSetRawValueName(owner->effect, name, data, 0, size);
+    return 1;
 }
 
 unsigned int openzt2_effect_parameter_count(const struct openzt2_effect *owner)
@@ -268,6 +482,31 @@ unsigned int openzt2_effect_parameter_annotations(const struct openzt2_effect *o
     return owner->effect->params[index].annotation_count;
 }
 
+unsigned int openzt2_effect_parameter_member_count(const struct openzt2_effect *owner, unsigned int index)
+{
+    const MOJOSHADER_symbolTypeInfo *type = &owner->effect->params[index].value.type;
+    return type->parameter_class == MOJOSHADER_SYMCLASS_STRUCT ? type->member_count : 0;
+}
+
+const char *openzt2_effect_parameter_member(const struct openzt2_effect *owner,
+        unsigned int index, unsigned int member_index, unsigned int *layout)
+{
+    const MOJOSHADER_symbolTypeInfo *type = &owner->effect->params[index].value.type;
+    const MOJOSHADER_symbolStructMember *member = &type->members[member_index];
+    layout[0] = member->info.parameter_class;
+    layout[1] = member->info.parameter_type;
+    layout[2] = member->info.rows;
+    layout[3] = member->info.columns;
+    layout[4] = member->info.elements;
+    layout[5] = 0;
+    for (unsigned int i = 0; i < member_index; ++i)
+    {
+        const MOJOSHADER_symbolTypeInfo *preceding = &type->members[i].info;
+        layout[5] += preceding->rows * 4 * (preceding->elements ? preceding->elements : 1);
+    }
+    return member->name;
+}
+
 unsigned int openzt2_effect_technique_count(const struct openzt2_effect *owner)
 {
     return owner->effect->technique_count;
@@ -317,13 +556,26 @@ const char *openzt2_effect_pass_name(const struct openzt2_effect *owner,
     return owner->effect->techniques[technique].passes[pass].name;
 }
 
-void openzt2_effect_begin_pass(struct openzt2_effect *owner,
+int openzt2_effect_begin_pass(struct openzt2_effect *owner,
         unsigned int technique, unsigned int pass)
 {
+    if (!owner->execution_validated || technique >= (unsigned int)owner->effect->technique_count
+            || pass >= owner->effect->techniques[technique].pass_count)
+    {
+        set_effect_error(owner, "effect pass has no valid execution contract");
+        return 0;
+    }
     unsigned int pass_count;
     MOJOSHADER_effectSetTechnique(owner->effect, &owner->effect->techniques[technique]);
     MOJOSHADER_effectBegin(owner->effect, &pass_count, 0, &owner->changes);
     MOJOSHADER_effectBeginPass(owner->effect, pass);
+    if (owner->effect->execution_error)
+    {
+        set_effect_error(owner, owner->effect->execution_error);
+        MOJOSHADER_effectEndPass(owner->effect);
+        MOJOSHADER_effectEnd(owner->effect);
+        return 0;
+    }
     /* MojoShader reports explicit ShaderConstant states to the backend. They
      * are separate from uniforms copied through mapUniformBufferMemory. */
     for (unsigned int i = 0; i < owner->changes.render_state_change_count; ++i) {
@@ -358,6 +610,18 @@ void openzt2_effect_begin_pass(struct openzt2_effect *owner,
             }
         }
     }
+    if (owner->error)
+    {
+        MOJOSHADER_effectEndPass(owner->effect);
+        MOJOSHADER_effectEnd(owner->effect);
+        return 0;
+    }
+    return 1;
+}
+
+const char *openzt2_effect_execution_error(const struct openzt2_effect *owner)
+{
+    return effect_error(owner);
 }
 
 void openzt2_effect_end_pass(struct openzt2_effect *owner)

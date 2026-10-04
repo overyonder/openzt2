@@ -13,6 +13,14 @@ pub enum D3d9EffectProcessingError {
     Vkd3dShaderEffectCompilationFailed(String),
     #[error("vkd3d-shader Effects returned malformed output")]
     NativeDependencyReturnedMalformedOutput,
+    #[error("effect parameter {parameter_name:?} assignment has {assignment_byte_count} bytes, but its native storage has {storage_byte_count} bytes")]
+    ParameterAssignmentExceedsStorage {
+        parameter_name: String,
+        assignment_byte_count: usize,
+        storage_byte_count: usize,
+    },
+    #[error("effect parameter {parameter_name:?} has object or sampler storage that cannot accept a raw numeric assignment")]
+    ParameterAssignmentUnsupportedStorage { parameter_name: String },
     #[error("D3D9 shader translation failed: {0}")]
     D3d9ShaderTranslationFailed(String),
     #[error("compiled Effects evaluation failed: {0}")]

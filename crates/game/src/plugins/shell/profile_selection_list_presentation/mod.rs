@@ -68,10 +68,9 @@ pub(super) fn project_profile_index_entries_into_authored_rows(
         };
         commands.entity(row_entity).insert((
             ProfileChoice(profile.profile_identifier),
-            UiValue(i64::from(row.index)),
             Visibility::Inherited,
         ));
-        project_profile_index_entry_into_authored_row_descendants(
+        project_profile_index_entry_into_authored_row_subtree(
             &mut commands,
             row_entity,
             row.index,
@@ -84,7 +83,7 @@ pub(super) fn project_profile_index_entries_into_authored_rows(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn project_profile_index_entry_into_authored_row_descendants(
+fn project_profile_index_entry_into_authored_row_subtree(
     commands: &mut Commands,
     entity: Entity,
     index: u16,
@@ -93,23 +92,23 @@ fn project_profile_index_entry_into_authored_row_descendants(
     bindings: &Query<&UiTextBinding>,
     texts: &mut Query<&mut Text>,
 ) {
+    commands.entity(entity).insert(UiValue(i64::from(index)));
+    if bindings
+        .get(entity)
+        .is_ok_and(|binding| binding.0 == UiTextPropertyBindingSource::ProfileName)
+    {
+        if let Ok(mut text) = texts.get_mut(entity) {
+            if text.0 != display_name {
+                text.0.clear();
+                text.0.push_str(display_name);
+            }
+        }
+    }
     let Ok(entity_children) = children.get(entity) else {
         return;
     };
     for child in entity_children.iter() {
-        commands.entity(child).insert(UiValue(i64::from(index)));
-        if bindings
-            .get(child)
-            .is_ok_and(|binding| binding.0 == UiTextPropertyBindingSource::ProfileName)
-        {
-            if let Ok(mut text) = texts.get_mut(child) {
-                if text.0 != display_name {
-                    text.0.clear();
-                    text.0.push_str(display_name);
-                }
-            }
-        }
-        project_profile_index_entry_into_authored_row_descendants(
+        project_profile_index_entry_into_authored_row_subtree(
             commands,
             child,
             index,
@@ -123,23 +122,19 @@ fn project_profile_index_entry_into_authored_row_descendants(
 
 /// Fills the selected profile's name when the main-menu text node appears.
 pub(super) fn project_selected_profile_name_into_new_main_menu_nodes(
-    mut commands: Commands,
     index: Res<ProfileIndex>,
-    mut nodes: Query<
-        (Entity, &UiTextBinding, &UiDocumentOwner, Option<&mut Text>),
-        Added<UiTextBinding>,
-    >,
+    mut nodes: Query<(&UiTextBinding, &UiDocumentOwner, &mut Text), Added<UiTextBinding>>,
     roots: Query<&ChildOf, With<UiDocumentRoot>>,
     screens: Query<&ShellScreen>,
 ) {
     let Some(display_name) = selected_profile_display_name(&index) else {
         return;
     };
-    for (entity, binding, owner, text) in &mut nodes {
+    for (binding, owner, text) in &mut nodes {
         if binding.0 == UiTextPropertyBindingSource::ProfileName
             && ui_document_owner_belongs_to_main_menu_screen(*owner, &roots, &screens)
         {
-            set_or_insert_ui_text(&mut commands, entity, text, display_name);
+            write_selected_profile_name_into_authored_text(text, display_name);
         }
     }
 }
@@ -147,11 +142,10 @@ pub(super) fn project_selected_profile_name_into_new_main_menu_nodes(
 /// Refreshes the same authored node only when persistence reports a completed
 /// load or selection. There is no per-frame profile catalogue scan.
 pub(super) fn refresh_selected_profile_name_after_profile_index_changes(
-    mut commands: Commands,
     mut ready: MessageReader<ProfileIndexReady>,
     mut selected: MessageReader<ProfileSelected>,
     index: Res<ProfileIndex>,
-    mut nodes: Query<(Entity, &UiTextBinding, &UiDocumentOwner, Option<&mut Text>)>,
+    mut nodes: Query<(&UiTextBinding, &UiDocumentOwner, &mut Text)>,
     roots: Query<&ChildOf, With<UiDocumentRoot>>,
     screens: Query<&ShellScreen>,
 ) {
@@ -162,11 +156,11 @@ pub(super) fn refresh_selected_profile_name_after_profile_index_changes(
     let Some(display_name) = selected_profile_display_name(&index) else {
         return;
     };
-    for (entity, binding, owner, text) in &mut nodes {
+    for (binding, owner, text) in &mut nodes {
         if binding.0 == UiTextPropertyBindingSource::ProfileName
             && ui_document_owner_belongs_to_main_menu_screen(*owner, &roots, &screens)
         {
-            set_or_insert_ui_text(&mut commands, entity, text, display_name);
+            write_selected_profile_name_into_authored_text(text, display_name);
         }
     }
 }
@@ -192,18 +186,9 @@ fn ui_document_owner_belongs_to_main_menu_screen(
         .is_some_and(|screen| *screen == ShellScreen::MainMenu)
 }
 
-fn set_or_insert_ui_text(
-    commands: &mut Commands,
-    entity: Entity,
-    text: Option<Mut<Text>>,
-    display_name: &str,
-) {
-    if let Some(mut text) = text {
-        if text.0 != display_name {
-            text.0.clear();
-            text.0.push_str(display_name);
-        }
-    } else {
-        commands.entity(entity).insert(Text::new(display_name));
+fn write_selected_profile_name_into_authored_text(mut text: Mut<Text>, display_name: &str) {
+    if text.0 != display_name {
+        text.0.clear();
+        text.0.push_str(display_name);
     }
 }

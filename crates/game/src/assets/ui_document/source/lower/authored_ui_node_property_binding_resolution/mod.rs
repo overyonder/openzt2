@@ -649,14 +649,21 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             },
         ));
     }
-    if matches!(
-        &node.widget,
-        SourceUiWidgetData::Text(text)
-            if matches!(
-                text.text_format.as_deref(),
-                Some("mainmenu:profile_name" | "shell:profilenameformat")
-            )
-    ) {
+    // The main menu's decorative panel also carries the profile formatter.
+    // Its UIText control owns the name; the panel owns only the frame.
+    if (role != UiDocumentRole::MainMenu || matches!(&node.widget, SourceUiWidgetData::Text(_)))
+        && (matches!(
+            node.text_format.as_deref(),
+            Some("mainmenu:profile_name" | "shell:profilenameformat")
+        ) || matches!(
+            &node.widget,
+            SourceUiWidgetData::Text(text)
+                if matches!(
+                    text.text_format.as_deref(),
+                    Some("mainmenu:profile_name" | "shell:profilenameformat")
+                )
+        ))
+    {
         output.bindings.push(UiNodePropertyBinding::TextContent(
             UiTextPropertyBindingSource::ProfileName,
         ));

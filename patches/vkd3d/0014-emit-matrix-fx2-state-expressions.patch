@@ -1,0 +1,409 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2238,18 +2238,18 @@
+     put_u32(buffer, entry->name_id == 146 || entry->name_id == 147
+             || entry->name_id == 164 || entry->name_id == 178 ? D3DXPC_OBJECT : D3DXPC_MATRIX_ROWS);
+     put_u32(buffer, 0); /* Name */
+     put_u32(buffer, 0); /* Semantic */
+     put_u32(buffer, 1); /* Element count */
+
+-    /* FX2 stores columns before rows. A vector argument is one expression,
+-     * not one scalar; preserve its complete component count. */
++    /* Numeric states use matrix-row descriptors: rows precede columns.
++     * A vector argument is one expression; preserve its complete component count. */
+     {
+         const unsigned int components = entry->args_count * hlsl_type_component_count(data_type);
+-        put_u32(buffer, components < 4 ? components : 4);
+         put_u32(buffer, (components + 3) / 4);
++        put_u32(buffer, components < 4 ? components : 4);
+     }
+
+     return offset;
+ }
+
+ struct fx_2_expression_variable
+@@ -2255,7 +2255,7 @@
+ struct fx_2_expression_variable
+ {
+     const struct hlsl_ir_var *var;
+-    uint32_t register_index;
++    uint32_t register_index, register_count;
+ };
+ 
+ struct fx_2_expression
+@@ -2265,7 +2265,8 @@
+     struct vkd3d_bytecode_buffer literals;
+     struct fx_2_expression_variable *variables;
+     size_t variable_count, variable_capacity;
+-    uint32_t instruction_count, temporary_count;
++    uint32_t instruction_count, temporary_count, register_count;
++    const struct hlsl_block *block;
+ };
+ 
+ struct fx_2_expression_operand
+@@ -2295,20 +2296,20 @@
+     return result;
+ }
+ 
+-static double fx_2_constant_as_double(const struct hlsl_ir_constant *constant)
++static double fx_2_constant_as_double(const struct hlsl_ir_constant *constant, unsigned int component)
+ {
+     switch (constant->node.data_type->e.numeric.type)
+     {
+         case HLSL_TYPE_BOOL:
+         case HLSL_TYPE_UINT:
+-            return constant->value.u[0].u;
++            return constant->value.u[component].u;
+         case HLSL_TYPE_INT:
+-            return constant->value.u[0].i;
++            return constant->value.u[component].i;
+         case HLSL_TYPE_FLOAT:
+         case HLSL_TYPE_HALF:
+-            return constant->value.u[0].f;
++            return constant->value.u[component].f;
+         case HLSL_TYPE_DOUBLE:
+-            return constant->value.u[0].d;
++            return constant->value.u[component].d;
+         default:
+             return 0.0;
+     }
+@@ -2360,42 +2361,159 @@
+ }
+ 
+ static struct fx_2_expression_operand write_fx_2_expression_node(struct fx_2_expression *expression,
+-        const struct hlsl_ir_node *node)
++        const struct hlsl_ir_node *node, unsigned int component);
++
++static struct fx_2_expression_operand write_fx_2_expression_load(
++        struct fx_2_expression *expression, const struct hlsl_ir_load *load, unsigned int component)
++{
++    struct fx_2_expression_operand invalid = {0};
++    const struct hlsl_ir_var *var = load->src.var;
++    struct hlsl_ctx *ctx = expression->fx->ctx;
++    const struct hlsl_type *type = var->data_type;
++    unsigned int offset = 0, relative;
++    enum hlsl_regset regset;
++
++    if (!hlsl_is_numeric_type(type)
++            || (load->src.path_len && !hlsl_regset_index_from_deref(ctx, &load->src, HLSL_REGSET_NUMERIC, &offset)))
++    {
++        hlsl_fixme(ctx, &load->node.loc, "Only constant numeric FX2 expression loads are supported.");
++        return invalid;
++    }
++    relative = hlsl_type_get_component_offset(ctx, load->node.data_type, component, &regset);
++    offset += relative;
++    if (!var->is_uniform)
++    {
++        const struct hlsl_ir_node *instruction, *source = NULL;
++        unsigned int source_component = 0;
++        bool found_load = false;
++
++        if (!var->is_synthetic)
++        {
++            hlsl_fixme(ctx, &load->node.loc, "Non-uniform FX2 expression variables are not supported.");
++            return invalid;
++        }
++        /* Constructors are already lowered by HLSL into numeric component stores.
++         * Resolve the last preceding store, preserving the load's snapshot semantics. */
++        LIST_FOR_EACH_ENTRY(instruction, &expression->block->instrs, const struct hlsl_ir_node, entry)
++        {
++            const struct hlsl_ir_store *store;
++            unsigned int base = 0, count, destination, rhs_component = 0;
++            struct hlsl_type *destination_type;
++
++            if (instruction == &load->node)
++            {
++                found_load = true;
++                break;
++            }
++            if (instruction->type != HLSL_IR_STORE)
++                continue;
++            store = hlsl_ir_store(instruction);
++            if (store->lhs.var != var)
++                continue;
++            if (store->lhs.path_len && !hlsl_regset_index_from_deref(ctx, &store->lhs, HLSL_REGSET_NUMERIC, &base))
++            {
++                hlsl_fixme(ctx, &instruction->loc, "Dynamic FX2 constructor stores are not supported.");
++                return invalid;
++            }
++            destination_type = hlsl_deref_get_type(ctx, &store->lhs);
++            count = hlsl_type_component_count(store->rhs.node->data_type);
++            if (store->writemask)
++            {
++                for (unsigned int bit = 0; bit < 4; ++bit)
++                {
++                    if (!(store->writemask & (1u << bit)))
++                        continue;
++                    if (base + bit == offset && rhs_component < count)
++                    {
++                        source = store->rhs.node;
++                        source_component = rhs_component;
++                    }
++                    ++rhs_component;
++                }
++            }
++            else
++            {
++                for (rhs_component = 0; rhs_component < count; ++rhs_component)
++                {
++                    destination = base + hlsl_type_get_component_offset(ctx, destination_type, rhs_component, &regset);
++                    if (destination == offset)
++                    {
++                        source = store->rhs.node;
++                        source_component = rhs_component;
++                    }
++                }
++            }
++        }
++        if (found_load && source)
++            return write_fx_2_expression_node(expression, source, source_component);
++        hlsl_fixme(ctx, &load->node.loc, "FX2 constructor component has no preceding definition.");
++        return invalid;
++    }
++
++    /* HLSL offsets follow declaration majority; FX2 parameter values are padded rows. */
++    if (type->class == HLSL_CLASS_MATRIX && !hlsl_type_is_row_major(type))
++        offset = (offset % 4) * 4 + offset / 4;
++    for (size_t i = 0; i < expression->variable_count; ++i)
++        if (expression->variables[i].var == var)
++            return (struct fx_2_expression_operand){2, expression->variables[i].register_index * 4 + offset};
++    if (expression->register_count + type->e.numeric.dimy > UINT16_MAX)
++    {
++        hlsl_fixme(ctx, &load->node.loc, "FX2 expression input register span is too large.");
++        return invalid;
++    }
++    if (!vkd3d_array_reserve((void **)&expression->variables, &expression->variable_capacity,
++                expression->variable_count + 1, sizeof(*expression->variables)))
++    {
++        set_status(expression->fx, VKD3D_ERROR_OUT_OF_MEMORY);
++        return invalid;
++    }
++    expression->variables[expression->variable_count++] =
++            (struct fx_2_expression_variable){var, expression->register_count, type->e.numeric.dimy};
++    relative = expression->register_count * 4 + offset;
++    expression->register_count += type->e.numeric.dimy;
++    return (struct fx_2_expression_operand){2, relative};
++}
++
++static struct fx_2_expression_operand write_fx_2_expression_node(struct fx_2_expression *expression,
++        const struct hlsl_ir_node *node, unsigned int component)
+ {
+     struct fx_2_expression_operand operands[3], invalid = {0};
+     struct hlsl_ctx *ctx = expression->fx->ctx;
+     const struct hlsl_ir_expr *expr;
+     uint32_t integer;
+ 
+-    if (node->type != HLSL_IR_CONSTANT && evaluate_fx_2_integer_expression(node, &integer))
++    if (!hlsl_is_numeric_type(node->data_type)
++            || component >= hlsl_type_component_count(node->data_type))
++    {
++        hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression component shape.");
++        return invalid;
++    }
++    if (node->type != HLSL_IR_CONSTANT && hlsl_is_vec1(node->data_type)
++            && evaluate_fx_2_integer_expression(node, &integer))
+         return write_fx_2_expression_literal(expression,
+                 node->data_type->e.numeric.type == HLSL_TYPE_INT ? (double)(int32_t)integer : integer);
+     switch (node->type)
+     {
+         case HLSL_IR_CONSTANT:
+-            return write_fx_2_expression_literal(expression, fx_2_constant_as_double(hlsl_ir_constant(node)));
+-        case HLSL_IR_LOAD:
+-        {
+-            const struct hlsl_ir_load *load = hlsl_ir_load(node);
+-            size_t i;
+-
+-            if (load->src.path_len)
++            if (component >= ARRAY_SIZE(hlsl_ir_constant(node)->value.u))
+             {
+-                hlsl_fixme(ctx, &node->loc, "Indexed FX2 expression loads are not implemented.");
++                hlsl_fixme(ctx, &node->loc, "Unlowered matrix FX2 constants are not supported.");
+                 return invalid;
+             }
+-            for (i = 0; i < expression->variable_count; ++i)
+-                if (expression->variables[i].var == load->src.var)
+-                    return (struct fx_2_expression_operand){2, expression->variables[i].register_index * 4};
+-            if (!vkd3d_array_reserve((void **)&expression->variables, &expression->variable_capacity,
+-                    expression->variable_count + 1, sizeof(*expression->variables)))
++            return write_fx_2_expression_literal(expression,
++                    fx_2_constant_as_double(hlsl_ir_constant(node), component));
++        case HLSL_IR_LOAD:
++            return write_fx_2_expression_load(expression, hlsl_ir_load(node), component);
++        case HLSL_IR_SWIZZLE:
++        {
++            const struct hlsl_ir_swizzle *swizzle = hlsl_ir_swizzle(node);
++            if (swizzle->val.node->data_type->class == HLSL_CLASS_MATRIX)
+             {
+-                set_status(expression->fx, VKD3D_ERROR_OUT_OF_MEMORY);
++                hlsl_fixme(ctx, &node->loc, "Unlowered matrix FX2 swizzles are not supported.");
+                 return invalid;
+             }
+-            expression->variables[expression->variable_count] = (struct fx_2_expression_variable)
+-                    {load->src.var, expression->variable_count};
+-            return (struct fx_2_expression_operand){2, expression->variable_count++ * 4};
++            return write_fx_2_expression_node(expression, swizzle->val.node,
++                    hlsl_swizzle_get_component(swizzle->u.vector, component));
+         }
+         case HLSL_IR_EXPR:
+             break;
+@@ -2406,11 +2524,13 @@
+ 
+     expr = hlsl_ir_expr(node);
+     if (expr->op == HLSL_OP1_CAST)
+-        return write_fx_2_expression_node(expression, expr->operands[0].node);
++        return write_fx_2_expression_node(expression, expr->operands[0].node,
++                    hlsl_is_vec1(expr->operands[0].node->data_type) ? 0 : component);
+     switch (expr->op)
+     {
+         case HLSL_OP1_NEG:
+-            operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node);
++            operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node,
++                    hlsl_is_vec1(expr->operands[0].node->data_type) ? 0 : component);
+             return operands[0].type
+                     ? write_fx_2_expression_instruction(expression, 0x101, operands, 1) : invalid;
+         case HLSL_OP2_ADD:
+@@ -2424,8 +2544,10 @@
+             hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression %s.", debug_hlsl_expr_op(expr->op));
+             return invalid;
+     }
+-    operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node);
+-    operands[1] = write_fx_2_expression_node(expression, expr->operands[1].node);
++    operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node,
++            hlsl_is_vec1(expr->operands[0].node->data_type) ? 0 : component);
++    operands[1] = write_fx_2_expression_node(expression, expr->operands[1].node,
++            hlsl_is_vec1(expr->operands[1].node->data_type) ? 0 : component);
+     if (!operands[0].type || !operands[1].type)
+         return invalid;
+     switch (expr->op)
+@@ -2447,7 +2569,8 @@
+             return write_fx_2_expression_instruction(expression, 0x204, comparisons, 2);
+         }
+         case HLSL_OP3_TERNARY:
+-            operands[2] = write_fx_2_expression_node(expression, expr->operands[2].node);
++            operands[2] = write_fx_2_expression_node(expression, expr->operands[2].node,
++                    hlsl_is_vec1(expr->operands[2].node->data_type) ? 0 : component);
+             if (!operands[2].type)
+                 return invalid;
+             operands[0] = write_fx_2_expression_instruction(expression, 0x204,
+@@ -2485,8 +2608,8 @@
+     for (size_t i = 0; i < expression->variable_count; ++i)
+     {
+         put_u32(ctab, 0);
+-        put_u32(ctab, vkd3d_make_u32(D3DXRS_FLOAT4, i));
+-        put_u32(ctab, 1);
++        put_u32(ctab, vkd3d_make_u32(D3DXRS_FLOAT4, expression->variables[i].register_index));
++        put_u32(ctab, expression->variables[i].register_count);
+         put_u32(ctab, 0);
+         put_u32(ctab, 0);
+     }
+@@ -2498,9 +2621,9 @@
+         size_t type = bytecode_align(ctab);
+         set_u32(ctab, entry, name);
+         set_u32(ctab, entry + 3 * sizeof(uint32_t), type);
+-        put_u32(ctab, vkd3d_make_u32(hlsl_sm1_class(var->data_type),
++        put_u32(ctab, vkd3d_make_u32(get_fx_2_type_class(var->data_type),
+                 hlsl_sm1_base_type(var->data_type, false, HLSL_SAMPLER_DIM_GENERIC)));
+-        put_u32(ctab, vkd3d_make_u32(1, 1));
++        put_u32(ctab, vkd3d_make_u32(var->data_type->e.numeric.dimy, var->data_type->e.numeric.dimx));
+         put_u32(ctab, vkd3d_make_u32(1, 0));
+         put_u32(ctab, 1);
+     }
+@@ -2509,22 +2632,32 @@
+     bytecode_align(ctab);
+ }
+ 
+-static bool write_fx_2_expression(const struct hlsl_ir_node *node, struct fx_write_context *fx,
+-        struct vkd3d_shader_code *out)
++static bool write_fx_2_expression(const struct hlsl_ir_node *node, const struct hlsl_block *block,
++        struct fx_write_context *fx, struct vkd3d_shader_code *out)
+ {
+     struct vkd3d_bytecode_buffer blob = {0}, ctab = {0}, clit = {0};
+-    struct fx_2_expression expression = {.fx = fx};
++    struct fx_2_expression expression = {.fx = fx, .block = block};
+     struct fx_2_expression_operand result;
+     size_t instruction_count;
+ 
++    if (!hlsl_is_numeric_type(node->data_type)
++            || !hlsl_type_component_count(node->data_type)
++            || hlsl_type_component_count(node->data_type) > 16)
++    {
++        hlsl_fixme(fx->ctx, &node->loc, "Unsupported FX2 expression output shape.");
++        return false;
++    }
+     instruction_count = put_u32(&expression.code, 0);
+-    result = write_fx_2_expression_node(&expression, node);
+-    if (!result.type)
+-        goto fail;
+-    write_fx_2_expression_instruction(&expression, 0x100, &result, 1);
+-    set_u32(&expression.code, expression.code.size - 3 * sizeof(uint32_t), 0);
+-    set_u32(&expression.code, expression.code.size - 2 * sizeof(uint32_t), 4);
+-    set_u32(&expression.code, expression.code.size - sizeof(uint32_t), 0);
++    for (unsigned int component = 0; component < hlsl_type_component_count(node->data_type); ++component)
++    {
++        result = write_fx_2_expression_node(&expression, node, component);
++        if (!result.type)
++            goto fail;
++        write_fx_2_expression_instruction(&expression, 0x100, &result, 1);
++        set_u32(&expression.code, expression.code.size - 3 * sizeof(uint32_t), 0);
++        set_u32(&expression.code, expression.code.size - 2 * sizeof(uint32_t), 4);
++        set_u32(&expression.code, expression.code.size - sizeof(uint32_t), component);
++    }
+     set_u32(&expression.code, instruction_count, expression.instruction_count);
+ 
+     write_fx_2_expression_ctab(&expression, &ctab);
+@@ -2564,10 +2697,9 @@
+     struct hlsl_ctx *ctx = fx->ctx;
+     struct hlsl_ir_constant *c;
+ 
+-    while (value_node->type == HLSL_IR_EXPR && hlsl_ir_expr(value_node)->op == HLSL_OP1_CAST)
++    while (value_node->type == HLSL_IR_EXPR && hlsl_ir_expr(value_node)->op == HLSL_OP1_CAST
++            && !hlsl_is_numeric_type(value_node->data_type))
+         value_node = hlsl_ir_expr(value_node)->operands[0].node;
+-    while (value_node->type == HLSL_IR_SWIZZLE)
+-        value_node = hlsl_ir_swizzle(value_node)->val.node;
+ 
+     put_u32(buffer, entry->name_id);
+     put_u32(buffer, entry->lhs_index);
+@@ -2593,15 +2725,11 @@
+         case HLSL_IR_LOAD:
+         {
+             struct hlsl_ir_load *load = hlsl_ir_load(value_node);
++            if (!load->src.var->is_uniform || load->src.path_len)
++                goto expression_state;
+             const char *name = load->src.var->name;
+             uint32_t id = fx->object_variable_count++;
+             uint32_t size = strlen(name) + 1;
+-
+-            if (load->src.path_len)
+-            {
+-                hlsl_fixme(ctx, &var->loc, "Indexed state parameter references are not implemented.");
+-                break;
+-            }
+ 
+             type = write_fx_2_state_type(entry, fx);
+             value = put_u32(unstructured, id);
+@@ -2640,12 +2768,14 @@
+             ++fx->shader_count;
+             break;
+         }
++        case HLSL_IR_SWIZZLE:
+         case HLSL_IR_EXPR:
++        expression_state:
+         {
+             struct vkd3d_shader_code code = {0};
+             uint32_t id = fx->object_variable_count++;
+ 
+-            if (!write_fx_2_expression(value_node, fx, &code))
++            if (!write_fx_2_expression(value_node, entry->instrs, fx, &code))
+                 break;
+             type = write_fx_2_state_type(entry, fx);
+             value = put_u32(unstructured, id);
+@@ -3652,6 +3782,7 @@
+     hlsl_transform_ir(ctx, replace_state_block_constant, entry->instrs, &replace_context);
+     if (entry->args->node->type == HLSL_IR_STATEBLOCK_CONSTANT)
+         replace_state_block_constant(ctx, entry->args->node, &replace_context);
++    hlsl_lower_index_loads(ctx, entry->instrs);
+     hlsl_run_const_passes(ctx, entry->instrs);
+ 
+     /* Now cast and run folding again. */

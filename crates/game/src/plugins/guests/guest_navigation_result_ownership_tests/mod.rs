@@ -15,8 +15,7 @@ use crate::plugins::{
         NavigationRequestSequence,
     },
     world_spawn::{
-        persistent_id_types::PersistentId,
-        world_membership_types::WorldMember,
+        persistent_id_types::PersistentId, world_membership_types::WorldMember,
         zoo_entrance_anchor_synchronization::ZooEntrance,
     },
 };

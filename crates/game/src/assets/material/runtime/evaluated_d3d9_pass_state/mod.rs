@@ -171,6 +171,7 @@ impl EvaluatedD3d9PassState {
             EvaluatedD3d9EffectCommand::D3d9TransformState {
                 transform_state,
                 transform_matrix,
+                ..
             } => {
                 if let Some(stage) = transform_state.checked_sub(16) {
                     *self

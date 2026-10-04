@@ -12,6 +12,7 @@ mod online_message_operations;
 mod online_message_types;
 mod options_screen_lifecycle;
 mod post_save_navigation;
+mod profile_dialog_lifecycle;
 mod profile_selection_list_presentation;
 mod shell_navigation_and_world_launch;
 pub mod shell_navigation_request_types;
@@ -194,6 +195,7 @@ impl Plugin for ShellPlugin {
                         request_authored_profile_selection_list_row_count,
                     profile_selection_list_presentation::
                         project_profile_index_entries_into_authored_rows,
+                    profile_dialog_lifecycle::close_profile_dialog_documents_once_their_dialog_hides,
                 )
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::MainMenu)),

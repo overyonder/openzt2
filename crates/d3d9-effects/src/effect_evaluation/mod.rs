@@ -10,10 +10,13 @@ mod evaluated_pass_copying;
 mod evaluated_state_copying;
 mod mojoshader_effect_allocation;
 mod parameter_application;
+pub mod retained_transform_evaluation;
 
 /// Compiles and evaluates an Effects document through vkd3d-shader and
 /// `MojoShader`'s dependency-owned FX2 evaluator.
 /// Assignments match FX semantics first, then exact variable names.
+/// Parameter-dependent fixed transforms retain their compiled native expression
+/// for later evaluation with independent inputs.
 ///
 /// # Errors
 ///
@@ -34,5 +37,6 @@ pub fn compile_and_evaluate_d3d9_effect_source(
         effect_allocation.native_effect_pointer,
         parameter_assignments,
     )?;
-    evaluated_state_copying::copy_evaluated_d3d9_effect_from_mojoshader(&effect_allocation)
+    retained_transform_evaluation::RetainedD3d9EffectProgram::new(effect_allocation)
+        .copy_initial_evaluated_effect()
 }

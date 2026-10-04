@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 fn main() {
     println!("cargo:rerun-if-changed=native/compiler.c");
     println!("cargo:rerun-if-changed=native/shader.c");
+    println!("cargo:rerun-if-changed=native/effect_execution_validation.h");
     println!("cargo:rerun-if-env-changed=OPENZT2_NATIVE_DEPENDENCY_DIR");
 
     let compilation_target = std::env::var("TARGET")

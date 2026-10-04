@@ -11,6 +11,7 @@ mod authored_widget_projection;
 use authored_document_projection::project_document;
 
 use bevy::{asset::LoadState, prelude::*};
+use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 
 use super::authored_image_selection_diagnostic_override::UiAuthoredImageSelectionDiagnosticOverride;
 use super::authored_reusable_list_and_table_runtime_types::{
@@ -273,6 +274,29 @@ pub(super) fn reconcile_ui_list_rows(
             image_selection_index,
             false,
         );
+        if lists
+            .get(pending_row.list)
+            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ProfileIndex)
+        {
+            // This fragment fills the list width. Its content-size fallback is
+            // one pixel because the authored root has no fixed width or children.
+            let region = document.canonical_ui_document().nodes[0].region.clone();
+            commands
+                .entity(root)
+                .entry::<Node>()
+                .and_modify(move |mut node| {
+                    node.width = Val::Auto;
+                    authored_node_layout_projection::apply_authored_node_region_to_bevy_node(
+                        &mut node, &region,
+                    );
+                    authored_document_projection::flow_authored_row(
+                        &mut node,
+                        Some(FlexDirection::Column),
+                        0,
+                        0,
+                    );
+                });
+        }
         commands.entity(root).insert(UiListRow {
             list: pending_row.list,
             index: pending_row.index,

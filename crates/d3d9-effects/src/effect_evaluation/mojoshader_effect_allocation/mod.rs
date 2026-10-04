@@ -98,3 +98,6 @@ pub(super) unsafe fn copy_optional_mojoshader_string(
             .into_owned()
     })
 }
+
+#[cfg(test)]
+mod tests;

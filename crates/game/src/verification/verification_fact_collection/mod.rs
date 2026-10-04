@@ -60,14 +60,20 @@ pub(crate) struct VerificationWorldFactQueries<'w, 's> {
     previews: Query<'w, 's, (&'static ConstructionPreview, &'static Visibility)>,
     fences: Query<'w, 's, (), With<FenceEdge>>,
     habitats: Query<'w, 's, (), With<Habitat>>,
-    animals: Query<'w, 's, (Option<&'static Containment>, Option<&'static AnimalSex>), With<Animal>>,
+    animals:
+        Query<'w, 's, (Option<&'static Containment>, Option<&'static AnimalSex>), With<Animal>>,
     staff: Query<'w, 's, (), With<Employment>>,
     facilities: Query<'w, 's, (), With<ServiceFacility>>,
     guests: Query<'w, 's, (), With<Guest>>,
     placed_objects: Query<'w, 's, (), With<PlacedObjectDefinitionReference>>,
     paths: Query<'w, 's, (), With<PathTile>>,
     photos: Query<'w, 's, Has<CameraRollPhoto>, With<Photo>>,
-    immersive_modes: Query<'w, 's, (), With<crate::plugins::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode>>,
+    immersive_modes: Query<
+        'w,
+        's,
+        (),
+        With<crate::plugins::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode>,
+    >,
     zoo_cameras: Query<'w, 's, (&'static GlobalTransform, &'static Camera), With<ZooCamera>>,
 }
 
@@ -170,7 +176,10 @@ pub(crate) fn collect_requested_verification_facts(
         fact("camera_x_m", f64::from(transform.translation().x));
         fact("camera_z_m", f64::from(transform.translation().z));
         fact("camera_height_m", f64::from(transform.translation().y));
-        fact("camera_pitch_deg", f64::from((-forward.y).asin().to_degrees()));
+        fact(
+            "camera_pitch_deg",
+            f64::from((-forward.y).asin().to_degrees()),
+        );
         // Read the field of view from the clip matrix so custom projections count too.
         let clip_from_view = camera.clip_from_view();
         if clip_from_view.y_axis.y > 0.0 {
@@ -180,7 +189,10 @@ pub(crate) fn collect_requested_verification_facts(
             );
         }
     }
-    fact("immersive_mode_active", flag(!world.immersive_modes.is_empty()));
+    fact(
+        "immersive_mode_active",
+        flag(!world.immersive_modes.is_empty()),
+    );
     fact("fences", count(world.fences.iter().count()));
     fact("habitats", count(world.habitats.iter().count()));
     fact("animals", count(world.animals.iter().count()));
@@ -200,7 +212,13 @@ pub(crate) fn collect_requested_verification_facts(
     ] {
         fact(
             name,
-            count(world.animals.iter().filter(|(_, animal_sex)| animal_sex.is_some_and(|value| value.0 == sex)).count()),
+            count(
+                world
+                    .animals
+                    .iter()
+                    .filter(|(_, animal_sex)| animal_sex.is_some_and(|value| value.0 == sex))
+                    .count(),
+            ),
         );
     }
     fact("staff", count(world.staff.iter().count()));

@@ -25,9 +25,8 @@ impl<'w, 's> GroundPathTilesUnderObjectPlacement<'w, 's> {
         catalogue: WorldDefinitionsView<'a>,
     ) -> impl Fn(IVec2) -> bool + use<'a, 'w, 's> {
         let spacing_m = self.grid.spacing_m;
-        let applies = definition.ground_paths_block_placement
-            && spacing_m.is_finite()
-            && spacing_m > 0.0;
+        let applies =
+            definition.ground_paths_block_placement && spacing_m.is_finite() && spacing_m > 0.0;
         let search_reach_m = if applies {
             catalogue
                 .paths()

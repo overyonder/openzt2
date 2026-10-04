@@ -16,6 +16,10 @@ use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 
 /// References immutable authored data rather than copying feedback or view rows.
 #[derive(Message)]
+#[expect(
+    dead_code,
+    reason = "retain the typed authored view-event payload until recipient delivery is implemented"
+)]
 pub(crate) struct BehaviorViewEventEmitted {
     pub(crate) source: Entity,
     pub(crate) source_definition: AssetId,

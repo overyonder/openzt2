@@ -54,6 +54,8 @@
           ./patches/vkd3d/0011-preserve-fx2-state-constant-types.patch
           ./patches/vkd3d/0012-preserve-fx2-state-vector-components.patch
           ./patches/vkd3d/0013-reset-sm123-constant-allocations-between-effect-shaders.patch
+          ./patches/vkd3d/0014-emit-matrix-fx2-state-expressions.patch
+          ./patches/vkd3d/0015-reject-value-changing-fx2-expression-casts.patch
         ];
     });
     mojoshaderSource = pkgs.applyPatches {
@@ -72,6 +74,10 @@
         ./patches/mojoshader/0010-retain-sampler-mappings-and-guard-pointcoord-patches.patch
         ./patches/mojoshader/0011-link-vertex-shaders-without-pixel-shaders.patch
         ./patches/mojoshader/0012-use-integer-windows-file-flags.patch
+        ./patches/mojoshader/0013-evaluate-preshaders-with-independent-registers.patch
+        ./patches/mojoshader/0014-pack-direct-matrix-state-references.patch
+        ./patches/mojoshader/0015-bound-preshader-execution-storage.patch
+        ./patches/mojoshader/0016-decode-struct-matrix-members.patch
       ];
     };
     mojoshaderFork = pkgs.mojoshader.overrideAttrs (old: {

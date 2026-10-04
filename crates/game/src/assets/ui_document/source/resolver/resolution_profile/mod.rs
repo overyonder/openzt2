@@ -13,7 +13,7 @@ pub(in crate::assets::ui_document::source) struct SelectedUiSourceResolutionProf
     pub(in crate::assets::ui_document::source) role_paths: Vec<(UiDocumentRole, String)>,
     /// Documents inserted beneath each screen's root.
     pub(super) role_compositions: Vec<(UiDocumentRole, String)>,
-    /// Document containing the mode-wide hotkey bindings.
+    /// Hotkey modes that role documents attach or reference by name.
     pub(super) hotkey_path: Option<String>,
     /// Original gameplay-mode tree which owns pointer cursor selection.
     pub(super) interaction_mode_path: Option<String>,
@@ -98,7 +98,7 @@ impl SelectedUiSourceResolutionProfile {
                 .iter()
                 .any(|(candidate, _)| candidate == role)
         });
-        if profile.role_hotkey_modes.is_empty() {
+        if profile.role_paths.is_empty() {
             profile.hotkey_path = None;
         }
         if !profile
