@@ -1,6 +1,6 @@
 --- a/libs/vkd3d-shader/fx.c
 +++ b/libs/vkd3d-shader/fx.c
-@@ -2245,6 +2245,308 @@
+@@ -2245,6 +2245,313 @@
      return offset;
  }
 
@@ -193,9 +193,14 @@
 +        case HLSL_OP2_NEQUAL:
 +        {
 +            struct fx_2_expression_operand comparisons[2];
-+            comparisons[0] = write_fx_2_expression_instruction(expression, 0x202, operands, 2);
-+            comparisons[1] = write_fx_2_expression_instruction(expression, 0x202,
++            /* Unordered operands compare unequal. Invert equality formed from
++             * both ordered GE predicates: 1 - ((a >= b) * (b >= a)). */
++            comparisons[0] = write_fx_2_expression_instruction(expression, 0x203, operands, 2);
++            comparisons[1] = write_fx_2_expression_instruction(expression, 0x203,
 +                    (struct fx_2_expression_operand[]){operands[1], operands[0]}, 2);
++            comparisons[0] = write_fx_2_expression_instruction(expression, 0x205, comparisons, 2);
++            comparisons[0] = write_fx_2_expression_instruction(expression, 0x101, comparisons, 1);
++            comparisons[1] = write_fx_2_expression_literal(expression, 1.0);
 +            return write_fx_2_expression_instruction(expression, 0x204, comparisons, 2);
 +        }
 +        case HLSL_OP3_TERNARY:
@@ -309,7 +314,7 @@
  static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
          struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
  {
-@@ -2329,6 +2631,27 @@
+@@ -2329,6 +2636,27 @@
              ++fx->shader_count;
              break;
          }

@@ -17,6 +17,7 @@ use super::mojoshader_effect_allocation::{
     copy_mojoshader_retained_shader_bytecode, copy_optional_mojoshader_string,
     copy_required_mojoshader_string, MojoShaderEffectAllocationOwner,
 };
+use super::retained_transform_evaluation::RetainedD3d9EffectProgram;
 
 #[allow(
     unsafe_code,
@@ -24,11 +25,18 @@ use super::mojoshader_effect_allocation::{
 )]
 pub(super) fn copy_evaluated_d3d9_effect_pass_from_mojoshader(
     effect_allocation: &MojoShaderEffectAllocationOwner,
+    retained_program: &RetainedD3d9EffectProgram,
     technique_index: u32,
     pass_index: u32,
 ) -> Result<EvaluatedD3d9EffectPass, D3d9EffectProcessingError> {
     let mut evaluated_commands = Vec::new();
-    append_evaluated_effect_state_commands(effect_allocation, &mut evaluated_commands)?;
+    append_evaluated_effect_state_commands(
+        effect_allocation,
+        retained_program,
+        technique_index,
+        pass_index,
+        &mut evaluated_commands,
+    )?;
     append_evaluated_shader_bytecode_commands(effect_allocation, &mut evaluated_commands);
     append_evaluated_shader_constant_commands(effect_allocation, &mut evaluated_commands);
     Ok(EvaluatedD3d9EffectPass {
@@ -49,6 +57,9 @@ pub(super) fn copy_evaluated_d3d9_effect_pass_from_mojoshader(
 )]
 fn append_evaluated_effect_state_commands(
     effect_allocation: &MojoShaderEffectAllocationOwner,
+    retained_program: &RetainedD3d9EffectProgram,
+    technique_index: u32,
+    pass_index: u32,
     evaluated_commands: &mut Vec<EvaluatedD3d9EffectCommand>,
 ) -> Result<(), D3d9EffectProcessingError> {
     for effect_state_index in
@@ -98,6 +109,12 @@ fn append_evaluated_effect_state_commands(
                         effect_state_stage_or_index
                     },
                     transform_matrix: floating_point_state_values,
+                    retained_expression: retained_program.retain_transform_expression(
+                        effect_allocation,
+                        technique_index,
+                        pass_index,
+                        effect_state_index,
+                    )?,
                 });
             } else {
                 evaluated_commands.push(EvaluatedD3d9EffectCommand::D3d9MaterialState {
@@ -333,6 +350,7 @@ fn convert_mojoshader_effect_state_to_evaluated_d3d9_command(
         8 => 22,
         9 => 23,
         13 => 27,
+        20 => 38,
         73 => 168,
         75 => 171,
         99 => 206,
@@ -344,7 +362,7 @@ fn convert_mojoshader_effect_state_to_evaluated_d3d9_command(
                 state_type: effect_state_type,
                 state_index: effect_state_index,
                 state_value: effect_state_value,
-            }
+            };
         }
     };
     EvaluatedD3d9EffectCommand::D3d9RenderState {

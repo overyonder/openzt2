@@ -164,7 +164,9 @@ fn expand_named_ui_source_event(
         if expanded.len() != 1 {
             return Err("a nested named UI event expanded to more than one child event".to_owned());
         }
-        event.child = expanded.pop().map(Box::new);
+        if let Some(child) = expanded.pop() {
+            event.set_child(child);
+        }
     }
     Ok(vec![event])
 }

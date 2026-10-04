@@ -7,7 +7,8 @@ use crate::assets::source_document::{
 use super::{
     super::model::{
         SourceUiEvent, SourceUiEventBlock, SourceUiEventTrigger, SourceUiHotkey,
-        SourceUiHotkeyTrigger, SourceUiNamedEventList, SourceUiPayloadNode, SourceUiXmlObjectEvent,
+        SourceUiHotkeyModeReference, SourceUiHotkeyTrigger, SourceUiNamedEventList,
+        SourceUiPayloadNode, SourceUiXmlObjectEvent,
     },
     source_scalar_and_attribute_reading::{
         copy_unknown_source_ui_attributes, optional_nonempty_source_attribute, parse_source_bool,
@@ -88,7 +89,7 @@ pub(super) fn parse_authored_ui_event(node: &OrderedSourceDocumentNode) -> Sourc
         node.element_children()
             .find(|node| node.name == "BFKeyValObj")
     });
-    SourceUiEvent {
+    let mut event = SourceUiEvent {
         message: node.attribute("msg").unwrap_or_default().to_owned(),
         data: optional_nonempty_source_attribute(node, "data"),
         string: optional_nonempty_source_attribute(node, "string"),
@@ -113,7 +114,7 @@ pub(super) fn parse_authored_ui_event(node: &OrderedSourceDocumentNode) -> Sourc
             value: xml_key_value.and_then(|node| optional_nonempty_source_attribute(node, "val")),
             payload: SourceUiPayloadNode::from_data_node(xml),
         }),
-        child: child.map(parse_authored_ui_event).map(Box::new),
+        child: None,
         payload: node
             .element_children()
             .filter(|node| {
@@ -149,7 +150,26 @@ pub(super) fn parse_authored_ui_event(node: &OrderedSourceDocumentNode) -> Sourc
                 "time",
             ],
         ),
+    };
+    if let Some(child) = child {
+        event.set_child(parse_authored_ui_event(child));
     }
+    event
+}
+
+/// `<file name node/>` entries include a named mode from a hotkey document.
+pub(super) fn parse_authored_ui_hotkey_mode_references(
+    node: &OrderedSourceDocumentNode,
+) -> Vec<SourceUiHotkeyModeReference> {
+    node.element_children()
+        .filter(|child| child.name == "file")
+        .filter_map(|child| {
+            Some(SourceUiHotkeyModeReference {
+                file: AssetPath::new(optional_nonempty_source_attribute(child, "name")?),
+                mode: optional_nonempty_source_attribute(child, "node")?,
+            })
+        })
+        .collect()
 }
 
 pub(super) fn parse_authored_ui_hotkeys(node: &OrderedSourceDocumentNode) -> Vec<SourceUiHotkey> {

@@ -2751,7 +2751,7 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "d3d9-effects"
-version = "0.4.0-alpha"
+version = "0.5.2-alpha"
 dependencies = [
  "cc",
  "naga",
@@ -5026,7 +5026,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_game"
-version = "0.4.0-alpha"
+version = "0.5.2-alpha"
 dependencies = [
  "anyhow",
  "arrayvec",
@@ -5064,7 +5064,7 @@ dependencies = [
 
 [[package]]
 name = "openzt2_game_data"
-version = "0.4.0-alpha"
+version = "0.5.2-alpha"
 dependencies = [
  "blake3",
  "serde",
@@ -7965,7 +7965,7 @@ dependencies = [
 
 [[package]]
 name = "z2f"
-version = "0.4.0-alpha"
+version = "0.5.2-alpha"
 dependencies = [
  "roxmltree 0.20.0",
  "zip",

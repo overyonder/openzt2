@@ -1,15 +1,17 @@
 use crate::{
     effect_types::{
-        D3d9EffectParameterDescription, EvaluatedD3d9Effect, EvaluatedD3d9EffectTechnique,
+        D3d9EffectParameterDescription, D3d9EffectStructMemberDescription, EvaluatedD3d9Effect,
+        EvaluatedD3d9EffectTechnique,
     },
     error::D3d9EffectProcessingError,
     native_abi::{
-        openzt2_effect_begin_pass, openzt2_effect_end_pass, openzt2_effect_parameter_annotations,
-        openzt2_effect_parameter_class, openzt2_effect_parameter_columns,
-        openzt2_effect_parameter_count, openzt2_effect_parameter_elements,
-        openzt2_effect_parameter_name, openzt2_effect_parameter_rows,
-        openzt2_effect_parameter_semantic, openzt2_effect_parameter_type,
-        openzt2_effect_pass_count, openzt2_effect_technique_count,
+        openzt2_effect_begin_pass, openzt2_effect_end_pass, openzt2_effect_execution_error,
+        openzt2_effect_parameter_annotations, openzt2_effect_parameter_class,
+        openzt2_effect_parameter_columns, openzt2_effect_parameter_count,
+        openzt2_effect_parameter_elements, openzt2_effect_parameter_member,
+        openzt2_effect_parameter_member_count, openzt2_effect_parameter_name,
+        openzt2_effect_parameter_rows, openzt2_effect_parameter_semantic,
+        openzt2_effect_parameter_type, openzt2_effect_pass_count, openzt2_effect_technique_count,
         openzt2_effect_technique_float_annotation, openzt2_effect_technique_is_valid,
         openzt2_effect_technique_name,
     },
@@ -21,6 +23,7 @@ use super::{
         copy_optional_mojoshader_string, copy_required_mojoshader_string,
         MojoShaderEffectAllocationOwner,
     },
+    retained_transform_evaluation::RetainedD3d9EffectProgram,
 };
 
 #[allow(
@@ -29,6 +32,7 @@ use super::{
 )]
 pub(super) fn copy_evaluated_d3d9_effect_from_mojoshader(
     effect_allocation: &MojoShaderEffectAllocationOwner,
+    retained_program: &RetainedD3d9EffectProgram,
 ) -> Result<EvaluatedD3d9Effect, D3d9EffectProcessingError> {
     let effect_parameter_count =
         unsafe { openzt2_effect_parameter_count(effect_allocation.native_effect_pointer) };
@@ -67,6 +71,30 @@ pub(super) fn copy_evaluated_d3d9_effect_from_mojoshader(
                     effect_allocation.native_effect_pointer,
                     parameter_index,
                 ),
+                struct_members: (0..openzt2_effect_parameter_member_count(
+                    effect_allocation.native_effect_pointer,
+                    parameter_index,
+                ))
+                    .map(|member_index| {
+                        let mut layout = [0; 6];
+                        let member_name =
+                            copy_required_mojoshader_string(openzt2_effect_parameter_member(
+                                effect_allocation.native_effect_pointer,
+                                parameter_index,
+                                member_index,
+                                layout.as_mut_ptr(),
+                            ))?;
+                        Ok(D3d9EffectStructMemberDescription {
+                            member_name,
+                            parameter_class: layout[0],
+                            parameter_type: layout[1],
+                            row_count: layout[2],
+                            column_count: layout[3],
+                            array_element_count: layout[4],
+                            native_component_offset: layout[5],
+                        })
+                    })
+                    .collect::<Result<_, D3d9EffectProcessingError>>()?,
             })
         })
         .collect::<Result<_, D3d9EffectProcessingError>>()?;
@@ -74,7 +102,11 @@ pub(super) fn copy_evaluated_d3d9_effect_from_mojoshader(
         unsafe { openzt2_effect_technique_count(effect_allocation.native_effect_pointer) };
     let evaluated_techniques = (0..effect_technique_count)
         .map(|technique_index| {
-            copy_evaluated_d3d9_effect_technique_from_mojoshader(effect_allocation, technique_index)
+            copy_evaluated_d3d9_effect_technique_from_mojoshader(
+                effect_allocation,
+                retained_program,
+                technique_index,
+            )
         })
         .collect::<Result<_, _>>()?;
     Ok(EvaluatedD3d9Effect {
@@ -89,6 +121,7 @@ pub(super) fn copy_evaluated_d3d9_effect_from_mojoshader(
 )]
 fn copy_evaluated_d3d9_effect_technique_from_mojoshader(
     effect_allocation: &MojoShaderEffectAllocationOwner,
+    retained_program: &RetainedD3d9EffectProgram,
     technique_index: u32,
 ) -> Result<EvaluatedD3d9EffectTechnique, D3d9EffectProcessingError> {
     let mut quality_annotation = 0.0;
@@ -103,15 +136,25 @@ fn copy_evaluated_d3d9_effect_technique_from_mojoshader(
     let evaluated_passes = (0..technique_pass_count)
         .filter(|_| is_valid)
         .map(|pass_index| {
-            unsafe {
+            let began_pass = unsafe {
                 openzt2_effect_begin_pass(
                     effect_allocation.native_effect_pointer,
                     technique_index,
                     pass_index,
-                );
+                )
             };
+            if began_pass == 0 {
+                return Err(D3d9EffectProcessingError::CompiledEffectEvaluationFailed(
+                    unsafe {
+                        copy_required_mojoshader_string(openzt2_effect_execution_error(
+                            effect_allocation.native_effect_pointer,
+                        ))?
+                    },
+                ));
+            }
             let evaluated_pass = copy_evaluated_d3d9_effect_pass_from_mojoshader(
                 effect_allocation,
+                retained_program,
                 technique_index,
                 pass_index,
             );

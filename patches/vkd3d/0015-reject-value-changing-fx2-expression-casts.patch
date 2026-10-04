@@ -1,0 +1,93 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -2298,12 +2298,13 @@
+
+ static double fx_2_constant_as_double(const struct hlsl_ir_constant *constant, unsigned int component)
+ {
+     switch (constant->node.data_type->e.numeric.type)
+     {
+         case HLSL_TYPE_BOOL:
++            return !!constant->value.u[component].u;
+         case HLSL_TYPE_UINT:
+             return constant->value.u[component].u;
+         case HLSL_TYPE_INT:
+             return constant->value.u[component].i;
+         case HLSL_TYPE_FLOAT:
+         case HLSL_TYPE_HALF:
+@@ -2338,13 +2339,18 @@
+         return true;
+     }
+     if (node->type != HLSL_IR_EXPR)
+         return false;
+     expr = hlsl_ir_expr(node);
+     if (expr->op == HLSL_OP1_CAST)
++    {
++        if (!hlsl_is_numeric_type(expr->operands[0].node->data_type)
++                || node->data_type->e.numeric.type != expr->operands[0].node->data_type->e.numeric.type)
++            return false;
+         return evaluate_fx_2_integer_expression(expr->operands[0].node, value);
++    }
+     if (expr->op != HLSL_OP2_BIT_OR && expr->op != HLSL_OP2_BIT_AND)
+         return false;
+     if (!evaluate_fx_2_integer_expression(expr->operands[0].node, &left)
+             || !evaluate_fx_2_integer_expression(expr->operands[1].node, &right))
+         return false;
+     switch (expr->op)
+@@ -2488,13 +2494,14 @@
+         hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression component shape.");
+         return invalid;
+     }
+     if (node->type != HLSL_IR_CONSTANT && hlsl_is_vec1(node->data_type)
+             && evaluate_fx_2_integer_expression(node, &integer))
+         return write_fx_2_expression_literal(expression,
+-                node->data_type->e.numeric.type == HLSL_TYPE_INT ? (double)(int32_t)integer : integer);
++                node->data_type->e.numeric.type == HLSL_TYPE_BOOL ? !!integer
++                : node->data_type->e.numeric.type == HLSL_TYPE_INT ? (double)(int32_t)integer : integer);
+     switch (node->type)
+     {
+         case HLSL_IR_CONSTANT:
+             if (component >= ARRAY_SIZE(hlsl_ir_constant(node)->value.u))
+             {
+                 hlsl_fixme(ctx, &node->loc, "Unlowered matrix FX2 constants are not supported.");
+@@ -2520,15 +2527,40 @@
+         default:
+             hlsl_fixme(ctx, &node->loc, "Unsupported FX2 expression node %u.", node->type);
+             return invalid;
+     }
+
+     expr = hlsl_ir_expr(node);
++    if (node->data_type->e.numeric.type == HLSL_TYPE_BOOL
++            && expr->op != HLSL_OP1_CAST && expr->op != HLSL_OP2_LESS
++            && expr->op != HLSL_OP2_GEQUAL && expr->op != HLSL_OP2_NEQUAL
++            && expr->op != HLSL_OP3_TERNARY)
++    {
++        hlsl_fixme(ctx, &node->loc, "Unsupported boolean FX2 expression %s.", debug_hlsl_expr_op(expr->op));
++        return invalid;
++    }
+     if (expr->op == HLSL_OP1_CAST)
++    {
++        const struct hlsl_type *source_type = expr->operands[0].node->data_type;
++        enum hlsl_base_type destination = node->data_type->e.numeric.type;
++
++        /* FX2 boolean literals and parameter registers are normalized to 0/1,
++         * as are comparison results. HLSL bool-to-uint casts therefore preserve
++         * their numeric value (fold_cast uses the same normalization).
++         * Other value-changing casts need conversion instructions. */
++        if (!hlsl_is_numeric_type(source_type)
++                || (destination != source_type->e.numeric.type
++                && !(source_type->e.numeric.type == HLSL_TYPE_BOOL
++                && destination == HLSL_TYPE_UINT)))
++        {
++            hlsl_fixme(ctx, &node->loc, "Value-changing numeric FX2 expression casts are not supported.");
++            return invalid;
++        }
+         return write_fx_2_expression_node(expression, expr->operands[0].node,
+                     hlsl_is_vec1(expr->operands[0].node->data_type) ? 0 : component);
++    }
+     switch (expr->op)
+     {
+         case HLSL_OP1_NEG:
+             operands[0] = write_fx_2_expression_node(expression, expr->operands[0].node,
+                     hlsl_is_vec1(expr->operands[0].node->data_type) ? 0 : component);
+             return operands[0].type

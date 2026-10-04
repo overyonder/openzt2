@@ -17,7 +17,7 @@ use super::{
     authored_text_edit_bevy_adaptation::UiTextEditPolicy,
     authored_ui_action_projection_components::UiInformationActions,
     authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable},
-    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
     slider::{UiSliderAxis, UiSliderPolicy},
 };
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -145,7 +145,6 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
         Entity,
         &UiAuthoredHotkeyKeyboardActivationBinding,
         &UiDocumentOwner,
-        &UiNodeId,
     )>,
     nodes: Query<(
         &UiFocusable,
@@ -171,12 +170,12 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
             }
             if request.action == GameAction::Cancel {
                 let mut has_authored_cancel = false;
-                for (node, binding, owner, id) in &cancel_bindings {
+                for (node, binding, owner) in &cancel_bindings {
                     if context.document_scope(owner.0) != root
                         || !binding.is_cancel_activation()
                         || !context.hotkey_receiver_is_eligible(
                             owner.0,
-                            *id,
+                            binding.receiver_index(),
                             Some(root),
                             active_modal,
                         )

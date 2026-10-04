@@ -28,6 +28,7 @@ impl Default for UiPreviousPointerPressTimeSeconds {
 pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
     time: Res<Time<Real>>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    modal_input: Res<super::active_authored_ui_context::AuthoredModalInputCapture>,
     active_input: Res<crate::plugins::input::input_types::ActiveInputDevice>,
     mut nodes: Query<
         (
@@ -57,6 +58,9 @@ pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
     ) in &mut nodes
     {
         let enabled = context.visible_and_enabled(entity)
+            && modal_input
+                .0
+                .is_none_or(|modal| context.is_in_modal(entity, modal))
             && interaction_enabled
                 .map(|enabled| enabled.0)
                 .unwrap_or_else(|| focusable.is_none_or(|focusable| focusable.enabled));

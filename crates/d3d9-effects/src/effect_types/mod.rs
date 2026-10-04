@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
-use crate::error::D3d9EffectProcessingError;
+use crate::{
+    effect_evaluation::retained_transform_evaluation::RetainedD3d9TransformExpression,
+    error::D3d9EffectProcessingError,
+};
 
 #[derive(Clone, Debug)]
 pub struct CompiledD3d9EffectBytecode(pub(crate) Box<[u8]>);
@@ -33,12 +36,32 @@ pub struct D3d9EffectParameterAssignment<'a> {
 
 #[derive(Clone, Debug)]
 pub enum D3d9EffectParameterValue<'a> {
-    Boolean { boolean_value: bool },
-    Integer { integer_value: i32 },
-    FloatingPoint { floating_point_value: f32 },
-    FloatVector { vector_components: &'a [f32] },
-    FloatMatrix { matrix_components: &'a [f32] },
-    TextureParameterReference { parameter_name: &'a str },
+    Boolean {
+        boolean_value: bool,
+    },
+    Integer {
+        integer_value: i32,
+    },
+    FloatingPoint {
+        floating_point_value: f32,
+    },
+    FloatVector {
+        vector_components: &'a [f32],
+    },
+    /// Logical rows with four components per row, including unused column padding.
+    /// Declaration majority does not change this native effect parameter ordering.
+    FloatMatrix {
+        matrix_components: &'a [f32],
+    },
+    /// Flat float members in declaration order, each with four-component logical
+    /// row strides. Member arrays precede the next field; struct arrays repeat
+    /// the complete member span. Shader register majority does not change this order.
+    FloatAggregate {
+        aggregate_components: &'a [f32],
+    },
+    TextureParameterReference {
+        parameter_name: &'a str,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -57,6 +80,19 @@ pub struct D3d9EffectParameterDescription {
     pub column_count: u32,
     pub array_element_count: u32,
     pub annotation_count: u32,
+    pub struct_members: Box<[D3d9EffectStructMemberDescription]>,
+}
+
+#[derive(Clone, Debug)]
+pub struct D3d9EffectStructMemberDescription {
+    pub member_name: String,
+    pub parameter_class: u32,
+    pub parameter_type: u32,
+    pub row_count: u32,
+    pub column_count: u32,
+    pub array_element_count: u32,
+    /// Float component offset in padded logical-row storage within one struct element.
+    pub native_component_offset: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -83,6 +119,7 @@ pub enum EvaluatedD3d9EffectCommand {
     D3d9TransformState {
         transform_state: u32,
         transform_matrix: [f32; 16],
+        retained_expression: Option<RetainedD3d9TransformExpression>,
     },
     D3d9MaterialState {
         material_state: u32,

@@ -1,0 +1,119 @@
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -433,14 +433,18 @@
+
+             const uint32 memname = readui32(&typeptr, &typelen);
+             /*const uint32 memsemantic =*/ readui32(&typeptr, &typelen);
+             mem->name = readstring(base, memname, m, d);
+
+             mem->info.elements = readui32(&typeptr, &typelen);
+-            mem->info.columns = readui32(&typeptr, &typelen);
+-            mem->info.rows = readui32(&typeptr, &typelen);
++            const uint32 first_dimension = readui32(&typeptr, &typelen);
++            const uint32 second_dimension = readui32(&typeptr, &typelen);
++            const int matrix = mem->info.parameter_class == MOJOSHADER_SYMCLASS_MATRIX_ROWS
++                            || mem->info.parameter_class == MOJOSHADER_SYMCLASS_MATRIX_COLUMNS;
++            mem->info.rows = matrix ? first_dimension : second_dimension;
++            mem->info.columns = matrix ? second_dimension : first_dimension;
+
+             // !!! FIXME: Nested structs! -flibit
+             assert(mem->info.parameter_class >= MOJOSHADER_SYMCLASS_SCALAR
+                 && mem->info.parameter_class <= MOJOSHADER_SYMCLASS_MATRIX_COLUMNS);
+             assert(mem->info.parameter_type >= MOJOSHADER_SYMTYPE_BOOL
+                 && mem->info.parameter_type <= MOJOSHADER_SYMTYPE_FLOAT);
+@@ -459,23 +463,27 @@
+         if (numelements > 0)
+             value->value_count *= numelements;
+
+         siz = value->value_count * 4;
+         value->values = m(siz, d);
+         memset(value->values, '\0', siz);
++        /* Offset zero denotes absent FX2 defaults, not a component array. */
++        if (!valoffset)
++            return;
+         int dst_offset = 0, src_offset = 0;
+         i = 0;
+         do
+         {
+             for (j = 0; j < value->type.member_count; j++)
+             {
+-                siz = value->type.members[j].info.rows * value->type.members[j].info.elements;
++                const MOJOSHADER_symbolTypeInfo *member = &value->type.members[j].info;
++                siz = member->rows * (member->elements ? member->elements : 1);
+                 for (k = 0; k < siz; k++)
+                 {
+                     memcpy(value->valuesF + dst_offset,
+-                           typeptr + src_offset, /* Yes, typeptr. -flibit */
++                           valptr + src_offset,
+                            value->type.members[j].info.columns << 2);
+                     dst_offset += 4;
+                     src_offset += value->type.members[j].info.columns << 2;
+                 } // for
+             }
+         } while (++i < numelements);
+@@ -1980,12 +1988,50 @@
+     } // if
+
+     MOJOSHADER_effectCommitChanges(effect);
+ } // MOJOSHADER_effectBeginPass
+
+
++/* FX2 stores logical rows. CTAB describes the shader's register majority and
++ * therefore the following member's register offset, independently of FX2. */
++static void copy_struct_parameter_data(const MOJOSHADER_effectValue *param,
++                                       const MOJOSHADER_symbol *symbol,
++                                       float *registers)
++{
++    uint32 element, member, array, row, column;
++    uint32 source = 0, destination = symbol->register_index * 4;
++    const uint32 end = destination + symbol->register_count * 4;
++    const uint32 elements = param->type.elements ? param->type.elements : 1;
++    memset(registers + destination, '\0', symbol->register_count * 4 * sizeof(float));
++    for (element = 0; element < elements && destination < end; element++)
++    {
++        for (member = 0; member < param->type.member_count && destination < end; member++)
++        {
++            const MOJOSHADER_symbolTypeInfo *type = &param->type.members[member].info;
++            const MOJOSHADER_symbolTypeInfo *binding = &symbol->info.members[member].info;
++            const uint32 arrays = type->elements ? type->elements : 1;
++            const int columns = binding->parameter_class == MOJOSHADER_SYMCLASS_MATRIX_COLUMNS;
++            const uint32 register_rows = columns ? type->columns : type->rows;
++            for (array = 0; array < arrays && destination < end; array++)
++            {
++                for (row = 0; row < type->rows; row++)
++                {
++                    for (column = 0; column < type->columns; column++)
++                    {
++                        const uint32 target = destination + (columns ? column * 4 + row : row * 4 + column);
++                        if (target < end)
++                            memcpy(registers + target, param->valuesF + source + row * 4 + column, sizeof(float));
++                    }
++                }
++                source += type->rows * 4;
++                destination += register_rows * 4;
++            }
++        }
++    }
++}
++
+ static inline void copy_parameter_data(MOJOSHADER_effectParam *params,
+                                        unsigned int *param_loc,
+                                        MOJOSHADER_symbol *symbols,
+                                        unsigned int symbol_count,
+                                        float *regf, int *regi, uint8 *regb)
+ {
+@@ -2003,13 +2049,13 @@
+         if (param->type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
+             memcpy(regf + start, param->valuesF, sym->register_count << 4);
+         else if (sym->register_set == MOJOSHADER_SYMREGSET_FLOAT4)
+         {
+             // Structs are a whole different world...
+             if (param->type.parameter_class == MOJOSHADER_SYMCLASS_STRUCT)
+-                memcpy(regf + start, param->valuesF, sym->register_count << 4);
++                copy_struct_parameter_data(param, sym, regf);
+             else
+             {
+                 // Sometimes int/bool parameters get thrown into float registers...
+                 j = 0;
+                 do
+                 {

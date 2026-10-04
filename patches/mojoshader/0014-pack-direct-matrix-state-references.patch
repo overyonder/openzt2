@@ -1,0 +1,96 @@
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -711,6 +711,13 @@
+                                          float *output);
+ 
+ 
++/* Copy a numeric parameter into packed FX state storage. Numeric matrix
++ * parameters have four-component row strides regardless of matrix majority.
++ * The destination uses its state value_count, not the parameter row padding.
++ * Both values must be numeric values produced by the FX parser. */
++DECLSPEC void MOJOSHADER_copyEffectNumericParameterToState(
++        const MOJOSHADER_effectValue *source, MOJOSHADER_effectValue *destination);
++
+ /* Effect parameter interface... */
+ 
+ /* Set the constant value for the specified effect parameter.
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -340,14 +340,20 @@
+      || valclass == MOJOSHADER_SYMCLASS_MATRIX_ROWS
+      || valclass == MOJOSHADER_SYMCLASS_MATRIX_COLUMNS)
+     {
+         /* These classes only ever contain scalar values */
+         assert(type >= MOJOSHADER_SYMTYPE_BOOL && type <= MOJOSHADER_SYMTYPE_FLOAT);
+
+-        const uint32 columncount = readui32(&typeptr, &typelen);
+-        const uint32 rowcount = readui32(&typeptr, &typelen);
++        /* FX2 vectors encode columns, rows; matrices encode rows, columns.
++         * Numeric values are expanded to four-component logical row strides. */
++        const uint32 first_dimension = readui32(&typeptr, &typelen);
++        const uint32 second_dimension = readui32(&typeptr, &typelen);
++        const int matrix = valclass == MOJOSHADER_SYMCLASS_MATRIX_ROWS
++                        || valclass == MOJOSHADER_SYMCLASS_MATRIX_COLUMNS;
++        const uint32 columncount = matrix ? second_dimension : first_dimension;
++        const uint32 rowcount = matrix ? first_dimension : second_dimension;
+
+         value->type.columns = columncount;
+         value->type.rows = rowcount;
+
+         uint32 siz = 4 * rowcount;
+         if (numelements > 0)
+@@ -1770,12 +1776,33 @@
+                                     &effect->prev_vertex_shader,
+                                     &effect->prev_pixel_shader);
+     } // if
+ } // MOJOSHADER_effectBegin
+
+
++void MOJOSHADER_copyEffectNumericParameterToState(
++        const MOJOSHADER_effectValue *source, MOJOSHADER_effectValue *destination)
++{
++    unsigned int count = source->value_count < destination->value_count
++            ? source->value_count : destination->value_count;
++    if ((source->type.parameter_class == MOJOSHADER_SYMCLASS_MATRIX_ROWS
++            || source->type.parameter_class == MOJOSHADER_SYMCLASS_MATRIX_COLUMNS)
++            && source->type.columns < 4)
++    {
++        const unsigned int columns = source->type.columns;
++        const unsigned int components = source->value_count / 4 * columns;
++        count = components < destination->value_count ? components : destination->value_count;
++        memset(destination->values, 0, destination->value_count * sizeof(float));
++        for (unsigned int component = 0; component < count; ++component)
++            memcpy(destination->valuesF + component,
++                    source->valuesF + component / columns * 4 + component % columns, sizeof(float));
++    }
++    else
++        memcpy(destination->values, source->values, count * sizeof(float));
++}
++
+ void MOJOSHADER_effectBeginPass(MOJOSHADER_effect *effect,
+                                 unsigned int pass)
+ {
+     int i;
+     MOJOSHADER_effectPass *curPass;
+     MOJOSHADER_effectState *state;
+@@ -1800,17 +1827,13 @@
+             const int parameter = findparameter(effect->params, effect->param_count,
+                     state->parameter);
+             if (parameter >= 0)
+             {
+                 const MOJOSHADER_effectValue *source = &effect->params[parameter].value;
+                 if (state->value.type.parameter_class <= MOJOSHADER_SYMCLASS_MATRIX_COLUMNS)
+-                {
+-                    const unsigned int count = source->value_count < state->value.value_count
+-                            ? source->value_count : state->value.value_count;
+-                    memcpy(state->value.values, source->values, count * sizeof(float));
+-                }
++                    MOJOSHADER_copyEffectNumericParameterToState(source, &state->value);
+                 else
+                     state->value.valuesI[0] = source->valuesI[0];
+             }
+         }
+         if (state->preshader)
+         {

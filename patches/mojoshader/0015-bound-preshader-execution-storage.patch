@@ -1,0 +1,535 @@
+diff --git a/mojoshader.c b/mojoshader.c
+--- a/mojoshader.c
++++ b/mojoshader.c
+@@ -17,6 +17,7 @@
+ 
+ #define __MOJOSHADER_INTERNAL__ 1
+ #include "profiles/mojoshader_profile.h"
++#include <limits.h>
+ 
+ // Deal with register lists...  !!! FIXME: I sort of hate this.
+ 
+@@ -2470,6 +2471,11 @@
+     const uint32 version_magic = 0x46580000;
+     const uint32 min_version = 0x00000200 | version_magic;
+     const uint32 max_version = 0x00000201 | version_magic;
++    if (!tokcount)
++    {
++        fail(ctx, "Missing preshader version.");
++        return;
++    }
+     const uint32 version = SWAP32(tokens[0]);
+     if (version < min_version || version > max_version)
+     {
+@@ -2492,7 +2498,7 @@
+     {
+         uint32 subtokcount = 0;
+         if ( (!is_comment_token(ctx, *tokens, &subtokcount)) ||
+-             (subtokcount > tokcount) )
++             (subtokcount >= tokcount) )
+         {
+             // !!! FIXME: Standalone preshaders have this EOS-looking token,
+             // !!! FIXME:  sometimes followed by tokens that don't appear to
+@@ -2557,12 +2563,15 @@
+     ctx->preshader = preshader;
+ 
+     // Let's set up the constant literals first...
+-    if (clit.tokcount == 0)
++    if (clit.tokcount < 2)
++    {
+         fail(ctx, "Bogus CLIT block in preshader.");
++        return;
++    }
+     else
+     {
+         const uint32 lit_count = SWAP32(clit.tokens[1]);
+-        if (lit_count > ((clit.tokcount - 2) / 2))
++        if (lit_count > ((clit.tokcount - 2) / 2) || lit_count > INT_MAX / sizeof(double))
+         {
+             fail(ctx, "Bogus CLIT block in preshader.");
+             return;
+@@ -2607,7 +2616,7 @@
+         prsi.tokcount -= 8;
+         prsi.tokens += 8;
+ 
+-        if (prsi.tokcount < ((output_map_count + 1) * 2))
++        if (output_map_count > prsi.tokcount / 2)
+         {
+             fail(ctx, "Bogus preshader PRSI data");
+             return;
+@@ -2632,7 +2641,18 @@
+     } // if
+ 
+     // The FXLC block has the actual instructions...
++    if (fxlc.tokcount < 2)
++    {
++        fail(ctx, "Missing preshader FXLC header.");
++        return;
++    }
+     uint32 opcode_count = SWAP32(fxlc.tokens[1]);
++    if (opcode_count > (fxlc.tokcount - 2) / 2
++            || opcode_count > INT_MAX / sizeof(MOJOSHADER_preshaderInstruction))
++    {
++        fail(ctx, "Preshader instruction storage exceeds the native allocator.");
++        return;
++    }
+ 
+     const size_t len = sizeof (MOJOSHADER_preshaderInstruction) * opcode_count;
+     preshader->instruction_count = (unsigned int) opcode_count;
+@@ -2652,6 +2672,11 @@
+     MOJOSHADER_preshaderInstruction *inst = preshader->instructions;
+     while (opcode_count--)
+     {
++        if (fxlc.tokcount < 2)
++        {
++            fail(ctx, "Truncated preshader instruction.");
++            return;
++        }
+         const uint32 opcodetok = SWAP32(fxlc.tokens[0]);
+         MOJOSHADER_preshaderOpcode opcode = MOJOSHADER_PRESHADEROP_NOP;
+         switch ((opcodetok >> 16) & 0xFFFF)
+@@ -2690,10 +2715,16 @@
+             case 0xA080: opcode = MOJOSHADER_PRESHADEROP_DIV_SCALAR; break;
+             case 0xD000: opcode = MOJOSHADER_PRESHADEROP_DOT_SCALAR; break;
+             case 0xD020: opcode = MOJOSHADER_PRESHADEROP_NOISE_SCALAR; break;
+-            default: fail(ctx, "Unknown preshader opcode."); break;
++            default: fail(ctx, "Unknown preshader opcode."); return;
+         } // switch
+ 
+-        uint32 operand_count = SWAP32(fxlc.tokens[1]) + 1;  // +1 for dest.
++        const uint32 sources = SWAP32(fxlc.tokens[1]);
++        if (sources < 1 || sources > 3 || !(opcodetok & 0xFF) || (opcodetok & 0xFF) > 4)
++        {
++            fail(ctx, "Unsupported preshader operand count or element width.");
++            return;
++        }
++        uint32 operand_count = sources + 1; // destination occupies the last operand.
+ 
+         inst->opcode = opcode;
+         inst->element_count = (unsigned int) (opcodetok & 0xFF);
+@@ -2714,11 +2745,16 @@
+ 
+             // !!! FIXME: Is this used anywhere other than INPUT? -flibit
+             const uint32 numarrays = SWAP32(fxlc.tokens[0]);
++            if (numarrays)
++            {
++                fail(ctx, "Indirect preshader array operands are unsupported.");
++                return;
++            }
+             switch (SWAP32(fxlc.tokens[1]))
+             {
+                 case 1:  // literal from CLIT block.
+                 {
+-                    if (item > preshader->literal_count)
++                    if (item >= preshader->literal_count)
+                     {
+                         fail(ctx, "Bogus preshader literal index.");
+                         break;
+@@ -2735,8 +2771,14 @@
+                     {
+                         const uint32 base = sym->register_index * 4;
+                         const uint32 count = sym->register_count * 4;
+-                        assert(sym->register_set==MOJOSHADER_SYMREGSET_FLOAT4);
+-                        if ( (base <= item) && ((base + count) > item) )
++                        if (sym->register_set != MOJOSHADER_SYMREGSET_FLOAT4
++                                || sym->register_index > UINT_MAX / 4
++                                || sym->register_count > UINT_MAX / 4)
++                        {
++                            fail(ctx, "Unsupported preshader input binding.");
++                            return;
++                        }
++                        if (base <= item && item - base < count)
+                             break;
+                     } // for
+                     if (i == ctabdata.symbol_count)
+@@ -2745,25 +2787,6 @@
+                         break;
+                     } // if
+                     operand->type = MOJOSHADER_PRESHADEROPERAND_INPUT;
+-                    if (numarrays > 0)
+-                    {
+-                        // malloc the array symbol name array
+-                        const uint32 siz = numarrays * sizeof (uint32);
+-                        operand->array_register_count = numarrays;
+-                        operand->array_registers = (uint32 *) Malloc(ctx, siz);
+-                        memset(operand->array_registers, '\0', siz);
+-                        // Get each register base, indicating the arrays used.
+-                        // !!! FIXME: fail if fxlc.tokcount*2 > numarrays ?
+-                        for (i = 0; i < numarrays; i++)
+-                        {
+-                            const uint32 jmp = SWAP32(fxlc.tokens[4]);
+-                            const uint32 bigjmp = (jmp >> 4) * 4;
+-                            const uint32 ltljmp = (jmp >> 2) & 3;
+-                            operand->array_registers[i] = bigjmp + ltljmp;
+-                            fxlc.tokens += 2;
+-                            fxlc.tokcount -= 2;
+-                        } // for
+-                    } // if
+                     break;
+                 } // case
+ 
+@@ -2791,14 +2814,21 @@
+                 case 7:
+                 {
+                     operand->type = MOJOSHADER_PRESHADEROPERAND_TEMP;
+-                    if (item >= preshader->temp_count)
+-                        preshader->temp_count = item + 1;
++                    const unsigned int width = opcode >= MOJOSHADER_PRESHADEROP_SCALAR_OPS
++                            && operand == inst->operands ? 1 : inst->element_count;
++                    if (item > (unsigned int)INT_MAX / sizeof(double) - width - 3)
++                    {
++                        fail(ctx, "Preshader temporary storage exceeds the native allocator.");
++                        return;
++                    }
++                    if (item + width > preshader->temp_count)
++                        preshader->temp_count = item + width;
+                     break;
+                 } // case
+ 
+                 default:
+-                    assert(0 && "Unhandled fxlc.tokens[1] in parse_preshader!");
+-                    break;
++                    fail(ctx, "Unsupported preshader operand storage.");
++                    return;
+             } // switch
+ 
+             operand->index = item;
+@@ -2819,6 +2849,14 @@
+     const uint32 symcount = (uint32) preshader->symbol_count;
+     for (i = 0; i < symcount; i++, sym++)
+     {
++        const unsigned int capacity = INT_MAX / (4 * sizeof(float));
++        if (sym->register_set != MOJOSHADER_SYMREGSET_FLOAT4
++                || sym->register_index > capacity
++                || sym->register_count > capacity - sym->register_index)
++        {
++            fail(ctx, "Preshader input storage exceeds the native allocator.");
++            return;
++        }
+         const unsigned int val = sym->register_index + sym->register_count;
+         if (val > largest)
+             largest = val;
+@@ -2828,6 +2866,8 @@
+     {
+         const size_t len = largest * sizeof (float) * 4;
+         preshader->registers = (float *) Malloc(ctx, len);
++        if (!preshader->registers)
++            return;
+         memset(preshader->registers, '\0', len);
+         preshader->register_count = largest;
+     } // if
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -9,6 +9,7 @@
+ 
+ #define __MOJOSHADER_INTERNAL__ 1
+ #include "mojoshader_internal.h"
++#include <limits.h>
+ 
+ #ifdef MOJOSHADER_EFFECT_SUPPORT
+ 
+@@ -16,7 +17,7 @@
+ #include <math.h>
+ #endif /* MOJOSHADER_USE_SDL_STDLIB */
+ 
+-void MOJOSHADER_runPreshader(const MOJOSHADER_preshader *preshader,
++int MOJOSHADER_runPreshader(const MOJOSHADER_preshader *preshader,
+                              float *outregs)
+ {
+     const float *inregs = preshader->registers;
+@@ -28,7 +29,12 @@
+     double *temps = NULL;
+     if (preshader->temp_count > 0)
+     {
+-        temps = (double *) alloca(sizeof (double) * preshader->temp_count);
++        if (preshader->temp_count > INT_MAX / sizeof(double))
++            return 0;
++        temps = (double *) preshader->malloc((int)(sizeof(double) * preshader->temp_count),
++                                            preshader->malloc_data);
++        if (!temps)
++            return 0;
+         memset(temps, '\0', sizeof (double) * preshader->temp_count);
+     } // if
+ 
+@@ -130,7 +136,8 @@
+ 
+                 default:
+                     assert(0 && "unexpected preshader operand type.");
+-                    return;
++                    preshader->free(temps, preshader->malloc_data);
++                    return 0;
+             } // switch
+         } // for
+ 
+@@ -208,15 +215,17 @@
+                 outregs[operand->index + i] = (float) dst[i];
+         } // else
+     } // for
++    preshader->free(temps, preshader->malloc_data);
++    return 1;
+ } // MOJOSHADER_runPreshader
+ 
+-void MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
++int MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
+                                  const float *registers,
+                                  float *output)
+ {
+     MOJOSHADER_preshader evaluation = *program;
+     evaluation.registers = (float *) registers;
+-    MOJOSHADER_runPreshader(&evaluation, output);
++    return MOJOSHADER_runPreshader(&evaluation, output);
+ }
+ 
+ static MOJOSHADER_effect MOJOSHADER_out_of_mem_effect = {
+@@ -301,10 +310,10 @@
+                          const char *name)
+ {
+     int i;
++    if (!name) return -1;
+     for (i = 0; i < param_count; i++)
+-        if (strcmp(name, params[i].value.name) == 0)
++        if (params[i].value.name && strcmp(name, params[i].value.name) == 0)
+             return i;
+-    assert(0 && "Parameter not found!");
+     return -1;
+ }
+ 
+@@ -738,13 +747,28 @@
+                     object->shader.sampler_count++;
+             object->shader.param_count = pd->symbol_count;
+             object->shader.params = (uint32 *) m(object->shader.param_count * sizeof (uint32), d);
++            if (object->shader.param_count && !object->shader.params)
++            {
++                errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                return;
++            }
+             object->shader.samplers = (MOJOSHADER_samplerStateRegister *) m(object->shader.sampler_count * sizeof (MOJOSHADER_samplerStateRegister), d);
++            if (object->shader.sampler_count && !object->shader.samplers)
++            {
++                errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                return;
++            }
+             uint32 curSampler = 0;
+             for (j = 0; j < pd->symbol_count; j++)
+             {
+                 int par = findparameter(effect->params,
+                                         effect->param_count,
+                                         pd->symbols[j].name);
++                if (par < 0)
++                {
++                    errorlist_add(errors, NULL, 0, "effect shader parameter is unresolved");
++                    return;
++                }
+                 object->shader.params[j] = par;
+                 if (pd->symbols[j].register_set == MOJOSHADER_SYMREGSET_SAMPLER)
+                 {
+@@ -759,6 +783,11 @@
+             {
+                 object->shader.preshader_param_count = pd->preshader->symbol_count;
+                 object->shader.preshader_params = (uint32 *) m(object->shader.preshader_param_count * sizeof (uint32), d);
++                if (object->shader.preshader_param_count && !object->shader.preshader_params)
++                {
++                    errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                    return;
++                }
+                 for (j = 0; j < pd->preshader->symbol_count; j++)
+                 {
+                     object->shader.preshader_params[j] = findparameter(effect->params,
+@@ -835,11 +864,21 @@
+             MOJOSHADER_effectState *effect_state =
+                 &effect->techniques[technique].passes[index].states[state];
+             effect_state->preshader = MOJOSHADER_parsePreshader(*ptr, length, m, f, d);
++            if (effect_state->preshader == NULL)
++            {
++                errorlist_add(errors, NULL, 0, "could not parse effect state preshader");
++                return;
++            }
+             if (effect_state->preshader != NULL)
+             {
+                 effect_state->preshader_param_count = effect_state->preshader->symbol_count;
+                 effect_state->preshader_params = (uint32 *) m(
+                         sizeof(uint32) * effect_state->preshader_param_count, d);
++                if (effect_state->preshader_param_count && !effect_state->preshader_params)
++                {
++                    errorlist_add(errors, NULL, 0, "could not allocate effect state bindings");
++                    return;
++                }
+                 for (j = 0; j < effect_state->preshader_param_count; ++j)
+                     effect_state->preshader_params[j] = findparameter(effect->params,
+                             effect->param_count, effect_state->preshader->symbols[j].name);
+@@ -868,15 +907,30 @@
+                 const char *array = readstring(*ptr, 0, m, d);
+                 object->shader.param_count = 1;
+                 object->shader.params = (uint32 *) m(sizeof (uint32), d);
++                if (object->shader.param_count && !object->shader.params)
++                {
++                    f((void *) array, d);
++                    errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                    return;
++                }
+                 object->shader.params[0] = findparameter(effect->params,
+                                                          effect->param_count,
+                                                          array);
+                 f((void *) array, d);
+                 object->shader.preshader = MOJOSHADER_parsePreshader(*ptr + start, length,
+                                                                      m, f, d);
+-                // !!! FIXME: check for errors.
++                if (!object->shader.preshader)
++                {
++                    errorlist_add(errors, NULL, 0, "could not parse effect selector preshader");
++                    return;
++                }
+                 object->shader.preshader_param_count = object->shader.preshader->symbol_count;
+                 object->shader.preshader_params = (uint32 *) m(object->shader.preshader_param_count * sizeof (uint32), d);
++                if (object->shader.preshader_param_count && !object->shader.preshader_params)
++                {
++                    errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                    return;
++                }
+                 for (j = 0; j < object->shader.preshader->symbol_count; j++)
+                 {
+                     object->shader.preshader_params[j] = findparameter(effect->params,
+@@ -911,13 +964,28 @@
+                         object->shader.sampler_count++;
+                 object->shader.param_count = pd->symbol_count;
+                 object->shader.params = (uint32 *) m(object->shader.param_count * sizeof (uint32), d);
++                if (object->shader.param_count && !object->shader.params)
++                {
++                    errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                    return;
++                }
+                 object->shader.samplers = (MOJOSHADER_samplerStateRegister *) m(object->shader.sampler_count * sizeof (MOJOSHADER_samplerStateRegister), d);
++                if (object->shader.sampler_count && !object->shader.samplers)
++                {
++                    errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                    return;
++                }
+                 uint32 curSampler = 0;
+                 for (j = 0; j < pd->symbol_count; j++)
+                 {
+                     int par = findparameter(effect->params,
+                                             effect->param_count,
+                                             pd->symbols[j].name);
++                    if (par < 0)
++                    {
++                        errorlist_add(errors, NULL, 0, "effect shader parameter is unresolved");
++                        return;
++                    }
+                     object->shader.params[j] = par;
+                     if (pd->symbols[j].register_set == MOJOSHADER_SYMREGSET_SAMPLER)
+                     {
+@@ -932,6 +1000,11 @@
+                 {
+                     object->shader.preshader_param_count = pd->preshader->symbol_count;
+                     object->shader.preshader_params = (uint32 *) m(object->shader.preshader_param_count * sizeof (uint32), d);
++                    if (object->shader.preshader_param_count && !object->shader.preshader_params)
++                    {
++                        errorlist_add(errors, NULL, 0, "could not allocate effect shader bindings");
++                        return;
++                    }
+                     for (j = 0; j < pd->preshader->symbol_count; j++)
+                     {
+                         object->shader.preshader_params[j] = findparameter(effect->params,
+@@ -1809,6 +1882,7 @@
+                                 &effect->current_pixl);
+ 
+     assert(effect->current_pass == -1);
++    effect->execution_error = NULL;
+     effect->current_pass = pass;
+     curPass = &effect->current_technique->passes[pass];
+ 
+@@ -1848,7 +1922,11 @@
+                         registers[component] = parameter->valuesI[component];
+                 }
+             }
+-            MOJOSHADER_runPreshader(state->preshader, output);
++            if (!MOJOSHADER_runPreshader(state->preshader, output))
++            {
++                effect->execution_error = "could not allocate state preshader temporaries";
++                return;
++            }
+             for (unsigned int component = 0; component < state->value.value_count; ++component)
+             {
+                 if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_FLOAT)
+@@ -1856,7 +1934,14 @@
+                 else if (state->value.type.parameter_type == MOJOSHADER_SYMTYPE_BOOL)
+                     state->value.valuesI[component] = output[component] != 0.0f;
+                 else
++                {
++                    if (!(output[component] >= INT_MIN && (double)output[component] <= INT_MAX))
++                    {
++                        effect->execution_error = "state preshader result exceeds integer storage";
++                        return;
++                    }
+                     state->value.valuesI[component] = (int) output[component];
++                }
+             }
+         }
+ 
+@@ -2004,7 +2089,11 @@
+                            param->valuesI + (j << 2), \
+                            param->type.columns << 2); \
+             } while (++i < raw->preshader->symbol_count); \
+-            MOJOSHADER_runPreshader(raw->preshader, &selector); \
++            if (!MOJOSHADER_runPreshader(raw->preshader, &selector)) \
++            { \
++                effect->execution_error = "could not allocate selector preshader temporaries"; \
++                return; \
++            } \
+             shader_object = effect->params[raw->params[0]].value.valuesI[(int) selector]; \
+             raw = &effect->objects[shader_object].shader; \
+             gls = raw->shader; \
+@@ -2056,7 +2145,12 @@
+                                     pd->preshader->registers, \
+                                     NULL, \
+                                     NULL); \
+-                MOJOSHADER_runPreshader(pd->preshader, stage##_reg_file_f); \
++                if (!MOJOSHADER_runPreshader(pd->preshader, stage##_reg_file_f)) \
++                { \
++                    effect->execution_error = "could not allocate shader preshader temporaries"; \
++                    effect->ctx.unmapUniformBufferMemory(effect->ctx.shaderContext); \
++                    return; \
++                } \
+             } \
+         }
+     effect->ctx.mapUniformBufferMemory(effect->ctx.shaderContext,
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -654,6 +654,8 @@
+      * This is the shader implementation you passed to MOJOSHADER_compileEffect().
+      */
+     MOJOSHADER_effectShaderContext ctx;
++    /* Borrowed static diagnostic for an execution failure. */
++    const char *execution_error;
+ } MOJOSHADER_effect;
+ 
+ 
+@@ -704,9 +706,11 @@
+  * The program and its stored registers are unchanged. Input storage must hold
+  * register_count * 4 floats; output storage must cover every output operand.
+  * Output registers must be initialized by the caller. Concurrent evaluations
+- * are safe with independent register storage and an immutable program.
+- */
+-DECLSPEC void MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
++ * are safe with independent register storage and an immutable program. Returns
++ * zero if evaluation scratch allocation fails, otherwise one. The caller must
++ * validate the immutable program and complete binding/storage spans before use.
++ */
++DECLSPEC int MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
+                                          const float *registers,
+                                          float *output);
+ 
+diff --git a/mojoshader_internal.h b/mojoshader_internal.h
+--- a/mojoshader_internal.h
++++ b/mojoshader_internal.h
+@@ -244,7 +244,7 @@
+ // Other stuff you can disable...
+ 
+ #ifdef MOJOSHADER_EFFECT_SUPPORT
+-void MOJOSHADER_runPreshader(const MOJOSHADER_preshader*, float*);
++int MOJOSHADER_runPreshader(const MOJOSHADER_preshader*, float*);
+ #endif
+ 
+ 

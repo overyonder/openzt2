@@ -1,0 +1,51 @@
+diff --git a/mojoshader_effects.h b/mojoshader_effects.h
+--- a/mojoshader_effects.h
++++ b/mojoshader_effects.h
+@@ -697,12 +697,22 @@
+  *  includes shaders usable with the provided backend.
+  *
+  * This call is only as thread safe as the backend functions!
+  */
+ DECLSPEC MOJOSHADER_effect *MOJOSHADER_cloneEffect(const MOJOSHADER_effect *effect);
+
++/* Evaluate a compiled preshader with caller-owned input and output registers.
++ * The program and its stored registers are unchanged. Input storage must hold
++ * register_count * 4 floats; output storage must cover every output operand.
++ * Output registers must be initialized by the caller. Concurrent evaluations
++ * are safe with independent register storage and an immutable program.
++ */
++DECLSPEC void MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
++                                         const float *registers,
++                                         float *output);
++
+
+ /* Effect parameter interface... */
+
+ /* Set the constant value for the specified effect parameter.
+  *
+  * This function maps to ID3DXEffect::SetRawValue.
+diff --git a/mojoshader_effects.c b/mojoshader_effects.c
+--- a/mojoshader_effects.c
++++ b/mojoshader_effects.c
+@@ -207,12 +207,21 @@
+             for (i = 0; i < elems; i++)
+                 outregs[operand->index + i] = (float) dst[i];
+         } // else
+     } // for
+ } // MOJOSHADER_runPreshader
+
++void MOJOSHADER_evaluatePreshader(const MOJOSHADER_preshader *program,
++                                 const float *registers,
++                                 float *output)
++{
++    MOJOSHADER_preshader evaluation = *program;
++    evaluation.registers = (float *) registers;
++    MOJOSHADER_runPreshader(&evaluation, output);
++}
++
+ static MOJOSHADER_effect MOJOSHADER_out_of_mem_effect = {
+     1, &MOJOSHADER_out_of_mem_error, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+ };
+ static MOJOSHADER_error MOJOSHADER_need_a_backend_error = {
+     "Need a MOJOSHADER_effectShaderContext", NULL, MOJOSHADER_POSITION_NONE
+ };

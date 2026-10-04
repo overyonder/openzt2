@@ -40,6 +40,9 @@ pub(crate) struct SourceUiNode {
     pub(crate) fields: Vec<SourceUiField>,
     pub(crate) finance_categories: Vec<SourceUiFinanceCategory>,
     pub(crate) hotkeys: Vec<SourceUiHotkey>,
+    /// `<UIHotKeys><file name node/>`: a named mode in a hotkey document whose
+    /// bindings belong to this node.
+    pub(crate) hotkey_mode_references: Vec<SourceUiHotkeyModeReference>,
     pub(crate) events: Vec<SourceUiEventBlock>,
     pub(crate) children: Vec<SourceUiNode>,
     pub(crate) unknown_attributes: Vec<SourceUiAttribute>,
@@ -480,12 +483,30 @@ pub(crate) struct SourceUiEvent {
     pub(crate) unknown_attributes: Vec<SourceUiAttribute>,
 }
 
+impl SourceUiEvent {
+    /// `UI_CHILD` sends its child message to the named node, so the child
+    /// carries that target wherever it is lowered, including a dialog's
+    /// Escape binding included from the hotkey file.
+    pub(crate) fn set_child(&mut self, mut child: SourceUiEvent) {
+        if self.message == "UI_CHILD" && child.target_child.is_none() {
+            child.target_child.clone_from(&self.target_child);
+        }
+        self.child = Some(Box::new(child));
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SourceUiXmlObjectEvent {
     pub(crate) message_type: Option<String>,
     pub(crate) key: Option<String>,
     pub(crate) value: Option<String>,
     pub(crate) payload: SourceUiPayloadNode,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SourceUiHotkeyModeReference {
+    pub(crate) file: AssetPath,
+    pub(crate) mode: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

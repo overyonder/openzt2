@@ -24,7 +24,16 @@ pub(super) fn initial_bevy_pickable_for_authored_node(node: &UiNodeDefinition) -
                 .find(|visual| matches!(&visual.visual_state, UiNodeVisualState::Default))
         })
         .map(|visual| &visual.hit_policy);
-    if matches!(policy, Some(UiNodePointerHitPolicy::Never)) {
+    // A list without a drawn surface has no pixels for the normal hit policy.
+    // Its rows remain targets and its wheel viewport stays rectangular, but its
+    // empty area must not cover controls beneath it, such as the main menu's
+    // Exit button under the empty expansion icon strip.
+    let undrawn_list = matches!(node.kind, UiNodeKind::List)
+        && !matches!(policy, Some(UiNodePointerHitPolicy::Always))
+        && node.visuals.iter().all(|visual| {
+            visual.image.0 == [0; 16] && (!visual.affects_color || visual.color[3] <= 0.0)
+        });
+    if undrawn_list || matches!(policy, Some(UiNodePointerHitPolicy::Never)) {
         Pickable::IGNORE
     } else {
         Pickable::default()

@@ -1,16 +1,58 @@
-# The profile dialog lists profiles and the options screen shows its resolution list (#187).
+# The profile dialog lists profiles and closes through Escape, X and Continue.
+# Captures also show the menu name before and after each dialog transition.
 phase splash
 wait 300
 click "splashbutton0"
 phase main-menu
 wait 120
+expect-text "currentprofile" "Default Profile"
+capture main-menu-profile
 click "profile_manager_opener"
 wait 180
 expect-visible "profile_manager_dialog"
 expect-rows "profilelist" >= 1         # the run starts with the default profile
+expect-text "ProfileEntry" "Default Profile"
+click-row "profilelist" 0
+wait 60
+expect-text "Profile_Display" "Default Profile"
+snapshot profile-dialog-rows
 capture profile-dialog
 key ESCAPE
 wait 60
+expect-hidden "profile_manager_dialog_shell"
+expect-text "currentprofile" "Default Profile"
+capture profile-dialog-escaped
+click "profile_manager_opener"
+wait 180
+expect-visible "profile_manager_dialog"
+expect-rows "profilelist" >= 1
+expect-text "ProfileEntry" "Default Profile"
+snapshot profile-dialog-reopened-rows
+capture profile-dialog-reopened
+click "cancel"
+wait 60
+expect-hidden "profile_manager_dialog_shell"
+expect-text "currentprofile" "Default Profile"
+capture profile-dialog-cancelled
+click "profile_manager_opener"
+wait 180
+expect-visible "profile_manager_dialog"
+expect-rows "profilelist" >= 1
+expect-text "ProfileEntry" "Default Profile"
+click-row "profilelist" 0
+wait 60
+expect-text "Profile_Display" "Default Profile"
+snapshot profile-dialog-continue-rows
+click "continue_button"
+wait 60
+expect-hidden "profile_manager_dialog_shell"
+expect-text "currentprofile" "Default Profile"
+capture main-menu-profile-after-continue
 click "Game Options Button"
 wait 180
+expect-visible "Back"
 capture options                        # headless runs have no monitor, so resolution rows may be empty
+click "Back"
+wait 180
+expect-text "currentprofile" "Default Profile"
+capture main-menu-profile-after-options

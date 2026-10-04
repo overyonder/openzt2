@@ -27,7 +27,7 @@ use super::{
     resolved_ui_document_types::ResolvedUiRoleAndFragmentDocuments,
     ui_document_role_specialization_and_composition::{
         attach_authored_global_hotkey_mode_to_document_role,
-        expose_authored_ui_surface_for_document_role,
+        expose_authored_ui_surface_for_document_role, include_referenced_authored_hotkey_modes,
         specialize_authored_ui_source_document_for_role,
     },
     ui_document_role_target_name_resolution::collect_unique_authored_node_name_targets_by_ui_document_role,
@@ -39,7 +39,7 @@ use super::{
 use crate::assets::ui_document::source::lower::authored_ui_document_lowering::ADOPTION_SLOT_ROW_DOCUMENT;
 
 pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
-    source_documents: BTreeMap<String, SourceUiDocument>,
+    mut source_documents: BTreeMap<String, SourceUiDocument>,
     all_named_templates: &BTreeMap<String, SourceUiNode>,
     reusable_row_template_names: &BTreeSet<String>,
     authored_image_selections: &[AuthoredUiImageSelection],
@@ -49,6 +49,16 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
     resolution_profile: &SelectedUiSourceResolutionProfile,
 ) -> Result<ResolvedUiRoleAndFragmentDocuments, UiSourceDocumentGap> {
     let mut claimed_source_document_roles = BTreeMap::new();
+    if let Some(hotkeys) = resolution_profile
+        .hotkey_path
+        .as_deref()
+        .map(normalize_authored_ui_source_path)
+        .and_then(|path| source_documents.get(&path).cloned())
+    {
+        for source_document in source_documents.values_mut() {
+            include_referenced_authored_hotkey_modes(source_document, &hotkeys)?;
+        }
+    }
     let global_hotkey_source = resolution_profile
         .hotkey_path
         .as_deref()

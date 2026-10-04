@@ -11,8 +11,7 @@ impl PlacementConstraints {
     pub const ALLOW_OVERLAP_SCENERY: Self = Self(1 << 6);
     pub const FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT: Self = Self(1 << 8);
 
-    const ALL_BITS: u32 =
-        1 << 0 | 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 8;
+    const ALL_BITS: u32 = 1 << 0 | 1 << 1 | 1 << 2 | 1 << 3 | 1 << 4 | 1 << 5 | 1 << 6 | 1 << 8;
 
     #[must_use]
     pub const fn raw_flag_bits(self) -> u32 {

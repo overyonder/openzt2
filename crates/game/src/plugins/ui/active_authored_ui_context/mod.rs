@@ -119,13 +119,13 @@ impl ActiveAuthoredUiContext<'_, '_> {
     pub(crate) fn hotkey_receiver_is_eligible(
         &self,
         owner: Entity,
-        id: UiNodeId,
+        receiver_index: u32,
         scope: Option<Entity>,
         modal: Option<Entity>,
     ) -> bool {
         self.nodes.iter().any(|(entity, node_owner, node_id)| {
             node_owner.0 == owner
-                && node_id.index == id.index
+                && node_id.index == receiver_index
                 && self.visible_and_enabled(entity)
                 && scope.is_none_or(|scope| self.document_scope(owner) == scope)
                 && modal.is_none_or(|modal| self.ancestors(entity).any(|node| node == modal))

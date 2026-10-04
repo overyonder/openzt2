@@ -11,8 +11,12 @@ use crate::plugins::input::input_types::ActionSource;
 
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
 
+/// A hotkey proxy. It names its receiver by document preorder index and
+/// deliberately has no `UiNodeId`, so node lookups never mistake it for the
+/// receiver itself.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiAuthoredHotkeyKeyboardActivationBinding {
+    receiver_index: u32,
     key: KeyCode,
     control_state: UiDocumentHotkeyControlState,
     activates_on_release: bool,
@@ -25,13 +29,18 @@ impl UiAuthoredHotkeyKeyboardActivationBinding {
             && !self.activates_on_release
             && self.control_state != UiDocumentHotkeyControlState::ControlPressed
     }
+    pub(super) fn receiver_index(&self) -> u32 {
+        self.receiver_index
+    }
     pub(super) fn from_projected_authored_hotkey(
+        receiver_index: u32,
         key: KeyCode,
         control_state: UiDocumentHotkeyControlState,
         activates_on_release: bool,
         allows_repeated_input: bool,
     ) -> Self {
         Self {
+            receiver_index,
             key,
             control_state,
             activates_on_release,
@@ -47,7 +56,6 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         Entity,
         &UiAuthoredHotkeyKeyboardActivationBinding,
         &super::authored_ui_node_projection_components::UiDocumentOwner,
-        &super::authored_ui_node_projection_components::UiNodeId,
     )>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     mut activated: MessageWriter<UiNodeActivated>,
@@ -69,10 +77,10 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         {
             continue;
         }
-        for (entity, binding, owner, id) in &bindings {
+        for (entity, binding, owner) in &bindings {
             if !context.hotkey_receiver_is_eligible(
                 owner.0,
-                *id,
+                binding.receiver_index(),
                 binding
                     .is_cancel_activation()
                     .then_some(active_scope)

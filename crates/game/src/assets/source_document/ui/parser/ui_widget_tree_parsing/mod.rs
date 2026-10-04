@@ -30,6 +30,7 @@ use super::{
     ui_event_and_hotkey_parsing::{
         parse_authored_ui_event_block as parse_event_block,
         parse_authored_ui_event_trigger as parse_event_trigger,
+        parse_authored_ui_hotkey_mode_references as parse_hotkey_mode_references,
         parse_authored_ui_hotkeys as parse_hotkeys,
     },
     ui_region_and_state_parsing::{
@@ -112,6 +113,12 @@ fn parse_authored_ui_node_parts(
         .copied()
         .filter(|node| node.name == "UIHotKeys")
         .flat_map(parse_hotkeys)
+        .collect();
+    let hotkey_mode_references = element_children
+        .iter()
+        .copied()
+        .filter(|node| node.name == "UIHotKeys")
+        .flat_map(parse_hotkey_mode_references)
         .collect();
     let events = element_children
         .iter()
@@ -253,6 +260,7 @@ fn parse_authored_ui_node_parts(
         fields,
         finance_categories,
         hotkeys,
+        hotkey_mode_references,
         events,
         children: authored_children,
         unknown_attributes,
