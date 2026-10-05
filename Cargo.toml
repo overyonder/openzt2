@@ -12,7 +12,7 @@ exclude = ["vendor/bevy_render", "vendor/bevy_image", "vendor/lunify"]
 resolver = "3"
 
 [workspace.package]
-version = "0.5.1-alpha"
+version = "0.5.2-alpha"
 edition = "2021"
 rust-version = "1.96"
 publish = false

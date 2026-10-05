@@ -24,6 +24,8 @@ use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 pub(crate) struct UiPointerCapture {
     pub(crate) over_ui: bool,
     pub(crate) target: Option<Entity>,
+    /// The live leaf which accepted this primary press, retained while held.
+    pressed_target: Option<Entity>,
 }
 
 /// The source texture region sampled by the original `normal` UI hit policy.
@@ -64,9 +66,11 @@ pub(super) fn alpha_ui_picking(
     mut interactions: Query<(Entity, &UiInteractionEnabled, &mut Interaction)>,
     mut output: MessageWriter<PointerHits>,
 ) {
+    let previous_pressed_target = capture.pressed_target;
     *capture = UiPointerCapture {
         over_ui: modal_input.0.is_some(),
         target: None,
+        pressed_target: None,
     };
     let mut mouse_hit = None::<(f32, Entity)>;
     for (pointer, location) in pointers
@@ -168,6 +172,19 @@ pub(super) fn alpha_ui_picking(
     }
 
     capture.target = mouse_hit.map(|(_, entity)| entity);
+    capture.pressed_target = if pointer_input.just_pressed {
+        capture.target
+    } else if pointer_input.pressed {
+        previous_pressed_target
+    } else {
+        None
+    }
+    .filter(|entity| {
+        context.visible_and_enabled(*entity)
+            && modal_input
+                .0
+                .is_none_or(|modal| context.is_in_modal(*entity, modal))
+    });
 
     // Bevy's legacy `Interaction` owner performs rectangle-only focus before
     // the picking backends run. Replace those authored-control states with the
@@ -175,9 +192,9 @@ pub(super) fn alpha_ui_picking(
     // and activation cannot disagree with picking.
     for (entity, enabled, mut interaction) in &mut interactions {
         let hit = enabled.0 && mouse_hit.is_some_and(|(_, hovered)| hovered == entity);
-        let next = if hit && pointer_input.just_pressed {
-            Interaction::Pressed
-        } else if *interaction == Interaction::Pressed && pointer_input.pressed {
+        // Never retain Pressed from Bevy's earlier rectangle-only focus pass:
+        // it may name another control beneath a transparent part of its skin.
+        let next = if enabled.0 && capture.pressed_target == Some(entity) {
             Interaction::Pressed
         } else if hit {
             Interaction::Hovered
