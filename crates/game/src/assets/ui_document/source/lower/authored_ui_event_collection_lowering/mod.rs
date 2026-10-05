@@ -163,11 +163,14 @@ pub(super) fn flatten_event(
     scope: Option<&str>,
     shell_owns_role_transition: bool,
 ) -> io::Result<()> {
-    if event.message == "UI_CHILD" && event.child.is_some() {
-        let child = inherited_child(event, input)?;
+    if let Some(child) = event
+        .child
+        .as_deref()
+        .filter(|_| event.message == "UI_CHILD")
+    {
         return flatten_event(
             trigger,
-            &child,
+            child,
             role,
             current,
             current_stable_name,
@@ -235,21 +238,6 @@ pub(super) fn source_event_enters_shell_role(event: &SourceUiEvent) -> bool {
             .child
             .as_deref()
             .is_some_and(source_event_enters_shell_role)
-}
-
-pub(super) fn inherited_child(
-    event: &SourceUiEvent,
-    input: &AuthoredUiDocument,
-) -> io::Result<SourceUiEvent> {
-    let mut child = event
-        .child
-        .as_deref()
-        .cloned()
-        .ok_or_else(|| invalid_at(input, "UI_CHILD event has no typed child event"))?;
-    if child.target_child.is_none() {
-        child.target_child.clone_from(&event.target_child);
-    }
-    Ok(child)
 }
 
 pub(super) fn closed_information_value<T>(

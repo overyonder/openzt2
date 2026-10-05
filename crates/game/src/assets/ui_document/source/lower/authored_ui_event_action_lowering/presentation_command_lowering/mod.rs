@@ -59,6 +59,13 @@ pub(super) fn lower_presentation_command(
                 },
             }))
         }
+        // Overhead-mode shortcuts press the named game button.
+        "ZT_ACTIVATE_UI_BUTTON" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
+            trigger,
+            action: UiPresentationAction::ActivateTargetNodeWithPress {
+                target_node: target_node(event, role, current),
+            },
+        })),
         "ZT_ACTIVATE_MODE_HELP" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::ShowDocumentRole {

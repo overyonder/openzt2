@@ -352,6 +352,7 @@ pub(super) fn decode_stored_profile_index(
             graphics_settings,
         )?;
         migrate_legacy_controller_defaults(&mut game_action_input_bindings);
+        release_keyboard_chords_owned_by_authored_overhead_hotkeys(&mut game_action_input_bindings);
         let profile_display_name_byte_count = read_little_endian_u16_from_profile_index(
             profile_index_bytes,
             profile_index_byte_cursor,
@@ -605,6 +606,30 @@ fn read_little_endian_u64_from_profile_index(
     ))
 }
 
+/// Overhead mode authors Escape (`ZT_ESCAPE_KEY`) and Ctrl+Z (`ZT_UNDOACTION`).
+/// Clear the retired defaults that duplicated them; keep customized chords.
+fn release_keyboard_chords_owned_by_authored_overhead_hotkeys(
+    bindings: &mut GameActionInputBindings,
+) {
+    use crate::plugins::input::input_types::GameAction;
+    let control_z = InputChord::ModifiedKey {
+        key: bevy::prelude::KeyCode::KeyZ,
+        shift: false,
+        control: true,
+        alt: false,
+    };
+    for binding in bindings.entries.iter_mut() {
+        let retired = match binding.action {
+            GameAction::OpenMenu => InputChord::Key(bevy::prelude::KeyCode::Escape),
+            GameAction::Undo => control_z,
+            _ => continue,
+        };
+        if binding.primary == retired {
+            binding.primary = InputChord::Unbound;
+        }
+    }
+}
+
 /// Upgrade the retired default controller layout while retaining customized
 /// chords. A new default that conflicts with a customization stays unbound.
 fn migrate_legacy_controller_defaults(bindings: &mut GameActionInputBindings) {
@@ -663,4 +688,44 @@ fn migrate_legacy_controller_defaults(bindings: &mut GameActionInputBindings) {
         }
     }
     bindings.entries = entries.into_boxed_slice();
+}
+
+#[cfg(test)]
+mod overhead_hotkey_chord_migration_tests {
+    use super::*;
+    use crate::plugins::input::input_types::GameAction;
+    use bevy::prelude::KeyCode;
+
+    #[test]
+    fn saved_default_escape_and_control_z_chords_are_released() {
+        let mut bindings = GameActionInputBindings::default();
+        for binding in bindings.entries.iter_mut() {
+            match binding.action {
+                GameAction::OpenMenu => binding.primary = InputChord::Key(KeyCode::Escape),
+                GameAction::Undo => {
+                    binding.primary = InputChord::ModifiedKey {
+                        key: KeyCode::KeyZ,
+                        shift: false,
+                        control: true,
+                        alt: false,
+                    };
+                }
+                GameAction::Redo => binding.primary = InputChord::Key(KeyCode::KeyU),
+                _ => {}
+            }
+        }
+        release_keyboard_chords_owned_by_authored_overhead_hotkeys(&mut bindings);
+        let primary = |action| {
+            bindings
+                .entries
+                .iter()
+                .find(|binding| binding.action == action)
+                .unwrap()
+                .primary
+        };
+        assert_eq!(primary(GameAction::OpenMenu), InputChord::Unbound);
+        assert_eq!(primary(GameAction::Undo), InputChord::Unbound);
+        // A customized chord on another action is kept.
+        assert_eq!(primary(GameAction::Redo), InputChord::Key(KeyCode::KeyU));
+    }
 }

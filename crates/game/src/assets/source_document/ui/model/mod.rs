@@ -526,6 +526,8 @@ pub(crate) struct SourceUiHotkey {
 pub(crate) enum SourceUiHotkeyTrigger {
     Down,
     Up,
+    /// `<char>`: `code` is a character code, so Ctrl-M is 13 rather than M.
+    Character,
     Unknown(String),
 }
 

@@ -4,8 +4,8 @@ use std::time::Duration;
 use bevy::{
     input_focus::{FocusCause, InputFocus},
     prelude::*,
-    text::{EditableText, EditableTextFilter, TextCursorStyle, TextLayoutInfo},
-    ui::widget::TextScroll,
+    text::{ComputedTextBlock, EditableText, EditableTextFilter, TextCursorStyle, TextLayoutInfo},
+    ui::widget::{TextNodeFlags, TextScroll},
     ui_widgets::SelectAllOnFocus,
 };
 
@@ -86,7 +86,12 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
         // off-screen portion of the one-line edit over sibling controls.
         node.overflow = Overflow::clip_x();
         let mut entity_commands = commands.entity(entity);
-        entity_commands.remove::<Text>().insert((
+        // Leave Bevy's static-text pipeline entirely. `TextNodeFlags` alone
+        // keeps its layout system laying out the projected text's stale block
+        // whenever the node changes, overwriting the editor's glyphs, so the
+        // value and caret are never drawn.
+        entity_commands.remove::<(Text, TextNodeFlags)>().insert((
+            ComputedTextBlock::default(),
             editable,
             TextCursorStyle::default(),
             TextLayout::no_wrap(),

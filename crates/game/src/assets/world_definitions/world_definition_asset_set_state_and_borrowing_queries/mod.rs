@@ -139,6 +139,26 @@ pub struct WorldDefinitions {
 }
 
 impl WorldDefinitions {
+    pub(crate) fn apply_source_lowered_automatic_placement_bounds(
+        &self,
+        assets: &mut ResMut<Assets<WorldDefinitionAsset>>,
+        definition: AssetId,
+        bounds_xz: [[f32; 2]; 2],
+    ) {
+        // Hydration must mutate the same precedence winner used by find_placeable.
+        let Some(owner) = self.records.get(&(DefinitionKind::Placeable, definition)) else {
+            return;
+        };
+        if assets.get(owner).is_some_and(|asset| {
+            asset.automatic_placement_definition_needs_source_lowered_bounds(definition, bounds_xz)
+        }) {
+            assets
+                .get_mut(owner)
+                .expect("automatic placement owner came from this asset set")
+                .apply_source_lowered_automatic_placement_bounds(definition, bounds_xz);
+        }
+    }
+
     pub(crate) fn loading_progress(&self) -> (usize, usize) {
         (
             self.completed_loads.load(Ordering::Relaxed),
@@ -163,6 +183,10 @@ impl WorldDefinitions {
         document.objects.iter().for_each(|record| {
             self.records
                 .insert((DefinitionKind::Object, record.id), handle.clone());
+        });
+        document.placeables.iter().for_each(|record| {
+            self.records
+                .insert((DefinitionKind::Placeable, record.id), handle.clone());
         });
         document.fences.iter().for_each(|record| {
             self.records

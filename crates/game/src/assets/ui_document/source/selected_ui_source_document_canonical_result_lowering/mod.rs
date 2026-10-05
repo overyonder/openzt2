@@ -34,6 +34,11 @@ pub(super) fn lower_selected_ui_source_documents_to_canonical_result_documents(
     let mut resolution_profile =
         SelectedUiSourceResolutionProfile::for_primary_source_path(primary_source_path);
     resolution_profile.available_assets = resolved_dependencies.images.values().cloned().collect();
+    resolution_profile.available_xpacks = source_documents
+        .iter()
+        .filter(|document| document.root.name.eq_ignore_ascii_case("ZTExpansionInfo"))
+        .filter_map(|document| document.root.attribute("index")?.parse().ok())
+        .collect();
     resolution_profile.resolved_dependencies = resolved_dependencies;
     for (role, source_path) in &resolution_profile.role_paths {
         resolution_profile.resolved_dependencies.documents.insert(

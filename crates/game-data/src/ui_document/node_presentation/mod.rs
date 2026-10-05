@@ -16,8 +16,10 @@ pub struct UiNodeAnimationDefinition {
     /// Time held at the end before automatic reverse playback. Zero disables it.
     pub bob_ms: u32,
     pub interpolation: UiNodeAnimationInterpolation,
-    pub start_rect: [f32; 4],
-    pub end_rect: [f32; 4],
+    /// Start and end of the x, y, width and height the animation moves.
+    /// `None` keeps that component of the projected layout, which may be
+    /// aligned or a percentage of the parent.
+    pub rect_intervals: [Option<[f32; 2]>; 4],
     /// Whether the authored animation supplies a color interval. This remains
     /// distinct from `affects_text_color`: an animation without a `colors`
     /// element leaves the node's authored visual tint unchanged.

@@ -21,15 +21,13 @@ pub(in crate::assets::ui_document::source) struct SelectedUiSourceResolutionProf
     /// Hidden source nodes extracted as separate screens.
     pub(super) role_surfaces: Vec<(UiDocumentRole, String)>,
     /// Nodes inside another role's document that other documents address by
-    /// name, such as dialogs they open. The names resolve to that role without
-    /// loading it.
+    /// name: dialogs they open and toggles they release. The names resolve to
+    /// that role without loading it.
     pub(super) role_addressed_nodes: Vec<(UiDocumentRole, String)>,
     pub(super) theme: Option<String>,
-    /// Expansion availability reported to the original UI loader. This is
-    /// deliberately independent of which archives supplied data: Complete
-    /// Collection loads maps and objects from every archive while its UI
-    /// availability registry reports no numbered expansion guards.
-    pub(super) available_xpacks: BTreeSet<u32>,
+    /// Installed expansions, by the index each registers in the archives'
+    /// `xpInfo` entries. `xPack` guards keep a node only for these.
+    pub(in crate::assets::ui_document::source) available_xpacks: BTreeSet<u32>,
     pub(in crate::assets::ui_document::source) available_assets: Vec<String>,
     pub(in crate::assets::ui_document::source) resolved_dependencies: UiResolvedDependencies,
     /// Selected source order, lowest precedence first. This is independent of
@@ -59,7 +57,8 @@ impl SelectedUiSourceResolutionProfile {
             role_hotkey_modes: vec![
                 (UiDocumentRole::MainMenu, "mainmode".into()),
                 (UiDocumentRole::InGameHud, "gamemode".into()),
-                (UiDocumentRole::Overview, "overview".into()),
+                // The zoo view is the original overhead mode.
+                (UiDocumentRole::InGameHud, "overheadmode".into()),
                 (UiDocumentRole::PhotoMode, "photomode".into()),
             ],
             role_surfaces: vec![
@@ -76,8 +75,20 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::ModeHelp, "modehelpmainlayout".into()),
                 (UiDocumentRole::Overview, "overview_screen".into()),
             ],
-            // The main menu's Exit button opens this confirmation in confirm.xml.
-            role_addressed_nodes: vec![(UiDocumentRole::Modal, "exit_zoo".into())],
+            // The entity information panel and the in-game options open these
+            // confirmations in confirm.xml. The recommendations panel's close
+            // button releases the toggles that opened it.
+            role_addressed_nodes: vec![
+                (UiDocumentRole::Modal, "delete_object_confirmation".into()),
+                (UiDocumentRole::Modal, "fire_staff_confirmation".into()),
+                // The main menu's Exit button opens this confirmation.
+                (UiDocumentRole::Modal, "exit_zoo".into()),
+                (UiDocumentRole::Modal, "return_mainmenu".into()),
+                (UiDocumentRole::Modal, "save current game".into()),
+                (UiDocumentRole::PurchaseCatalogue, "sort button".into()),
+                (UiDocumentRole::EntityInfo, "in game sort button".into()),
+                (UiDocumentRole::EntityInfo, "crate in game sort button".into()),
+            ],
             theme: None,
             available_xpacks: BTreeSet::new(),
             available_assets: Vec::new(),

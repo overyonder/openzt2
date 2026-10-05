@@ -92,11 +92,15 @@ pub(super) fn lower_animation_values(
             ));
         }
     };
-    let rect = |value: Option<SourceUiRect>| {
-        value.map_or([-1.0; 4], |value| {
-            [value.x, value.y, value.width, value.height]
-        })
+    // An absent rectangle or an authored `-1` keeps that component. Other
+    // negative values are real coordinates: the in-game controls panel slides
+    // from x=-311 while keeping its width and height through `w=-1 h=-1`.
+    let component = |rect: Option<SourceUiRect>, index: usize| {
+        rect.map(|rect| [rect.x, rect.y, rect.width, rect.height][index])
+            .filter(|value| *value != -1.0)
     };
+    let rect_intervals =
+        std::array::from_fn(|index| Some([component(start, index)?, component(end, index)?]));
     let color = |value: Option<SourceUiColor>| {
         value.map_or([255; 4], |value| {
             [value.red, value.green, value.blue, value.alpha]
@@ -110,8 +114,7 @@ pub(super) fn lower_animation_values(
         delay_ms: (delay_seconds * 1000.0).round() as u32,
         bob_ms: (bob_seconds * 1000.0).round() as u32,
         interpolation,
-        start_rect: rect(start),
-        end_rect: rect(end),
+        rect_intervals,
         animates_color: colors.is_some(),
         affects_text_color: colors.and_then(|value| value.affects_text).unwrap_or(false),
         start_color: color(colors.and_then(|value| value.start)),
