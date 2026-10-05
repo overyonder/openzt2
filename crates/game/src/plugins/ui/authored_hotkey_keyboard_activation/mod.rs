@@ -62,7 +62,6 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
     focus: Res<InputFocus>,
     text_edits: Query<(), With<EditableText>>,
 ) {
-    let active_scope = context.active_scope();
     let active_modal = context.top_modal();
     let control_is_pressed =
         keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
@@ -78,15 +77,16 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
             continue;
         }
         for (entity, binding, owner) in &bindings {
-            if !context.hotkey_receiver_is_eligible(
-                owner.0,
-                binding.receiver_index(),
-                binding
-                    .is_cancel_activation()
-                    .then_some(active_scope)
-                    .flatten(),
-                active_modal,
-            ) {
+            // Escape dismisses one activity. The cancellation receiver selection
+            // chooses it for keyboard and controller alike.
+            if binding.is_cancel_activation()
+                || !context.hotkey_receiver_is_eligible(
+                    owner.0,
+                    binding.receiver_index(),
+                    None,
+                    active_modal,
+                )
+            {
                 continue;
             }
             let control_state_matches = match binding.control_state {

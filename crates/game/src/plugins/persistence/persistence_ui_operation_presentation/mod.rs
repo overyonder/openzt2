@@ -1,9 +1,18 @@
-//! Persistence-operation wait presentation and save-then-load continuation.
+//! Persistence-operation wait presentation, save-then-load continuation and
+//! closing the save dialog once its save completes.
 
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::document::UiDocumentRole;
+use openzt2_game_data::ui_document::{
+    action::presentation::UiPresentationAction, document::UiDocumentRole,
+};
 
-use crate::plugins::ui::{cursor::SetWaitCursor, ui_document_lifecycle_contracts::ShowUiRole};
+use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_presentation_action_application::RequestUiPresentationAction,
+    cursor::SetWaitCursor, save_dialog_cancellation::SaveDialogCancellationRequests,
+    ui_document_lifecycle_contracts::ShowUiRole,
+};
 
 use super::{
     persistence_failure_types::{
@@ -51,22 +60,36 @@ pub(super) fn project_outstanding_world_snapshot_operations_onto_ui_wait_cursor(
 /// only changes presentation after their typed completion message arrives.
 pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     mut commands: Commands,
+    mut cancellations: SaveDialogCancellationRequests,
     mut saved_world_snapshot_messages: MessageReader<WorldSnapshotSavedToSlot>,
     mut world_snapshot_persistence_failures: MessageReader<WorldSnapshotPersistenceFailed>,
     pending_load_slot_catalogue_owners: Query<
-        (Entity, &ChildOf),
+        Entity,
         With<OpenLoadSlotCatalogueAfterWorldSnapshotSave>,
     >,
     mut show_ui_document_requests: MessageWriter<ShowUiRole>,
 ) {
-    if saved_world_snapshot_messages.read().next().is_some() {
-        for (ui_document_owner, lifecycle_owner) in &pending_load_slot_catalogue_owners {
+    // The continuation waits on the save dialog's owner, so cancelling that
+    // dialog abandons it.
+    let cancelled_owners = cancellations.read_cancelled_lifecycle_owners();
+    for owner in &pending_load_slot_catalogue_owners {
+        if cancelled_owners.contains(&owner) {
             commands
-                .entity(ui_document_owner)
+                .entity(owner)
                 .remove::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>();
+        }
+    }
+    if saved_world_snapshot_messages.read().next().is_some() {
+        for owner in &pending_load_slot_catalogue_owners {
+            commands
+                .entity(owner)
+                .remove::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>();
+            if cancelled_owners.contains(&owner) {
+                continue;
+            }
             show_ui_document_requests.write(ShowUiRole {
                 role: UiDocumentRole::SavedGames,
-                owner: lifecycle_owner.parent(),
+                owner,
             });
         }
     }
@@ -74,10 +97,33 @@ pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     if world_snapshot_persistence_failures.read().any(|failure| {
         failure.persistence_operation == WorldSnapshotPersistenceOperation::SaveToSlot
     }) {
-        for (ui_document_owner, _) in &pending_load_slot_catalogue_owners {
+        for owner in &pending_load_slot_catalogue_owners {
             commands
-                .entity(ui_document_owner)
+                .entity(owner)
                 .remove::<OpenLoadSlotCatalogueAfterWorldSnapshotSave>();
+        }
+    }
+}
+
+/// A completed save closes the save dialog, as its Cancel does. A failed save
+/// leaves it open so the player can try again.
+pub(super) fn close_save_dialogs_after_world_snapshot_save(
+    mut saved_world_snapshot_messages: MessageReader<WorldSnapshotSavedToSlot>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    roots: Query<(Entity, &UiDocumentRoot)>,
+    mut presentation_requests: MessageWriter<RequestUiPresentationAction>,
+) {
+    if saved_world_snapshot_messages.read().next().is_none() {
+        return;
+    }
+    for (document_root, root) in &roots {
+        if documents.get(&root.document).is_some_and(|document| {
+            document.canonical_ui_document().role == UiDocumentRole::SaveGame
+        }) {
+            presentation_requests.write(RequestUiPresentationAction {
+                document_root,
+                action: UiPresentationAction::HideOwningDocument,
+            });
         }
     }
 }

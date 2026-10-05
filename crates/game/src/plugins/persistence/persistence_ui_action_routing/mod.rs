@@ -14,7 +14,7 @@ use crate::{
         authored_ui_node_projection_components::UiDocumentRoot,
         authored_ui_node_projection_components::UiValue,
         authored_ui_selection_state::UiSelected,
-        ui_document_lifecycle_contracts::ShowUiRole,
+        ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
     },
 };
 
@@ -51,6 +51,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
         Entity,
         With<crate::plugins::world_spawn::world_membership_types::WorldRoot>,
     >,
+    dialog_owner: GameViewDocumentOwner,
 ) {
     for activated_ui_node in activated_ui_nodes.read() {
         let Ok((authored_persistence_action_range, ui_document_owner)) =
@@ -206,12 +207,11 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     } else {
                         UiDocumentRole::SavedGames
                     };
-                    // Share the lifecycle owner so this document gets one canvas transform.
                     persistence_action_messages
                         .show_ui_document_requests
                         .write(ShowUiRole {
                             role,
-                            owner: lifecycle_owner.parent(),
+                            owner: dialog_owner.owner(lifecycle_owner.parent()),
                         });
                     persistence_action_messages
                         .load_save_slot_catalogue_requests
@@ -219,7 +219,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                 }
                 UiPersistenceAction::OpenLoadSlotCatalogueAfterSaveCompletes => {
                     commands
-                        .entity(ui_document_owner.0)
+                        .entity(dialog_owner.owner(lifecycle_owner.parent()))
                         .insert(OpenLoadSlotCatalogueAfterWorldSnapshotSave);
                 }
             }

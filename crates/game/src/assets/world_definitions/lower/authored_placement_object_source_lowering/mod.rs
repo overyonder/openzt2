@@ -14,14 +14,15 @@ use super::object_facility_staff_and_guest_source_vocabulary::{
     authored_world_object_information_view_class, authored_world_object_kind,
 };
 use super::source_element_tree_search::{
-    authored_type_family_component_attribute, authored_type_family_elements_named, find_descendant,
+    authored_type_family_component_attribute, authored_type_family_components,
+    authored_type_family_elements_named, find_descendant,
     find_descendant_named_with_nonempty_attribute, find_descendant_with_attribute,
     find_presentation_component,
 };
 use super::source_model_scene_path_normalization::normalize_scene_path;
 use super::world_definition_lowering_tables::WorldDefinitionLoweringTables;
 use super::world_definition_source_value_reading_and_conversion::{
-    id, money_cents, parse_f32_triplet,
+    element_bool, id, money_cents, parse_f32_triplet,
 };
 use super::world_object_presentation_controller_source_lowering::lower_authored_world_object_presentation_controller_states;
 use crate::assets::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
@@ -406,12 +407,25 @@ pub(super) fn bind_authored_placement_object(
             "true" | "yes" | "1"
         )
     });
+    let placement_components = authored_type_family_components(record, "ZTPlacementData");
+    // Placement is deletable by default; a more-specific component without
+    // this attribute must still inherit an explicit family restriction.
+    let deletable = placement_components
+        .iter()
+        .find(|placement| placement.attribute_named_any(&["deletable"]).is_some())
+        .or_else(|| placement_components.first())
+        .map(|placement| element_bool(placement, &["deletable"], true))
+        .transpose()?
+        .unwrap_or(false);
     let object_property_flags = WorldObjectPropertyFlags::from_raw_flag_bits(
         inherited_donation_acceptor
             .then_some(WorldObjectPropertyFlags::DONATION_ACCEPTOR.raw_flag_bits())
-            .unwrap_or_default(),
+            .unwrap_or_default()
+            | deletable
+                .then_some(WorldObjectPropertyFlags::DELETABLE.raw_flag_bits())
+                .unwrap_or_default(),
     )
-    .expect("the donation-acceptor flag is part of the canonical flag vocabulary");
+    .expect("authored object flags are part of the canonical flag vocabulary");
 
     output.document.objects.push(WorldObjectDefinition {
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),

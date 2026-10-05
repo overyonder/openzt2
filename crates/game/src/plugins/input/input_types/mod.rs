@@ -117,19 +117,17 @@ impl Default for GameActionInputBindings {
                     primary: KeyPair(KeyCode::KeyP, KeyCode::Pause),
                     alternate: Some(Gamepad(Pad::DPadRight)),
                 },
+                // Overhead-mode Escape is authored (`ZT_ESCAPE_KEY`), so the
+                // keyboard has no separate menu chord.
                 GameActionInputBinding {
                     action: OpenMenu,
-                    primary: Key(KeyCode::Escape),
+                    primary: Unbound,
                     alternate: Some(Gamepad(Pad::Select)),
                 },
+                // Ctrl+Z is the authored overhead-mode `ZT_UNDOACTION`.
                 GameActionInputBinding {
                     action: Undo,
-                    primary: ModifiedKey {
-                        key: KeyCode::KeyZ,
-                        shift: false,
-                        control: true,
-                        alt: false,
-                    },
+                    primary: Unbound,
                     alternate: Some(Gamepad(Pad::DPadLeft)),
                 },
                 GameActionInputBinding {

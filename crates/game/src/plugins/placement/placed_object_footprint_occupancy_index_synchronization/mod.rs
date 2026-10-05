@@ -30,32 +30,38 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
     mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    placed: Query<(
+    mut placed: Query<(
         Entity,
         &PersistentId,
         Ref<PlacedObjectDefinitionReference>,
-        Ref<PlacedObjectFootprintOccupancy>,
+        &Transform,
+        &mut PlacedObjectFootprintOccupancy,
         Option<&PhysicsMovedPlacedObjectFootprint>,
     )>,
 ) {
-    if !placed.iter().any(|(_, _, placeable, footprint, moving)| {
-        placeable.is_added()
-            || footprint.is_added()
-            || match moving {
-                None => footprint.is_changed(),
-                Some(_) => false,
-            }
-    }) {
+    if !definitions.is_changed()
+        && !active_definitions.is_changed()
+        && !placed
+            .iter_mut()
+            .any(|(_, _, placeable, _, footprint, moving)| {
+                placeable.is_added()
+                    || footprint.is_added()
+                    || match moving {
+                        None => footprint.is_changed(),
+                        Some(_) => false,
+                    }
+            })
+    {
         return;
     }
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    let mut ordered: Vec<_> = placed.iter().collect();
-    ordered.sort_unstable_by_key(|(_, id, _, _, _)| id.0);
+    let mut ordered: Vec<_> = placed.iter_mut().collect();
+    ordered.sort_unstable_by_key(|(_, id, _, _, _, _)| id.0);
     let capacity = ordered
         .iter()
-        .filter_map(|(_, _, placed, _, _)| {
+        .filter_map(|(_, _, placed, _, _, _)| {
             resolve_object_placeable_definition(catalogue, placed.definition)
         })
         .map(|definition| {
@@ -67,11 +73,25 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
         .sum();
     index.clear();
     index.reserve(capacity);
-    for (entity, _, placeable, occupancy, _) in ordered {
+    for (entity, _, placeable, transform, mut occupancy, _) in ordered {
         let Some(definition) = resolve_object_placeable_definition(catalogue, placeable.definition)
         else {
             continue;
         };
+        let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, transform)
+        else {
+            continue;
+        };
+        let Some(origin) =
+            calculate_object_placement_footprint_origin(definition, transform, turns)
+        else {
+            continue;
+        };
+        // Late geometry changes both the derived pivot and the occupied cells.
+        if occupancy.origin != origin || occupancy.eighth_turns != turns {
+            occupancy.origin = origin;
+            occupancy.eighth_turns = turns;
+        }
         select_authored_footprint_for_eighth_turns(definition, occupancy.eighth_turns)
             .iter()
             .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))

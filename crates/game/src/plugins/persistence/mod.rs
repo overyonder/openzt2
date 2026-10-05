@@ -125,6 +125,7 @@ impl Plugin for PersistencePlugin {
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
                     persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor,
                     persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save,
+                    persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save,
                 )
                     .chain(),
             )

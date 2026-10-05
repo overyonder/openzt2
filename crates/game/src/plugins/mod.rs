@@ -23,7 +23,7 @@ pub mod locomotion;
 mod lua_script_module_execution;
 mod lua_value_conversion;
 pub mod maintenance;
-mod mod_manager;
+pub(crate) mod mod_manager;
 pub mod model_render;
 pub(crate) mod openzt2_game_plugin_group;
 pub mod persistence;

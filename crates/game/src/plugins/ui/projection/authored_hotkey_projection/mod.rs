@@ -1,5 +1,9 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::{action::UiActionRecord, hotkey::UiDocumentHotkeyTrigger};
+use openzt2_game_data::ui_document::{
+    action::{information::UiInformationAction, UiActionRecord},
+    document::UiDocumentRole,
+    hotkey::UiDocumentHotkeyTrigger,
+};
 
 use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
@@ -17,11 +21,24 @@ pub(super) fn project_authored_hotkey_action_proxies(
     root: Entity,
     document: &UiDocumentAsset,
 ) {
-    for (node_index, node) in document.canonical_ui_document().nodes.iter().enumerate() {
+    let data = document.canonical_ui_document();
+    for (node_index, node) in data.nodes.iter().enumerate() {
         for (hotkey_index, hotkey) in node.hotkeys.iter().enumerate() {
             let Some(key) = authored_hotkey_key_code(hotkey.key_code, &hotkey.character) else {
                 continue;
             };
+            // The menu inherits mainmode's hyperlink shortcut, but Zoopedia's
+            // F1 receiver belongs to the live HUD's separate gamemode binding.
+            if data.role == UiDocumentRole::MainMenu
+                && key == KeyCode::F1
+                && matches!(
+                    &hotkey.action,
+                    UiActionRecord::Information(record)
+                        if matches!(&record.action, UiInformationAction::OpenEncyclopediaEntry { .. })
+                )
+            {
+                continue;
+            }
             let proxy = commands
                 .spawn((
                     Name::new("ui hotkey"),

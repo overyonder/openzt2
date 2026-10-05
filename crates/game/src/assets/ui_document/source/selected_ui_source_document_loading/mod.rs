@@ -35,6 +35,10 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
     let (_, winning_asset_paths) = asset_archives.resolved_paths();
     let load_authored_biome_panels =
         AssetPath::new(primary_source_path).key() == "ui/layout/shell.xml";
+    let is_xml = |path: &Path| {
+        path.extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
+    };
     let supporting_source_paths =
         SelectedUiSourceResolutionProfile::for_primary_source_path(primary_source_path)
             .supporting_source_paths()
@@ -42,9 +46,17 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
             .chain(winning_asset_paths.iter().filter_map(|path| {
                 (load_authored_biome_panels
                     && path.parent() == Some(Path::new("biomes"))
-                    && path
-                        .extension()
-                        .is_some_and(|extension| extension.eq_ignore_ascii_case("xml")))
+                    && is_xml(path.as_path()))
+                .then(|| path.to_string_lossy().into_owned())
+            }))
+            // Every document's `xPack` guards test the installed expansions,
+            // which the archives register in `xpInfo`.
+            .chain(winning_asset_paths.iter().filter_map(|path| {
+                (path
+                    .parent()
+                    .and_then(Path::to_str)
+                    .is_some_and(|parent| parent.eq_ignore_ascii_case("xpinfo"))
+                    && is_xml(path.as_path()))
                 .then(|| path.to_string_lossy().into_owned())
             }));
     for supporting_source_path in supporting_source_paths {

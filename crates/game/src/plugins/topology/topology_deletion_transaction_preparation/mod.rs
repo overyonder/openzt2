@@ -69,6 +69,9 @@ pub(super) fn prepare_topology_deletion_transaction(
         else {
             continue;
         };
+        if node.is_none() && fence.is_none() && path.is_none() && portal.is_none() {
+            continue;
+        }
         if protected.is_some() {
             write_topology_edit_preparation_rejection(
                 request.transaction,

@@ -120,10 +120,10 @@ pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
                 .children
                 .push(composition_source_document.root.clone());
         }
-        if let Some((_, hotkey_mode)) = resolution_profile
+        for (_, hotkey_mode) in resolution_profile
             .role_hotkey_modes
             .iter()
-            .find(|(candidate_role, _)| candidate_role == role)
+            .filter(|(candidate_role, _)| candidate_role == role)
         {
             let (_, global_hotkey_source_document) =
                 global_hotkey_source
