@@ -75,12 +75,39 @@ pub(super) fn lower_netimmerse_skin(
     // the skeleton root parent. Retain named intermediary nodes so animation
     // still replaces their original local transforms, rather than baking them
     // into a descendant or silently treating that descendant as a root.
-    let order = order_netimmerse_skin_joint_hierarchy(
-        instance.skeleton_root_ref,
-        &instance.bone_refs,
-        &parents,
-    )
-    .map_err(skeleton_error)?;
+    // Authored `Link_*` sockets (and unweighted bones above them, such as the
+    // head bone of a body whose head is a separate model) are absent from the
+    // skin. Keep them as joints so entity binders can follow the animated
+    // skeleton; they influence no vertices.
+    let sockets = document.blocks().filter_map(|block| {
+        let reference = i32::try_from(block.index).ok()?;
+        let is_socket = matches!(block.payload, NetImmerseNifBlockPayload::NiNode(_))
+            && block.payload.av_object().is_some_and(|object| {
+                object
+                    .object
+                    .name
+                    .get(..5)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("link_"))
+            });
+        let mut ancestor = reference;
+        let under_skeleton_root = std::iter::from_fn(|| {
+            ancestor = *parents.get(&ancestor)?;
+            Some(ancestor)
+        })
+        .take(parents.len())
+        .any(|ancestor| ancestor == instance.skeleton_root_ref);
+        (is_socket && under_skeleton_root && !instance.bone_refs.contains(&reference))
+            .then_some(reference)
+    });
+    let joint_refs = instance
+        .bone_refs
+        .iter()
+        .copied()
+        .chain(sockets)
+        .collect::<Vec<_>>();
+    let order =
+        order_netimmerse_skin_joint_hierarchy(instance.skeleton_root_ref, &joint_refs, &parents)
+            .map_err(skeleton_error)?;
     let node_indices = order
         .iter()
         .enumerate()

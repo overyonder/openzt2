@@ -20,6 +20,7 @@ pub(crate) mod prefab_presentation_render_tree;
 pub(crate) mod prefab_presentation_types;
 mod prefab_renderable_components;
 pub(crate) mod prefab_source_asset_handle;
+pub(crate) mod prefab_texture_replacements;
 pub(super) mod prefab_transform_conversion;
 pub(crate) mod prefab_world_instance_spawning;
 pub(crate) mod selected_world_identity;

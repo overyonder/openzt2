@@ -57,6 +57,27 @@ pub struct StaffRoleDefinition {
     pub navigation_radius_m: f32,
     pub permitted_jobs: StaffJobCapabilityFlags,
     pub job_overrides: Vec<AssetId>,
+    /// Concrete authored looks (sex, skin and uniform textures, head) a hired
+    /// employee is drawn from. Empty roles present the role object's prefab.
+    #[serde(default)]
+    pub presentation_variants: Vec<StaffPresentationVariant>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffPresentationVariant {
+    pub prefab: AssetId,
+    /// Actor manifest animations authored for this look's body.
+    pub model_animation_set: AssetId,
+    pub name_pool: AssetId,
+    pub head: Option<StaffHeadPresentation>,
+    pub texture_replacement_sets: Vec<super::world_objects::WorldObjectTextureReplacementSet>,
+}
+
+/// Separate head model the original attaches to a body joint.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct StaffHeadPresentation {
+    pub prefab: AssetId,
+    pub joint: String,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
 pub enum StaffJobEffect {

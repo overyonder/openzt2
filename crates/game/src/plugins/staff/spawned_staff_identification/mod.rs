@@ -8,11 +8,15 @@ use crate::plugins::person_name_selection_and_resolution::choose_generated_perso
 use crate::plugins::simulation_time::simulation_clock_types::ZooCalendar;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
+use crate::plugins::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
 
 use super::{
     staff_assignment_types::StaffAssignment,
     staff_employment_types::{AvailableForWork, Employment, Staff, StaffRole},
+    staff_presentation_variant_selection::{
+        attach_staff_presentation_variant, staff_presentation_variant,
+    },
 };
 
 /// Initializes staff loaded from world prefabs. Definitions can identify
@@ -24,14 +28,19 @@ pub(in crate::plugins::staff) fn identify_spawned_staff_from_world_definition(
     clock: Res<ZooClock>,
     calendar: Res<ZooCalendar>,
     spawned_entities: Query<
-        (Entity, &DefinitionId, &PersistentId),
+        (
+            Entity,
+            &DefinitionId,
+            &PersistentId,
+            Option<&PrefabSourceAssetHandle>,
+        ),
         (Added<DefinitionId>, Without<Staff>),
     >,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, definition, persistent_identifier) in &spawned_entities {
+    for (entity, definition, persistent_identifier, body) in &spawned_entities {
         let Some(role) = catalogue
             .find_staff(definition.0)
             .or_else(|| catalogue.find_staff_by_object(definition.0))
@@ -39,11 +48,34 @@ pub(in crate::plugins::staff) fn identify_spawned_staff_from_world_definition(
             continue;
         };
         let role_identifier = AssetId(role.id.0);
-        let person_name = choose_generated_person_name_rows_from_authored_pool(
-            catalogue,
-            AssetId(role.name_pool.0),
-            persistent_identifier.0,
-        );
+        // An authored record may pin its own body; only dress the drawn one.
+        let variant = staff_presentation_variant(role, persistent_identifier.0, catalogue)
+            .filter(|(_, prefab)| body.is_some_and(|body| body.0.id() == prefab.id()))
+            .map(|(variant, _)| variant);
+        if let Some(variant) = variant {
+            attach_staff_presentation_variant(
+                &mut commands,
+                entity,
+                variant,
+                persistent_identifier.0,
+                catalogue,
+            );
+        }
+        let person_name = variant
+            .and_then(|variant| {
+                choose_generated_person_name_rows_from_authored_pool(
+                    catalogue,
+                    AssetId(variant.name_pool.0),
+                    persistent_identifier.0,
+                )
+            })
+            .or_else(|| {
+                choose_generated_person_name_rows_from_authored_pool(
+                    catalogue,
+                    AssetId(role.name_pool.0),
+                    persistent_identifier.0,
+                )
+            });
         let mut staff_commands = commands.entity(entity);
         staff_commands.insert((
             Staff,

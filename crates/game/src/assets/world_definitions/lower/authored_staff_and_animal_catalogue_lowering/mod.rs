@@ -3,8 +3,9 @@ use super::catalogue_entry_source_lowering::{
     authored_catalogue_purchase_sort_fallback_type_name, authored_catalogue_purchase_sort_key,
 };
 use super::source_element_tree_search::{
-    authored_type_family_component_attribute, find_descendant, find_descendant_with_attribute,
-    find_first_authored_family_variant_with_nonempty_attribute, find_presentation_component,
+    authored_type_family_component_attribute, authored_type_family_elements_named, find_descendant,
+    find_descendant_with_attribute, find_first_authored_family_variant_with_nonempty_attribute,
+    find_presentation_component,
 };
 use super::world_definition_lowering_tables::WorldDefinitionLoweringTables;
 use super::world_definition_source_value_reading_and_conversion::{
@@ -20,10 +21,13 @@ use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_d
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
 use openzt2_game_data::world_definitions::staff_management::{
-    StaffJobCapabilityFlags, StaffRoleDefinition, StaffRoleKind,
+    StaffHeadPresentation, StaffJobCapabilityFlags, StaffPresentationVariant, StaffRoleDefinition,
+    StaffRoleKind,
 };
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
+    WorldObjectTextureReplacement, WorldObjectTextureReplacementGroup,
+    WorldObjectTextureReplacementSet,
 };
 use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
@@ -114,6 +118,114 @@ mod tests {
         }
         Ok(())
     }
+
+    #[test]
+    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let sources = [
+            (
+                "staff.xml",
+                r#"<BFTypedBinder binderType="Staff" abstract="true">
+                <types><entity><actor><people><Staff/></people></actor></entity></types>
+                <binder><BFBinder><instance><BFBehaviorMgr><subBehaviors><BFBehLocoSwitchSet loopFlag="true"><behaviorTable><ground behSet="Stand_Idle"/></behaviorTable></BFBehLocoSwitchSet></subBehaviors></BFBehaviorMgr></instance></BFBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "keeper.xml",
+                r#"<BFTypedBinder binderType="Keeper" abstract="true">
+                <types><entity><actor><people><Staff><Keeper/></Staff></people></actor></entity></types>
+                <shared><UIToggleButton><UIAspect><default image="keeper.dds"/></UIAspect><on><event msg="ZT_SETPLACEMENTOBJECT" string="Keeper"/></on></UIToggleButton></shared>
+                <binder><BFBinder><instance><BFGCollisionTester radius="0.1"/></instance></BFBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "keeper_f.xml",
+                r#"<BFTypedBinder binderType="Keeper_Adult_F" abstract="true">
+                <types><entity><actor><people><Staff><Keeper><Keeper_Adult_F/></Keeper></Staff></people></actor></entity></types>
+                <instance><BFGEntity><physObjParenting><parentObj parent="mainObj" child="headObj" attachnode="Link_Head"/></physObjParenting></BFGEntity></instance>
+                <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFActorComponent actorfile="body_f.bfm"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="headObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="head_f.nif"/></BFPhysObj></instance></BFNamedBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "keeper_f_01.xml",
+                r#"<BFTypedBinder binderType="Keeper_Adult_F_01">
+                <types><entity><actor><people><Staff><Keeper><Keeper_Adult_F><Keeper_Adult_F_01/></Keeper_Adult_F></Keeper></Staff></people></actor></entity></types>
+                <binder><BFNamedBinder binderName="mainObj"><shared><BFSharedRandomTextureInfo><replacementSet>
+                    <group weight="0.5"><item material="Body" image="Shared\\Uniform_01.dds" layer="base"/><item material="body" image="detail.dds" layer="detail"/></group>
+                    <group><item material="body" image="uniform_02.dds"/></group>
+                </replacementSet></BFSharedRandomTextureInfo></shared></BFNamedBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+        ];
+        let documents = sources
+            .iter()
+            .map(|(path, xml)| {
+                parse_blue_fang_source_document(AssetPath::new(path), xml.as_bytes())
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+        scenes.register_archive_resolved_actor_scene_asset_path(
+            "body_f.bfm",
+            "body_f.nif#scene".into(),
+        );
+        scenes.register_archive_resolved_actor_scene_asset_path(
+            "head_f.nif",
+            "head_f.nif#scene".into(),
+        );
+        let document =
+            lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                &documents,
+                &scenes,
+                "keeper.xml",
+                [0, 0],
+            )?
+            .ok_or_else(|| std::io::Error::other("staff source produced no document"))?;
+        let role = document
+            .staff
+            .first()
+            .ok_or_else(|| std::io::Error::other("staff role is absent"))?;
+        assert_eq!(
+            role.presentation_variants.len(),
+            1,
+            "abstract binders are not looks"
+        );
+        let look = &role.presentation_variants[0];
+        assert_eq!(look.prefab, AssetId::from_virtual_path("body_f.nif#scene"));
+        assert_eq!(
+            look.model_animation_set,
+            AssetId::from_virtual_path("body_f.bfm")
+        );
+        assert_eq!(look.name_pool, id("personname:Keeper_Adult_F"));
+        let head = look
+            .head
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("head is absent"))?;
+        assert_eq!(head.prefab, AssetId::from_virtual_path("head_f.nif#scene"));
+        assert_eq!(head.joint, "Link_Head");
+        let [set] = look.texture_replacement_sets.as_slice() else {
+            return Err(std::io::Error::other("expected one replacement set").into());
+        };
+        assert_eq!(
+            set.groups
+                .iter()
+                .map(|group| group.weight)
+                .collect::<Vec<_>>(),
+            [0.5, 1.0]
+        );
+        assert_eq!(
+            set.groups[0].items.len(),
+            1,
+            "non-base layers have no binding"
+        );
+        assert_eq!(set.groups[0].items[0].material, "body");
+        assert_eq!(
+            set.groups[0].items[0].image,
+            AssetId::from_virtual_path(&AssetPath::new("shared/uniform_01.dds").key())
+        );
+        Ok(())
+    }
 }
 
 fn authored_staff_primary_actor_component<'document>(
@@ -146,10 +258,169 @@ fn authored_staff_named_presentation_component<'document>(
     .and_then(find_presentation_component)
 }
 
+/// Lowers every concrete hireable look of a staff role.
+///
+/// Originals split one look across an abstract sex binder (actor body, head
+/// model, joint parenting) and a concrete numbered binder beneath it (skin and
+/// uniform texture replacements). A look whose body has no resolved scene is
+/// left out rather than rejecting the role.
+fn lower_authored_staff_presentation_variants(
+    record: &RecordView<'_, '_>,
+    resolved_source_records: &[RecordView<'_, '_>],
+    actor_scene_paths: &BTreeMap<String, String>,
+) -> Vec<StaffPresentationVariant> {
+    let mut variants = resolved_source_records
+        .iter()
+        .filter(|candidate| {
+            candidate.key != record.key
+                && candidate.has_type_token(record.key)
+                && !candidate
+                    .source_document_element()
+                    .attribute_named_any(&["abstract"])
+                    .is_some_and(|value| {
+                        matches!(
+                            canonicalize_source_document_record_key(value).as_str(),
+                            "true" | "1"
+                        )
+                    })
+        })
+        .collect::<Vec<_>>();
+    variants.sort_by_key(|variant| variant.key);
+    variants
+        .into_iter()
+        .filter_map(|variant| {
+            let family = std::iter::once(*variant)
+                .chain(
+                    variant
+                        .type_tokens()
+                        .iter()
+                        .rev()
+                        .filter(|token| {
+                            !source_document_names_are_semantically_equal(token, variant.key)
+                        })
+                        .filter_map(|token| {
+                            variant.find_resolved_source_record_by_reference(token)
+                        }),
+                )
+                .collect::<Vec<_>>();
+            let actor_record = family
+                .iter()
+                .find(|candidate| authored_staff_primary_actor_component(candidate).is_some())?;
+            let actor = authored_staff_primary_actor_component(actor_record)?
+                .attribute_named_any(&["actorfile"])?;
+            let Some(prefab) =
+                actor_scene_paths.get(&canonicalize_source_document_record_key(actor))
+            else {
+                bevy::log::warn!(
+                    variant = variant.key,
+                    %actor,
+                    "staff look has no resolved body scene; leaving it out"
+                );
+                return None;
+            };
+            let head = family
+                .iter()
+                .find_map(|candidate| {
+                    authored_staff_named_presentation_component(candidate, "headObj")
+                })
+                .and_then(|component| component.attribute_named_any(&["modelfile", "actorfile"]))
+                .and_then(|model| {
+                    actor_scene_paths.get(&canonicalize_source_document_record_key(model))
+                })
+                .zip(
+                    authored_type_family_elements_named(variant, "parentObj")
+                        .into_iter()
+                        .find(|parenting| {
+                            parenting
+                                .attribute_named_any(&["child"])
+                                .is_some_and(|child| {
+                                    source_document_names_are_semantically_equal(child, "headObj")
+                                })
+                        })
+                        .and_then(|parenting| parenting.attribute_named_any(&["attachnode"])),
+                )
+                .map(|(scene, joint)| StaffHeadPresentation {
+                    prefab: AssetId::from_virtual_path(scene),
+                    joint: joint.trim().to_owned(),
+                });
+            Some(StaffPresentationVariant {
+                prefab: AssetId::from_virtual_path(prefab),
+                model_animation_set: AssetId::from_virtual_path(
+                    &canonicalize_source_document_record_key(actor),
+                ),
+                name_pool: id(&format!("personname:{}", actor_record.key)),
+                head,
+                texture_replacement_sets: authored_type_family_elements_named(
+                    variant,
+                    "replacementSet",
+                )
+                .into_iter()
+                .map(lower_authored_texture_replacement_set)
+                .filter(|set| !set.groups.is_empty())
+                .collect(),
+            })
+        })
+        .collect()
+}
+
+/// Lowers one `replacementSet`. Only base-layer replacements have a native
+/// binding; groups left without items still count toward the weighted draw.
+fn lower_authored_texture_replacement_set(
+    set: &OrderedSourceDocumentNode,
+) -> WorldObjectTextureReplacementSet {
+    let named = |element: &OrderedSourceDocumentNode, name: &str| {
+        source_document_names_are_semantically_equal(element.name.as_str(), name)
+    };
+    WorldObjectTextureReplacementSet {
+        groups: set
+            .element_children()
+            .filter(|group| named(group, "group"))
+            .map(|group| WorldObjectTextureReplacementGroup {
+                weight: group
+                    .attribute_named_any(&["weight"])
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                    .filter(|weight| weight.is_finite() && *weight > 0.0)
+                    .unwrap_or(1.0),
+                items: group
+                    .element_children()
+                    .filter(|item| named(item, "item"))
+                    .filter(|item| {
+                        item.attribute_named_any(&["layer"]).is_none_or(|layer| {
+                            source_document_names_are_semantically_equal(layer, "base")
+                        })
+                    })
+                    .filter_map(|item| {
+                        Some(WorldObjectTextureReplacement {
+                            material: item
+                                .attribute_named_any(&["material"])?
+                                .trim()
+                                .to_ascii_lowercase(),
+                            image: AssetId::from_virtual_path(
+                                &crate::assets::source_document::path::AssetPath::new(
+                                    item.attribute_named_any(&["image"])?.trim(),
+                                )
+                                .key(),
+                            ),
+                        })
+                    })
+                    .collect(),
+            })
+            .collect(),
+    }
+}
+
 fn authored_initial_staff_animation(
     record: &RecordView<'_, '_>,
 ) -> Result<Option<(String, bool)>, BindError> {
-    let Some(locomotion_switch_set) = record.descendant_named("BFBehLocoSwitchSet") else {
+    // Most roles inherit the idle switch from the shared `Staff` binder.
+    let Some(locomotion_switch_set) =
+        super::source_element_tree_search::authored_type_family_components(
+            record,
+            "BFBehLocoSwitchSet",
+        )
+        .into_iter()
+        .next()
+    else {
         return Ok(None);
     };
     let Some(ground_behavior) = find_descendant(locomotion_switch_set, "behaviorTable")
@@ -476,6 +747,11 @@ pub(super) fn bind_authored_staff_catalogue(
         navigation_radius_m,
         permitted_jobs,
         job_overrides: Vec::new(),
+        presentation_variants: lower_authored_staff_presentation_variants(
+            record,
+            resolved_source_records,
+            actor_scene_paths,
+        ),
     });
     output.document.catalogue.push(CatalogueEntry {
         filter_values: super::catalogue_entry_source_lowering::authored_catalogue_filter_values(

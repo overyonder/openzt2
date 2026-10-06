@@ -144,6 +144,10 @@ pub struct PrefabRenderable {
     pub scene_name: String,
     pub material_overrides: Vec<PrefabRenderableMaterialOverride>,
     pub visibility: ScenePrefabRenderableVisibilityFlags,
+    /// Authored source material name (NIF `NiMaterialProperty`), the key that
+    /// entity texture replacement sets select by. Empty when not authored.
+    #[serde(default)]
+    pub material_name: String,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]

@@ -13,6 +13,7 @@ use crate::plugins::world_spawn::prefab_object_presentation_attachment_projectio
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
 
 use super::staff_employment_types::StaffRole;
+use super::staff_presentation_variant_selection::{StaffAttachedHead, StaffModelAnimationSet};
 
 pub(in crate::plugins::staff) fn request_authored_initial_staff_animation_for_newly_resolved_prefab_models(
     mut commands: Commands,
@@ -25,6 +26,8 @@ pub(in crate::plugins::staff) fn request_authored_initial_staff_animation_for_ne
     >,
     parents: Query<&ChildOf>,
     staff_roles: Query<&StaffRole>,
+    drawn_animation_sets: Query<&StaffModelAnimationSet>,
+    attached_heads: Query<(), With<StaffAttachedHead>>,
     definition_identifiers: Query<(
         Option<&DefinitionId>,
         Option<&PrefabObjectPresentationAttachmentProjection>,
@@ -37,7 +40,13 @@ pub(in crate::plugins::staff) fn request_authored_initial_staff_animation_for_ne
     };
     for (prefab_model_entity, animation_playback_controller) in &newly_resolved_prefab_models {
         let mut ancestor = prefab_model_entity;
+        let mut drawn_animation_set = None;
         let staff_role_definition = loop {
+            if attached_heads.contains(ancestor) {
+                break None;
+            }
+            drawn_animation_set = drawn_animation_set
+                .or_else(|| drawn_animation_sets.get(ancestor).ok().map(|set| set.0));
             if let Ok(staff_role) = staff_roles.get(ancestor) {
                 break definitions.find_staff(staff_role.0);
             }
@@ -64,7 +73,10 @@ pub(in crate::plugins::staff) fn request_authored_initial_staff_animation_for_ne
         };
         if animation_playback_controller.is_none() {
             let Some(animation_set_asset_handle) = definitions
-                .load_staff_model_animation_set::<AnimationSetAsset>(staff_role_definition.id)
+                .load_staff_model_animation_set::<AnimationSetAsset>(
+                    staff_role_definition.id,
+                    drawn_animation_set,
+                )
             else {
                 continue;
             };

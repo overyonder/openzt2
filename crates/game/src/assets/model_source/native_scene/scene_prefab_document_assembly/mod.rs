@@ -171,6 +171,7 @@ impl ScenePrefabDocumentAssembler {
                 visibility: ScenePrefabRenderableVisibilityFlags::VISIBLE
                     | ScenePrefabRenderableVisibilityFlags::RECEIVE_SHADOW
                     | ScenePrefabRenderableVisibilityFlags::REFLECTION_VISIBLE,
+                material_name: String::new(),
             },
         ));
         self.dependency(
@@ -194,6 +195,13 @@ impl ScenePrefabDocumentAssembler {
             .to_string_lossy()
             .into_owned();
         self.material_override_from(material, path);
+    }
+    pub(super) fn renderable_material_name(&mut self, material_name: &str) {
+        self.renderables
+            .last_mut()
+            .expect("material name follows its renderable")
+            .1
+            .material_name = material_name.to_owned();
     }
     pub(super) fn material_override_from(&mut self, material: AssetId, path: String) {
         self.renderables

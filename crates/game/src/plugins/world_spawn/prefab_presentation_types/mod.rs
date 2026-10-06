@@ -28,6 +28,8 @@ pub(crate) struct PrefabModel {
     pub(crate) model_path: Box<str>,
     pub(crate) handle: Option<Handle<Gltf>>,
     pub(crate) scene_name: Option<Box<str>>,
+    /// Lowercase authored source material name used by texture replacements.
+    pub(crate) material_name: Option<Box<str>>,
 }
 
 /// One authored render primitive represented by an ordinary ECS entity.

@@ -70,8 +70,15 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             initial_animation_set_asset.model_asset_path.is_empty()
                 || openzt2_game_data::AssetId::from_virtual_path(
                     &initial_animation_set_asset.model_asset_path,
-                ) == prefab_model.model,
-            "model-specific animation set does not belong to its prefab model"
+                ) == prefab_model.model
+                // Archive paths are case-insensitive: manifests store them
+                // lowercased while prefabs keep the authored casing.
+                || initial_animation_set_asset
+                    .model_asset_path
+                    .eq_ignore_ascii_case(&prefab_model.model_path),
+            "model-specific animation set {:?} does not belong to its prefab model {:?}",
+            initial_animation_set_asset.model_asset_path,
+            prefab_model.model_path,
         );
         let initial_animation_clip_asset_key = match pending_model_animation_assets
             .requested_initial_animation_clip_asset_key
