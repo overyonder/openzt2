@@ -35,6 +35,7 @@ use gltf_model_scene_instantiation::{
 use model_scene_visibility_and_shadow_projection::{
     invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
     project_model_scene_visibility_and_shadow_policy,
+    project_model_scene_visibility_and_shadow_policy_onto_late_primitives,
 };
 use prefab_ambient_light_projection::project_prefab_ambient_light_contributions;
 use prefab_fixed_function_world_lighting_projection::{
@@ -72,6 +73,9 @@ impl Plugin for ModelRenderPlugin {
                 project_model_scene_visibility_and_shadow_policy
                     .after(request_hidden_prefab_model_asset_release)
                     .before(VisibilitySystems::CheckVisibility),
+                project_model_scene_visibility_and_shadow_policy_onto_late_primitives
+                    .after(project_model_scene_visibility_and_shadow_policy)
+                    .before(project_authored_model_material_passes),
                 project_authored_model_material_passes
                     .after(project_model_scene_visibility_and_shadow_policy),
                 update_per_draw_effect_transform_semantics
