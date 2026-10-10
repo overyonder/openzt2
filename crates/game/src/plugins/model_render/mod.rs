@@ -31,7 +31,10 @@ use gltf_model_scene_instantiation::{
     complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
     instantiate_visible_gltf_model_scenes, request_hidden_prefab_model_asset_release,
 };
-use model_scene_visibility_and_shadow_projection::project_model_scene_visibility_and_shadow_policy;
+use model_scene_visibility_and_shadow_projection::{
+    project_model_scene_visibility_and_shadow_policy,
+    project_model_scene_visibility_and_shadow_policy_onto_late_primitives,
+};
 use prefab_ambient_light_projection::project_prefab_ambient_light_contributions;
 use prefab_fixed_function_world_lighting_projection::{
     project_prefab_fixed_function_world_lighting_policies, update_fixed_function_world_light_buffer,
@@ -64,6 +67,9 @@ impl Plugin for ModelRenderPlugin {
                     .after(instantiate_visible_gltf_model_scenes),
                 project_model_scene_visibility_and_shadow_policy
                     .after(instantiate_visible_gltf_model_scenes),
+                project_model_scene_visibility_and_shadow_policy_onto_late_primitives
+                    .after(project_model_scene_visibility_and_shadow_policy)
+                    .before(project_authored_model_material_passes),
                 project_authored_model_material_passes
                     .after(project_model_scene_visibility_and_shadow_policy),
                 update_per_draw_effect_transform_semantics

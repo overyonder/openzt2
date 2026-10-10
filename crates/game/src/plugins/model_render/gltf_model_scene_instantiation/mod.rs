@@ -16,6 +16,7 @@ use super::{
     authored_model_material_pass_projection::{
         AdditionalAuthoredModelMaterialPass, AuthoredModelMaterialPassesProjected,
     },
+    model_scene_visibility_and_shadow_projection::ModelSceneVisibilityAndShadowPolicyProjected,
     ModelExpanded,
 };
 
@@ -191,6 +192,9 @@ fn release_hidden_prefab_model_assets_and_render_components(
         GltfMaterialName,
         ModelExpanded,
         AuthoredModelMaterialPassesProjected,
+        // The re-expanded scene spawns new primitives, which need their
+        // render layers and shadow policy projected again.
+        ModelSceneVisibilityAndShadowPolicyProjected,
         HiddenPrefabModelWorldAssetInstanceReleasePending,
     )>();
 }

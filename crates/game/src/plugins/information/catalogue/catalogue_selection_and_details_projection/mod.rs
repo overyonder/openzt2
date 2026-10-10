@@ -173,13 +173,22 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
         {
             continue;
         }
-        let authored_object = world_definitions.find_object(selected_definition);
+        // An adoption variant row (one sex of a species) has no price, biome,
+        // location or conservation status of its own; the panel describes
+        // its species, as the species row does.
+        let variant_species = species
+            .and_then(|species| species.find_variant_with_species(selected_definition))
+            .map(|(species, _)| species);
+        let details_definition = variant_species.map_or(selected_definition, |species| {
+            AssetId(species.world_definition.0)
+        });
+        let authored_object = world_definitions.find_object(details_definition);
         let ui_document = ui_document_roots
             .get(document_owner.0)
             .ok()
             .and_then(|root| ui_document_assets.get(&root.document));
-        let conservation_status_key = species
-            .and_then(|species| species.find(selected_definition))
+        let conservation_status_key = variant_species
+            .or_else(|| species.and_then(|species| species.find(selected_definition)))
             .and_then(|species| {
                 authored_multi_icon_key_for_conservation_status(species.conservation)
             });
@@ -258,6 +267,16 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
                 UiTextPropertyBindingSource::CatalogueEntryName { .. } => {
                     let selected_name = localization
                         .find_plain_localized_text(AssetId(catalogue_entry.name_key.0))
+                        .filter(|name| !name.is_empty())
+                        .or_else(|| {
+                            world_definitions
+                                .catalogue()
+                                .find(|entry| AssetId(entry.definition.0) == details_definition)
+                                .and_then(|entry| {
+                                    localization
+                                        .find_plain_localized_text(AssetId(entry.name_key.0))
+                                })
+                        })
                         .unwrap_or("");
                     replace_projected_ui_text_if_changed(&mut text.0, selected_name);
                 }
@@ -269,7 +288,7 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
                     text.0.clear();
                     if let Some(price) = find_authored_object_or_placeable_price(
                         world_definitions,
-                        selected_definition,
+                        details_definition,
                     ) {
                         let mut formatted_amount = String::new();
                         let _ = localization.write_localized_currency_amount(
@@ -291,7 +310,7 @@ pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purch
                     text.0.clear();
                     if let Some(research) = world_definitions
                         .research()
-                        .find(|research| research.unlocks.contains(&selected_definition))
+                        .find(|research| research.unlocks.contains(&details_definition))
                     {
                         let mut amount = String::new();
                         let _ = localization.write_localized_currency_amount(
