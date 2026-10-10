@@ -179,7 +179,10 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             eighth_turns: turns,
             valid,
         };
-        if state.as_deref() == Some(&next) {
+        if state.as_deref() == Some(&next)
+            && !definitions.is_changed()
+            && !active_definitions.is_changed()
+        {
             continue;
         }
         let plane = plane

@@ -214,6 +214,7 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "UI_SHOW_CHILD_EX"
         | "UI_WIND_ANIMATION"
         | "ZT_ACTIVATE_MODE_HELP"
+        | "ZT_ACTIVATE_UI_BUTTON"
         | "ZT_CANCEL_GENERIC_CONFIRMATION"
         | "ZT_GENERIC_CONFIRMATION_PROCEED" => {
             presentation_command_lowering::lower_presentation_command(
@@ -253,6 +254,7 @@ pub(super) fn lower_authored_ui_event_to_canonical_action(
         | "ZT_CANCEL_EXITCONFIRMATION"
         | "ZT_CONFIRM_EXIT"
         | "ZT_EXITAPP"
+        | "ZT_ESCAPE_KEY"
         | "ZT_EXITTOMAINMENU"
         | "ZT_EXIT_AFTER_SAVE"
         | "ZT_EXIT_DOWNLOADS"

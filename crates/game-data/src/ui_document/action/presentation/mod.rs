@@ -135,3 +135,53 @@ pub enum UiPresentationAction {
         visible: bool,
     },
 }
+
+impl UiPresentationAction {
+    /// Nodes of the acting document that this action names. Actions on
+    /// another document, on roles, or on the owning document itself name none.
+    pub fn local_node_targets_mut(&mut self) -> impl Iterator<Item = &mut AssetId> {
+        let targets: [Option<&mut AssetId>; 2] = match self {
+            Self::ShowDocumentRole { .. }
+            | Self::HideDocumentRole { .. }
+            | Self::SetDocumentNodeVisible { .. }
+            | Self::SetTargetNodeSelectionAndTimedSequencesActive {
+                document_role: Some(_),
+                ..
+            }
+            | Self::PlayDocumentAudioCue { .. }
+            | Self::HideOwningDocument
+            | Self::HideOwningDocumentAfterAlertAcknowledgement
+            | Self::HideOwningDocumentAfterConfirmationDismissal
+            | Self::SetAllEmotePresentationsVisible { .. } => [None, None],
+            Self::CopySourceNodeTextToTargetNode {
+                target_node,
+                source_node,
+            } => [Some(target_node), Some(source_node)],
+            Self::ActivateTargetNodeWithPress { target_node }
+            | Self::SetTargetNodeVisible { target_node, .. }
+            | Self::SetTargetNodeSelectionAndTimedSequencesActive { target_node, .. }
+            | Self::SetTargetNodeInteractionEnabled { target_node, .. }
+            | Self::SetTargetNodeIntegerValue { target_node, .. }
+            | Self::ChangeTargetNodeSliderOrScrollPositionByDelta { target_node, .. }
+            | Self::SetTargetNodeImageSourceRectangle { target_node, .. }
+            | Self::SetTargetNodeLayoutPosition { target_node, .. }
+            | Self::SetTargetNodeTextFromLocalizationKey { target_node, .. }
+            | Self::SetTargetNodeExpanded { target_node, .. }
+            | Self::SelectTargetNode { target_node }
+            | Self::WindTargetShowHideAnimationToCurrentDirectionBoundary { target_node }
+            | Self::AdvanceTargetNodeMessageCursor { target_node }
+            | Self::SetTargetNodeLayoutSize { target_node, .. }
+            | Self::SetTargetNodeImageOverride { target_node, .. }
+            | Self::SetTargetNodeModal { target_node, .. }
+            | Self::SetTargetNodeTooltip { target_node, .. }
+            | Self::SetTargetNodeCursor { target_node, .. }
+            | Self::SetTargetNodeTextLiteral { target_node, .. }
+            | Self::SetTargetNodeHoverPresentation { target_node, .. }
+            | Self::ActivateSelectedChildOfTargetNode { target_node }
+            | Self::FocusPreviousOrNextSiblingOfTargetNode { target_node, .. }
+            | Self::ShowOnlyNamedChildOfTargetNode { target_node, .. }
+            | Self::MarkTargetNodeForQuery { target_node } => [Some(target_node), None],
+        };
+        targets.into_iter().flatten()
+    }
+}

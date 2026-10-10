@@ -182,7 +182,8 @@ pub(super) fn parse_authored_ui_hotkeys(node: &OrderedSourceDocumentNode) -> Vec
             }
             SourceUiHotkey {
                 trigger: match child.name.as_str() {
-                    "down" | "char" => SourceUiHotkeyTrigger::Down,
+                    "down" => SourceUiHotkeyTrigger::Down,
+                    "char" => SourceUiHotkeyTrigger::Character,
                     "up" => SourceUiHotkeyTrigger::Up,
                     other => SourceUiHotkeyTrigger::Unknown(other.to_owned()),
                 },

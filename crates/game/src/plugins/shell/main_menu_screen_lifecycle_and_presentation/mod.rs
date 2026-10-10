@@ -16,7 +16,8 @@ use crate::{
 };
 
 use super::{
-    shell_screen_presentation_types::MainMenuLogoFallback, shell_selection_types::ShellScreen,
+    shell_screen_presentation_types::MainMenuLogoFallback,
+    shell_selection_types::{ShellScreen, ShellSelection},
 };
 
 const MAIN_MENU_LOGO_TEXTURE_PATH: &str = "ui/shared/zoo2logo.dds";
@@ -25,9 +26,13 @@ pub(super) fn create_main_menu_screen_and_request_profile_index(
     mut commands: Commands,
     assets: Res<AssetServer>,
     old_shell_screens: Query<(Entity, &ShellScreen)>,
+    mut selection: ResMut<ShellSelection>,
     mut requested_ui_roles: ResMut<UiRoleRequests>,
     mut profile_index_load_requests: MessageWriter<LoadProfileIndex>,
 ) {
+    // Menu play buttons choose a mode. Retaining the previous map would route
+    // their activation to a world-start request before map selection opens.
+    *selection = ShellSelection::default();
     for (entity, _) in &old_shell_screens {
         commands.entity(entity).despawn();
     }

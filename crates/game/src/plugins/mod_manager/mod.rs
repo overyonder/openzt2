@@ -1,4 +1,4 @@
-mod mod_manager_types;
+pub(crate) mod mod_manager_types;
 mod mod_manager_ui_presentation;
 
 use bevy::prelude::*;
@@ -23,6 +23,7 @@ impl Plugin for ModManagerPlugin {
             .add_systems(
                 Update,
                 (
+                    mod_manager_ui_presentation::apply_mod_manager_visibility_controls,
                     mod_manager_ui_presentation::synchronize_mod_manager_visibility_and_reload_input_blocking,
                     mod_manager_ui_presentation::toggle_selected_asset_archive_enabled_state,
                     mod_manager_ui_presentation::finish_asset_archive_reload_and_request_main_menu_document_rebuild,

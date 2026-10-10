@@ -8,82 +8,134 @@ use crate::{
     plugins::shell::{
         shell_navigation_request_types::ReturnToMainMenu, shell_selection_types::ShellScreen,
     },
+    plugins::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled,
 };
 
 use super::mod_manager_types::{
-    AssetArchiveEnabledStateCheckbox, AssetArchiveReloadState, ModManagerOverlayRoot,
-    ModManagerReloadInputBlocker,
+    AssetArchiveEnabledStateCheckbox, AssetArchiveReloadState, ModManagerOverlayButton,
+    ModManagerOverlayRoot, ModManagerReloadInputBlocker,
 };
 
 pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
     mut commands: Commands,
     asset_archives: Res<AssetArchives>,
 ) {
+    let mut overlay = commands.spawn((
+        Name::new("mod manager"),
+        ModManagerOverlayRoot::default(),
+        Pickable::default(),
+        Visibility::Hidden,
+        Node {
+            display: Display::None,
+            position_type: PositionType::Absolute,
+            top: px(24),
+            right: px(24),
+            min_width: px(300),
+            padding: UiRect::all(px(16)),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            ..default()
+        },
+        BackgroundColor(Color::srgba(0.04, 0.04, 0.05, 0.96)),
+        GlobalZIndex(1_000),
+    ));
+    let overlay_entity = overlay.id();
+    overlay.with_children(|overlay_root| {
+        overlay_root.spawn((
+            Text::new("Z2F priority — highest first"),
+            TextFont::from_font_size(20.0),
+            TextColor(Color::WHITE),
+        ));
+        overlay_root
+            .spawn((
+                Name::new("Close Mods"),
+                Button,
+                UiInteractionEnabled(true),
+                ModManagerOverlayButton {
+                    overlay: overlay_entity,
+                    open: false,
+                },
+                Node {
+                    padding: UiRect::axes(px(8), px(5)),
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+            ))
+            .with_child((
+                Text::new("Close"),
+                TextFont::from_font_size(17.0),
+                TextColor(Color::WHITE),
+            ));
+        for (archive_status_index, archive_status) in asset_archives
+            .enabled_archive_statuses()
+            .into_iter()
+            .enumerate()
+            .rev()
+        {
+            let mut archive_checkbox_row = overlay_root.spawn((
+                Name::new("archive checkbox"),
+                AssetArchiveEnabledStateCheckbox {
+                    archive_status_index,
+                },
+                Node {
+                    width: percent(100),
+                    padding: UiRect::axes(px(8), px(5)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+            ));
+            if !archive_status.is_required_base_archive {
+                archive_checkbox_row.insert((Button, UiInteractionEnabled(true)));
+            }
+            archive_checkbox_row.with_child((
+                Text::new(format_asset_archive_enabled_state_checkbox_label(
+                    archive_status.is_enabled,
+                    archive_status.is_required_base_archive,
+                    &archive_status.archive_name.to_string_lossy(),
+                )),
+                TextFont::from_font_size(17.0),
+                TextColor(if archive_status.is_required_base_archive {
+                    Color::srgb(0.65, 0.65, 0.68)
+                } else {
+                    Color::WHITE
+                }),
+            ));
+        }
+    });
     commands
         .spawn((
-            Name::new("mod manager"),
-            ModManagerOverlayRoot,
+            Name::new("Open Mods"),
+            Button,
+            UiInteractionEnabled(true),
+            ModManagerOverlayButton {
+                overlay: overlay_entity,
+                open: true,
+            },
             Node {
                 display: Display::None,
                 position_type: PositionType::Absolute,
                 top: px(24),
                 right: px(24),
-                min_width: px(300),
                 padding: UiRect::all(px(16)),
-                flex_direction: FlexDirection::Column,
-                row_gap: px(8),
                 ..default()
             },
             BackgroundColor(Color::srgba(0.04, 0.04, 0.05, 0.96)),
             GlobalZIndex(1_000),
+            Visibility::Hidden,
         ))
-        .with_children(|overlay_root| {
-            overlay_root.spawn((
-                Text::new("Z2F priority — highest first"),
-                TextFont::from_font_size(20.0),
-                TextColor(Color::WHITE),
-            ));
-            for (archive_status_index, archive_status) in asset_archives
-                .enabled_archive_statuses()
-                .into_iter()
-                .enumerate()
-                .rev()
-            {
-                let mut archive_checkbox_row = overlay_root.spawn((
-                    Name::new("archive checkbox"),
-                    AssetArchiveEnabledStateCheckbox {
-                        archive_status_index,
-                    },
-                    Node {
-                        width: percent(100),
-                        padding: UiRect::axes(px(8), px(5)),
-                        ..default()
-                    },
-                    BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
-                ));
-                if !archive_status.is_required_base_archive {
-                    archive_checkbox_row.insert(Button);
-                }
-                archive_checkbox_row.with_child((
-                    Text::new(format_asset_archive_enabled_state_checkbox_label(
-                        archive_status.is_enabled,
-                        archive_status.is_required_base_archive,
-                        &archive_status.archive_name.to_string_lossy(),
-                    )),
-                    TextFont::from_font_size(17.0),
-                    TextColor(if archive_status.is_required_base_archive {
-                        Color::srgb(0.65, 0.65, 0.68)
-                    } else {
-                        Color::WHITE
-                    }),
-                ));
-            }
-        });
+        .with_child((
+            Text::new("Mods"),
+            TextFont::from_font_size(20.0),
+            TextColor(Color::WHITE),
+        ));
     commands
         .spawn((
             Name::new("mod reload input blocker"),
             ModManagerReloadInputBlocker,
             Button,
+            UiInteractionEnabled(true),
+            Visibility::Hidden,
             Node {
                 display: Display::None,
                 position_type: PositionType::Absolute,
@@ -103,6 +155,30 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
             TextFont::from_font_size(24.0),
             TextColor(Color::WHITE),
         ));
+}
+
+pub(super) fn apply_mod_manager_visibility_controls(
+    phase: Res<State<GamePhase>>,
+    reload_state: Res<AssetArchiveReloadState>,
+    shell_screens: Query<&ShellScreen>,
+    controls: Query<(&ModManagerOverlayButton, &Interaction), Changed<Interaction>>,
+    mut overlays: Query<&mut ModManagerOverlayRoot>,
+) {
+    if *phase.get() != GamePhase::MainMenu
+        || !shell_screens
+            .iter()
+            .any(|screen| *screen == ShellScreen::MainMenu)
+        || reload_state.is_in_progress()
+    {
+        return;
+    }
+    for (control, interaction) in &controls {
+        if *interaction == Interaction::Pressed {
+            if let Ok(mut overlay) = overlays.get_mut(control.overlay) {
+                overlay.is_open = control.open;
+            }
+        }
+    }
 }
 
 pub(super) fn toggle_selected_asset_archive_enabled_state(
@@ -214,17 +290,25 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
     reload_state: Res<AssetArchiveReloadState>,
     shell_screens: Query<&ShellScreen>,
     mut mod_manager_overlay_roots: Query<
-        &mut Node,
+        (&ModManagerOverlayRoot, &mut Node, &mut Visibility),
         (
             With<ModManagerOverlayRoot>,
             Without<ModManagerReloadInputBlocker>,
         ),
     >,
+    mut visibility_controls: Query<
+        (&ModManagerOverlayButton, &mut Node, &mut Visibility),
+        (
+            Without<ModManagerOverlayRoot>,
+            Without<ModManagerReloadInputBlocker>,
+        ),
+    >,
     mut reload_input_blockers: Query<
-        &mut Node,
+        (&mut Node, &mut Visibility),
         (
             With<ModManagerReloadInputBlocker>,
             Without<ModManagerOverlayRoot>,
+            Without<ModManagerOverlayButton>,
         ),
     >,
 ) {
@@ -232,20 +316,55 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
         && shell_screens
             .iter()
             .any(|screen| *screen == ShellScreen::MainMenu);
-    for mut mod_manager_overlay_root in &mut mod_manager_overlay_roots {
-        mod_manager_overlay_root.display = if mod_manager_is_available {
+    for (overlay, mut node, mut visibility) in &mut mod_manager_overlay_roots {
+        let display = if mod_manager_is_available && overlay.is_open {
             Display::Flex
         } else {
             Display::None
         };
+        if node.display != display {
+            node.display = display;
+        }
+        visibility.set_if_neq(if display == Display::Flex {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
-    for mut reload_input_blocker in &mut reload_input_blockers {
-        reload_input_blocker.display = if mod_manager_is_available && reload_state.is_in_progress()
-        {
+    for (control, mut node, mut visibility) in &mut visibility_controls {
+        if control.open {
+            let is_closed = mod_manager_overlay_roots
+                .get(control.overlay)
+                .is_ok_and(|(overlay, _, _)| !overlay.is_open);
+            let display = if mod_manager_is_available && is_closed {
+                Display::Flex
+            } else {
+                Display::None
+            };
+            if node.display != display {
+                node.display = display;
+            }
+            visibility.set_if_neq(if display == Display::Flex {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            });
+        }
+    }
+    for (mut reload_input_blocker, mut visibility) in &mut reload_input_blockers {
+        let display = if mod_manager_is_available && reload_state.is_in_progress() {
             Display::Flex
         } else {
             Display::None
         };
+        if reload_input_blocker.display != display {
+            reload_input_blocker.display = display;
+        }
+        visibility.set_if_neq(if display == Display::Flex {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 

@@ -28,25 +28,26 @@ impl InGameOptionsOverlay {
     }
 }
 
-/// Restores the previous pause state after the options modal finishes hiding.
+/// Restores the previous pause state after the options modal finishes hiding,
+/// and removes the menu so the next opening starts from its authored state.
+/// The menu belongs with the game view, so what it opened stays open.
 pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause_state(
     mut commands: Commands,
     overlays: Query<(Entity, &InGameOptionsOverlay)>,
-    roots: Query<(Entity, &ChildOf, &UiDocumentRoot)>,
+    roots: Query<(Entity, &UiDocumentRoot)>,
     documents: Res<Assets<UiDocumentAsset>>,
     modal_nodes: Query<(&UiAuthoredModalPresentation, &UiDocumentOwner, &Visibility)>,
     mut set_paused: MessageWriter<SetSimulationPaused>,
 ) {
     for (overlay_entity, overlay_state) in &overlays {
-        let Some(document_root_entity) = roots.iter().find_map(|(root, parent, document)| {
-            (parent.parent() == overlay_entity
-                && documents.get(&document.document).is_some_and(|asset| {
-                    matches!(
-                        &asset.canonical_ui_document().role,
-                        UiDocumentRole::InGameOptions
-                    )
-                }))
-            .then_some(root)
+        // One options menu is open at a time; it may still be loading.
+        let Some(document_root_entity) = roots.iter().find_map(|(root, document)| {
+            documents
+                .get(&document.document)
+                .is_some_and(|asset| {
+                    asset.canonical_ui_document().role == UiDocumentRole::InGameOptions
+                })
+                .then_some(root)
         }) else {
             continue;
         };
@@ -58,6 +59,7 @@ pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause
         set_paused.write(SetSimulationPaused(
             overlay_state.previous_simulation_paused_state,
         ));
+        commands.entity(document_root_entity).despawn();
         commands.entity(overlay_entity).despawn();
     }
 }

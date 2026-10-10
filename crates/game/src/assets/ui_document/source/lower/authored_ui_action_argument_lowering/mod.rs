@@ -10,9 +10,11 @@ use openzt2_game_data::ui_document::action::camera::{
 };
 use openzt2_game_data::ui_document::action::information::InformationSortField;
 use openzt2_game_data::ui_document::action::staff_management::UiWorkerDuty;
-use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
+use openzt2_game_data::ui_document::node::UiNodeDefinition;
 use openzt2_game_data::AssetId;
+use std::collections::BTreeMap;
 use std::io;
 
 pub(super) fn trigger(value: &SourceUiEventTrigger) -> UiTrigger {
@@ -30,6 +32,8 @@ pub(super) fn trigger(value: &SourceUiEventTrigger) -> UiTrigger {
     }
 }
 
+/// The node an event names. A name that repeats in the document is settled
+/// once the tree is complete, by `resolve_repeated_target_names_to_nearest_scope`.
 pub(super) fn target_node(
     event: &SourceUiEvent,
     role: UiDocumentRole,
@@ -42,6 +46,93 @@ pub(super) fn target_node(
         .map(|target| UiDocumentRole::node_id(role, target))
         .unwrap_or(current)
 }
+
+/// Repeated names, such as every confirm.xml dialog's "cancel", receive
+/// indexed ids, so a name alone reaches only its first node. The original
+/// looks a name up from the node acting on it: its own subtree first, then
+/// each enclosing subtree outwards. Point every same-document target of a
+/// repeated name at that nearest node.
+pub(super) fn resolve_repeated_target_names_to_nearest_scope(
+    nodes: &mut [UiNodeDefinition],
+    role: UiDocumentRole,
+) {
+    let mut named = BTreeMap::<AssetId, Vec<u32>>::new();
+    for (index, node) in nodes.iter().enumerate() {
+        named
+            .entry(UiDocumentRole::node_id(role, &node.name))
+            .or_default()
+            .push(index as u32);
+    }
+    named.retain(|_, candidates| candidates.len() > 1);
+    if named.is_empty() {
+        return;
+    }
+    let parent = |nodes: &[UiNodeDefinition], index: u32| {
+        nodes
+            .get(index as usize)
+            .map(|node| node.parent)
+            .filter(|parent| (*parent as usize) < nodes.len())
+    };
+    let encloses = |nodes: &[UiNodeDefinition], scope: u32, mut node: u32| loop {
+        if node == scope {
+            break true;
+        }
+        match parent(nodes, node) {
+            Some(next) => node = next,
+            None => break false,
+        }
+    };
+    let mut resolved = Vec::new();
+    for (actor, node) in nodes.iter().enumerate() {
+        let actor = actor as u32;
+        let records = node
+            .actions
+            .iter()
+            .chain(node.hotkeys.iter().map(|hotkey| &hotkey.action))
+            .enumerate();
+        for (record_index, record) in records {
+            let UiActionRecord::Presentation(record) = record else {
+                continue;
+            };
+            let mut action = record.action.clone();
+            for (target_index, target) in action.local_node_targets_mut().enumerate() {
+                let Some(candidates) = named.get(&*target) else {
+                    continue;
+                };
+                let nearest = std::iter::successors(Some(actor), |scope| parent(nodes, *scope))
+                    .find_map(|scope| {
+                        candidates
+                            .iter()
+                            .copied()
+                            .find(|candidate| encloses(nodes, scope, *candidate))
+                    });
+                if let Some(nearest) = nearest {
+                    resolved.push((
+                        actor,
+                        record_index,
+                        target_index,
+                        nodes[nearest as usize].id,
+                    ));
+                }
+            }
+        }
+    }
+    for (actor, record_index, target_index, id) in resolved {
+        let node = &mut nodes[actor as usize];
+        let action_count = node.actions.len();
+        let record = if record_index < action_count {
+            &mut node.actions[record_index]
+        } else {
+            &mut node.hotkeys[record_index - action_count].action
+        };
+        if let UiActionRecord::Presentation(record) = record {
+            if let Some(target) = record.action.local_node_targets_mut().nth(target_index) {
+                *target = id;
+            }
+        }
+    }
+}
+
 pub(super) fn cross_document_role(
     event: &SourceUiEvent,
     input: &AuthoredUiDocument,

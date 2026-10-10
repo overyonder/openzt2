@@ -24,7 +24,7 @@ use openzt2_game_data::{
 
 pub(super) fn project_selected_object_sale_confirmation(
     selected: Res<SelectedEntity>,
-    objects: Query<(&DefinitionId, Ref<CurrentSellQuote>)>,
+    objects: Query<(&DefinitionId, Option<&Name>, Ref<CurrentSellQuote>)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -35,7 +35,7 @@ pub(super) fn project_selected_object_sale_confirmation(
     let quote_removed = removed_quotes.read().count() != 0;
     let object = selected.0.and_then(|entity| objects.get(entity).ok());
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
-    let definition = object.as_ref().and_then(|(definition, _)| {
+    let definition = object.as_ref().and_then(|(definition, _, _)| {
         active_definitions
             .get(&definitions)?
             .find_object(definition.0)
@@ -55,12 +55,14 @@ pub(super) fn project_selected_object_sale_confirmation(
             && !active_definitions.is_changed()
             && !localizations.is_changed()
             && !active_localization.is_changed()
-            && !object.as_ref().is_some_and(|(_, quote)| quote.is_changed())
+            && !object
+                .as_ref()
+                .is_some_and(|(_, _, quote)| quote.is_changed())
         {
             continue;
         }
         text.0.clear();
-        let Some((_, quote)) = &object else {
+        let Some((_, live_name, quote)) = &object else {
             continue;
         };
         let Some(localization) = localization else {
@@ -68,8 +70,12 @@ pub(super) fn project_selected_object_sale_confirmation(
         };
         match &binding.0 {
             UiTextPropertyBindingSource::SelectedEntitySaleConfirmation => {
-                let name = definition.and_then(|definition| {
-                    localization.find_plain_localized_text(definition.name_key)
+                // Placed objects often carry their own name, which the information
+                // panel already shows; use it before the catalogue name.
+                let name = live_name.map(Name::as_str).or_else(|| {
+                    definition.and_then(|definition| {
+                        localization.find_plain_localized_text(definition.name_key)
+                    })
                 });
                 if let Some(name) = name {
                     let _ = localization.write_localized_text_with_format_arguments(

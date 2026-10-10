@@ -164,6 +164,7 @@ pub(super) fn route_authored_shell_ui_actions_to_navigation_requests(
                 | UiShellAction::MarkExitConfirmationPending
                 | UiShellAction::ReturnToMainMenu
                 | UiShellAction::ShowInGameOptionsOverlay
+                | UiShellAction::OpenInGameOptionsFromOverheadEscape
                 | UiShellAction::ReturnToMainMenuAfterWorldSnapshotSave
                 | UiShellAction::ExitApplicationAfterWorldSnapshotSave
                 | UiShellAction::CaptureScreenshotFromSoleActive3dCamera => {}

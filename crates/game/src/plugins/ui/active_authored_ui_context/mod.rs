@@ -39,13 +39,18 @@ impl ActiveAuthoredUiContext<'_, '_> {
         self.visibility
             .get(entity)
             .is_ok_and(|visible| visible.get())
-            && self.ancestors(entity).all(|ancestor| {
-                !self.enabled.get(ancestor).is_ok_and(|enabled| !enabled.0)
-                    && !self
-                        .focusables
-                        .get(ancestor)
-                        .is_ok_and(|focusable| !focusable.enabled)
-            })
+            && self.enabled(entity)
+    }
+
+    /// No disabled node on the path to the root, whether or not it is shown.
+    pub(crate) fn enabled(&self, entity: Entity) -> bool {
+        self.ancestors(entity).all(|ancestor| {
+            !self.enabled.get(ancestor).is_ok_and(|enabled| !enabled.0)
+                && !self
+                    .focusables
+                    .get(ancestor)
+                    .is_ok_and(|focusable| !focusable.enabled)
+        })
     }
 
     pub(crate) fn top_modal(&self) -> Option<Entity> {
@@ -143,4 +148,25 @@ pub(crate) fn capture_authored_modal_for_input_frame(
     mut capture: ResMut<AuthoredModalInputCapture>,
 ) {
     capture.0 = context.top_modal();
+}
+
+/// Whether the zoo view was in the original overhead mode when this input
+/// frame began: no construction tool and no immersive mode. Those modes own
+/// Escape themselves, and their own handling ends them before UI routing runs.
+#[derive(Resource, Default)]
+pub(crate) struct OverheadModeInputCapture(pub(crate) bool);
+
+pub(crate) fn capture_overhead_mode_for_input_frame(
+    tool: Option<
+        Res<crate::plugins::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
+    >,
+    immersive_modes: Query<
+        (),
+        With<crate::plugins::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode>,
+    >,
+    mut capture: ResMut<OverheadModeInputCapture>,
+) {
+    capture.0 = tool.is_some_and(|tool| {
+        *tool == crate::plugins::construction::construction_tool_and_placement_policy_types::ConstructionTool::Inspect
+    }) && immersive_modes.is_empty();
 }

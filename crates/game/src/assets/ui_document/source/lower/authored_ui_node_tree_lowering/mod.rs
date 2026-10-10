@@ -33,6 +33,9 @@ use openzt2_game_data::ui_document::action::audio_settings::{
 use openzt2_game_data::ui_document::action::information::{
     UiInformationAction, UiInformationActionRecord,
 };
+use openzt2_game_data::ui_document::action::presentation::{
+    UiPresentationAction, UiPresentationActionRecord,
+};
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::finance_table::UiFinanceTableCategoryDefinition;
@@ -217,6 +220,17 @@ pub(super) fn lower_node(
             .push(UiActionRecord::Information(UiInformationActionRecord {
                 trigger: UiTrigger::Press,
                 action: UiInformationAction::OpenContextEncyclopediaEntry,
+            }));
+    }
+    // The confirmation document's root is one click-catching dimmer shared by
+    // its dialogs. Each dialog hides only itself when answered, so the dimmer
+    // closes with it.
+    if input.role == UiDocumentRole::Modal && parent == 0 && effective.modal == Some(true) {
+        output
+            .actions
+            .push(UiActionRecord::Presentation(UiPresentationActionRecord {
+                trigger: UiTrigger::Hide,
+                action: UiPresentationAction::HideOwningDocumentAfterConfirmationDismissal,
             }));
     }
     if input

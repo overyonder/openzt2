@@ -27,6 +27,7 @@ impl Plugin for GameInputPlugin {
             .init_resource::<PrimaryPointerInputState>()
             .init_resource::<ActiveInputDevice>()
             .init_resource::<crate::plugins::ui::active_authored_ui_context::AuthoredModalInputCapture>()
+            .init_resource::<crate::plugins::ui::active_authored_ui_context::OverheadModeInputCapture>()
             .add_message::<ActionRequest>()
             .add_message::<RebindGameActionInput>()
             .add_message::<GameActionInputRebindingRejection>()
@@ -34,6 +35,7 @@ impl Plugin for GameInputPlugin {
                 PreUpdate,
                 (
                     crate::plugins::ui::active_authored_ui_context::capture_authored_modal_for_input_frame,
+                    crate::plugins::ui::active_authored_ui_context::capture_overhead_mode_for_input_frame,
                     keyboard_and_mouse_input_translation::translate_keyboard_and_mouse_state_to_game_actions_and_control_axes,
                     gamepad_input_translation::translate_connected_gamepad_state_to_game_actions_and_control_axes,
                     controller_pointer::project_controller_pointer,

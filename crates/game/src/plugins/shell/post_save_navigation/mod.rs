@@ -8,6 +8,7 @@ use crate::plugins::persistence::{
 };
 
 use super::shell_navigation_request_types::{ExitApplication, ReturnToMainMenu};
+use crate::plugins::ui::save_dialog_cancellation::SaveDialogCancellationRequests;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ReturnToMainMenuAfterSave;
@@ -18,6 +19,7 @@ pub(super) struct ExitApplicationAfterSave;
 /// Completes pending navigation only after persistence confirms the save.
 pub(super) fn complete_or_cancel_pending_navigation_after_save_result(
     mut commands: Commands,
+    mut cancellations: SaveDialogCancellationRequests,
     mut completed: MessageReader<WorldSnapshotSavedToSlot>,
     mut failed: MessageReader<WorldSnapshotPersistenceFailed>,
     return_to_menu: Query<Entity, With<ReturnToMainMenuAfterSave>>,
@@ -25,11 +27,30 @@ pub(super) fn complete_or_cancel_pending_navigation_after_save_result(
     mut return_to_main_menu: MessageWriter<ReturnToMainMenu>,
     mut exit_application: MessageWriter<ExitApplication>,
 ) {
+    let cancelled_owners = cancellations.read_cancelled_lifecycle_owners();
+    for entity in &return_to_menu {
+        if cancelled_owners.contains(&entity) {
+            commands
+                .entity(entity)
+                .remove::<ReturnToMainMenuAfterSave>();
+        }
+    }
+    for entity in &exit_after_save {
+        if cancelled_owners.contains(&entity) {
+            commands.entity(entity).remove::<ExitApplicationAfterSave>();
+        }
+    }
     if completed.read().next().is_some() {
-        if !return_to_menu.is_empty() {
+        if return_to_menu
+            .iter()
+            .any(|entity| !cancelled_owners.contains(&entity))
+        {
             return_to_main_menu.write(ReturnToMainMenu);
         }
-        if !exit_after_save.is_empty() {
+        if exit_after_save
+            .iter()
+            .any(|entity| !cancelled_owners.contains(&entity))
+        {
             exit_application.write(ExitApplication);
         }
         remove_pending_navigation_components(&mut commands, &return_to_menu, &exit_after_save);

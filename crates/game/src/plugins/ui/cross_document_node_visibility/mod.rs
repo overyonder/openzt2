@@ -76,9 +76,8 @@ pub(super) fn apply_pending_cross_document_node_visibility(
             .then_some(entity)
         });
         let Some(root) = root else {
-            if !pending.visible {
-                commands.entity(request).despawn();
-            }
+            // A preceding show may still be loading. Keep its later hide until
+            // projection so the completed load cannot resurrect the child.
             continue;
         };
         let target = nodes

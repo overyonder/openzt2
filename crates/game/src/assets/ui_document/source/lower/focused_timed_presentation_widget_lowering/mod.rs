@@ -3,7 +3,6 @@
 use crate::assets::source_document::ui::model::SourceUiTimedEvent;
 use crate::assets::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::assets::ui_document::source::lower::authored_ui_event_action_lowering;
-use crate::assets::ui_document::source::lower::authored_ui_event_collection_lowering::inherited_child;
 use crate::assets::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::assets::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
@@ -125,10 +124,9 @@ fn lower_authored_timed_sequence_to_canonical_widget_record(
                 input,
             )?)
             .ok_or_else(|| invalid_at(input, "timed UI sequence duration overflow"))?;
-        let event = if timed.event.message == "UI_CHILD" && timed.event.child.is_some() {
-            inherited_child(&timed.event, input)?
-        } else {
-            timed.event.clone()
+        let event = match timed.event.child.as_deref() {
+            Some(child) if timed.event.message == "UI_CHILD" => child.clone(),
+            _ => timed.event.clone(),
         };
         let Some(UiActionRecord::Presentation(action)) =
             authored_ui_event_action_lowering::lower_authored_ui_event_to_canonical_action(

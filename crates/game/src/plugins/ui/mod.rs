@@ -70,8 +70,10 @@ mod notification;
 pub(crate) mod notification_contracts;
 pub(crate) mod picking;
 pub(crate) mod projection;
+pub(crate) mod save_dialog_cancellation;
 pub(crate) mod scenario_objective_status_visual_classification;
 pub(crate) mod scrollbar_value_and_scroll_position_synchronization;
+mod single_receiver_ui_cancellation;
 pub(crate) mod slider;
 pub(crate) mod ui_document_asset_load_failure;
 pub(crate) mod ui_document_lifecycle_contracts;
@@ -83,15 +85,12 @@ use self::scrollbar_value_and_scroll_position_synchronization as scrollbar_synch
 use bevy::prelude::*;
 
 use self::ui_document_lifecycle_contracts::{
-    HideUiDocument, ShowUiDocument, ShowUiRole, UiRoleRequests,
+    HideUiDocument, InGameUiOwner, ShowUiDocument, ShowUiRole, UiRoleRequests,
 };
 use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::GameSet;
 
 pub struct GameUiPlugin;
-
-#[derive(Component)]
-struct InGameUiOwner;
 
 #[derive(Component)]
 struct ApplicationUiOwner;
@@ -221,6 +220,8 @@ impl Plugin for GameUiPlugin {
                     ),
                     (
                         controller_ui_action_routing::route_controller_authored_actions,
+                        single_receiver_ui_cancellation::dismiss_one_active_ui_activity_from_cancel_requests
+                            .after(authored_ui_interaction_enabled_state_application::apply_authored_ui_node_interaction_enabled_state_changes),
                         authored_ui_focus_navigation_and_activation::activate_focused_authored_ui_node_from_confirm_or_cancel
                             .after(authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions),
                         authored_ui_focus_navigation_and_activation::present_controller_authored_ui_focus
