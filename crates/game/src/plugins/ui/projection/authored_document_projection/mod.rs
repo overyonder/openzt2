@@ -241,8 +241,7 @@ pub(crate) fn project_document(
                 running: duration_ms > 0.0
                     && (authored_animation || elapsed_ms > 0.0 && elapsed_ms < duration_ms),
                 base_rect: record.rect.map(|value| value),
-                start_rect: animation.start_rect.map(|value| value),
-                end_rect: animation.end_rect.map(|value| value),
+                rect_intervals: animation.rect_intervals,
                 animates_color: animation.animates_color,
                 affects_text_color: animation.affects_text_color,
                 start_color: animation.start_color,

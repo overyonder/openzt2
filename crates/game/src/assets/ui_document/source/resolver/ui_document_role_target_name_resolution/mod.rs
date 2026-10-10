@@ -75,3 +75,34 @@ pub(super) fn collect_unique_authored_node_name_targets_by_ui_document_role(
         .filter_map(|(name, role)| role.map(|role| (name, role)))
         .collect())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::assets::source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    };
+
+    #[test]
+    fn entity_information_resolves_its_confirmation_dialogs_to_the_confirmation_document() {
+        let parsed = parse_blue_fang_source_document(
+            AssetPath::new("ui/layout/entityinfo.xml"),
+            br#"<UILayout name="entity info"><children><UIButton name="Sell"/></children></UILayout>"#,
+        )
+        .unwrap();
+        let sources = [(
+            "ui/layout/entityinfo.xml".to_owned(),
+            SourceUiDocument::parse(&parsed),
+        )]
+        .into();
+        let targets = collect_unique_authored_node_name_targets_by_ui_document_role(
+            &sources,
+            &SelectedUiSourceResolutionProfile::for_primary_source_path("ui/layout/entityinfo.xml"),
+        )
+        .unwrap();
+        for dialog in ["delete_object_confirmation", "fire_staff_confirmation"] {
+            assert_eq!(targets.get(dialog), Some(&UiDocumentRole::Modal));
+        }
+        assert_eq!(targets.get("sell"), Some(&UiDocumentRole::EntityInfo));
+    }
+}

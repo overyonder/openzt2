@@ -226,6 +226,10 @@ pub(in crate::assets::ui_document::source) fn lower_ui_document(
         &mut output,
     )?;
     output.dependencies.remove(&[0; 16]);
+    super::authored_ui_action_argument_lowering::resolve_repeated_target_names_to_nearest_scope(
+        &mut output.nodes,
+        input.role,
+    );
 
     let gameplay_interaction_cursors = input
         .interaction_cursors

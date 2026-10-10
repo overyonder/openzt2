@@ -141,11 +141,7 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
     scopes: Query<(Entity, &UiFocusScope)>,
     focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
     context: ActiveAuthoredUiContext,
-    cancel_bindings: Query<(
-        Entity,
-        &UiAuthoredHotkeyKeyboardActivationBinding,
-        &UiDocumentOwner,
-    )>,
+    cancel_bindings: Query<(&UiAuthoredHotkeyKeyboardActivationBinding, &UiDocumentOwner)>,
     nodes: Query<(
         &UiFocusable,
         &UiDocumentOwner,
@@ -164,13 +160,18 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
         if !matches!(request.action, GameAction::Confirm | GameAction::Cancel) {
             continue;
         }
+        if request.action == GameAction::Cancel
+            && matches!(request.source, ActionSource::Controller(_))
+        {
+            continue;
+        }
         for (root, scope) in &scopes {
             if Some(root) != active_root {
                 continue;
             }
             if request.action == GameAction::Cancel {
                 let mut has_authored_cancel = false;
-                for (node, binding, owner) in &cancel_bindings {
+                for (binding, owner) in &cancel_bindings {
                     if context.document_scope(owner.0) != root
                         || !binding.is_cancel_activation()
                         || !context.hotkey_receiver_is_eligible(
@@ -183,14 +184,7 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
                         continue;
                     }
                     has_authored_cancel = true;
-                    // Physical keyboard events already activate these proxies.
-                    if matches!(request.source, ActionSource::Controller(_)) {
-                        activated.write(UiNodeActivated {
-                            node,
-                            source: request.source,
-                            trigger: UiTrigger::Press,
-                        });
-                    }
+                    // Single-receiver cancellation activates this binding.
                 }
                 if has_authored_cancel {
                     continue;

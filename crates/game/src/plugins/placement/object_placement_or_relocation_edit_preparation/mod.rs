@@ -116,6 +116,14 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             );
             continue;
         };
+        if !permission.prefab_ready {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::AuthoredRule(preview.definition),
+            );
+            continue;
+        }
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             reject_object_placement_edit_preparation(

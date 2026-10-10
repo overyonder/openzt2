@@ -158,8 +158,12 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         ));
         if !animate || start_animation {
             node.position_type = PositionType::Absolute;
-            node.left = px(authored_position.x + animation.base_rect[0] + animation.end_rect[0]);
-            node.top = px(authored_position.y + animation.base_rect[1] + animation.end_rect[1]);
+            node.left = px(authored_position.x
+                + animation.base_rect[0]
+                + animation.rect_intervals[0].map_or(animation.base_rect[0], |[_, end]| end));
+            node.top = px(authored_position.y
+                + animation.base_rect[1]
+                + animation.rect_intervals[1].map_or(animation.base_rect[1], |[_, end]| end));
             node.width = px(animation.base_rect[2]);
             node.height = px(animation.base_rect[3]);
         }

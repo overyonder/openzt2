@@ -22,6 +22,18 @@ pub(crate) struct UiDocumentAsset {
 }
 
 impl UiDocumentAsset {
+    #[cfg(test)]
+    pub(crate) fn from_test_document(canonical_ui_document: UiDocument) -> Self {
+        Self {
+            canonical_ui_document,
+            texture_image_handles: Box::new([]),
+            interactive_texture_metadata_handles: Box::new([]),
+            scene_prefab_handles: Box::new([]),
+            nested_ui_document_handles: Box::new([]),
+            audio_source_handles: Box::new([]),
+        }
+    }
+
     pub(crate) fn canonical_ui_document(&self) -> &UiDocument {
         &self.canonical_ui_document
     }

@@ -9,7 +9,7 @@ use crate::{
         ui::{
             authored_ui_node_projection_components::UiDocumentOwner,
             authored_ui_node_projection_components::UiDocumentRoot,
-            ui_document_lifecycle_contracts::ShowUiRole,
+            ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
         },
     },
 };
@@ -41,6 +41,7 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
     overlays: Query<(), With<InGameOptionsOverlay>>,
     mut set_paused: MessageWriter<SetSimulationPaused>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
+    game_view: GameViewDocumentOwner,
 ) {
     for activation in activations.read() {
         let Ok((range, owner)) = nodes.get(activation.node) else {
@@ -81,14 +82,15 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                         owner: confirmation,
                     });
                 }
-                UiShellAction::ShowInGameOptionsOverlay => {
+                UiShellAction::ShowInGameOptionsOverlay
+                | UiShellAction::OpenInGameOptionsFromOverheadEscape => {
                     if !overlays.is_empty() {
                         continue;
                     }
                     let Some(simulation) = simulation.as_deref() else {
                         continue;
                     };
-                    let options = commands
+                    let overlay = commands
                         .spawn((
                             InGameOptionsOverlay::remembering_previous_pause_state(
                                 simulation.paused,
@@ -97,16 +99,29 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                         ))
                         .id();
                     set_paused.write(SetSimulationPaused(true));
+                    // The menu belongs with the game view, so the dialogs it
+                    // opens as it closes, such as returning to the main menu or
+                    // saving, outlive it.
                     show.write(ShowUiRole {
                         role: UiDocumentRole::InGameOptions,
-                        owner: options,
+                        owner: game_view.owner(overlay),
                     });
                 }
+                // Navigation waits on the save dialog's owner, where its save
+                // completes or its cancellation abandons the navigation.
                 UiShellAction::ReturnToMainMenuAfterWorldSnapshotSave => {
-                    commands.entity(owner.0).insert(ReturnToMainMenuAfterSave);
+                    if let Ok(parent) = parents.get(owner.0) {
+                        commands
+                            .entity(game_view.owner(parent.parent()))
+                            .insert(ReturnToMainMenuAfterSave);
+                    }
                 }
                 UiShellAction::ExitApplicationAfterWorldSnapshotSave => {
-                    commands.entity(owner.0).insert(ExitApplicationAfterSave);
+                    if let Ok(parent) = parents.get(owner.0) {
+                        commands
+                            .entity(game_view.owner(parent.parent()))
+                            .insert(ExitApplicationAfterSave);
+                    }
                 }
                 UiShellAction::CaptureScreenshotFromSoleActive3dCamera => {
                     let mut active = cameras

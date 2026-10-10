@@ -28,11 +28,20 @@ pub enum UiShellAction {
     MarkExitConfirmationPending,
     ReturnToMainMenu,
     ShowInGameOptionsOverlay,
+    /// Overhead-mode Escape: opens the in-game options unless a construction
+    /// tool or immersive mode owns Escape.
+    OpenInGameOptionsFromOverheadEscape,
     ReturnToMainMenuAfterWorldSnapshotSave,
     ExitApplicationAfterWorldSnapshotSave,
     CaptureScreenshotFromSoleActive3dCamera,
-    FilterWorldChoicesToLocation { world_location: AssetId },
-    FilterWorldChoicesToExpansionPack { expansion_pack_identifier: u16 },
-    ShowSecondaryGlobeBiome { biome: AssetId },
+    FilterWorldChoicesToLocation {
+        world_location: AssetId,
+    },
+    FilterWorldChoicesToExpansionPack {
+        expansion_pack_identifier: u16,
+    },
+    ShowSecondaryGlobeBiome {
+        biome: AssetId,
+    },
     NavigateBackFromOptions,
 }

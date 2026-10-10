@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
@@ -35,4 +35,26 @@ impl UiRoleRequests {
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HideUiDocument {
     pub(crate) owner: Entity,
+}
+
+/// Owner of the running game's view. Its documents live as long as the game.
+#[derive(Component)]
+pub(crate) struct InGameUiOwner;
+
+/// Menus and dialogs opened during a game belong with the game view, as when
+/// F5 and F6 open the save and load dialogs, so a menu or prompt that closes
+/// as it opens another cannot take that one, or navigation waiting on its
+/// save, along with it. Outside a game they belong with their opener.
+#[derive(SystemParam)]
+pub(crate) struct GameViewDocumentOwner<'w, 's> {
+    game_views: Query<'w, 's, Entity, With<InGameUiOwner>>,
+}
+
+impl GameViewDocumentOwner<'_, '_> {
+    pub(crate) fn owner(&self, opening_document_owner: Entity) -> Entity {
+        self.game_views
+            .iter()
+            .next()
+            .unwrap_or(opening_document_owner)
+    }
 }

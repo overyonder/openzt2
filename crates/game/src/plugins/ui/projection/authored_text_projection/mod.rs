@@ -34,7 +34,13 @@ pub(super) fn apply_authored_text_record_to_bevy_text_and_layout(
             // the explicit text `minimumheight` attribute constrains the
             // measured result; treating UIRegion.h as another minimum makes
             // compact tree rows retain their 30-pixel wrapping box.
-            value.min_height = px(minimum_height.max(0) as f32);
+            // Bevy's wrapped-text measure treats an explicit zero minimum as
+            // an effective height and skips intrinsic height measurement.
+            value.min_height = if minimum_height > 0 {
+                px(minimum_height as f32)
+            } else {
+                Val::Auto
+            };
             if auto_size {
                 // Multi-line text grows vertically inside its authored wrap
                 // width. Give Taffy a definite inline constraint so Parley can

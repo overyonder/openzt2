@@ -18,8 +18,7 @@ pub(crate) struct UiShowHideAnimation {
     pub forward: bool,
     pub running: bool,
     pub base_rect: [f32; 4],
-    pub start_rect: [f32; 4],
-    pub end_rect: [f32; 4],
+    pub rect_intervals: [Option<[f32; 2]>; 4],
     pub animates_color: bool,
     pub affects_text_color: bool,
     pub start_color: [u8; 4],
@@ -150,27 +149,36 @@ pub(super) fn dispatch_ui_animation_commands(
 }
 
 fn apply_rect(node: &mut Node, animation: &UiShowHideAnimation, amount: f32, origin: Option<Vec2>) {
-    // `-1` preserves one authored base component. Other negative values are
-    // real coordinates: the in-game controls panel slides from x=-311 while
-    // retaining its width and height through `w=-1 h=-1`.
-    let value = |index: usize| {
-        let start = animation.start_rect[index];
-        let end = animation.end_rect[index];
-        if start == -1.0 || end == -1.0 {
-            animation.base_rect[index]
-        } else {
-            start + (end - start) * amount
-        }
+    let animated = |index: usize| {
+        animation.rect_intervals[index].map(|[start, end]| start + (end - start) * amount)
     };
-    let relative = |index: usize| {
-        origin.map_or(value(index), |origin| {
-            origin[index] + animation.base_rect[index] + value(index)
-        })
-    };
-    node.left = px(relative(0));
-    node.top = px(relative(1));
-    node.width = px(value(2));
-    node.height = px(value(3));
+    let components = [
+        &mut node.left,
+        &mut node.top,
+        &mut node.width,
+        &mut node.height,
+    ];
+    for (index, component) in components.into_iter().enumerate() {
+        let value = match origin {
+            // A moving receiver positions the authored region itself.
+            Some(origin) => {
+                let value = animated(index).unwrap_or(animation.base_rect[index]);
+                if index < 2 {
+                    origin[index] + animation.base_rect[index] + value
+                } else {
+                    value
+                }
+            }
+            // Preserved components keep the projected layout, which may be
+            // aligned or a percentage of the parent, such as a hover-revealed
+            // text button that only animates its colour.
+            None => match animated(index) {
+                Some(value) => value,
+                None => continue,
+            },
+        };
+        *component = px(value);
+    }
 }
 
 #[cfg(test)]
@@ -178,7 +186,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn show_hide_rect_animates_negative_position_and_preserves_sentinel_extent() {
+    fn show_hide_rect_animates_negative_position_and_keeps_unanimated_extent() {
         let animation = UiShowHideAnimation {
             elapsed_ms: 0.0,
             duration_ms: 300.0,
@@ -190,14 +198,17 @@ mod tests {
             forward: true,
             running: true,
             base_rect: [0.0, 540.0, 327.0, 228.0],
-            start_rect: [-311.0, 540.0, -1.0, -1.0],
-            end_rect: [0.0, 540.0, -1.0, -1.0],
+            rect_intervals: [Some([-311.0, 0.0]), Some([540.0, 540.0]), None, None],
             animates_color: false,
             affects_text_color: false,
             start_color: [255; 4],
             end_color: [255; 4],
         };
-        let mut node = Node::default();
+        let mut node = Node {
+            width: px(327.0),
+            height: px(228.0),
+            ..default()
+        };
 
         apply_rect(&mut node, &animation, 0.5, None);
 
@@ -220,8 +231,7 @@ mod tests {
             forward: false,
             running: true,
             base_rect: [-80.0, -30.0, 100.0, 30.0],
-            start_rect: [0.0, -100.0, -1.0, -1.0],
-            end_rect: [0.0, 0.0, -1.0, -1.0],
+            rect_intervals: [Some([0.0, 0.0]), Some([-100.0, 0.0]), None, None],
             animates_color: true,
             affects_text_color: true,
             start_color: [255, 255, 64, 0],

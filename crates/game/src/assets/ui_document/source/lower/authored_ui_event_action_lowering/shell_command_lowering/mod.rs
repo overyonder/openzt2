@@ -77,6 +77,10 @@ pub(super) fn lower_shell_command(
             trigger,
             action: UiShellAction::ShowInGameOptionsOverlay,
         })),
+        "ZT_ESCAPE_KEY" => Ok(UiActionRecord::Shell(UiShellActionRecord {
+            trigger,
+            action: UiShellAction::OpenInGameOptionsFromOverheadEscape,
+        })),
         "ZT_EXIT_AFTER_SAVE" => Ok(UiActionRecord::Shell(UiShellActionRecord {
             trigger,
             action: UiShellAction::ExitApplicationAfterWorldSnapshotSave,

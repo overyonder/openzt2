@@ -25,6 +25,18 @@ pub struct ScenePrefabAsset {
 }
 
 impl ScenePrefabAsset {
+    #[cfg(test)]
+    pub(crate) fn from_test_document(document: ScenePrefabDocument) -> Self {
+        Self {
+            document,
+            model_paths: Box::new([]),
+            collider_models: Box::new([]),
+            material_paths: Box::new([]),
+            effects: Box::new([]),
+            animations: Box::new([]),
+        }
+    }
+
     pub fn canonical_scene_prefab_document(&self) -> &ScenePrefabDocument {
         &self.document
     }
