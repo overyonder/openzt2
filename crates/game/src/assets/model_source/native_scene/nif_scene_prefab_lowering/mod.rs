@@ -16,6 +16,7 @@ use super::super::{
     native_geometry::{
         native_geometry_identity::netimmerse_geometry_virtual_path,
         native_geometry_identity::NativeMaterialReference,
+        nif_material_lowering::inherited_netimmerse_property_references,
         source_transform_conversion::convert_source_transform_to_bevy_components,
     },
     native_model_source_lowering::{
@@ -167,6 +168,10 @@ fn visit_netimmerse_scene_block(
             material,
             native_model_material_labelled_asset_path(&document.source_path, block.index),
         );
+        if let Some(name) = netimmerse_geometry_material_name(document, block.index, &block.payload)
+        {
+            builder.renderable_material_name(name);
+        }
     }
     match &block.payload {
         NetImmerseNifBlockPayload::NiBillboardNode(node) => builder.billboard(
@@ -298,4 +303,30 @@ fn visit_netimmerse_scene_block(
 
 fn netimmerse_scene_entity_key(block: i32) -> String {
     format!("nif_{:08x}", block as u32)
+}
+
+/// Name of the `NiMaterialProperty` a geometry block renders with, including
+/// properties inherited from its ancestors. Material lowering reports
+/// malformed inheritance, so a failure here only leaves the name unset.
+fn netimmerse_geometry_material_name<'a>(
+    document: &'a NetImmerseNifDocument,
+    geometry_block: u32,
+    payload: &NetImmerseNifBlockPayload,
+) -> Option<&'a str> {
+    let geometry = match payload {
+        NetImmerseNifBlockPayload::NiTriShape(value) => &value.geometry,
+        NetImmerseNifBlockPayload::NiTriStrips(value) => &value.geometry,
+        _ => return None,
+    };
+    inherited_netimmerse_property_references(document, geometry_block, geometry)
+        .ok()?
+        .into_iter()
+        .filter_map(|reference| document.block(reference))
+        .find_map(|block| match &block.payload {
+            NetImmerseNifBlockPayload::NiMaterialProperty(material) => {
+                Some(material.object.name.as_str())
+            }
+            _ => None,
+        })
+        .filter(|name| !name.is_empty())
 }

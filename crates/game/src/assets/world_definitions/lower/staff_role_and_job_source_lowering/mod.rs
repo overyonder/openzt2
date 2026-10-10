@@ -42,6 +42,7 @@ pub(super) fn bind_staff(
             BindError::record(record, "staff role contains unknown job capability bits")
         })?,
         job_overrides,
+        presentation_variants: Vec::new(),
     });
     Ok(())
 }

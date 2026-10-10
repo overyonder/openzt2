@@ -114,8 +114,21 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
                     .find_fence(definition_id)
                     .map(|record| record.object)
             });
+        let staff_variant_prefab = active_catalogue
+            .find_staff(definition_id)
+            .or_else(|| active_catalogue.find_staff_by_object(definition_id))
+            .and_then(|role| {
+                crate::plugins::staff::staff_presentation_variant_selection::staff_presentation_variant(
+                    role,
+                    record.persistent_id,
+                    active_catalogue,
+                )
+            })
+            .map(|(variant, _)| variant.prefab);
         let prefab_id = if record.prefab != AssetId::default() {
             AssetId(record.prefab.0)
+        } else if let Some(prefab) = staff_variant_prefab {
+            prefab
         } else {
             let Some(prefab) = object_definition_id.and_then(|object| {
                 active_catalogue

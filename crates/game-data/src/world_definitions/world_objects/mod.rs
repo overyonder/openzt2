@@ -84,6 +84,31 @@ pub struct WorldObjectRealPhysicsWaterImpactDefinition {
     pub maximum_splash_strength: f32,
 }
 
+/// One authored `BFSharedRandomTextureInfo` replacement set. Each entity
+/// instance draws one weighted group and binds every item's image as the base
+/// texture of the named source material.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectTextureReplacementSet {
+    pub groups: Vec<WorldObjectTextureReplacementGroup>,
+}
+
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "authored group weights are floats"
+)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectTextureReplacementGroup {
+    pub weight: f32,
+    pub items: Vec<WorldObjectTextureReplacement>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectTextureReplacement {
+    /// Lowercase source material name, matched against prefab renderables.
+    pub material: String,
+    pub image: AssetId,
+}
+
 #[allow(
     clippy::derive_partial_eq_without_eq,
     reason = "authored timer bounds contain floats"

@@ -22,6 +22,7 @@ pub(crate) mod staff_job_types;
 pub(crate) mod staff_lifecycle_messages;
 mod staff_navigation_agent_projection;
 mod staff_placement_interaction;
+pub(crate) mod staff_presentation_variant_selection;
 mod staff_request_candidate_cleanup;
 mod staff_wage_lifecycle;
 mod ui_actions;

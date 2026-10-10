@@ -14,7 +14,7 @@ use crate::plugins::economy::money_types::Money;
 use crate::plugins::person_name_selection_and_resolution::choose_generated_person_name_rows_from_authored_pool;
 use crate::plugins::simulation_time::simulation_clock_types::ZooCalendar;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
-use crate::plugins::world_spawn::persistent_id_types::PersistentIdAllocator;
+use crate::plugins::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 use crate::plugins::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use crate::plugins::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
@@ -24,6 +24,9 @@ use super::{
     staff_assignment_types::StaffAssignment,
     staff_employment_types::{AvailableForWork, Employment, PendingStaffHire, Staff, StaffRole},
     staff_lifecycle_messages::{HireStaffRequest, StaffHired},
+    staff_presentation_variant_selection::{
+        attach_staff_presentation_variant, staff_presentation_variant,
+    },
 };
 
 /// Keeps the selected prefab loaded while payment and spawning are pending.
@@ -109,6 +112,11 @@ pub(in crate::plugins::staff) fn mark_paid_staff_hires_for_prefab_spawning(
     }
 }
 
+/// Persistent id allocated once payment completes, so the employee's drawn
+/// look can load its own body before spawning.
+#[derive(Component)]
+pub(super) struct PaidStaffHireIdentity(PersistentId);
+
 #[allow(clippy::too_many_arguments)]
 pub(in crate::plugins::staff) fn spawn_paid_staff_hires_from_ready_prefabs(
     mut commands: Commands,
@@ -118,6 +126,7 @@ pub(in crate::plugins::staff) fn spawn_paid_staff_hires_from_ready_prefabs(
             &PendingStaffHire,
             &PendingStaffHirePrefab,
             &WorldMember,
+            Option<&PaidStaffHireIdentity>,
         ),
         With<PaidStaffHire>,
     >,
@@ -133,26 +142,46 @@ pub(in crate::plugins::staff) fn spawn_paid_staff_hires_from_ready_prefabs(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (operation, request, prefab_handle, member) in &pending {
+    for (operation, request, prefab_handle, member, identity) in &pending {
+        let Some(role) = catalogue.find_staff(request.role) else {
+            commands.entity(operation).despawn();
+            continue;
+        };
+        let Some(PaidStaffHireIdentity(id)) = identity else {
+            let Ok(id) = ids.allocate(member.root) else {
+                commands.entity(operation).despawn();
+                continue;
+            };
+            let mut operation_commands = commands.entity(operation);
+            operation_commands.insert(PaidStaffHireIdentity(id));
+            if let Some((_, prefab)) = staff_presentation_variant(role, id.0, catalogue) {
+                operation_commands.insert(PendingStaffHirePrefab(prefab));
+            }
+            continue;
+        };
+        let id = *id;
         let Some(prefab) = prefabs.get(&prefab_handle.0) else {
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
             continue;
         }
-        let Some(role) = catalogue.find_staff(request.role) else {
-            commands.entity(operation).despawn();
-            continue;
-        };
-        let Ok(id) = ids.allocate(member.root) else {
-            commands.entity(operation).despawn();
-            continue;
-        };
-        let name = choose_generated_person_name_rows_from_authored_pool(
-            catalogue,
-            AssetId(role.name_pool.0),
-            id.0,
-        );
+        let variant = staff_presentation_variant(role, id.0, catalogue).map(|(variant, _)| variant);
+        let name = variant
+            .and_then(|variant| {
+                choose_generated_person_name_rows_from_authored_pool(
+                    catalogue,
+                    AssetId(variant.name_pool.0),
+                    id.0,
+                )
+            })
+            .or_else(|| {
+                choose_generated_person_name_rows_from_authored_pool(
+                    catalogue,
+                    AssetId(role.name_pool.0),
+                    id.0,
+                )
+            });
         let staff = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
             prefab,
@@ -165,6 +194,9 @@ pub(in crate::plugins::staff) fn spawn_paid_staff_hires_from_ready_prefabs(
             None,
             RigidBody::Dynamic,
         );
+        if let Some(variant) = variant {
+            attach_staff_presentation_variant(&mut commands, staff, variant, id.0, catalogue);
+        }
         let mut staff_commands = commands.entity(staff);
         staff_commands.insert((
             Staff,

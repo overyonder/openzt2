@@ -45,6 +45,12 @@ pub(super) fn create_prefab_renderable_components(
             handle: None,
             scene_name: (!renderable.scene_name.is_empty())
                 .then(|| renderable.scene_name.clone().into_boxed_str()),
+            material_name: (!renderable.material_name.is_empty()).then(|| {
+                renderable
+                    .material_name
+                    .to_ascii_lowercase()
+                    .into_boxed_str()
+            }),
         },
         PrefabMaterialOverrides(overrides),
         PrefabShadowPolicy {

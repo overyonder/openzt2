@@ -153,6 +153,7 @@ fn hydrate_environment_sun_position_rig(
                         model_path: Box::default(),
                         handle: Some(handle),
                         scene_name: None,
+                        material_name: None,
                     },
                     PrefabRenderable,
                     PrefabMaterialOverrides(Box::new([])),

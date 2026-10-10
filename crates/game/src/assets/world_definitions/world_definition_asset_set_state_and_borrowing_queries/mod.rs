@@ -309,9 +309,12 @@ impl<'a> WorldDefinitionsView<'a> {
         MaintenanceDefinition
     );
     finder!(find_staff, Staff, staff, StaffRoleDefinition);
+    /// Loads an employee's actor animations: its drawn look's set, or the
+    /// role's own when the employee has no drawn look.
     pub(crate) fn load_staff_model_animation_set<T: Asset>(
         self,
         staff_role: AssetId,
+        drawn_model_animation_set: Option<AssetId>,
     ) -> Option<Handle<T>> {
         let asset = self
             .assets
@@ -322,7 +325,10 @@ impl<'a> WorldDefinitionsView<'a> {
             .iter()
             .find(|record| record.id == staff_role)?
             .model_animation_set;
-        asset.animation_set(self.server?, model_animation_set)
+        asset.animation_set(
+            self.server?,
+            drawn_model_animation_set.unwrap_or(model_animation_set),
+        )
     }
     finder!(find_staff_job, StaffJob, staff_jobs, StaffJobDefinition);
     finder!(find_guest, Guest, guests, GuestDefinition);

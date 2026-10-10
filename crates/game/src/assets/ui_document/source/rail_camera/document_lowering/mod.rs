@@ -144,6 +144,7 @@ fn lower_one_rail_camera_document_to_scene_prefab_document(
                 scene_name: String::new(),
                 material_overrides: Vec::new(),
                 visibility: rail_camera_renderable_visibility_flags(visible),
+                material_name: String::new(),
             });
             entities.push(object_entity);
         }

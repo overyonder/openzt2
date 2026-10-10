@@ -135,7 +135,7 @@ pub(super) fn lower_netimmerse_native_material(
     }))
 }
 
-pub(super) fn inherited_netimmerse_property_references(
+pub(in super::super) fn inherited_netimmerse_property_references(
     document: &NetImmerseNifDocument,
     geometry_block: u32,
     geometry: &NetImmerseNiGeometry,
