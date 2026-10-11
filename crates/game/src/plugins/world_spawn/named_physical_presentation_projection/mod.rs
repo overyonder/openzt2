@@ -13,6 +13,9 @@ use openzt2_game_data::{
     world_definitions::world_objects::WorldObjectNamedPhysicalPresentationDefinition, AssetId,
 };
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Component)]
 pub(super) struct NamedPhysicalPresentationsHydrated;
 
@@ -33,22 +36,27 @@ pub(super) fn hydrate_required_named_physical_presentations(
         let Some(object) = definitions.find_object(definition.0) else {
             continue;
         };
-        let Some(presentations) = object
+        // An unregistered scene never appears later. Skip that binder with a
+        // warning instead of retrying the whole object every frame.
+        let presentations = object
             .named_physical_presentations
             .iter()
             .filter(|presentation| presentation.required)
-            .map(|presentation| {
-                let prefab = if presentation.prefab == AssetId::default() {
-                    None
-                } else {
-                    Some(definitions.scene(presentation.prefab)?)
+            .filter_map(|presentation| {
+                if presentation.prefab == AssetId::default() {
+                    return Some((presentation, None));
+                }
+                let Some(prefab) = definitions.scene(presentation.prefab) else {
+                    warn!(
+                        definition = ?definition.0,
+                        binder = ?presentation.name,
+                        "named physical presentation has no registered scene; spawning the object without it"
+                    );
+                    return None;
                 };
-                Some((presentation, prefab))
+                Some((presentation, Some(prefab)))
             })
-            .collect::<Option<Vec<_>>>()
-        else {
-            continue;
-        };
+            .collect::<Vec<_>>();
         spawn_required_named_physical_presentations(&mut commands, owner, presentations);
     }
 }
@@ -66,7 +74,11 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
     for (presentation, prefab) in presentations {
         let mut child = commands.spawn((
             Transform::from_scale(Vec3::splat(presentation.scale)),
-            Visibility::Inherited,
+            if presentation.initially_visible {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            },
             ChildOf(owner),
             PrefabAuthoredAttachmentIdentifier(presentation.name),
             NamedPhysicalPresentation,

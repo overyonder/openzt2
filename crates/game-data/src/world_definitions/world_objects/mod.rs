@@ -208,6 +208,15 @@ pub struct WorldObjectNamedPhysicalPresentationDefinition {
     pub prefab: AssetId,
     pub scale: f32,
     pub required: bool,
+    /// False for a binder the engine reveals only on a state change, such as
+    /// an event marker's `finishedEventObj`. It still spawns, hidden, so the
+    /// state change only toggles its visibility.
+    #[serde(default = "named_physical_presentation_is_initially_visible")]
+    pub initially_visible: bool,
+}
+
+const fn named_physical_presentation_is_initially_visible() -> bool {
+    true
 }
 
 #[allow(
