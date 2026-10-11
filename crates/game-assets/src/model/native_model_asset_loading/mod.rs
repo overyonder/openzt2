@@ -123,9 +123,13 @@ impl AssetLoader for NativeModelAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["nif", "bfb"]
+        NATIVE_MODEL_EXTENSIONS
     }
 }
+
+/// Bevy matches loader extensions case-sensitively, and the shipped archives
+/// keep some models as `.NIF` (Lion, Jaguar, LeopardSnow, PenguinEmperor).
+const NATIVE_MODEL_EXTENSIONS: &[&str] = &["nif", "bfb", "NIF", "BFB"];
 
 fn labelled_native_model_subasset_label(path: &str) -> Option<String> {
     path.split_once('#').map(|(_, label)| label.to_owned())
@@ -135,7 +139,7 @@ pub struct NativeModelAssetPlugin;
 
 impl Plugin for NativeModelAssetPlugin {
     fn build(&self, application: &mut App) {
-        application.preregister_asset_loader::<NativeModelAssetLoader>(&["nif", "bfb"]);
+        application.preregister_asset_loader::<NativeModelAssetLoader>(NATIVE_MODEL_EXTENSIONS);
     }
 
     fn finish(&self, application: &mut App) {
