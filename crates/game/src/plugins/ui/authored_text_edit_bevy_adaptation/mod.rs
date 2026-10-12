@@ -135,7 +135,12 @@ pub(super) fn suppress_fitting_authored_text_edit_scroll_during_render_extractio
     >,
 ) {
     for (entity, scroll, node, layout) in &edits {
-        if scroll.0 == Vec2::ZERO && layout.size.cmple(node.content_box().size()).all() {
+        if scroll.0 == Vec2::ZERO
+            && layout
+                .size
+                .cmple(node.content_box().size() * node.inverse_scale_factor())
+                .all()
+        {
             commands
                 .entity(entity)
                 .remove::<TextScroll>()

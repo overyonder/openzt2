@@ -69,7 +69,10 @@ pub(super) fn align_authored_single_line_text_from_measured_glyph_run(
     )>,
 ) {
     for (node, text_layout, layout, mut alignment) in &mut texts {
-        let remaining = (node.content_box().size() - layout.size).max(Vec2::ZERO);
+        // `TextLayoutInfo::size` is logical; `ComputedNode` and the glyph
+        // offset are physical.
+        let remaining =
+            (node.content_box().size() - layout.size / node.inverse_scale_factor()).max(Vec2::ZERO);
         let horizontal = match text_layout.justify {
             Justify::Center => remaining.x * 0.5,
             Justify::End | Justify::Right => remaining.x,

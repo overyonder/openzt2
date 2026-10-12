@@ -98,8 +98,9 @@ fn accepted_values_map_to_actual_bevy_components() {
         .query_filtered::<&Window, With<PrimaryWindow>>()
         .single(app.world())
         .unwrap();
-    assert_eq!(window.resolution.physical_width(), 1920);
-    assert_eq!(window.resolution.physical_height(), 1080);
+    // Fullscreen keeps the last windowed size; the monitor dictates the surface.
+    assert_eq!(window.resolution.physical_width(), 1280);
+    assert_eq!(window.resolution.physical_height(), 720);
     assert!(matches!(
         window.mode,
         bevy::window::WindowMode::BorderlessFullscreen(_)

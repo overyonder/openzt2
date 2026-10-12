@@ -55,9 +55,13 @@ pub(super) fn apply_accepted_display_settings_to_primary_window(
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
-    window
-        .resolution
-        .set_physical_resolution(settings.width, settings.height);
+    // Borderless fullscreen takes the monitor's size; forcing a physical size
+    // there shrinks the surface on HiDPI (macOS) or the window itself (Windows).
+    if settings.mode == DisplayMode::Windowed {
+        window
+            .resolution
+            .set_physical_resolution(settings.width, settings.height);
+    }
     window.mode = match settings.mode {
         DisplayMode::Windowed => WindowMode::Windowed,
         DisplayMode::BorderlessFullscreen => {

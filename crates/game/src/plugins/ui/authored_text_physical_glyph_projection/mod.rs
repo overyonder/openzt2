@@ -39,7 +39,16 @@ pub(crate) fn preserve_authored_font_aspect_in_extracted_text_draws(
     let viewport = Vec2::new(window.width(), window.height());
     for draw in &mut extracted.uinodes {
         let entity = draw.main_entity.id();
-        let Ok((node, stack, transform, layout, glyphs, single_line)) = text_nodes.get(entity)
+        // Rich tooltip text draws from a child laid over its single-line
+        // owner's transparent fallback, so it follows the owner's geometry.
+        let Some((node, stack, transform, layout, glyphs, single_line)) =
+            text_nodes.get(entity).ok().or_else(|| {
+                let (_, parent) = hierarchy.get(entity).ok()?;
+                text_nodes
+                    .get(parent?.parent())
+                    .ok()
+                    .filter(|owner| owner.5.is_some())
+            })
         else {
             continue;
         };
@@ -72,7 +81,8 @@ pub(crate) fn preserve_authored_font_aspect_in_extracted_text_draws(
             _ => 0.0,
         };
         let width = if single_line.is_some() {
-            glyphs.size.x
+            // Logical glyph run, physical content box.
+            glyphs.size.x / node.inverse_scale_factor()
         } else {
             node.content_box().size().x
         };
