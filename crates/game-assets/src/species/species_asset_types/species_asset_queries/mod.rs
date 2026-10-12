@@ -93,10 +93,19 @@ impl<'a> SpeciesView<'a> {
         Some((self.find(binding.species)?, &binding.variant))
     }
 
-    pub fn find_variant_by_model(self, model: AssetId) -> Option<&'a SpeciesVariant> {
+    /// Archive paths are case-insensitive: actor manifests and the resolved
+    /// archive entry can spell the same model with different casing, so the
+    /// paths compare by text rather than by their hashed identities.
+    pub fn find_variant_by_model_path(self, model_path: &str) -> Option<&'a SpeciesVariant> {
+        let model_path = model_path.replace('\\', "/");
         self.documents()
             .flat_map(|asset| &asset.document.variants)
             .map(|binding| &binding.variant)
-            .find(|variant| AssetId::from_virtual_path(&variant.model) == model)
+            .find(|variant| {
+                variant
+                    .model
+                    .replace('\\', "/")
+                    .eq_ignore_ascii_case(&model_path)
+            })
     }
 }

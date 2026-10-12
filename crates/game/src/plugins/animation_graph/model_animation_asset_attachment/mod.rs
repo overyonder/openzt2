@@ -176,9 +176,25 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
     }
 }
 
+/// An actor without an authored initial clip should stand idle. The first
+/// authored clip or graph node can be anything: the staff sets start with
+/// `ClimbDown_2Stand`, which lowers the skeleton root underground.
 fn select_initial_animation_clip_asset_key(
     animation_set_asset: &AnimationSetAsset,
 ) -> Option<String> {
+    let clip_asset_keys = animation_set_asset
+        .animation_clips
+        .iter()
+        .map(|clip| clip.animation_clip_asset_key.as_str())
+        .chain(
+            animation_set_asset
+                .animation_clip_source_references
+                .iter()
+                .map(|reference| reference.animation_clip_asset_key.as_str()),
+        );
+    if let Some(idle) = preferred_idle_animation_clip_asset_key(clip_asset_keys) {
+        return Some(idle.to_owned());
+    }
     animation_set_asset
         .animation_graph_order
         .first()
@@ -217,6 +233,22 @@ fn select_initial_animation_clip_asset_key(
         )
 }
 
+/// `Stand_Idle` when the set has one, otherwise any `*_Idle` clip.
+fn preferred_idle_animation_clip_asset_key<'a>(
+    clip_asset_keys: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
+    let clip_asset_keys = clip_asset_keys.collect::<Vec<_>>();
+    clip_asset_keys
+        .iter()
+        .find(|key| key.eq_ignore_ascii_case("Stand_Idle"))
+        .or_else(|| {
+            clip_asset_keys
+                .iter()
+                .find(|key| key.to_ascii_lowercase().ends_with("_idle"))
+        })
+        .copied()
+}
+
 /// The clip a model starts in when it enters `graph_node`, loaded or not.
 pub(crate) fn select_initial_animation_clip_asset_key_from_graph_node(
     animation_set_asset: &AnimationSetAsset,
@@ -253,4 +285,33 @@ fn select_preferred_unloaded_animation_clip_from_graph_node(
         })
         .or_else(|| animation_clip_source_references_in_graph_node().next())
         .map(|animation_clip| animation_clip.animation_clip_asset_key.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::preferred_idle_animation_clip_asset_key;
+
+    #[test]
+    fn initial_clip_prefers_standing_idle_over_authored_order() {
+        let staff = [
+            "ClimbDown_2Stand",
+            "SitBench_Idle",
+            "Stand_Idle",
+            "Walk_Ahead",
+        ];
+        assert_eq!(
+            preferred_idle_animation_clip_asset_key(staff.into_iter()),
+            Some("Stand_Idle")
+        );
+        let sitting = ["ClimbDown_2Stand", "SitBench_Idle"];
+        assert_eq!(
+            preferred_idle_animation_clip_asset_key(sitting.into_iter()),
+            Some("SitBench_Idle")
+        );
+        let no_idle = ["ClimbDown_2Stand", "Walk_Ahead"];
+        assert_eq!(
+            preferred_idle_animation_clip_asset_key(no_idle.into_iter()),
+            None
+        );
+    }
 }
