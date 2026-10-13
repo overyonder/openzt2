@@ -1,16 +1,12 @@
-pub(crate) mod application_schedule;
 #[cfg(feature = "dev-tools")]
 mod diagnostics;
-pub mod game_session_types;
-pub mod plugins;
 
 mod launch;
 mod missing_game_content_screen;
-mod verification;
+mod openzt2_game_plugin_group;
 
-use verification::verification_launch_arguments::VerificationLaunchRequest;
+use openzt2_verification::verification_launch_arguments::VerificationLaunchRequest;
 
-use application_schedule::{FixedGameSet, GameSet};
 use bevy::{
     app::ScheduleRunnerPlugin,
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
@@ -27,7 +23,9 @@ use bevy::{
 use launch::GameLaunchConfiguration;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::openzt2_asset_loading_plugin_group::OpenZt2AssetLoadingPluginGroup;
-use plugins::openzt2_game_plugin_group::OpenZt2GamePluginGroup;
+use openzt2_game_plugin_group::OpenZt2GamePluginGroup;
+use openzt2_world_state::application_schedule::FixedGameSet;
+use openzt2_world_state::application_schedule::GameSet;
 
 /// Reads the executable arguments, assembles the Bevy application, and runs
 /// OpenZT2 until its normal application exit.
@@ -157,7 +155,7 @@ fn add_game_persistence_directories(
             .join("openzt2")
     };
     game_application.insert_resource(
-        plugins::persistence::persistence_filesystem_paths::PersistenceFilesystemPaths::new(
+        openzt2_session::persistence::persistence_filesystem_paths::PersistenceFilesystemPaths::new(
             data_directory,
         ),
     );
@@ -283,7 +281,7 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
                 .chain()
                 .run_if(in_state(GamePhase::InGame))
                 .run_if(
-                    plugins::simulation_time::simulation_control_application::simulation_is_running,
+                    openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running,
                 ),
         );
 }
@@ -313,7 +311,7 @@ fn add_verification_when_requested(
             capture_mode,
             budget,
         }) => {
-            game_application.add_plugins(verification::VerificationJourneyPlugin {
+            game_application.add_plugins(openzt2_verification::VerificationJourneyPlugin {
                 journeys,
                 routes,
                 output_root,
@@ -324,7 +322,9 @@ fn add_verification_when_requested(
         }
         Some(VerificationLaunchRequest::MapLoad { map_index }) => {
             game_application.add_plugins(
-                verification::verification_map_load::VerificationMapLoadPlugin { map_index },
+                openzt2_verification::verification_map_load::VerificationMapLoadPlugin {
+                    map_index,
+                },
             );
         }
         None => {}

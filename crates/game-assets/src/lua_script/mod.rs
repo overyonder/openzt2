@@ -23,3 +23,5 @@ impl Plugin for LuaScriptAssetLoadingPlugin {
             );
     }
 }
+pub mod lua_script_module_execution;
+pub mod lua_value_conversion;

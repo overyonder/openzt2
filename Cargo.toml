@@ -1,10 +1,37 @@
 [workspace]
 members = [
-    "crates/z2f",
+    "crates/animals",
+    "crates/aquatic",
+    "crates/audio",
+    "crates/construction",
     "crates/d3d9-effects",
-    "crates/game-data",
+    "crates/economy",
+    "crates/environment",
+    "crates/extinct-animals",
     "crates/game-assets",
+    "crates/game-data",
     "crates/game",
+    "crates/information",
+    "crates/interface-state",
+    "crates/navigation",
+    "crates/photos",
+    "crates/player-controls",
+    "crates/progression",
+    "crates/session",
+    "crates/settings",
+    "crates/shows",
+    "crates/simulation-time",
+    "crates/staff-requests",
+    "crates/terrain",
+    "crates/transport",
+    "crates/ui",
+    "crates/verification",
+    "crates/visitors",
+    "crates/world-state",
+    "crates/world",
+    "crates/z2f",
+    "crates/zoo-staff",
+    "crates/zoo-state",
 ]
 default-members = ["crates/game"]
 # Keep upstream code out of first-party workspace checks while allowing its
@@ -20,7 +47,87 @@ publish = false
 license = "MIT"
 
 [workspace.dependencies]
+openzt2_animals = { path = "crates/animals" }
+openzt2_aquatic = { path = "crates/aquatic" }
+openzt2_audio = { path = "crates/audio" }
+openzt2_construction = { path = "crates/construction" }
+openzt2_economy = { path = "crates/economy" }
+openzt2_environment = { path = "crates/environment" }
+openzt2_extinct_animals = { path = "crates/extinct-animals" }
+openzt2_game = { path = "crates/game" }
+openzt2_game_assets = { path = "crates/game-assets" }
+openzt2_game_data = { path = "crates/game-data" }
+openzt2_information = { path = "crates/information" }
+openzt2_interface_state = { path = "crates/interface-state" }
+openzt2_navigation = { path = "crates/navigation" }
+openzt2_photos = { path = "crates/photos" }
+openzt2_player_controls = { path = "crates/player-controls" }
+openzt2_progression = { path = "crates/progression" }
+openzt2_session = { path = "crates/session" }
+openzt2_settings = { path = "crates/settings" }
+openzt2_shows = { path = "crates/shows" }
+openzt2_simulation_time = { path = "crates/simulation-time" }
+openzt2_staff_requests = { path = "crates/staff-requests" }
+openzt2_terrain = { path = "crates/terrain" }
+openzt2_transport = { path = "crates/transport" }
+openzt2_ui = { path = "crates/ui" }
+openzt2_verification = { path = "crates/verification" }
+openzt2_visitors = { path = "crates/visitors" }
+openzt2_world = { path = "crates/world" }
+openzt2_world_state = { path = "crates/world-state" }
+openzt2_zoo_staff = { path = "crates/zoo-staff" }
+openzt2_zoo_state = { path = "crates/zoo-state" }
+
+d3d9-effects = { path = "crates/d3d9-effects" }
+z2f = { path = "crates/z2f" }
+arrayvec = "0.7"
+avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "collider-from-mesh"] }
+bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"] }
+blake3 = "1.8"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+dirs = "7"
+image = { version = "0.25", default-features = false, features = ["bmp", "ico", "jpeg", "png", "tga"] }
+mlua = { version = "0.11", features = ["lua51", "vendored"] }
 ron = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smol_str = "0.2"
+ureq = { version = "3.3", default-features = false, features = ["json", "rustls"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+bevy = { version = "0.19.0", default-features = false, features = [
+    "default_app",
+    "std",
+    "multi_threaded",
+    "async_executor",
+    "async-io",
+    "bevy_winit",
+    "bevy_gilrs",
+    "wayland",
+    "default_font",
+    "system_font_discovery",
+    "3d_bevy_render",
+    "bevy_scene",
+    "ui_bevy_render",
+    "bevy_ui_widgets",
+    "bevy_picking",
+    "mesh_picking",
+    "custom_cursor",
+    "keyboard",
+    "mouse",
+    "touch",
+    "serialize",
+    "audio",
+    "mp3",
+    "vorbis",
+    "wav",
+    "dds",
+    "jpeg",
+    "shader_format_spirv",
+    "bmp",
+    "png",
+    "tga",
+] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

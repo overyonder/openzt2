@@ -8,8 +8,8 @@ Third-party code retains its own licenses:
 - patches/vkd3d patches: LGPL-2.1-or-later, like vkd3d.
 - patches/mojoshader patches: zlib, like MojoShader.
 - patches/gamescope patches: BSD-2-Clause, like Gamescope.
-- crates/game/assets/fonts/ComicNeue-Regular.ttf: SIL Open Font License 1.1;
-  see crates/game/assets/fonts/ComicNeue-OFL.txt.
+- crates/ui/assets/fonts/ComicNeue-Regular.ttf: SIL Open Font License 1.1;
+  see crates/ui/assets/fonts/ComicNeue-OFL.txt.
 
 The root MIT license does not replace these licenses or grant any rights to
 Zoo Tycoon 2 content. Original game files are not distributed with OpenZT2.

@@ -1,0 +1,12 @@
+pub mod adoption_and_content_availability_types;
+pub mod award_and_progression_fact_types;
+pub mod catalogue_definition_index_queries;
+pub mod catalogue_entry_availability;
+pub mod catalogue_unlock_set_operations;
+pub mod fame_history_types;
+pub mod fame_types;
+pub mod profile_challenge_types;
+pub mod rating_types;
+pub mod research_duration_calculation;
+pub mod research_types;
+pub mod unlock_types;

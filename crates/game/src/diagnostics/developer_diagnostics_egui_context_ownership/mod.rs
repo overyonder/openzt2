@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use bevy_inspector_egui::bevy_egui::{EguiContext, EguiMultipassSchedule, PrimaryEguiContext};
 
-use crate::plugins::shell::shell_screen_presentation_types::ShellUiCamera;
+use openzt2_interface_state::shell::shell_screen_presentation_types::ShellUiCamera;
 
 /// Keeps the diagnostics UI on the game's single UI camera.
 ///

@@ -1,0 +1,395 @@
+//! One cancel request dismisses one authored activity, for keyboard Escape and
+//! controller cancel alike, without requiring a focused cancel button.
+
+use bevy::{ecs::system::SystemParam, input_focus::InputFocus, prelude::*, text::EditableText};
+use openzt2_game_data::ui_document::action::animal_shows::UiShowAction;
+use openzt2_game_data::ui_document::action::construction::UiConstructionAction;
+use openzt2_game_data::ui_document::action::information::InformationSettingAction;
+use openzt2_game_data::ui_document::action::information::UiInformationAction;
+use openzt2_game_data::ui_document::action::photography::UiPhotoAction;
+use openzt2_game_data::ui_document::action::presentation::UiPresentationAction;
+use openzt2_game_data::ui_document::action::shell_navigation::UiShellAction;
+use openzt2_game_data::ui_document::action::transportation::UiTransportAction;
+use openzt2_game_data::ui_document::action::UiActionRecord;
+use openzt2_game_data::ui_document::action::UiTrigger;
+
+use super::active_authored_ui_context::ActiveAuthoredUiContext;
+use super::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
+use super::authored_ui_action_projection_components::UiPresentationActions;
+use super::authored_ui_action_projection_components::UiShellActions;
+use super::authored_ui_activation_contracts::UiNodeActivated;
+use super::authored_ui_node_projection_components::UiDocumentOwner;
+use super::authored_ui_node_projection_components::UiDocumentRoot;
+use super::authored_ui_node_projection_components::UiNodeId;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_interface_state::input::input_types::ActionRequest;
+use openzt2_interface_state::input::input_types::ActionSource;
+use openzt2_interface_state::input::input_types::GameAction;
+use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
+use openzt2_interface_state::ui::input_frame_capture_types::OverheadModeInputCapture;
+
+#[derive(SystemParam)]
+pub(super) struct UiCancellationReceivers<'w, 's> {
+    context: ActiveAuthoredUiContext<'w, 's>,
+    capture: Res<'w, AuthoredModalInputCapture>,
+    overhead_mode: Res<'w, OverheadModeInputCapture>,
+    input_focus: Res<'w, InputFocus>,
+    text_edits: Query<'w, 's, (), With<EditableText>>,
+    documents: Res<'w, Assets<UiDocumentAsset>>,
+    roots: Query<'w, 's, &'static UiDocumentRoot>,
+    owners: Query<'w, 's, &'static UiDocumentOwner>,
+    nodes: Query<
+        'w,
+        's,
+        (Entity, &'static UiDocumentOwner, &'static UiNodeId),
+        With<InheritedVisibility>,
+    >,
+    bindings: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static UiDocumentOwner,
+            &'static UiAuthoredHotkeyKeyboardActivationBinding,
+            Option<&'static UiPresentationActions>,
+            Option<&'static UiShellActions>,
+        ),
+    >,
+}
+
+pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
+    mut requests: MessageReader<ActionRequest>,
+    ui: UiCancellationReceivers,
+    mut activated: MessageWriter<UiNodeActivated>,
+) {
+    let UiCancellationReceivers {
+        context,
+        capture,
+        documents,
+        roots,
+        owners,
+        nodes,
+        ..
+    } = &ui;
+    // Multiple cancel buttons or devices in one input frame still dismiss only
+    // one activity. Drain all requests so none can replay against its parent.
+    let source = requests
+        .read()
+        .filter_map(|request| {
+            (request.action == GameAction::Cancel
+                && matches!(
+                    request.source,
+                    ActionSource::Controller(_) | ActionSource::KeyboardMouse
+                ))
+            .then_some(request.source)
+        })
+        .last();
+    let Some(source) = source else {
+        return;
+    };
+    let modal = capture.0.or_else(|| context.top_modal());
+    let scope = match modal {
+        Some(entity) => owners
+            .get(entity)
+            .ok()
+            .map(|owner| context.document_scope(owner.0)),
+        // A visible edit is focusable even while nobody is typing. Only actual
+        // text input focus captures keyboard Escape for its document. Otherwise
+        // choose an eligible authored receiver, including the zoo view beneath
+        // an inspection panel whose name edit has no Escape binding.
+        None if source == ActionSource::KeyboardMouse => ui
+            .input_focus
+            .get()
+            .filter(|focused| {
+                ui.text_edits.contains(*focused) && context.visible_and_enabled(*focused)
+            })
+            .and_then(|focused| owners.get(focused).ok())
+            .map(|owner| context.document_scope(owner.0))
+            .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
+        // Controllers retain their active document and inferred cancel button.
+        None => context
+            .active_scope()
+            .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
+    };
+    let handled_by_hotkey = scope.is_some_and(|scope| {
+        activate_cancel_hotkey_receiver(&ui, scope, modal, source, &mut activated)
+    });
+    info!(
+        target: "openzt2_ui",
+        ?source, ?modal, ?scope, handled_by_hotkey,
+        "routed authored UI cancellation"
+    );
+    if handled_by_hotkey {
+        return;
+    }
+    let Some(scope) = scope else {
+        return;
+    };
+    // The keyboard follows authored Escape bindings only. Controllers have no
+    // Escape key, so they may also infer a dialog's cancel button.
+    if source == ActionSource::KeyboardMouse {
+        return;
+    }
+
+    let modal_id = modal
+        .and_then(|modal| nodes.get(modal).ok())
+        .map(|(_, _, id)| id.id);
+    let target = nodes
+        .iter()
+        .filter_map(|(entity, owner, id)| {
+            if !context.eligible_in_scope(entity, scope, modal) {
+                return None;
+            }
+            let document = documents.get(&roots.get(owner.0).ok()?.document)?;
+            let node = document
+                .canonical_ui_document()
+                .nodes
+                .get(id.index as usize)?;
+            // Reject mixed actions such as Apply + Back, or Save + Hide. Only the
+            // cancellation trigger's records matter; hover/focus actions are inert.
+            [UiTrigger::Cancel, UiTrigger::Press]
+                .into_iter()
+                .find(|trigger| {
+                    let mut found = false;
+                    for action in &node.actions {
+                        let (action_trigger, cancels) = cancellation_action(
+                            action,
+                            modal_id,
+                            modal.is_none_or(|modal| modal == owner.0),
+                        );
+                        if action_trigger == *trigger {
+                            if !cancels {
+                                return false;
+                            }
+                            found = true;
+                        }
+                    }
+                    found
+                })
+                .map(|trigger| (entity, trigger))
+        })
+        .max_by_key(|(entity, _)| context.navigation_order(*entity));
+    if let Some((node, trigger)) = target {
+        activated.write(UiNodeActivated {
+            node,
+            source,
+            trigger,
+        });
+    }
+}
+
+/// Whether this receiver holds an Escape binding that may act now. The zoo
+/// view's own Escape (`ZT_ESCAPE_KEY`) exists only in overhead mode.
+fn receiver_holds_active_cancel_binding(
+    ui: &UiCancellationReceivers,
+    owner: Entity,
+    index: u32,
+) -> bool {
+    ui.bindings
+        .iter()
+        .any(|(_, binding_owner, binding, _, shell)| {
+            binding_owner.0 == owner
+                && binding.receiver_index() == index
+                && binding.is_cancel_activation()
+                && (ui.overhead_mode.0 || !binding_opens_overhead_options(ui, owner, shell))
+        })
+}
+
+fn binding_opens_overhead_options(
+    ui: &UiCancellationReceivers,
+    owner: Entity,
+    shell: Option<&UiShellActions>,
+) -> bool {
+    let Some(document) = ui
+        .roots
+        .get(owner)
+        .ok()
+        .and_then(|root| ui.documents.get(&root.document))
+    else {
+        return false;
+    };
+    shell.is_some_and(|actions| {
+        actions
+            .authored_action_records(document)
+            .any(|record| record.action == UiShellAction::OpenInGameOptionsFromOverheadEscape)
+    })
+}
+
+fn topmost_cancel_hotkey_receiver_scope(ui: &UiCancellationReceivers) -> Option<Entity> {
+    ui.nodes
+        .iter()
+        .filter(|(entity, owner, id)| {
+            ui.context.visible_and_enabled(*entity)
+                && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
+        })
+        .max_by_key(|(entity, _, _)| ui.context.navigation_order(*entity))
+        .map(|(_, owner, _)| ui.context.document_scope(owner.0))
+}
+
+fn activate_cancel_hotkey_receiver(
+    ui: &UiCancellationReceivers,
+    scope: Entity,
+    modal: Option<Entity>,
+    source: ActionSource,
+    activated: &mut MessageWriter<UiNodeActivated>,
+) -> bool {
+    let UiCancellationReceivers {
+        context,
+        documents,
+        roots,
+        nodes,
+        bindings,
+        ..
+    } = ui;
+    // A hotkey may lower to several action proxies. Keep that receiver's
+    // complete action group, but never activate other Escape receivers too.
+    let receiver = nodes
+        .iter()
+        .filter(|(entity, owner, id)| {
+            context.eligible_in_scope(*entity, scope, modal)
+                && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
+        })
+        .max_by_key(|(entity, _, _)| context.navigation_order(*entity));
+    let Some((_, owner, id)) = receiver else {
+        return false;
+    };
+    let mut forwarded_targets = std::collections::HashSet::new();
+    for (entity, binding_owner, binding, presentation, _) in bindings {
+        if binding_owner.0 != owner.0
+            || binding.receiver_index() != id.index
+            || !binding.is_cancel_activation()
+        {
+            continue;
+        }
+        let forwarded_target = roots
+            .get(owner.0)
+            .ok()
+            .and_then(|root| documents.get(&root.document))
+            .and_then(|document| {
+                presentation.and_then(|actions| actions.authored_action_records(document).next())
+            })
+            .and_then(|record| match record.action {
+                UiPresentationAction::ActivateTargetNodeWithPress { target_node } => {
+                    Some(target_node)
+                }
+                _ => None,
+            });
+        let target = if let Some(target_id) = forwarded_target {
+            let named = |_: Entity, target_owner: &UiDocumentOwner, id: &UiNodeId| {
+                target_owner.0 == owner.0 && id.id == target_id
+            };
+            nodes
+                .iter()
+                .find_map(|(target, target_owner, id)| {
+                    (named(target, target_owner, id)
+                        && context.eligible_in_scope(target, scope, modal))
+                    .then_some(target)
+                })
+                // Text buttons such as the in-game options Cancel stay hidden
+                // until hovered. Escape presses them if they are enabled.
+                .or_else(|| {
+                    nodes.iter().find_map(|(target, target_owner, id)| {
+                        (named(target, target_owner, id)
+                            && context.enabled(target)
+                            && modal.is_none_or(|modal| context.is_in_modal(target, modal)))
+                        .then_some(target)
+                    })
+                })
+        } else {
+            Some(entity)
+        };
+        if let Some(node) = target {
+            if forwarded_target.is_some() && !forwarded_targets.insert(node) {
+                continue;
+            }
+            activated.write(UiNodeActivated {
+                node,
+                source,
+                trigger: UiTrigger::Press,
+            });
+        }
+    }
+    true
+}
+
+fn cancellation_action(
+    record: &UiActionRecord,
+    modal_id: Option<openzt2_game_data::AssetId>,
+    can_hide_document: bool,
+) -> (UiTrigger, bool) {
+    match record {
+        UiActionRecord::Presentation(record) => (
+            record.trigger,
+            (can_hide_document
+                && matches!(
+                    record.action,
+                    UiPresentationAction::HideOwningDocument
+                        | UiPresentationAction::HideOwningDocumentAfterAlertAcknowledgement
+                        | UiPresentationAction::HideOwningDocumentAfterConfirmationDismissal
+                ))
+                || matches!(record.action, UiPresentationAction::SetTargetNodeVisible { target_node, visible: false }
+                if Some(target_node) == modal_id),
+        ),
+        UiActionRecord::Information(record) => (
+            record.trigger,
+            matches!(
+                record.action,
+                UiInformationAction::ApplySetting {
+                    setting: InformationSettingAction::Back
+                }
+            ),
+        ),
+        UiActionRecord::Shell(record) => (
+            record.trigger,
+            matches!(
+                record.action,
+                UiShellAction::DismissExitConfirmationDialog
+                    | UiShellAction::NavigateBackFromDownloads
+                    | UiShellAction::NavigateBackFromOptions
+                    | UiShellAction::NavigateBackFromMapSelection
+            ),
+        ),
+        UiActionRecord::Construction(record) => (
+            record.trigger,
+            matches!(
+                record.action,
+                UiConstructionAction::ResolveConfirmation {
+                    confirmed: false,
+                    ..
+                }
+            ),
+        ),
+        UiActionRecord::Transport(record) => (
+            record.trigger,
+            matches!(
+                record.action,
+                UiTransportAction::ResolvePendingTransportPathDeletion {
+                    deletion_confirmed: false
+                }
+            ),
+        ),
+        UiActionRecord::Show(record) => (
+            record.trigger,
+            matches!(
+                record.action,
+                UiShowAction::ResolvePlatformDeletion { confirmed: false }
+            ),
+        ),
+        UiActionRecord::Photo(record) => (
+            record.trigger,
+            matches!(record.action, UiPhotoAction::CancelMovingSelectedPhoto),
+        ),
+        UiActionRecord::PopulateCatalogueTypeList(record) => (record.trigger, false),
+        UiActionRecord::Camera(record) => (record.trigger, false),
+        UiActionRecord::StartResearchForSelectedCatalogueItem(record) => (record.trigger, false),
+        UiActionRecord::AnimalHealth(record) => (record.trigger, false),
+        UiActionRecord::Scenario(record) => (record.trigger, false),
+        UiActionRecord::AudioSetting(record) => (record.trigger, false),
+        UiActionRecord::EnterImmersiveMode(record) => (record.trigger, false),
+        UiActionRecord::Staff(record) => (record.trigger, false),
+        UiActionRecord::Economy(record) => (record.trigger, false),
+        UiActionRecord::Animal(record) => (record.trigger, false),
+        UiActionRecord::Persistence(record) => (record.trigger, false),
+        UiActionRecord::Simulation(record) => (record.trigger, false),
+    }
+}

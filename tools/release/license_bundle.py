@@ -24,7 +24,7 @@ def prepare_release_license_bundle(workspace, native_prefix, destination, target
     shutil.copytree(native_licenses, destination)
     for name in ("LICENSE", "THIRD-PARTY-NOTICES"):
         shutil.copy2(workspace / name, destination / name)
-    shutil.copy2(workspace / "crates/game/assets/fonts/ComicNeue-OFL.txt", destination)
+    shutil.copy2(workspace / "crates/ui/assets/fonts/ComicNeue-OFL.txt", destination)
     with tempfile.TemporaryDirectory() as temporary:
         report_path = Path(temporary) / "dependency-licenses.json"
         subprocess.run(

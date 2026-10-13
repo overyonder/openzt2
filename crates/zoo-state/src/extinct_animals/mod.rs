@@ -1,0 +1,3 @@
+pub mod extinct_animal_observable_fact_types;
+pub mod fossil_collection_and_assembly_types;
+pub mod fossil_recovery_types;

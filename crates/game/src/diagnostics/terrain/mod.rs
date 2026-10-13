@@ -1,12 +1,11 @@
 use super::developer_diagnostics_view_types::DeveloperDiagnosticsViewState;
-use crate::plugins::terrain::terrain_chunk_presentation_types::{
-    TerrainRenderChunk, TerrainRenderRevision,
-};
 use avian3d::debug_render::DebugRender;
 use bevy::{
     mesh::{Indices, VertexAttributeValues},
     prelude::*,
 };
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
 use std::collections::HashSet;
 
 #[derive(Component)]

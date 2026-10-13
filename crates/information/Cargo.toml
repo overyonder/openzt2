@@ -1,0 +1,29 @@
+[package]
+name = "openzt2_information"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openzt2_animals.workspace = true
+openzt2_game_assets.workspace = true
+openzt2_game_data.workspace = true
+openzt2_interface_state.workspace = true
+openzt2_settings.workspace = true
+openzt2_ui.workspace = true
+openzt2_world.workspace = true
+openzt2_world_state.workspace = true
+openzt2_zoo_state.workspace = true
+
+arrayvec.workspace = true
+bevy.workspace = true
+
+[dev-dependencies]
+openzt2_world_state = { workspace = true, features = ["testing"] }
+
+openzt2_game_assets = { workspace = true, features = ["testing"] }

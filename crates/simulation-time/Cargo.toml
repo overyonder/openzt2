@@ -1,0 +1,22 @@
+[package]
+name = "openzt2_simulation_time"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+openzt2_game_assets.workspace = true
+openzt2_game_data.workspace = true
+openzt2_interface_state.workspace = true
+openzt2_ui.workspace = true
+openzt2_world_state.workspace = true
+
+bevy.workspace = true
+
+[dev-dependencies]
+openzt2_game_assets = { workspace = true, features = ["testing"] }

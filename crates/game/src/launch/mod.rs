@@ -1,4 +1,4 @@
-use crate::verification::verification_launch_arguments::{
+use openzt2_verification::verification_launch_arguments::{
     read_verification_launch_request_from_process_arguments, VerificationLaunchRequest,
 };
 

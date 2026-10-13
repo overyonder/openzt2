@@ -13,74 +13,43 @@ testing = []
 workspace = true
 
 [dependencies]
-d3d9-effects = { path = "../d3d9-effects" }
-openzt2_game_data = { path = "../game-data" }
-z2f = { path = "../z2f" }
+openzt2_game_data.workspace = true
+
+d3d9-effects.workspace = true
+z2f.workspace = true
 futures-lite = "2.6"
-dirs = "7"
-chrono = { version = "0.4", default-features = false, features = ["std"] }
+dirs.workspace = true
+chrono.workspace = true
 ron.workspace = true
-arrayvec = "0.7"
+arrayvec.workspace = true
 async-channel = "2.5"
 anyhow = "1.0"
-avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "collider-from-mesh"] }
-bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"] }
-blake3 = "1.8"
+avian3d.workspace = true
+bevy_hanabi.workspace = true
+blake3.workspace = true
 ico = "0.5"
-image = { version = "0.25", default-features = false, features = ["bmp", "ico", "jpeg", "png", "tga"] }
+image.workspace = true
 image_dds = { version = "0.7", default-features = false, features = ["ddsfile", "image"] }
 lunify = "1.1"
-mlua = { version = "0.11", features = ["lua51", "vendored"] }
+mlua.workspace = true
 quick-xml = { version = "0.38", features = ["serialize"] }
 rayon = "1.11"
 roxmltree = "0.20"
-smol_str = "0.2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+smol_str.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror = "2.0"
 gltf = { version = "1.4", default-features = false, features = ["extras", "names"] }
 sysinfo = { version = "0.38", default-features = false, features = ["system"] }
-ureq = { version = "3.3", default-features = false, features = ["json", "rustls"] }
-bevy = { version = "0.19.0", default-features = false, features = [
-    "default_app",
-    "std",
-    "multi_threaded",
-    "async_executor",
-    "async-io",
-    "bevy_winit",
-    "bevy_gilrs",
-    "wayland",
-    "default_font",
-    "system_font_discovery",
-    "3d_bevy_render",
-    "bevy_scene",
-    "ui_bevy_render",
-    "bevy_ui_widgets",
-    "bevy_picking",
-    "mesh_picking",
-    "custom_cursor",
-    "keyboard",
-    "mouse",
-    "touch",
-    "serialize",
-    "audio",
-    "mp3",
-    "vorbis",
-    "wav",
-    "dds",
-    "jpeg",
-    "shader_format_spirv",
-    "bmp",
-    "png",
-    "tga",
-] }
+ureq.workspace = true
+bevy.workspace = true
 
 # Apple's wgpu backend is Metal; raw Vulkan initialization is unavailable there.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]
-bevy = { version = "0.19.0", default-features = false, features = ["raw_vulkan_init"] }
+bevy = { workspace = true, features = ["raw_vulkan_init"] }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
+windows-sys.workspace = true
 
 [dev-dependencies]
-zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip.workspace = true

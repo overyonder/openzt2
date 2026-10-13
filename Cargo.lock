@@ -5025,42 +5025,139 @@ dependencies = [
 ]
 
 [[package]]
+name = "openzt2_animals"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "avian3d",
+ "bevy",
+ "mlua",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_staff",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_aquatic"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_construction",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_audio"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_construction"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_economy"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_environment"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_extinct_animals"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
 name = "openzt2_game"
 version = "0.7.0-alpha"
 dependencies = [
- "anyhow",
- "arrayvec",
- "async-channel",
  "avian3d",
  "bevy",
  "bevy-inspector-egui",
  "bevy_hanabi",
- "blake3",
- "chrono",
- "d3d9-effects",
  "dirs",
- "futures-lite",
- "gltf",
- "ico",
- "image",
- "image_dds",
- "lunify",
- "mlua",
+ "openzt2_animals",
+ "openzt2_aquatic",
+ "openzt2_audio",
+ "openzt2_construction",
+ "openzt2_economy",
+ "openzt2_environment",
+ "openzt2_extinct_animals",
  "openzt2_game_assets",
- "openzt2_game_data",
- "quick-xml 0.38.4",
- "rayon",
- "ron",
- "roxmltree 0.20.0",
- "serde",
- "serde_json",
- "smol_str",
- "sysinfo",
- "thiserror 2.0.20",
- "ureq",
- "windows-sys 0.61.2",
+ "openzt2_information",
+ "openzt2_interface_state",
+ "openzt2_navigation",
+ "openzt2_photos",
+ "openzt2_player_controls",
+ "openzt2_progression",
+ "openzt2_session",
+ "openzt2_settings",
+ "openzt2_shows",
+ "openzt2_simulation_time",
+ "openzt2_staff_requests",
+ "openzt2_terrain",
+ "openzt2_transport",
+ "openzt2_ui",
+ "openzt2_verification",
+ "openzt2_visitors",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_staff",
+ "openzt2_zoo_state",
  "z2f",
- "zip",
 ]
 
 [[package]]
@@ -5106,6 +5203,305 @@ version = "0.7.0-alpha"
 dependencies = [
  "blake3",
  "serde",
+]
+
+[[package]]
+name = "openzt2_information"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "bevy",
+ "openzt2_animals",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_settings",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_interface_state"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_world_state",
+ "serde",
+]
+
+[[package]]
+name = "openzt2_navigation"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_photos"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "mlua",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_player_controls"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_progression"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_session"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "avian3d",
+ "bevy",
+ "blake3",
+ "chrono",
+ "image",
+ "mlua",
+ "openzt2_animals",
+ "openzt2_environment",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_photos",
+ "openzt2_player_controls",
+ "openzt2_simulation_time",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_staff",
+ "openzt2_zoo_state",
+ "serde",
+ "serde_json",
+ "ureq",
+ "windows-sys 0.61.2",
+ "zip",
+]
+
+[[package]]
+name = "openzt2_settings"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_shows"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_simulation_time"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+]
+
+[[package]]
+name = "openzt2_staff_requests"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_terrain"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_player_controls",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_transport"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_construction",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_ui"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+ "ron",
+ "serde",
+]
+
+[[package]]
+name = "openzt2_verification"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "blake3",
+ "image",
+ "openzt2_animals",
+ "openzt2_construction",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_information",
+ "openzt2_interface_state",
+ "openzt2_player_controls",
+ "openzt2_session",
+ "openzt2_terrain",
+ "openzt2_ui",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+ "serde",
+ "serde_json",
+ "smol_str",
+]
+
+[[package]]
+name = "openzt2_visitors"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_ui",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_world"
+version = "0.7.0-alpha"
+dependencies = [
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_world_state"
+version = "0.7.0-alpha"
+dependencies = [
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+]
+
+[[package]]
+name = "openzt2_zoo_staff"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_interface_state",
+ "openzt2_world",
+ "openzt2_world_state",
+ "openzt2_zoo_state",
+]
+
+[[package]]
+name = "openzt2_zoo_state"
+version = "0.7.0-alpha"
+dependencies = [
+ "arrayvec",
+ "avian3d",
+ "bevy",
+ "openzt2_game_assets",
+ "openzt2_game_data",
+ "openzt2_world_state",
 ]
 
 [[package]]
