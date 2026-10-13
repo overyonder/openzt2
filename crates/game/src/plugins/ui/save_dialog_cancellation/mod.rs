@@ -8,7 +8,7 @@ use super::{
     authored_ui_activation_contracts::UiNodeActivated,
     authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
 };
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(SystemParam)]
 pub(crate) struct SaveDialogCancellationRequests<'w, 's> {

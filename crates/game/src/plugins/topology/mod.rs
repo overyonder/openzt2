@@ -4,11 +4,12 @@ mod fence_construction_preview_presentation;
 mod fence_segment_prefab_refresh;
 mod fence_segment_prefab_selection;
 mod fence_terrain_endpoint_skew_presentation;
+pub(crate) mod gate_actor_type_queries;
 mod gate_automatic_operation;
 pub(crate) mod gate_operation_types;
 mod gate_state_application;
 pub(crate) mod ground_path_layout_calculation;
-mod path_curb_presentation;
+pub(crate) mod path_curb_presentation;
 mod path_support_hydration;
 mod path_surface_presentation;
 mod tank_boundary_projection;
@@ -38,8 +39,11 @@ use gate_automatic_operation::{
     advance_gate_automatic_close_countdowns,
     request_open_gates_for_agents_within_authored_trigger_distance,
 };
-use gate_operation_types::SetGateState;
-use gate_state_application::apply_requested_gate_state_and_animation;
+use gate_operation_types::{GateOperationSet, SetGateState};
+use gate_state_application::{
+    apply_requested_gate_state, attach_authored_animation_sets_to_resolved_gate_models,
+    project_gate_state_to_ready_animation_presentations,
+};
 use path_curb_presentation::{
     hydrate_authored_path_curb_prefab_presentations,
     invalidate_path_curb_presentations_after_topology_or_terrain_changes,
@@ -82,13 +86,13 @@ use topology_prefab_presentation::hydrate_topology_prefab_presentations;
 use bevy::prelude::*;
 
 use crate::{
-    application_lifecycle::GamePhase,
     application_schedule::{FixedGameSet, GameSet},
     plugins::construction::{
         construction_domain_preparation_collection::collect_construction_domain_preparation_results,
         FixedConstructionPreparedDomainEditMaterializationSet, FixedConstructionSet,
     },
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 /// Registers topology-owned messages and the bounded spatial lookup. Root integration
 /// places the exported systems in the shared construction schedules.
@@ -136,6 +140,7 @@ impl Plugin for TopologyPlugin {
                     hydrate_authored_path_curb_prefab_presentations,
                     refresh_fence_segment_prefabs_after_topology_index_changes,
                     hydrate_topology_prefab_presentations,
+                    attach_authored_animation_sets_to_resolved_gate_models,
                     fit_fence_presentations_to_terrain_endpoint_heights,
                     project_fence_construction_preview_validity_onto_prefab_model_tints,
                 )
@@ -177,16 +182,20 @@ impl Plugin for TopologyPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    request_open_gates_for_agents_within_authored_trigger_distance,
-                    advance_gate_automatic_close_countdowns,
-                    apply_requested_gate_state_and_animation,
+                    request_open_gates_for_agents_within_authored_trigger_distance
+                        .run_if(crate::plugins::simulation_time::simulation_control_application::simulation_is_running),
+                    advance_gate_automatic_close_countdowns
+                        .run_if(crate::plugins::simulation_time::simulation_control_application::simulation_is_running),
+                    apply_requested_gate_state,
                 )
                     .chain()
+                    .in_set(GateOperationSet)
                     .in_set(FixedGameSet::Act),
             )
             .add_systems(
                 FixedUpdate,
                 (
+                    project_gate_state_to_ready_animation_presentations,
                     synchronize_tank_boundary_relationships_after_habitat_region_changes,
                     remove_tank_boundary_relationship_entities_with_missing_endpoints,
                     invalidate_path_supports_after_topology_or_terrain_changes,

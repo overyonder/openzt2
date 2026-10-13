@@ -1,0 +1,28 @@
+# diagnostic: select explicitly by name
+# Compare each immediate capture with its later, independently settled capture.
+# Review the visible panel, text and textures in both images; assertions alone
+# cannot establish that the first render contained the complete presentation.
+start main-menu
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+capture options-ready
+until settled 60
+capture options-settled
+expect-visible "Back"
+expect-visible "Apply"
+click "Back"
+until hidden "Settings Panel"
+until visible "Game Options Button"
+capture menu-ready
+until settled 60
+capture menu-settled
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until rows "profilelist" >= 1
+capture profile-ready
+until settled 60
+capture profile-settled
+key ESCAPE
+until hidden "profile_manager_dialog_shell"

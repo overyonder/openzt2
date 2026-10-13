@@ -32,6 +32,7 @@ pub(super) fn begin_construction_application_rollback(
         &mut progress.topology,
         &mut progress.placement,
         &mut progress.shows,
+        &mut progress.aquatic,
     ] {
         if matches!(
             *domain_status,

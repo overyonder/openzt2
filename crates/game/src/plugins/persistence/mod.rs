@@ -11,7 +11,7 @@ pub mod persistence_failure_types;
 pub mod persistence_filesystem_paths;
 mod persistence_ui_action_routing;
 mod persistence_ui_operation_presentation;
-mod persistence_ui_types;
+pub(crate) mod persistence_ui_types;
 mod photo_album_html_and_bmp_export;
 mod profile_filesystem_task_completion_application;
 mod profile_identifier_generation;
@@ -33,17 +33,15 @@ mod save_slot_catalogue_ui_presentation;
 pub mod save_slot_types;
 mod screenshot_export;
 mod simulation_time_snapshot_section;
-mod slot_io;
+pub(crate) mod slot_io;
 mod snapshot_container_encoding_and_validation;
 #[cfg(test)]
 mod snapshot_container_tests;
 mod snapshot_container_types;
 
-use crate::{
-    application_lifecycle::GamePhase, application_schedule::GameSet,
-    plugins::world_spawn::persistent_id_types::PersistentIdAllocator,
-};
+use crate::application_schedule::GameSet;
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use generated_photo_persistence_types::{
     ChallengePhotoJpegCopyPersisted, ChallengePhotoJpegCopyPersistenceFailed,
@@ -67,6 +65,11 @@ pub struct PersistencePlugin;
 
 impl Plugin for PersistencePlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            persistence_ui_action_routing::route_authored_save_dialog_opening_requests
+                .in_set(crate::plugins::ui::UiSet::Routing),
+        );
         app.init_resource::<ReusableWorldSnapshotByteBuffer>()
             .init_resource::<ProfileIndex>()
             .init_resource::<ProfileOptions>()
@@ -124,7 +127,8 @@ impl Plugin for PersistencePlugin {
                     save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates,
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
                     persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor,
-                    persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save,
+                    persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save
+                        .after(crate::plugins::ui::UiSet::Projection),
                     persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save,
                 )
                     .chain(),
@@ -175,8 +179,7 @@ impl Plugin for PersistencePlugin {
                     .after(
                         slot_io::filesystem_task_completion_application::
                             apply_completed_persistence_slot_filesystem_tasks,
-                    )
-                    .run_if(resource_exists::<PersistentIdAllocator>),
+                    ),
             );
     }
 }

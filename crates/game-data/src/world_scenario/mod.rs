@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AssetId;
 
-pub const WORLD_SCENARIO_VERSION: u32 = 32;
+pub const WORLD_SCENARIO_VERSION: u32 = 33;
 
 /// Maximum distinct subject identities selected across one authored photo set.
 /// The shipped sequential sets top out at three independently selected types.
@@ -229,11 +229,26 @@ pub struct ScenarioDefinitionRecord {
     pub objectives: Vec<ScenarioObjectiveRecord>,
     pub time_limit_ticks: u64,
     pub flags: ScenarioRecordFlags,
+    /// Authored `ZTScenarioMgr/uimods`: interface nodes this scenario shows
+    /// or hides while it runs.
+    #[serde(default)]
+    pub ui_modifications: Vec<ScenarioUiModification>,
+}
+
+/// One authored `uimods/mod`: the named interface node's visibility under
+/// the scenario (`new/UIState@visible`).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ScenarioUiModification {
+    pub node: String,
+    pub visible: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ScenarioObjectiveRecord {
     pub id: AssetId,
+    /// Authored rule name addressed by scenario script commands.
+    #[serde(default)]
+    pub name: Option<AssetId>,
     /// Authored `BFScenarioRule/info@type` used by the goal-panel tabs.
     pub category: AssetId,
     /// Neutral/active, success, and failure row labels.

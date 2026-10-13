@@ -1,14 +1,14 @@
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::{
+    GraphicsSettings, ReplaceGraphicsSettingsRequest, ShadowDetail,
+};
 
 use crate::plugins::{
     camera::camera_runtime_state_types::ZooCamera,
     environment::environment_presentation_types::EnvironmentLight,
 };
 
-use super::{
-    graphics_settings_types::{GraphicsSettings, ReplaceGraphicsSettingsRequest, ShadowDetail},
-    graphics_settings_validation::validate_proposed_graphics_settings,
-};
+use super::graphics_settings_validation::validate_proposed_graphics_settings;
 
 pub(super) fn validate_and_accept_requested_graphics_settings(
     mut requests: MessageReader<ReplaceGraphicsSettingsRequest>,

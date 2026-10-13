@@ -1,10 +1,15 @@
 //! Animal show stages, authored schedules, editor state, and platform upgrades.
 
 mod cleanup;
+pub(crate) mod performer_training;
+mod show_audience_lifecycle;
+mod show_audience_types;
 mod show_donation_summary_presentation;
 mod show_editor_interaction_types;
 mod show_editor_presentation_lifecycle;
 mod show_editor_ui_action_routing;
+pub(crate) mod show_event_lifecycle;
+pub(crate) mod show_event_types;
 mod show_platform_upgrade_lifecycle;
 mod show_platform_upgrade_presentation;
 pub(crate) mod show_platform_upgrade_types;
@@ -19,8 +24,8 @@ mod show_timing_operations;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use show_platform_upgrade_types::{
     CommitShowPlatformUpgradeEdit, RestoreShowPlatformUpgrade, ShowPlatformUpgradeEditAcknowledged,
 };
@@ -83,6 +88,10 @@ impl Plugin for ShowsPlugin {
                     show_scheduler_link_cleanup::
                         remove_show_schedule_entries_and_editor_links_with_missing_owners,
                     cleanup::remove_departed_animals_from_scheduled_show_performances,
+                    show_event_lifecycle::remove_expired_animal_show_events,
+                    show_audience_lifecycle::synchronize_authored_show_attendance.after(
+                        crate::plugins::guests::guest_lifecycle_and_memory_execution::advance_guest_lifecycle,
+                    ),
                 )
                     .chain()
                     .in_set(FixedGameSet::Cleanup)

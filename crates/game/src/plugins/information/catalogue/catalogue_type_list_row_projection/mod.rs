@@ -1,8 +1,8 @@
 use bevy::{ecs::entity::EntityHashMap, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use crate::plugins::progression::catalogue_entry_availability::{catalogue_entry_is_available, catalogue_entry_can_be_researched};
 use crate::plugins::progression::unlock_types::UnlockedCatalogueDefinitionSet;
@@ -121,6 +121,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
                     .collect::<Vec<_>>()
             });
         let Some(&(catalogue_index, entry)) = included_entries.get(usize::from(row.index)) else {
+            commands.entity(entity).remove::<CatalogueRowEntry>();
             if *visibility != Visibility::Hidden {
                 *visibility = Visibility::Hidden;
             }

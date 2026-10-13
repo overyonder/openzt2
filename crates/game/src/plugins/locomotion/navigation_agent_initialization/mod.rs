@@ -41,12 +41,15 @@ pub(super) fn initialize_navigation_agents_with_bounded_runtime_state(
             ContactSteering::default(),
             Route::with_capacity(locomotion_capacity.max_route_points),
             SpatialCell::OUTSIDE,
-            LocomotionMode::default(),
             MotionProgress {
                 last_position: navigation_agent_transform.translation(),
                 stationary_ticks: 0,
             },
         ));
+        // Entity owners select modes before navigation runtime state is ready.
+        commands
+            .entity(navigation_agent_entity)
+            .insert_if_new(LocomotionMode::default());
         if rigid_body.is_none() {
             commands
                 .entity(navigation_agent_entity)

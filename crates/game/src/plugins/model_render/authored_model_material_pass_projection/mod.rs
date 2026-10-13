@@ -1,4 +1,3 @@
-use crate::assets::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
 use bevy::platform::collections::HashSet;
 use bevy::{
     asset::AssetEvent,
@@ -10,16 +9,19 @@ use bevy::{
     prelude::*,
     render::storage::ShaderBuffer,
 };
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
 
 use crate::{
-    assets::material::{
-        material_asset_types::MaterialAsset, runtime::effect_pass_gpu_data::EffectPassMaterial,
-    },
     plugins::camera::camera_runtime_state_types::ZooCamera,
     plugins::environment::environment_presentation_types::EnvironmentLight,
     plugins::environment::environment_state_types::AuthoredWindShaderPresentationState,
-    plugins::settings::graphics_settings_types::GraphicsSettings,
-    plugins::world_spawn::prefab_presentation_types::PrefabMaterialOverrides,
+    plugins::world_spawn::prefab_presentation_types::{
+        PrefabClothingTextures, PrefabMaterialOverrides,
+    },
+};
+use openzt2_game_assets::material::{
+    material_asset_types::MaterialAsset, runtime::effect_pass_gpu_data::EffectPassMaterial,
 };
 
 use super::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
@@ -45,7 +47,7 @@ pub(super) struct AdditionalAuthoredModelMaterialPass;
 pub(super) struct PerDrawEffectPassMaterial;
 
 #[derive(Component)]
-pub(super) struct ProgrammableEffectPassMaterial;
+pub(super) struct DynamicEffectPassMaterial;
 
 pub(crate) const PRIMARY_EFFECT_PASS_RENDER_VIEW_LAYER: usize = 5;
 pub(crate) const WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER: usize = 6;
@@ -69,7 +71,11 @@ pub(super) struct EffectPassMaterialSourceRenderLayers(pub(super) RenderLayers);
 pub(super) fn project_authored_model_material_passes(
     mut commands: Commands,
     roots: Query<
-        (Entity, &PrefabMaterialOverrides),
+        (
+            Entity,
+            &PrefabMaterialOverrides,
+            Option<&PrefabClothingTextures>,
+        ),
         (
             With<ModelExpanded>,
             Without<AuthoredModelMaterialPassesProjected>,
@@ -93,20 +99,26 @@ pub(super) fn project_authored_model_material_passes(
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     cameras: Query<
         (
+            Entity,
             &Camera,
             &GlobalTransform,
             &Projection,
             Option<&RenderLayers>,
+            Has<EffectPassMaterialRenderView>,
         ),
         With<Camera3d>,
     >,
-    hierarchy: Query<(Option<&ChildOf>, Option<&RenderLayers>)>,
+    hierarchy: Query<(
+        Option<&ChildOf>,
+        Option<&RenderLayers>,
+        Option<&super::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+    )>,
 ) {
-    for (root, overrides) in &roots {
+    for (root, overrides, clothing) in &roots {
         let source_parent = hierarchy
             .get(root)
             .ok()
-            .and_then(|(parent, _)| parent.map(ChildOf::parent))
+            .and_then(|(parent, _, _)| parent.map(ChildOf::parent))
             .unwrap_or(root);
         let source_index = children
             .get(source_parent)
@@ -114,9 +126,12 @@ pub(super) fn project_authored_model_material_passes(
             .and_then(|children| children.iter().position(|child| child == root))
             .unwrap_or(0);
         let render_layers = render_layers_for_prefab_entity_and_ancestor_chain(root, &hierarchy);
-        let Some((_, camera_transform, camera_projection, _)) =
-            cameras.iter().find(|(camera, _, _, camera_layers)| {
-                camera.is_active && camera_layers.unwrap_or_default().intersects(&render_layers)
+        let Some((view_entity, _, camera_transform, camera_projection, _, _)) = cameras
+            .iter()
+            .find(|(_, camera, _, _, camera_layers, additional_view)| {
+                camera.is_active
+                    && !additional_view
+                    && camera_layers.unwrap_or_default().intersects(&render_layers)
             })
         else {
             continue;
@@ -209,11 +224,30 @@ pub(super) fn project_authored_model_material_passes(
                 .iter()
                 .filter_map(|handle| {
                     let template = writable_effect_materials.get(handle)?;
-                    // Fixed-function transforms use Bevy's mesh/view bindings.
-                    // Programmable wind/light-only bindings are also shared;
-                    // their presence does not make their values instance-local.
+                    let clothed =
+                        material
+                            .netimmerse_texture_binding
+                            .as_ref()
+                            .and_then(|binding| {
+                                let texture = clothing?.0.iter().find(|(id, _)| {
+                                    name.0
+                                        .eq_ignore_ascii_case(&id.to_lowercase_hexadecimal_string())
+                                })?;
+                                Some(template.clone_with_netimmerse_decal(
+                                    binding.decal_stage,
+                                    binding.decal_uv_set,
+                                    texture.1.clone(),
+                                    &mut effect_uniform_buffers,
+                                ))
+                            });
+                    let template = clothed.as_ref().unwrap_or(template);
+                    // Only model/view-dependent inputs require instance-local
+                    // buffers; world wind/light-only registers remain shared.
                     if !template.requires_draw_specific_shader_registers() {
-                        return Some(handle.clone());
+                        return Some(clothed.map_or_else(
+                            || handle.clone(),
+                            |material| writable_effect_materials.add(material),
+                        ));
                     }
                     let mut projected = template.clone();
                     projected.bind_per_draw_transform_semantics(
@@ -222,7 +256,17 @@ pub(super) fn project_authored_model_material_passes(
                         true,
                         true,
                     );
-                    projected.allocate_programmable_float_register_buffers_for_model_view(
+                    projected.bind_fixed_function_transform_expressions(
+                        transform.to_matrix(),
+                        view_entity,
+                        &view_transforms,
+                        true,
+                        true,
+                        None,
+                        None,
+                        None,
+                    );
+                    projected.allocate_dynamic_uniform_buffers_for_model_view(
                         &mut effect_uniform_buffers,
                     );
                     Some(writable_effect_materials.add(projected))
@@ -234,11 +278,11 @@ pub(super) fn project_authored_model_material_passes(
             };
             if writable_effect_materials
                 .get(&first_pass)
-                .is_some_and(EffectPassMaterial::has_programmable_effect_parameter_bindings)
+                .is_some_and(EffectPassMaterial::has_dynamic_effect_parameter_bindings)
             {
-                target.insert(ProgrammableEffectPassMaterial);
+                target.insert(DynamicEffectPassMaterial);
             } else {
-                target.remove::<ProgrammableEffectPassMaterial>();
+                target.remove::<DynamicEffectPassMaterial>();
             }
             target
                 .insert(Visibility::Inherited)
@@ -265,9 +309,9 @@ pub(super) fn project_authored_model_material_passes(
                 ));
                 if writable_effect_materials
                     .get(pass)
-                    .is_some_and(EffectPassMaterial::has_programmable_effect_parameter_bindings)
+                    .is_some_and(EffectPassMaterial::has_dynamic_effect_parameter_bindings)
                 {
-                    additional_pass.insert(ProgrammableEffectPassMaterial);
+                    additional_pass.insert(DynamicEffectPassMaterial);
                 }
                 if let Some(layers) = layers {
                     additional_pass.insert(layers.clone());
@@ -297,14 +341,24 @@ pub(super) fn project_authored_model_material_passes(
 pub(super) fn update_per_draw_effect_transform_semantics(
     mut hot_loop_measurements: Local<MaterialHotLoopMeasurements>,
     mut prepared_views: Local<Vec<(Entity, EffectRenderViewTransforms)>>,
-    camera: Single<
+    cameras: Query<
         (
+            Entity,
+            Ref<Camera>,
             Ref<GlobalTransform>,
             Ref<Projection>,
+            Option<&RenderLayers>,
             Option<Ref<DistanceFog>>,
+            Has<ZooCamera>,
+            Has<EffectPassMaterialRenderView>,
         ),
-        With<ZooCamera>,
+        With<Camera3d>,
     >,
+    hierarchy: Query<(
+        Option<&ChildOf>,
+        Option<&RenderLayers>,
+        Option<&super::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+    )>,
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(
         Ref<DirectionalLight>,
@@ -315,28 +369,23 @@ pub(super) fn update_per_draw_effect_transform_semantics(
     wind: Single<Ref<AuthoredWindShaderPresentationState>>,
     mut effect_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
-    render_views: Query<
-        (Entity, Ref<GlobalTransform>, Ref<Projection>),
-        With<EffectPassMaterialRenderView>,
-    >,
     renderables: Query<
         (
+            Entity,
             Ref<GlobalTransform>,
             Ref<MeshMaterial3d<EffectPassMaterial>>,
             Ref<PerDrawEffectPassMaterial>,
             Ref<ViewVisibility>,
             Option<&EffectPassMaterialRenderViewProjection>,
         ),
-        With<ProgrammableEffectPassMaterial>,
+        With<DynamicEffectPassMaterial>,
     >,
 ) {
     let measurement_started =
-        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::INFO)
+        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::DEBUG)
             .then(std::time::Instant::now);
     let mut scanned = 0_u64;
     let mut updated = 0_u64;
-    let (camera_transform, camera_projection, distance_fog) = camera.into_inner();
-    let fog_changed = distance_fog.as_ref().is_some_and(|fog| fog.is_changed());
     let wind_changed = wind.is_changed();
     let light_changed = ambient_light.is_changed()
         || directional_lights
@@ -347,15 +396,22 @@ pub(super) fn update_per_draw_effect_transform_semantics(
                     || visibility.is_changed()
                     || authored_light.is_changed()
             });
-    let primary_view =
-        EffectRenderViewTransforms::from_camera(&camera_transform, &camera_projection);
     prepared_views.clear();
-    prepared_views.extend(render_views.iter().map(|(entity, transform, projection)| {
-        (
-            entity,
-            EffectRenderViewTransforms::from_camera(&transform, &projection),
-        )
-    }));
+    prepared_views.extend(
+        cameras
+            .iter()
+            .filter(|(_, camera, ..)| camera.is_active)
+            .map(|(entity, _, transform, projection, ..)| {
+                (
+                    entity,
+                    EffectRenderViewTransforms::from_camera(&transform, &projection),
+                )
+            }),
+    );
+    let world_fog = cameras
+        .iter()
+        .find(|(_, _, _, _, _, _, zoo, _)| *zoo)
+        .and_then(|(_, _, _, _, _, fog, _, _)| fog);
     let mut light_rig = [Vec4::ZERO; 7];
     for (light, transform, visibility, authored_light) in &directional_lights {
         let Some(light_index) = authored_light.kind_rank.checked_sub(1).map(usize::from) else {
@@ -374,48 +430,66 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;
     light_rig[6].w = 1.0;
     let wind_registers = wind.shader_registers();
-    for (transform, material_handle, projected_marker, visibility, view_projection) in &renderables
+    for (entity, transform, material_handle, projected_marker, visibility, view_projection) in
+        &renderables
     {
         scanned += 1;
         if !visibility.get() {
             continue;
         }
-        let (transform, view_transform, projection, prepared_view) =
+        let (transform, accepted_camera) =
             if let Some(view_projection) = view_projection {
-                let (Ok(source_transform), Ok((_, view_transform, projection))) = (
-                    renderables
-                        .get(view_projection.source)
-                        .map(|source| source.0),
-                    render_views.get(view_projection.view),
+                let (Ok(source), Ok(camera)) = (
+                    renderables.get(view_projection.source),
+                    cameras.get(view_projection.view),
                 ) else {
                     continue;
                 };
-                let Some((_, prepared)) = prepared_views
-                    .iter()
-                    .find(|(entity, _)| *entity == view_projection.view)
-                else {
+                (source.1, camera)
+            } else {
+                let layers = render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
+                let Some(camera) = cameras.iter().find(
+                    |(_, camera, _, _, camera_layers, _, _, additional_view)| {
+                        camera.is_active
+                            && !additional_view
+                            && camera_layers.unwrap_or_default().intersects(&layers)
+                    },
+                ) else {
                     continue;
                 };
-                (source_transform, view_transform, projection, prepared)
-            } else {
-                (
-                    transform,
-                    camera_transform,
-                    camera_projection,
-                    &primary_view,
-                )
+                (transform, camera)
             };
+        let (view_entity, camera, view_transform, projection, _, view_fog, _, _) = accepted_camera;
+        if !camera.is_active {
+            continue;
+        }
+        let Some((_, prepared_view)) = prepared_views
+            .iter()
+            .find(|(entity, _)| *entity == view_entity)
+        else {
+            continue;
+        };
+        // Additional world cameras share the world's authored fog settings, but
+        // derive directional/depth inputs from their own accepted view. Preview
+        // cameras keep their own environment instead of borrowing the zoo view.
+        let distance_fog = if view_projection.is_some() {
+            view_fog.or(world_fog)
+        } else {
+            view_fog
+        };
+        let fog_changed = distance_fog.as_ref().is_some_and(|fog| fog.is_changed());
         let force = material_handle.is_changed()
             || visibility.is_changed()
             || projected_marker.is_changed();
         let model_changed = force || transform.is_changed();
-        let view_changed = force || view_transform.is_changed() || projection.is_changed();
+        let view_changed =
+            force || camera.is_changed() || view_transform.is_changed() || projection.is_changed();
         // Only CPU register values change here. Buffer handles and pipeline
         // state stay fixed; ShaderBuffer assets publish the GPU updates.
         // Emitting Material::Modified would unnecessarily rebuild bind groups.
         let Some(material) = effect_materials
             .get_mut_untracked(&material_handle.0)
-            .filter(|material| material.has_programmable_effect_parameter_bindings())
+            .filter(|material| material.has_dynamic_effect_parameter_bindings())
         else {
             continue;
         };
@@ -448,6 +522,19 @@ pub(super) fn update_per_draw_effect_transform_semantics(
             (force || wind_changed).then_some(wind_registers.as_slice()),
             (force || light_changed).then_some(light_rig.as_slice()),
             fog_parameters.as_ref().map(|values| values.as_slice()),
+        );
+        material.bind_fixed_function_transform_expressions(
+            transform.to_matrix(),
+            view_entity,
+            prepared_view,
+            model_changed,
+            view_changed,
+            (force || wind_changed).then_some(wind_registers.as_slice()),
+            (force || light_changed).then_some(light_rig.as_slice()),
+            fog_parameters.as_ref().map(|values| values.as_slice()),
+        );
+        material.write_changed_fixed_function_transforms_to_persistent_buffer(
+            &mut effect_uniform_buffers,
         );
         material
             .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
@@ -510,7 +597,7 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     let measurement_started =
-        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::INFO)
+        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::DEBUG)
             .then(std::time::Instant::now);
     let mut scanned = 0_u64;
     let mut created = 0_u64;
@@ -631,9 +718,18 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
                 true,
                 true,
             );
-            projected_material.allocate_programmable_float_register_buffers_for_model_view(
-                &mut effect_uniform_buffers,
+            projected_material.bind_fixed_function_transform_expressions(
+                source_transform.to_matrix(),
+                *view,
+                prepared_view,
+                true,
+                true,
+                None,
+                None,
+                None,
             );
+            projected_material
+                .allocate_dynamic_uniform_buffers_for_model_view(&mut effect_uniform_buffers);
             let mut projection = commands.spawn((
                 mesh.clone(),
                 MeshMaterial3d(effect_materials.add(projected_material)),
@@ -642,7 +738,7 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
                 ChildOf(source),
                 RenderLayers::layer(*render_layer),
                 PerDrawEffectPassMaterial,
-                ProgrammableEffectPassMaterial,
+                DynamicEffectPassMaterial,
                 EffectPassMaterialRenderViewProjection {
                     source,
                     view: *view,
@@ -692,7 +788,7 @@ fn report_material_hot_loop_measurements(
     measurements.visited_items += visited;
     measurements.changed_items += changed;
     if measurements.calls == 120 {
-        info!(target: "openzt2_material_hot_loops", system_name,
+        debug!(target: "openzt2_material_hot_loops", system_name,
             calls = measurements.calls, mean_ms = measurements.total_milliseconds / 120.0,
             worst_ms = measurements.worst_milliseconds, visited_per_call = measurements.visited_items / 120,
             changed_per_call = measurements.changed_items / 120, "material hot loop attribution");
@@ -724,9 +820,17 @@ pub(super) fn invalidate_authored_model_material_pass_projection(
     mut events: MessageReader<AssetEvent<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     mut commands: Commands,
-    roots: Query<(Entity, &PrefabMaterialOverrides), With<AuthoredModelMaterialPassesProjected>>,
+    roots: Query<
+        (
+            Entity,
+            &PrefabMaterialOverrides,
+            Option<Ref<PrefabClothingTextures>>,
+        ),
+        With<AuthoredModelMaterialPassesProjected>,
+    >,
     children: Query<&Children>,
     additional_passes: Query<(), With<AdditionalAuthoredModelMaterialPass>>,
+    changed_clothing: Query<(), Changed<PrefabClothingTextures>>,
 ) {
     let changed_materials = events
         .read()
@@ -739,11 +843,12 @@ pub(super) fn invalidate_authored_model_material_pass_projection(
         })
         .collect::<HashSet<_>>();
     let all_materials_changed = graphics_settings.is_changed();
-    if changed_materials.is_empty() && !all_materials_changed {
+    if changed_materials.is_empty() && !all_materials_changed && changed_clothing.is_empty() {
         return;
     }
-    for (root, overrides) in &roots {
-        let root_material_changed = all_materials_changed
+    for (root, overrides, clothing) in &roots {
+        let root_material_changed = clothing.is_some_and(|clothing| clothing.is_changed())
+            || all_materials_changed
             || overrides.0.iter().any(|material_override| {
                 material_override
                     .handle

@@ -4,10 +4,10 @@ use openzt2_game_data::{
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
 };
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::authored_economy_fact_hydration::find_authored_object_or_placeable_price;
 use crate::plugins::economy::money_types::Money;
 use crate::plugins::ui::animation::UiAnimationOrigin;
@@ -181,7 +181,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
 
 #[allow(clippy::too_many_arguments)]
 fn write_localized_cursor_money_text_and_font(
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     cost: Money,

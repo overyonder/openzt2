@@ -1,6 +1,7 @@
 use openzt2_game_data::terrain::TerrainGrid;
 
 use crate::plugins::terrain::terrain_navigation_cell_queries::average_terrain_corner_samples_into_navigation_cell_height_and_water;
+use crate::plugins::terrain::terrain_world_sampling::minimum_terrain_triangle_normal_y;
 
 use super::{
     locomotion_types::NavFlags,
@@ -123,8 +124,23 @@ impl TerrainDerivedNavigationGraph {
                         if water {
                             eligibility_flags.0 |= NavFlags::WATER.0;
                         }
+                        let tile_columns = terrain_cell_column_count / 4;
+                        let slope_tile = authored_terrain_grid
+                            .slope_tiles
+                            .get(z as usize / 4 * tile_columns + x as usize / 4)?;
+                        // Source rows run opposite world Z. Reflect the corners
+                        // and diagonal just as terrain chunk sampling does.
+                        let heights = indexes.map(|index| {
+                            authored_terrain_grid.samples[index].height_relative_to_base_metres
+                        });
+                        let minimum_triangle_normal_y = minimum_terrain_triangle_normal_y(
+                            [heights[2], heights[3], heights[0], heights[1]],
+                            authored_terrain_grid.units.cell_size_metres,
+                            !slope_tile.uses_alternate_diagonal,
+                        )?;
                         navigation_nodes.push(TerrainDerivedNavigationGraphNode {
                             height_centimetres,
+                            minimum_triangle_normal_y,
                             clearance_centimetres: terrain_cell_size_centimetres,
                             water_depth_centimetres,
                             eligibility_flags,

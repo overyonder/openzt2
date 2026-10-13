@@ -5,8 +5,8 @@ use openzt2_game_data::terrain::{
     TerrainWaterGeometricWavePresentation, TerrainWaterRippleWavePresentation,
 };
 
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 const GEOMETRIC_AMPLITUDE_SCALE: f32 = 0.0019;
 const RIPPLE_AMPLITUDE_SCALE: f32 = 0.0499;

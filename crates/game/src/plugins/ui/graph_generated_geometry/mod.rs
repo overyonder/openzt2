@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::localization::loaded_localization_queries::LoadedLocalizationView;
+use openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView;
 
 use super::graph_presentation_types::UiGeneratedGraphPresentationElement;
 

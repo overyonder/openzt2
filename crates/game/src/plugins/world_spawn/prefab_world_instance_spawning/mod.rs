@@ -10,14 +10,12 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::{
-    assets::scene_prefab::ScenePrefabAsset,
-    plugins::{
-        animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets,
-        information::entity_selection_types::Inspectable,
-        physics::collider_hydration::hydrate_scene_prefab_colliders_into_avian_physics,
-    },
+use crate::plugins::{
+    animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets,
+    information::entity_selection_types::Inspectable,
+    physics::collider_hydration::hydrate_scene_prefab_colliders_into_avian_physics,
 };
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::{
     persistent_id_types::PersistentId,

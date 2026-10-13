@@ -1,16 +1,13 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::{
-        terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
-        world_spawn::{
-            selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle,
-            world_membership_types::WorldRoot,
-            world_terrain_hydration::WorldTerrainHorizontalBounds,
-        },
+use crate::plugins::{
+    terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
+    world_spawn::{
+        selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle,
+        world_membership_types::WorldRoot, world_terrain_hydration::WorldTerrainHorizontalBounds,
     },
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     locomotion_types::{

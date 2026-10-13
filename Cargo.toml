@@ -3,16 +3,17 @@ members = [
     "crates/z2f",
     "crates/d3d9-effects",
     "crates/game-data",
+    "crates/game-assets",
     "crates/game",
 ]
 default-members = ["crates/game"]
 # Keep upstream code out of first-party workspace checks while allowing its
 # focused GPU-resource tests to run through its own manifest.
-exclude = ["vendor/bevy_render", "vendor/bevy_image", "vendor/lunify"]
+exclude = ["vendor/bevy_render", "vendor/bevy_image", "vendor/lunify", "vendor/taffy"]
 resolver = "3"
 
 [workspace.package]
-version = "0.6.0-alpha"
+version = "0.7.0-alpha"
 edition = "2021"
 rust-version = "1.96"
 publish = false
@@ -47,37 +48,27 @@ opt-level = 1
 debug = 1
 incremental = true
 codegen-units = 256
+lto = "off"
 
 [profile.dev.package."*"]
 opt-level = 3
 
 [profile.release]
+opt-level = 3
+debug = 0
+incremental = false
 codegen-units = 1
 lto = "thin"
-strip = "debuginfo"
+strip = "symbols"
 
 [profile.profiling]
-# Tracy/perf builds need optimized hot loops and symbols, but whole-program LTO
-# obscures iteration time without materially changing which systems are hot.
+# Match shipping optimization settings, retaining symbols for profiling.
 inherits = "release"
 debug = 1
 strip = "none"
-incremental = true
-codegen-units = 16
-lto = false
-
-[profile.release-profiling]
-# Use this only to measure the exact final release optimization strategy.
-inherits = "release"
-debug = 1
-strip = "none"
-
-[profile.wasm-release]
-inherits = "release"
-opt-level = "s"
-strip = "debuginfo"
 
 [patch.crates-io]
+taffy = { path = "vendor/taffy" }
 # Stripped Lua chunks retain executable instructions and closure upvalue counts.
 lunify = { path = "vendor/lunify" }
 # Preserve legacy 24-bit DDS BGR channel order during alpha expansion.

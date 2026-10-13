@@ -32,6 +32,7 @@ pub(crate) struct TransportTrackConstructionPiece {
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct PreparedTransportTrackConstructionEdit {
+    pub(crate) removes_track: bool,
     pub(crate) piece_entities: Box<[PersistentId]>,
     pub(crate) destination_junction_entity: Option<PersistentId>,
     pub(crate) definition: AssetId,

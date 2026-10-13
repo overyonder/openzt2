@@ -1,4 +1,4 @@
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 
 #[inline]
 pub(super) fn convert_authored_nanoseconds_to_fixed_simulation_ticks(

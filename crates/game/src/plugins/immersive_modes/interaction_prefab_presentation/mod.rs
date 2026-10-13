@@ -1,15 +1,13 @@
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, prelude::*};
 
-use crate::{
-    assets::scene_prefab::ScenePrefabAsset,
-    plugins::world_spawn::{
-        persistent_id_types::PersistentId,
-        prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
-        prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance,
-        world_membership_types::WorldRoot,
-    },
+use crate::plugins::world_spawn::{
+    persistent_id_types::PersistentId,
+    prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
+    prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance,
+    world_membership_types::WorldRoot,
 };
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::immersive_mode_policy_types::{InteractionPrefab, InteractionPrefabVisual};
 

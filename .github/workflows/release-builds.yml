@@ -63,7 +63,14 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y autoconf automake libtool flex bison libjson-perl cmake ninja-build pkg-config spirv-headers libvulkan-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev patchelf dpkg-dev mingw-w64-tools
+          sudo apt-get install -y autoconf automake libtool flex bison libjson-perl cmake ninja-build pkg-config spirv-headers libvulkan-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev patchelf dpkg-dev mingw-w64-tools rpm libarchive-tools zstd squashfs-tools desktop-file-utils flatpak xz-utils librsvg2-bin
+      - name: Linux package runtimes and tools
+        if: runner.os == 'Linux'
+        run: |
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install --user --noninteractive --no-related flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
+          bash tools/release/linux/install-tools.sh "$RUNNER_TEMP/openzt2-packaging"
+          echo "OPENZT2_LINUX_PACKAGE_TOOLS=$RUNNER_TEMP/openzt2-packaging" >> "$GITHUB_ENV"
       - uses: Swatinem/rust-cache@v2
         with:
           prefix-key: v1-rust
@@ -146,6 +153,10 @@ jobs:
             build/releases/windows-amd64/OpenZT2-*.zip
             build/releases/darwin-arm64/OpenZT2-*.dmg
             build/releases/linux-x86_64/OpenZT2-*.deb
+            build/releases/linux-x86_64/OpenZT2-*.rpm
+            build/releases/linux-x86_64/OpenZT2-*.pkg.tar.zst
+            build/releases/linux-x86_64/OpenZT2-*.AppImage
+            build/releases/linux-x86_64/OpenZT2-*.flatpak
             build/releases/windows-amd64/SHA256SUMS
             build/releases/darwin-arm64/SHA256SUMS
             build/releases/linux-x86_64/SHA256SUMS
@@ -174,10 +185,21 @@ jobs:
           output = pathlib.Path('release')
           output.mkdir()
           checksums = []
+          version = __import__('os').environ['RELEASE_TAG'].removeprefix('v')
+          expected_packages = {
+              f'OpenZT2-{version}-windows-amd64.zip',
+              f'OpenZT2-{version}-darwin-arm64.dmg',
+              *(f'OpenZT2-{version}-linux-x86_64.{suffix}'
+                for suffix in ('deb', 'rpm', 'pkg.tar.zst', 'AppImage', 'flatpak')),
+          }
+          seen = set()
           for manifest in sorted(root.rglob('SHA256SUMS')):
               for line in manifest.read_text().splitlines():
                   expected, name = line.split(maxsplit=1)
                   name = name.strip()
+                  if name not in expected_packages or name in seen:
+                      raise SystemExit(f'Unexpected or duplicate package: {name}')
+                  seen.add(name)
                   package = manifest.parent / name
                   if package.name != name or not package.is_file():
                       raise SystemExit(f'Invalid package path: {name}')
@@ -187,8 +209,8 @@ jobs:
                       raise SystemExit(f'Checksum mismatch: {name}')
                   shutil.copy2(package, output / name)
                   checksums.append(f'{actual}  {name}')
-          if len(checksums) != 3:
-              raise SystemExit('Expected Windows, macOS and Linux packages')
+          if seen != expected_packages:
+              raise SystemExit(f'Missing release packages: {sorted(expected_packages - seen)}')
           (output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
           PY
       - name: Publish tagged release
@@ -200,7 +222,7 @@ jobs:
           cat > release-notes.md <<'EOF'
           Early alpha. Gameplay remains incomplete and known bugs are tracked in Issues.
 
-          Packages: Windows x64 (.zip), macOS Apple Silicon (.dmg), Linux x64 (.deb, Ubuntu 24.04 or compatible).
+          Packages: Windows x64 (.zip), macOS Apple Silicon (.dmg), Linux x64 (.deb, .rpm, .pkg.tar.zst, AppImage and Flatpak). Native Linux packages and AppImage require glibc 2.39 or newer and the system libraries listed in the Linux packaging documentation; Flatpak uses its own runtime. See tools/release/linux/README.md for installation and game-file locations.
 
           Requires your own Zoo Tycoon 2 game files. They are not included. These packages have not yet been verified through complete gameplay sessions on all three platforms.
           EOF

@@ -1,13 +1,11 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::terrain::{
-        terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
-        terrain_navigation_cell_queries::read_navigation_cell_height_and_water_from_terrain_samples,
-        terrain_navigation_change_types::TerrainNavigationChanged,
-    },
+use crate::plugins::terrain::{
+    terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
+    terrain_navigation_cell_queries::read_navigation_cell_geometry_from_terrain_samples,
+    terrain_navigation_change_types::TerrainNavigationChanged,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     locomotion_types::{ActiveTerrainDerivedNavigationGraph, Destination, Route},
@@ -95,8 +93,8 @@ pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrai
     for z in minimum_terrain_cell.y..=maximum_terrain_cell.y {
         for x in minimum_terrain_cell.x..=maximum_terrain_cell.x {
             let local_terrain_cell = UVec2::new(x, z);
-            let Some((height_centimetres, contains_water)) =
-                read_navigation_cell_height_and_water_from_terrain_samples(
+            let Some((height_centimetres, contains_water, minimum_triangle_normal_y)) =
+                read_navigation_cell_geometry_from_terrain_samples(
                     terrain_chunk,
                     terrain_asset,
                     edited_terrain_samples,
@@ -128,6 +126,7 @@ pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrai
                         global_terrain_cell,
                         height_centimetres,
                         contains_water,
+                        minimum_triangle_normal_y,
                     )
                     .is_some(),
                 "indexed terrain cell must exist in the active terrain-derived navigation graph"

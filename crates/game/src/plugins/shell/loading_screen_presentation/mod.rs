@@ -4,25 +4,23 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-        world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+use crate::plugins::{
+    ui::{
+        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
+        authored_ui_visual_types::{UiSourceRect, UiVisualLayer},
+        ui_document_lifecycle_contracts::UiRoleRequests,
     },
-    plugins::{
-        ui::{
-            authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
-            authored_ui_visual_types::{UiSourceRect, UiVisualLayer},
-            ui_document_lifecycle_contracts::UiRoleRequests,
-        },
-        world_spawn::{
-            world_hydration_types::WorldHydration, world_load_completion_marker::WorldLoadCompleted,
-        },
+    world_spawn::{
+        world_hydration_types::WorldHydration, world_load_completion_marker::WorldLoadCompleted,
     },
+};
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
+    },
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+    world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
 };
 
 #[derive(Component)]

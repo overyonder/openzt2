@@ -1,7 +1,7 @@
 use super::transport_fact_validation::authored_transport_track_piece_chain_is_valid;
-use crate::assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
 use crate::plugins::economy::money_types::Money;
 use bevy::prelude::*;
+use openzt2_game_assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 

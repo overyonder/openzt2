@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
 use crate::plugins::simulation_time::simulation_control_types::{
-    SetSimulationPaused, SimulationControl,
+    SimulationControl, SimulationPauseRequest,
 };
 
 use super::immersive_mode_policy_types::{PauseSimulationWhileActive, RestoreSimulationPause};
@@ -13,7 +13,7 @@ pub(super) fn pause_simulation_while_requested_immersive_mode_is_active_and_rest
     previous_simulation_pause_states: Query<&RestoreSimulationPause>,
     simulation_control: Option<Res<SimulationControl>>,
     mut removed_pause_policy_components: RemovedComponents<PauseSimulationWhileActive>,
-    mut set_simulation_paused_requests: MessageWriter<SetSimulationPaused>,
+    mut set_simulation_paused_requests: MessageWriter<SimulationPauseRequest>,
     mut commands: Commands,
 ) {
     for controller_entity in &newly_pausing_controllers {
@@ -24,14 +24,15 @@ pub(super) fn pause_simulation_while_requested_immersive_mode_is_active_and_rest
                     .as_deref()
                     .is_some_and(|simulation_control| simulation_control.paused),
             ));
-        set_simulation_paused_requests.write(SetSimulationPaused(true));
+        set_simulation_paused_requests.write(SimulationPauseRequest::Set(true));
     }
     for controller_entity in removed_pause_policy_components.read() {
         if let Ok(previous_simulation_pause_state) =
             previous_simulation_pause_states.get(controller_entity)
         {
-            set_simulation_paused_requests
-                .write(SetSimulationPaused(previous_simulation_pause_state.0));
+            set_simulation_paused_requests.write(SimulationPauseRequest::Set(
+                previous_simulation_pause_state.0,
+            ));
             commands
                 .entity(controller_entity)
                 .remove::<RestoreSimulationPause>();

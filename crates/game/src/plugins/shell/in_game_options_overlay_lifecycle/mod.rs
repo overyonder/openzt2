@@ -1,17 +1,15 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        simulation_time::simulation_control_types::SetSimulationPaused,
-        ui::{
-            authored_modal_presentation::UiAuthoredModalPresentation,
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
+use crate::plugins::{
+    simulation_time::simulation_control_types::SimulationPauseRequest,
+    ui::{
+        authored_modal_presentation::UiAuthoredModalPresentation,
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct InGameOptionsOverlay {
@@ -37,7 +35,7 @@ pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause
     roots: Query<(Entity, &UiDocumentRoot)>,
     documents: Res<Assets<UiDocumentAsset>>,
     modal_nodes: Query<(&UiAuthoredModalPresentation, &UiDocumentOwner, &Visibility)>,
-    mut set_paused: MessageWriter<SetSimulationPaused>,
+    mut set_paused: MessageWriter<SimulationPauseRequest>,
 ) {
     for (overlay_entity, overlay_state) in &overlays {
         // One options menu is open at a time; it may still be loading.
@@ -56,7 +54,7 @@ pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause
         }) {
             continue;
         }
-        set_paused.write(SetSimulationPaused(
+        set_paused.write(SimulationPauseRequest::Set(
             overlay_state.previous_simulation_paused_state,
         ));
         commands.entity(document_root_entity).despawn();
@@ -67,10 +65,10 @@ pub(super) fn close_hidden_in_game_options_overlays_and_restore_simulation_pause
 pub(super) fn close_in_game_options_overlays_when_game_exits(
     mut commands: Commands,
     overlays: Query<(Entity, &InGameOptionsOverlay)>,
-    mut set_paused: MessageWriter<SetSimulationPaused>,
+    mut set_paused: MessageWriter<SimulationPauseRequest>,
 ) {
     for (overlay_entity, overlay_state) in &overlays {
-        set_paused.write(SetSimulationPaused(
+        set_paused.write(SimulationPauseRequest::Set(
             overlay_state.previous_simulation_paused_state,
         ));
         commands.entity(overlay_entity).despawn();

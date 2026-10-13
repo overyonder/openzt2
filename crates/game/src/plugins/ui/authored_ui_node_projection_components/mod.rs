@@ -4,7 +4,7 @@ use openzt2_game_data::ui_document::node_property_binding::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 /// Retains the canonical document asset which produced one projected UI root.
 #[derive(Component, Debug, Clone)]

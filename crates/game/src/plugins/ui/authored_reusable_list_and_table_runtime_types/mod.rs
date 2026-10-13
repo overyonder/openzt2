@@ -3,7 +3,7 @@ use openzt2_game_data::{
     ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct UiListPolicy {

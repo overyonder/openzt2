@@ -9,7 +9,6 @@ mod display_settings_application;
 pub mod display_settings_types;
 mod display_settings_validation;
 mod graphics_settings_application;
-pub mod graphics_settings_types;
 mod graphics_settings_validation;
 pub mod online_message_policy_types;
 pub mod options_screen_settings_draft_types;
@@ -19,8 +18,10 @@ use display_settings_types::{
     DisplaySettings, ReplaceDisplaySettingsRequest, SelectScreenResolutionRequest,
     SupportedDisplayResolutions,
 };
-use graphics_settings_types::{GraphicsSettings, ReplaceGraphicsSettingsRequest};
 use online_message_policy_types::OnlineMessagePolicy;
+use openzt2_game_assets::graphics_settings_types::{
+    GraphicsSettings, ReplaceGraphicsSettingsRequest,
+};
 use options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft;
 
 use bevy::{ecs::schedule::common_conditions::*, prelude::*};

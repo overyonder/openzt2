@@ -20,7 +20,7 @@ pub(super) struct PhotoSnapshotRecord {
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct PhotoChallengeProgressSnapshotRecord {
-    pub challenge_row_index: u32,
+    pub challenge_definition_identifier: AssetId,
     pub completed_by_photo_persistent_identifier: Option<PersistentId>,
     pub rating_stars: u8,
 }

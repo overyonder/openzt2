@@ -1,14 +1,10 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::construction::{
-        construction_interaction_types::{
-            ConstructionPreview, PlacementFailure, PlacementValidity,
-        },
-        construction_transaction_types::PrepareConstruction,
-    },
+use crate::plugins::construction::{
+    construction_interaction_types::{ConstructionPreview, PlacementFailure, PlacementValidity},
+    construction_transaction_types::PrepareConstruction,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     terrain_brush_interaction_state::{TerrainBrushDab, TerrainBrushPath},

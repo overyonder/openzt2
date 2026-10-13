@@ -7,7 +7,7 @@ use super::{
     authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
     ui_document_asset_load_failure::UiDocumentAssetLoadFailed,
 };
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(Component)]
 pub(super) struct PendingCrossDocumentNodeVisibility {
@@ -22,6 +22,7 @@ pub(super) fn queue_cross_document_node_visibility(
     role: UiDocumentRole,
     node: AssetId,
     visible: bool,
+    preserve_temporary_pause: bool,
 ) {
     // Commands retain authored event order, including show/hide before either
     // request entity is query-visible. A later hide cancels a still-loading show.
@@ -36,17 +37,45 @@ pub(super) fn queue_cross_document_node_visibility(
                 (parent.parent() == lifecycle_owner && pending.role == role && pending.node == node)
                     .then_some(entity)
             });
+        let preserve = visible && preserve_temporary_pause;
         let pending = PendingCrossDocumentNodeVisibility {
             role,
             node,
             visible,
         };
         if let Some(existing) = existing {
-            world.entity_mut(existing).insert(pending);
+            let mut entity = world.entity_mut(existing);
+            if preserve {
+                entity.insert(crate::plugins::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause::holding());
+            } else {
+                entity.remove::<crate::plugins::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause>();
+            }
+            entity.insert(pending);
         } else {
-            world.spawn((pending, ChildOf(lifecycle_owner)));
+            let mut entity = world.spawn((pending, ChildOf(lifecycle_owner)));
+            if preserve {
+                entity.insert(crate::plugins::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause::holding());
+            }
         }
     });
+}
+
+pub(super) fn cancel_pending_cross_document_visibility(
+    world: &mut World,
+    owner: Entity,
+    role: Option<UiDocumentRole>,
+) {
+    let requests: Vec<_> = world
+        .query::<(Entity, &PendingCrossDocumentNodeVisibility, &ChildOf)>()
+        .iter(world)
+        .filter_map(|(entity, pending, parent)| {
+            (parent.parent() == owner && role.is_none_or(|role| pending.role == role))
+                .then_some(entity)
+        })
+        .collect();
+    for entity in requests {
+        world.entity_mut(entity).despawn();
+    }
 }
 
 pub(super) fn apply_pending_cross_document_node_visibility(

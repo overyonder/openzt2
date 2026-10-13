@@ -22,6 +22,18 @@ impl InteractionContainerOccupancy {
         })
     }
 
+    /// Everything the container holds, such as the items a guest carries.
+    pub(crate) fn members_of_container(
+        &self,
+        container: Entity,
+    ) -> impl Iterator<Item = Entity> + '_ {
+        self.members
+            .get(&container)
+            .into_iter()
+            .flatten()
+            .map(|(member, _)| *member)
+    }
+
     pub(super) fn members_in_slot(
         &self,
         container: Entity,

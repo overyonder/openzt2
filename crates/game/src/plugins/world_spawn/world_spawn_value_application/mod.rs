@@ -6,9 +6,9 @@ use crate::plugins::simulation_time::deterministic_random_stream::{
 use bevy::prelude::{Assets, Commands, Entity, Name, Query, Res, ResMut};
 use openzt2_game_data::{world_scenario::StartingZooSpawnValue, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::economy::facility_economy_types::Wallet;
 use crate::plugins::economy::money_types::Money;
 use crate::plugins::maintenance::maintenance_types::MaintainableObjectConditionPermille;

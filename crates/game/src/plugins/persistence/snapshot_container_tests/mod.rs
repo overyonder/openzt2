@@ -91,16 +91,25 @@ fn checksum_version_profile_and_ranges_reject_before_apply() {
         Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
     );
 
-    let mut future_version_snapshot_container_bytes = original_snapshot_container_bytes.clone();
-    future_version_snapshot_container_bytes[8..12]
-        .copy_from_slice(&(WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION + 1).to_le_bytes());
-    assert_eq!(
-        validate_world_snapshot_container_and_section_directory(
-            &future_version_snapshot_container_bytes,
-            create_test_profile_identifier(2)
-        ),
-        Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion)
-    );
+    for unsupported_version in [12, WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION + 1] {
+        let mut unsupported_version_snapshot_container_bytes =
+            original_snapshot_container_bytes.clone();
+        unsupported_version_snapshot_container_bytes[8..12]
+            .copy_from_slice(&unsupported_version.to_le_bytes());
+        // Keep the checksum valid: rejection belongs to the version boundary.
+        finalize_world_snapshot_container_header_and_checksum(
+            &mut unsupported_version_snapshot_container_bytes,
+            4,
+        )
+        .unwrap();
+        assert_eq!(
+            validate_world_snapshot_container_and_section_directory(
+                &unsupported_version_snapshot_container_bytes,
+                create_test_profile_identifier(2)
+            ),
+            Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion)
+        );
+    }
     assert_eq!(
         validate_world_snapshot_container_and_section_directory(
             &original_snapshot_container_bytes,

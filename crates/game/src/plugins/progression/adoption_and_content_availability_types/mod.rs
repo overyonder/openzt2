@@ -46,3 +46,9 @@ impl ScenarioContentAvailability {
         }
     }
 }
+
+#[derive(Message, Debug, Clone, Copy)]
+pub(crate) struct MakeScenarioContentAvailableRequest {
+    pub(crate) source: Entity,
+    pub(crate) definition: AssetId,
+}

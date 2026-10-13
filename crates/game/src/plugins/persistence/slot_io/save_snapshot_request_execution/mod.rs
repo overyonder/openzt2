@@ -13,7 +13,10 @@ use super::super::{
     snapshot_container_types::ReusableWorldSnapshotByteBuffer,
 };
 use super::{
-    animal_adoption_offer_inventory_snapshot_section::validate_animal_adoption_offer_inventory_against_loaded_authored_content,
+    animal_adoption_offer_inventory_snapshot_section::{
+        validate_animal_adoption_offer_inventory_against_loaded_authored_content,
+        validate_animal_adoption_offer_inventory_presence_for_session_mode,
+    },
     economy_snapshot_capture::capture_economy_snapshot_records_from_live_world,
     persistence_failure_message_publication::publish_persistence_failure_for_slot_operation,
     photo_snapshot_capture::capture_sorted_photo_and_challenge_progress_snapshot_records_from_live_world,
@@ -119,27 +122,37 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 continue;
             }
         };
-        let animal_adoption_offer_inventory_validation = world_snapshot_capture_queries
-            .active_species
-            .get(&world_snapshot_capture_queries.species_assets)
-            .zip(
-                world_snapshot_capture_queries
-                    .active_world_definitions
-                    .get(&world_snapshot_capture_queries.world_definition_assets),
+        let animal_adoption_offer_inventory_validation =
+            validate_animal_adoption_offer_inventory_presence_for_session_mode(
+                animal_adoption_offer_inventory,
+                world_snapshot_record.session_mode,
             )
-            .and_then(|(species, world_definitions)| {
-                world_definitions
-                    .animal_adoption_offer_configuration()
-                    .map(|configuration| (species, configuration))
-            })
-            .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)
-            .and_then(|(species, configuration)| {
-                validate_animal_adoption_offer_inventory_against_loaded_authored_content(
-                    animal_adoption_offer_inventory,
-                    species,
-                    configuration,
-                    *world_snapshot_capture_queries.fame,
-                )
+            .and_then(|()| {
+                let Some(inventory) = animal_adoption_offer_inventory else {
+                    return Ok(());
+                };
+                world_snapshot_capture_queries
+                    .active_species
+                    .get(&world_snapshot_capture_queries.species_assets)
+                    .zip(
+                        world_snapshot_capture_queries
+                            .active_world_definitions
+                            .get(&world_snapshot_capture_queries.world_definition_assets),
+                    )
+                    .and_then(|(species, world_definitions)| {
+                        world_definitions
+                            .animal_adoption_offer_configuration()
+                            .map(|configuration| (species, configuration))
+                    })
+                    .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)
+                    .and_then(|(species, configuration)| {
+                        validate_animal_adoption_offer_inventory_against_loaded_authored_content(
+                            inventory,
+                            species,
+                            configuration,
+                            *world_snapshot_capture_queries.fame,
+                        )
+                    })
             });
         if let Err(failure_reason) = animal_adoption_offer_inventory_validation {
             snapshot_scratch_storage.clear_logical_contents();
@@ -151,6 +164,54 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
             );
             continue;
         }
+        let habitat_waste_records =
+            match super::maintenance_snapshot_capture::capture_habitat_waste_records(
+                &world_snapshot_capture_queries.habitat_waste,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
+        let animal_snapshot_records =
+            match super::animal_snapshot_capture::capture_animal_snapshot_records(
+                &world_snapshot_capture_queries.animals,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
+        let staff_snapshot_records =
+            match super::staff_snapshot_capture::capture_staff_snapshot_records(
+                &world_snapshot_capture_queries.staff,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
         let tank_snapshot_records =
             capture_sorted_tank_snapshot_records_from_live_world(&world_snapshot_capture_queries);
         let (
@@ -245,6 +306,9 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &mut snapshot_scratch_storage.snapshot_container_bytes,
                 &world_snapshot_record,
                 animal_adoption_offer_inventory,
+                &animal_snapshot_records,
+                &habitat_waste_records,
+                &staff_snapshot_records,
                 &tank_snapshot_records,
                 &economy_snapshot_records,
                 &progression_snapshot_records,

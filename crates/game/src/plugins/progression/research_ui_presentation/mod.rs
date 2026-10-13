@@ -3,8 +3,8 @@ use openzt2_game_data::ui_document::node_property_binding::{
     UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource,
 };
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use crate::plugins::information::catalogue_types::SelectedCatalogueEntry;
 use crate::plugins::ui::authored_ui_action_projection_components::UiResearchActions;
 use crate::plugins::ui::authored_ui_change_activation_dispatch::UiPreviousSelection;

@@ -160,6 +160,10 @@ pub struct WorldObjectContainerQuantityDefinition {
     /// Authored initial `f_FoodLevel` in the shared Q16 authored-point unit.
     pub initial_q16: i32,
     pub content: WorldObjectContainerContent,
+    /// Authored `s_prop`: the object an eater holds while using this
+    /// container, such as `Meat_Prop`. Absent or `none` holds nothing.
+    #[serde(default)]
+    pub held_prop: Option<AssetId>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
@@ -217,6 +221,10 @@ pub struct WorldObjectDefinition {
     /// The resolved source family contains a `ZTAITrickComponent`. Native
     /// isInShow is false without this capability, regardless of proximity.
     pub supports_show_tricks: bool,
+    /// Type ancestry, record key and true `b_` flags that behavior task
+    /// subjects and targets name, such as `bench` or `b_FoodSource`.
+    #[serde(default)]
+    pub behavior_type_identifiers: Vec<AssetId>,
     #[serde(default)]
     pub view_data: Vec<WorldObjectViewData>,
     pub detach_actions: Vec<WorldObjectDetachActionDefinition>,
@@ -270,19 +278,19 @@ pub struct WorldObjectDefinition {
     pub destruction: Option<WorldObjectDestructionDefinition>,
 }
 
-#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct WorldObjectSelectedUiBroadcast {
     pub target_name: String,
     pub operation: WorldObjectSelectedUiOperation,
 }
 
-#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub enum WorldObjectSelectedUiOperation {
     SetVisible(bool),
     SetActive(bool),
 }
 
-/// Source ZTAIViewData values; absence of a named row is an action failure.
+/// Source `ZTAIViewData` values; absence of a named row is an action failure.
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectViewData {
     pub name: AssetId,

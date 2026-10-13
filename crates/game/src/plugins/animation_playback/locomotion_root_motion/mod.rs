@@ -4,8 +4,10 @@ use super::{
     animation_joint_target_types::AnimationJointTarget,
     animation_playback_controller_types::AnimationPlaybackController,
 };
-use crate::assets::animation::animation_set_asset_types::{AnimationClipRecord, AnimationSetAsset};
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipRecord, AnimationSetAsset,
+};
 
 #[derive(Component)]
 pub(crate) struct ConsumedLocomotionRootMotion {

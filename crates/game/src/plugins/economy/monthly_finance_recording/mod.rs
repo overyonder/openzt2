@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityServiceKind;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::guests::guest_simulation_types::GuestArrived;
 use crate::plugins::guests::guest_simulation_types::GuestDeparted;
 use crate::plugins::simulation_time::simulation_clock_types::ZooCalendar;
@@ -96,4 +96,12 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
     guest_departures
         .read()
         .for_each(|_| finance_history.record_guest_departure());
+}
+
+/// A zoo's finances belong to that zoo; the next world starts from none, and a
+/// loaded save restores its own history afterwards.
+pub(super) fn clear_finance_history_after_leaving_game(
+    mut finance_history: ResMut<MonthlyFinanceHistory>,
+) {
+    *finance_history = MonthlyFinanceHistory::default();
 }

@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+# Desktop launches have no useful working directory. CLI callers can still
+# select an archive directory explicitly with OPENZT2_Z2F_PATH.
+set -eu
+export OPENZT2_Z2F_PATH="${OPENZT2_Z2F_PATH:-${XDG_DATA_HOME:-$HOME/.local/share}/openzt2/game-files}"
+exec "$(dirname "$(readlink -f "$0")")/openzt2" "$@"

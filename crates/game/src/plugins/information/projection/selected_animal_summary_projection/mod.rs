@@ -6,10 +6,10 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_health::types::Dead;
 use crate::plugins::animal_health::types::Disease;
 use crate::plugins::animal_health::types::Escaped;

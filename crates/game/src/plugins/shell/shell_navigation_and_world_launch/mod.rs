@@ -3,13 +3,13 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_scenario::WorldMapSupportedGameModeFlags;
 
-use crate::application_lifecycle::GamePhase;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::persistence::profile_types::ProfileIndex;
 use crate::plugins::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use crate::plugins::world_spawn::world_load_request_acceptance::BeginWorldLoad;
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     shell_navigation_request_types::{
@@ -159,6 +159,7 @@ pub(super) fn begin_loading_selected_world(
             continue;
         }
         begin_load.write(BeginWorldLoad {
+            operation: None,
             scenario,
             mode,
             profile,

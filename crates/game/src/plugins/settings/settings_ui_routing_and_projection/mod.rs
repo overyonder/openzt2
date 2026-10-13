@@ -1,23 +1,20 @@
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::ui_document::action::information::{
     InformationSettingAction, UiInformationAction,
 };
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        camera::camera_runtime_state_types::CameraMouseLook,
-        settings::{
-            display_settings_types::DisplayMode, graphics_settings_types::GraphicsSettings,
-        },
-        ui::{
-            authored_ui_change_activation_dispatch::UiPreviousSelection,
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            authored_ui_selection_state::UiSelected,
-        },
+use crate::plugins::{
+    camera::camera_runtime_state_types::CameraMouseLook,
+    settings::display_settings_types::DisplayMode,
+    ui::{
+        authored_ui_change_activation_dispatch::UiPreviousSelection,
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        authored_ui_selection_state::UiSelected,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::settings_action_types::SettingsActionTargets;
 use crate::plugins::ui::authored_ui_action_projection_components::UiInformationActions;
@@ -163,11 +160,11 @@ pub(in crate::plugins) fn apply_authored_setting_action(
                 );
             }
             if targets.draft_settings.dirty_graphics {
-                targets
-                    .graphics_setting_requests
-                    .write(crate::plugins::settings::graphics_settings_types::ReplaceGraphicsSettingsRequest(
+                targets.graphics_setting_requests.write(
+                    openzt2_game_assets::graphics_settings_types::ReplaceGraphicsSettingsRequest(
                         targets.draft_settings.graphics,
-                    ));
+                    ),
+                );
             }
             targets.online_message_policy.enabled = targets.draft_settings.message_of_the_day;
             targets.draft_settings.dirty_display = false;

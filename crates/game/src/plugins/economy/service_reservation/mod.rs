@@ -1,8 +1,8 @@
 use bevy::{platform::collections::HashSet, prelude::*};
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityPaymentTrigger;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::{
     facility_economy_types::{Inventory, Price, ServiceFacility, Wallet},

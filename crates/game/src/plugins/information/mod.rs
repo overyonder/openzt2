@@ -28,7 +28,8 @@ use selection::{
     reconcile_selected_entity_information,
 };
 
-use crate::{application_lifecycle::GamePhase, application_schedule::GameSet};
+use crate::application_schedule::GameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(super) struct InformationPlugin;
 
@@ -56,8 +57,8 @@ impl Plugin for InformationPlugin {
                         .before(crate::plugins::shell::ShellNavigationAfterSettings),
                     zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_table_of_contents_row,
                     zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_rich_content_link,
-                    apply_selection_requests,
                     catalogue::catalogue_selection_and_details_projection::select_catalogue_entry_and_open_purchase_information_document,
+                    apply_selection_requests,
                     catalogue::animal_care_subject_projection::retain_selected_animal_for_care_catalogue,
                 )
                     .chain()
@@ -76,6 +77,12 @@ impl Plugin for InformationPlugin {
                         .chain(),
                     catalogue::catalogue_type_list_row_count_operations::request_visible_catalogue_type_list_row_counts,
                     catalogue::catalogue_type_list_row_projection::project_catalogue_entries_to_authored_type_list_rows,
+                    (
+                        catalogue::catalogue_research_overlay::attach_authored_catalogue_research_overlays,
+                        catalogue::catalogue_research_overlay::project_catalogue_research_overlays
+                            .before(crate::plugins::ui::UiSet::Interaction),
+                    )
+                        .chain(),
                     catalogue::catalogue_filter_menu::label_catalogue_filter_rows,
                     (
                         catalogue::adoption_list_operations::apply_authored_adoption_catalogue_tab_initialization,
@@ -89,7 +96,8 @@ impl Plugin for InformationPlugin {
                     )
                         .chain(),
                     (
-                        catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_tool_request,
+                        catalogue::catalogue_selection_and_details_projection::dismiss_purchase_information_on_inspection_request,
+                        catalogue::catalogue_selection_and_details_projection::project_purchase_information_document_visibility_from_selected_subject,
                         catalogue::catalogue_selection_and_details_projection::project_selected_catalogue_entry_to_purchase_information_document,
                         catalogue::catalogue_selection_and_details_projection::position_visible_purchase_information_rows_from_authored_dynamic_start,
                     )

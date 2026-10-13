@@ -6,10 +6,10 @@ use openzt2_game_data::world_definitions::{
     },
 };
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::PlacementValidity;
 use crate::plugins::construction::construction_transaction_types::PrepareConstruction;
 use crate::plugins::economy::money_types::Money;
@@ -524,7 +524,7 @@ fn biome_automatic_placement_cell_has_remaining_blocker(
     cell: IVec2,
     removed: &HashSet<Entity>,
     constraints: PlacementConstraints,
-    catalogue: crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,

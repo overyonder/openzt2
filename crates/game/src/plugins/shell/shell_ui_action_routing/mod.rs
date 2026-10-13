@@ -3,7 +3,6 @@ use openzt2_game_data::ui_document::action::shell_navigation::UiShellAction;
 use openzt2_game_data::ui_document::action::UiTrigger;
 
 use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     game_session_types::WorldSessionMode,
     plugins::{
         persistence::profile_types::SelectProfile,
@@ -13,6 +12,7 @@ use crate::{
         },
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     shell_navigation_request_types::{

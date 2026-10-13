@@ -1,9 +1,9 @@
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, prelude::*};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::{
     construction::construction_transaction_types::EditApplication,
     world_spawn::{
@@ -37,7 +37,7 @@ pub(super) fn apply_show_platform_upgrade_edits(
         &PrefabAuthoredAttachmentIdentifier,
         Option<&ChildOf>,
     )>,
-    prefabs: Res<Assets<crate::assets::scene_prefab::ScenePrefabAsset>>,
+    prefabs: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -129,7 +129,7 @@ pub(super) fn restore_show_platform_upgrades(
         &PrefabAuthoredAttachmentIdentifier,
         Option<&ChildOf>,
     )>,
-    prefabs: Res<Assets<crate::assets::scene_prefab::ScenePrefabAsset>>,
+    prefabs: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -175,7 +175,7 @@ fn spawn_show_platform_upgrade_prefab_at_authored_stage_attachment(
     world_definitions: WorldDefinitionsView<'_>,
     world_root: Entity,
     persistent_id: crate::plugins::world_spawn::persistent_id_types::PersistentId,
-    prefabs: &Assets<crate::assets::scene_prefab::ScenePrefabAsset>,
+    prefabs: &Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
     models: &Assets<Gltf>,
     sockets: &Query<(
         Entity,

@@ -20,10 +20,19 @@ pub(super) struct SimulationTimeSnapshotSaveResources<'w> {
 
 #[derive(SystemParam)]
 pub(super) struct SimulationTimeSnapshotLoadResources<'w> {
-    clock: ResMut<'w, ZooClock>,
-    calendar: ResMut<'w, ZooCalendar>,
-    control: ResMut<'w, SimulationControl>,
-    seed: ResMut<'w, ZooSeed>,
+    clock: Option<ResMut<'w, ZooClock>>,
+    calendar: Option<ResMut<'w, ZooCalendar>>,
+    control: Option<ResMut<'w, SimulationControl>>,
+    seed: Option<ResMut<'w, ZooSeed>>,
+}
+
+impl SimulationTimeSnapshotLoadResources<'_> {
+    pub(super) fn is_initialized(&self) -> bool {
+        self.clock.is_some()
+            && self.calendar.is_some()
+            && self.control.is_some()
+            && self.seed.is_some()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,18 +66,28 @@ impl SimulationTimeSnapshotRecord {
         bytes.push(self.calendar.month);
         bytes.push(self.calendar.day);
         bytes.push(self.control.speed_tier);
-        bytes.push(u8::from(self.control.paused));
+        // A save made from a dialog must not keep that dialog's temporary pause.
+        bytes.push(u8::from(self.control.requested_pause_state()));
         bytes.extend_from_slice(&self.seed.0.to_le_bytes());
     }
 
     pub(super) fn apply_simulation_time_snapshot_record_to_live_resources(
         self,
         resources: &mut SimulationTimeSnapshotLoadResources,
-    ) {
-        *resources.clock = self.clock;
-        *resources.calendar = self.calendar;
-        *resources.control = self.control;
-        *resources.seed = self.seed;
+    ) -> Result<(), WorldSnapshotPersistenceFailure> {
+        let (Some(clock), Some(calendar), Some(control), Some(seed)) = (
+            resources.clock.as_mut(),
+            resources.calendar.as_mut(),
+            resources.control.as_mut(),
+            resources.seed.as_mut(),
+        ) else {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        };
+        **clock = self.clock;
+        **calendar = self.calendar;
+        **control = self.control;
+        **seed = self.seed;
+        Ok(())
     }
 
     fn validate_simulation_time_snapshot_record(
@@ -123,10 +142,7 @@ pub(super) fn decode_simulation_time_snapshot_record(
             month: bytes[18],
             day: bytes[19],
         },
-        control: SimulationControl {
-            speed_tier: bytes[20],
-            paused,
-        },
+        control: SimulationControl::new(bytes[20], paused),
         seed: ZooSeed(u64_at(22)?),
     }
     .validate_simulation_time_snapshot_record()
@@ -149,10 +165,7 @@ mod tests {
                 month: 2,
                 day: 5,
             },
-            control: SimulationControl {
-                speed_tier: 2,
-                paused: true,
-            },
+            control: SimulationControl::new(2, true),
             seed: ZooSeed(99),
         };
         let mut bytes = Vec::new();

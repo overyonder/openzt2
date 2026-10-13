@@ -6,13 +6,11 @@ use openzt2_game_data::ui_document::document::*;
 use super::entity_selection_types::{
     InfoPanel, Inspectable, SelectedEntity, SelectionChanged, SelectionRequest,
 };
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_ui_node_projection_components::UiDocumentRoot,
-        ui_document_lifecycle_contracts::ShowUiRole,
-    },
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::UiDocumentRoot,
+    ui_document_lifecycle_contracts::ShowUiRole,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 /// Applies the last valid request in message order and reports at most one
 /// observable change for the update.

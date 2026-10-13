@@ -1,21 +1,19 @@
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::economy::UiEconomyAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        information::entity_selection_types::SelectedEntity,
-        ui::{
-            authored_ui_change_activation_dispatch::UiPreviousSelection,
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            authored_ui_selection_state::UiSelected,
-        },
+use crate::plugins::{
+    information::entity_selection_types::SelectedEntity,
+    ui::{
+        authored_ui_change_activation_dispatch::UiPreviousSelection,
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        authored_ui_selection_state::UiSelected,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::facility_economy_types::{
     CurrentSellQuote, FacilityPriceIndex, MaintenanceScheduleIndex,
@@ -33,6 +31,7 @@ pub(super) fn route_selected_facility_economy_ui_actions(
     objects: Query<&DefinitionId>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    transport_sales: crate::plugins::transport_tours::transport_track_sale::TransportTrackSaleQueries,
 ) {
     for activation in activations.read() {
         let Ok((action_source, document_owner)) = action_nodes.get(activation.node) else {
@@ -65,6 +64,10 @@ pub(super) fn route_selected_facility_economy_ui_actions(
                         .insert(MaintenanceScheduleIndex(*maintenance_schedule_index));
                 }
                 UiEconomyAction::RefreshSelectedEntitySellQuote => {
+                    if transport_sales.requires_transport_sale(selected_entity) {
+                        // The transport owner refreshes the aggregate quote from live topology.
+                        continue;
+                    }
                     if let Some(refund) = objects
                         .get(selected_entity)
                         .ok()

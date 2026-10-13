@@ -5,10 +5,10 @@ mod start;
 mod tests;
 mod update;
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::behavior_task_execution_types::{
     BehaviorTaskExecutionState, BehaviorTaskReturnFrame,
 };
@@ -48,7 +48,8 @@ impl ActiveQueueWait {
 }
 
 pub(super) fn register_queue_wait_execution(application: &mut App) {
-    use crate::{application_lifecycle::GamePhase, application_schedule::FixedGameSet};
+    use crate::application_schedule::FixedGameSet;
+    use openzt2_game_assets::application_lifecycle::GamePhase;
     application.add_systems(FixedUpdate, (
         update::update_queue_wait_deadlines_and_service_readiness,
         start::start_or_repeat_authored_queue_wait,

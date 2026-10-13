@@ -5,7 +5,6 @@ use openzt2_game_data::ui_document::{
     hotkey::UiDocumentHotkeyTrigger,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
 use crate::plugins::ui::authored_ui_action_projection_components::{
     UiActionSource, UiAnimalActions, UiAnimalHealthActions, UiAudioSettingActions, UiCameraActions,
@@ -15,6 +14,7 @@ use crate::plugins::ui::authored_ui_action_projection_components::{
     UiSimulationActions, UiStaffActions, UiTransportActions,
 };
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(super) fn project_authored_hotkey_action_proxies(
     commands: &mut Commands,

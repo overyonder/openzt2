@@ -1,11 +1,11 @@
-use bevy::prelude::{Commands, Entity, MessageWriter, Name, Query, With};
+use bevy::prelude::{Commands, Entity, MessageWriter, Name};
 use openzt2_game_data::AssetId;
 
 use crate::plugins::{
+    animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     shows::show_platform_upgrade_types::RestoreShowPlatformUpgrade,
     world_spawn::{
         persistent_id_types::PersistentIdAllocator, selected_world_identity::SelectedWorldIdentity,
-        world_membership_types::WorldRoot,
     },
 };
 
@@ -46,19 +46,28 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     commands: &mut Commands,
     snapshot_container_bytes: &[u8],
     profile_identifier: AssetId,
-    world_roots: &Query<Entity, With<WorldRoot>>,
+    world_root_entity: Entity,
     persistent_identifier_allocator: &mut PersistentIdAllocator,
     world_snapshot_application_state: WorldSnapshotApplicationState,
     progression_snapshot_application_parameters: &mut ProgressionSnapshotApplicationParameters,
     simulation_time_snapshot_application_resources: &mut SimulationTimeSnapshotLoadResources,
     show_platform_upgrade_restore_requests: &mut MessageWriter<RestoreShowPlatformUpgrade>,
-) -> Result<(), WorldSnapshotPersistenceFailure> {
+    retained_maintenance_prefabs: &mut Vec<
+        bevy::prelude::Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
+    >,
+) -> Result<bool, WorldSnapshotPersistenceFailure> {
     let WorldSnapshotApplicationState {
+        photo_baseline,
+        baseline_waste,
+        prefabs,
+        asset_server,
+        baseline_animals,
         species_assets,
         active_species,
         world_definition_assets,
         active_world_definitions,
         entities_with_persistent_identifiers,
+        entities_with_definition_identifiers,
         transport_entities_with_persistent_identifiers,
         mut show_stages_with_mutable_snapshot_state,
         mut loaded_photo_images,
@@ -72,8 +81,17 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         photo_album_persistent_identifiers,
     } = world_snapshot_application_state;
 
+    // The coordinator runs after Intent and its deferred commands. Initialization
+    // must be committed before any live reference check or restored mutation.
+    if !simulation_time_snapshot_application_resources.is_initialized()
+        || !photo_baseline
+            .is_ready_for_snapshot_application(world_root_entity, persistent_identifier_allocator)?
+    {
+        return Ok(false);
+    }
+
     // Every payload was checked before loading this baseline world. Decode the
-    // records once here, then check their references against the loaded entities.
+    // records here, then check their references against the loaded entities.
     let validated_snapshot_container = validate_world_snapshot_container_and_section_directory(
         snapshot_container_bytes,
         profile_identifier,
@@ -82,13 +100,30 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::World),
     )?;
-    let animal_adoption_offer_inventory_snapshot_section =
-        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Animals);
+    let animal_adoption_offer_inventory_snapshot_section = validated_snapshot_container
+        .section_directory_entry(WorldSnapshotSectionKind::AdoptionOffers);
     let animal_adoption_offer_inventory =
         decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
             &snapshot_container_bytes[animal_adoption_offer_inventory_snapshot_section
                 .payload_byte_range_within_container(snapshot_container_bytes.len())?],
             animal_adoption_offer_inventory_snapshot_section.encoded_record_count,
+            world_snapshot_record.session_mode,
+        )?;
+    let animal_snapshot_records =
+        super::animal_snapshot_section_encoding::decode_animal_snapshot_records(
+            snapshot_container_bytes,
+            validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Animals),
+        )?;
+    let habitat_waste_records =
+        super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
+            snapshot_container_bytes,
+            validated_snapshot_container
+                .section_directory_entry(WorldSnapshotSectionKind::Maintenance),
+        )?;
+    let staff_snapshot_records =
+        super::staff_snapshot_section_encoding::decode_staff_snapshot_records(
+            snapshot_container_bytes,
+            validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Staff),
         )?;
     let tank_snapshot_records = decode_and_validate_tank_snapshot_section(
         snapshot_container_bytes,
@@ -111,14 +146,16 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     let world_definitions = active_world_definitions
         .get(&world_definition_assets)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
-    validate_animal_adoption_offer_inventory_against_loaded_authored_content(
-        &animal_adoption_offer_inventory,
-        species,
-        world_definitions
-            .animal_adoption_offer_configuration()
-            .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?,
-        progression_snapshot_records.fame,
-    )?;
+    if let Some(inventory) = animal_adoption_offer_inventory.as_ref() {
+        validate_animal_adoption_offer_inventory_against_loaded_authored_content(
+            inventory,
+            species,
+            world_definitions
+                .animal_adoption_offer_configuration()
+                .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?,
+            progression_snapshot_records.fame,
+        )?;
+    }
     let simulation_time_snapshot_section = validated_snapshot_container
         .section_directory_entry(WorldSnapshotSectionKind::SimulationTime);
     let simulation_time_snapshot_record = decode_simulation_time_snapshot_record(
@@ -139,7 +176,44 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Photos),
         )?;
 
+    let Some(resolved_waste_prefabs) =
+        super::maintenance_snapshot_application::resolve_habitat_waste_prefabs(
+            &habitat_waste_records,
+            world_definitions,
+            &prefabs,
+            &asset_server,
+            retained_maintenance_prefabs,
+        )?
+    else {
+        return Ok(false);
+    };
+    let Some(resolved_staff_prefabs) =
+        super::staff_snapshot_application::resolve_staff_body_prefabs(
+            &staff_snapshot_records,
+            world_definitions,
+            &prefabs,
+            &asset_server,
+            retained_maintenance_prefabs,
+        )?
+    else {
+        return Ok(false);
+    };
+    let baseline_staff = super::staff_snapshot_application::baseline_staff_entities(
+        world_definitions,
+        &entities_with_definition_identifiers,
+    );
+    let resolved_animals = super::animal_snapshot_application::resolve_saved_animal_components(
+        &animal_snapshot_records,
+        species,
+        world_definitions.timing().ticks_per_day,
+    )?;
     validate_loaded_snapshot_references_and_imported_persistent_identifiers(
+        &animal_snapshot_records,
+        &baseline_animals,
+        &habitat_waste_records,
+        &baseline_waste,
+        &staff_snapshot_records,
+        &baseline_staff,
         &tank_snapshot_records,
         &economy_snapshot_records,
         &progression_snapshot_records,
@@ -171,9 +245,33 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         &mut monthly_finance_history,
     )?;
 
-    let world_root_entity = world_roots
-        .single()
-        .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+    let restored_animals = super::animal_snapshot_application::apply_animal_snapshot_records(
+        commands,
+        animal_snapshot_records,
+        resolved_animals,
+        world_root_entity,
+        persistent_identifier_allocator,
+        &baseline_animals,
+    )?;
+    super::maintenance_snapshot_application::apply_habitat_waste_records(
+        commands,
+        &habitat_waste_records,
+        &resolved_waste_prefabs,
+        &prefabs,
+        world_root_entity,
+        persistent_identifier_allocator,
+        &baseline_waste,
+    )?;
+    super::staff_snapshot_application::apply_staff_snapshot_records(
+        commands,
+        &staff_snapshot_records,
+        &resolved_staff_prefabs,
+        &prefabs,
+        world_root_entity,
+        persistent_identifier_allocator,
+        &baseline_staff,
+        world_definitions,
+    )?;
     commands.entity(world_root_entity).insert((
         Name::new(world_snapshot_record.display_name),
         SelectedWorldIdentity {
@@ -183,8 +281,14 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             mode: world_snapshot_record.session_mode,
             profile: profile_identifier,
         },
-        animal_adoption_offer_inventory,
     ));
+    if let Some(inventory) = animal_adoption_offer_inventory {
+        commands.entity(world_root_entity).insert(inventory);
+    } else {
+        commands
+            .entity(world_root_entity)
+            .remove::<AnimalAdoptionOfferInventory>();
+    }
     apply_progression_snapshot_records_to_live_world(
         commands,
         progression_snapshot_records,
@@ -205,6 +309,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     apply_show_snapshot_records_to_live_show_stages_and_schedule(
         commands,
         show_snapshot_records,
+        &restored_animals,
         world_root_entity,
         &entities_with_persistent_identifiers,
         &mut show_stages_with_mutable_snapshot_state,
@@ -221,7 +326,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     )?;
     simulation_time_snapshot_record.apply_simulation_time_snapshot_record_to_live_resources(
         simulation_time_snapshot_application_resources,
-    );
+    )?;
 
-    Ok(())
+    Ok(true)
 }

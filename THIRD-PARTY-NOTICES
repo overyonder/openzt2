@@ -3,6 +3,8 @@ OpenZT2's own code is licensed under MIT; see LICENSE.
 Third-party code retains its own licenses:
 - vendor/bevy_hanabi, vendor/bevy_image, vendor/bevy_render: MIT OR Apache-2.0.
 - vendor/lunify: MIT.
+- vendor/taffy: MIT. Grid overflow correction backported from upstream;
+  see vendor/taffy/CHANGES.md and LICENSE.md.
 - patches/vkd3d patches: LGPL-2.1-or-later, like vkd3d.
 - patches/mojoshader patches: zlib, like MojoShader.
 - patches/gamescope patches: BSD-2-Clause, like Gamescope.

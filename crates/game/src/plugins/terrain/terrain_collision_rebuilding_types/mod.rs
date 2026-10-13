@@ -10,8 +10,12 @@ pub(super) struct TerrainCollisionRevision(pub u64);
 pub(super) struct TerrainCollisionPending;
 
 /// The centred Avian height-field child owned by one rendered terrain chunk.
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "placement queries need sibling-owner access; the terrain collider marker remains a crate-internal API"
+)]
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub(super) struct TerrainChunkCollisionSurface;
+pub(crate) struct TerrainChunkCollisionSurface;
 
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TerrainCollisionBudget {

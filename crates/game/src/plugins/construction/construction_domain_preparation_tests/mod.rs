@@ -20,6 +20,8 @@ use super::*;
 fn construction_preparation_test_application() -> App {
     let mut application = App::new();
     application
+        .add_message::<crate::plugins::aquatic::tank_floor_edit_types::TankFloorEditPrepared>()
+        .add_message::<crate::plugins::aquatic::tank_floor_edit_types::TankFloorEditPreparationRejected>()
         .add_message::<TerrainEditPrepared>()
         .add_message::<TerrainEditPreparationRejected>()
         .add_message::<TopologyEditPrepared>()

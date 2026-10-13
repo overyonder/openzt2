@@ -1,12 +1,15 @@
 use bevy::{platform::collections::HashSet, prelude::*};
+use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 
 use crate::plugins::{
     animal_behavior::behavior_move_execution::PendingBehaviorMoveCompletion,
+    animal_health::types::Dead,
     behavior_task_execution_types::{
         BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
         PendingBehaviorDockingCompletion, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{Destination, Docking},
+    maintenance::maintenance_types::AppliedHabitatWasteCleanup,
     world_spawn::world_membership_types::WorldMember,
 };
 
@@ -43,16 +46,29 @@ pub(in crate::plugins::staff) fn release_staff_and_despawn_completed_jobs(
 pub(crate) fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
     mut commands: Commands,
     mut cancellation_requests: MessageReader<CancelStaffJobRequest>,
-    jobs: Query<(Entity, &StaffJob, Option<&JobClaim>)>,
+    jobs: Query<(
+        Entity,
+        &StaffJob,
+        Option<&JobClaim>,
+        Option<&StaffJobBehaviorTask>,
+        Option<&AppliedHabitatWasteCleanup>,
+    )>,
     staff: Query<(Entity, Option<&CurrentJob>), With<Staff>>,
     world_members: Query<(), With<WorldMember>>,
+    dead_animals: Query<(), With<Dead>>,
     mut cancelled_jobs: MessageWriter<StaffJobCancelled>,
     mut explicitly_requested_jobs: Local<HashSet<Entity>>,
 ) {
     explicitly_requested_jobs.clear();
     explicitly_requested_jobs.extend(cancellation_requests.read().map(|request| request.job));
-    for (job_entity, job, claim) in &jobs {
-        let target_is_live = world_members.get(job.target).is_ok();
+    for (job_entity, job, claim, behavior, applied_cleanup) in &jobs {
+        let target_is_live = world_members.get(job.target).is_ok()
+            && !(job.kind == StaffJobKind::Treat && dead_animals.contains(job.target));
+        let target_was_consumed = job.kind == StaffJobKind::CleanHabitat
+            && claim.is_some()
+            && applied_cleanup.is_some_and(|applied| {
+                behavior.is_some_and(|behavior| behavior.execution_id == Some(applied.execution_id))
+            });
         let claimed_staff_is_valid = claim.is_none_or(|claim| {
             staff.get(claim.staff).is_ok_and(|(_, current_job)| {
                 current_job.is_some_and(|current_job| current_job.job == job_entity)
@@ -67,7 +83,7 @@ pub(crate) fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
                 .remove::<(JobClaim, StaffJobBehaviorTask, JobProgress)>();
             continue;
         }
-        if target_is_live
+        if (target_is_live || target_was_consumed)
             && claimed_staff_is_valid
             && !explicitly_requested_jobs.contains(&job_entity)
         {

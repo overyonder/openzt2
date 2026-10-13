@@ -103,6 +103,9 @@ pub enum UiBooleanPropertyBindingSource {
     CatalogueSelectedEntryIsAnimal,
     CatalogueSelectedEntryPlacementCanRotate,
     CatalogueSelectedEntrySellsItems,
+    OverheadViewSelected,
+    FirstPersonViewSelected,
+    PhotoViewSelected,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
@@ -150,6 +153,7 @@ pub enum UiTextPropertyBindingSource {
         negative_format: AssetId,
     },
     ZooAdmissionPrice,
+    ZooAdmissionsStatus,
     ZooDonationSummaryDonationCount {
         category: Option<AssetId>,
         format: AssetId,

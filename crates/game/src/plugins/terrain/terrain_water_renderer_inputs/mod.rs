@@ -2,13 +2,13 @@ use super::terrain_water_geometric_wave_shader_state::NativeTerrainWaterGeometri
 use super::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use super::terrain_water_renderer_types::AuthoredTerrainWaterSurfaceEffectPass;
 use super::terrain_water_renderer_types::TerrainWaterWaveStateKey;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use crate::plugins::camera::camera_runtime_state_types::ZooCamera;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::primitives::Frustum;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::helper::TransformHelper;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 impl AuthoredTerrainWaterRendererTargets {
     pub(super) fn queue_wave_impact(
@@ -57,7 +57,7 @@ impl AuthoredTerrainWaterSurfaceEffectPass {
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_authored_terrain_water_renderer_inputs(
     time: Res<Time>,
-    phase: Res<State<crate::application_lifecycle::GamePhase>>,
+    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     mut targets: Option<ResMut<AuthoredTerrainWaterRendererTargets>>,
     zoo_camera: Query<(Entity, &Camera, Ref<Projection>), With<ZooCamera>>,
     mut camera_transforms: ParamSet<(
@@ -89,7 +89,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         .single()
         .ok()
         .filter(|(_, camera, _)| {
-            camera.is_active && *phase.get() == crate::application_lifecycle::GamePhase::InGame
+            camera.is_active
+                && *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::InGame
         })
         .and_then(|(entity, camera, projection)| {
             // Update runs before Bevy's transform propagation. Read the current

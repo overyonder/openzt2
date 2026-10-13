@@ -12,5 +12,6 @@ pub struct UiSimulationActionRecord {
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiSimulationAction {
     SetSimulationPaused { paused: bool },
+    SetTemporarySimulationPauseHeld { held: bool },
     ToggleSimulationPaused,
 }

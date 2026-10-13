@@ -13,3 +13,14 @@ pub struct BehaviorQueueWaitAction {
     /// Upper bound of the one-time waiting deadline draw.
     pub maximum_wait: std::time::Duration,
 }
+
+/// `BFBehDockQueue`: walk up to the target's queue for the enclosing task's
+/// container without taking a service place.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BehaviorDockQueueAction {
+    /// The actor stops this far from the queue's docking node.
+    pub hit_radius_m: f32,
+    /// The authored reach of the waiting line. Line formation is not modelled.
+    pub queue_radius_m: f32,
+    pub locomotion_speed: Option<super::docking::BehaviorDockLocomotionSpeed>,
+}

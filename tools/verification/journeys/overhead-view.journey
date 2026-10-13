@@ -1,32 +1,85 @@
-# First-person/staff entry returns through Overhead and Escape (#82).
-include boot-to-freeform-map.steps
+# Camera buttons reflect accepted modes after rejection, Overhead and Escape (#83/#82).
+start freeform-map
+until overhead_button_selected == 1
+expect first_person_button_selected == 0
+expect photo_button_selected == 0
 click "firstperson"
-wait 180
-expect immersive_mode_active == 1
+until immersive_mode_active == 1
+until first_person_button_selected == 1
+expect overhead_button_selected == 0
+expect photo_button_selected == 0
+snapshot first-person-selected
 capture guest-mode
-click "overhead"
-wait 180
-expect immersive_mode_active == 0
-expect camera_pitch_deg > 45
-expect camera_pitch_deg == @entered-map
-expect camera_height_m == @entered-map
-expect camera_fov_deg == @entered-map
-capture overhead
-click "firstperson"
-wait 180
+# Photo cannot replace an active immersive controller. A rejected request must
+# leave the accepted first-person view and its radio selection intact.
+click "photo"
+until busy_photo_rejections > @first-person-selected within 120
 expect immersive_mode_active == 1
-capture reentered-first-person
-key ESCAPE
-wait 180
-expect immersive_mode_active == 0
-expect camera_pitch_deg == @entered-map
-expect camera_height_m == @entered-map
-expect camera_fov_deg == @entered-map
-capture overhead-after-escape
+expect photo_mode_active == 0
+expect first_person_button_selected == 1
+expect overhead_button_selected == 0
+expect photo_button_selected == 0
+expect photo_button_visible == 1
+capture rejected-photo-selection
 click "overhead"
-wait 60
+until immersive_mode_active == 0
+until overhead_button_selected == 1
+expect first_person_button_selected == 0
+expect photo_button_selected == 0
+until camera_pitch_deg == @entered-map
+expect camera_pitch_deg > 45
+expect camera_height_m == @entered-map
+expect camera_fov_deg == @entered-map
+click "firstperson"
+until immersive_mode_active == 1
+key ESCAPE
+until immersive_mode_active == 0
+until overhead_button_selected == 1
+expect first_person_button_selected == 0
+expect photo_button_selected == 0
+until camera_pitch_deg == @entered-map
+expect camera_height_m == @entered-map
+expect camera_fov_deg == @entered-map
+click "overhead"
+wait 60                         # a repeated Overhead press must leave the view alone
 expect immersive_mode_active == 0
 expect camera_pitch_deg == @entered-map
 expect camera_height_m == @entered-map
 expect camera_fov_deg == @entered-map
-capture repeated-overhead
+# The same Photo control can select its mode once the former mode has exited.
+click "photo"
+until photo_mode_active == 1
+until photo_button_selected == 1
+expect first_person_button_selected == 0
+expect overhead_button_selected == 0
+expect photo_button_visible == 0      # accepted photo mode hides the ordinary HUD
+capture accepted-photo-mode
+until steady camera_height_m 30
+until steady camera_fov_deg 30
+snapshot photo-start
+wheel 3
+until steady camera_fov_deg 30
+expect camera_fov_deg < @photo-start
+snapshot zoomed-in
+wheel -6
+until steady camera_fov_deg 30
+expect camera_fov_deg > @zoomed-in
+wheel 1 120                     # far past the zoom-in limit, one notch at a time
+until steady camera_fov_deg 30
+snapshot zoom-limit
+wheel 1 10
+until steady camera_fov_deg 30
+expect camera_fov_deg == @zoom-limit
+capture zoom-limit
+key ESCAPE
+until immersive_mode_active == 0
+until overhead_button_selected == 1
+expect first_person_button_selected == 0
+expect photo_button_selected == 0
+until camera_pitch_deg == @entered-map
+until camera_height_m == @entered-map
+until camera_fov_deg == @entered-map
+expect camera_x_m == @entered-map
+expect camera_z_m == @entered-map
+
+restore freeform-map

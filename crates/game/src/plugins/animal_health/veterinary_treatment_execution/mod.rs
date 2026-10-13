@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::animal_lifecycle::types::Animal;
 use crate::plugins::staff::staff_employment_types::Staff;
 use crate::plugins::staff::staff_employment_types::StaffRole;

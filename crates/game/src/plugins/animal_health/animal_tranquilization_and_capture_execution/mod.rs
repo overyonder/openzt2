@@ -1,9 +1,15 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashSet, prelude::*};
+use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::types::Animal;
 use crate::plugins::staff::staff_employment_types::Staff;
+use crate::plugins::staff::staff_job_types::{
+    CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask,
+};
+use crate::plugins::staff::staff_lifecycle_messages::CancelStaffJobRequest;
+use crate::plugins::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     tranquilizer_eligibility_calculation::authored_tranquilizer_allows_animal_state,
@@ -12,6 +18,9 @@ use super::{
         TranquilizeRequest, Tranquilized, TranquilizerTool,
     },
 };
+
+#[cfg(test)]
+mod tests;
 
 pub(super) fn validate_tranquilizer_requests_and_apply_timed_tranquilization(
     mut commands: Commands,
@@ -81,16 +90,33 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
         (),
         (
             With<Animal>,
+            With<WorldMember>,
             With<Escaped>,
             With<Tranquilized>,
             Without<Dead>,
         ),
     >,
-    staff: Query<(), With<Staff>>,
+    staff: Query<&CurrentJob, With<Staff>>,
+    jobs: Query<(&StaffJob, &JobClaim, &StaffJobBehaviorTask), With<JobProgress>>,
+    mut cancellations: MessageReader<CancelStaffJobRequest>,
+    mut cancelled_jobs: Local<HashSet<Entity>>,
     mut animal_captured_messages: MessageWriter<AnimalCaptured>,
 ) {
+    cancelled_jobs.clear();
+    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
     for request in capture_requests.read() {
-        if animals.get(request.animal).is_err() || staff.get(request.staff).is_err() {
+        if cancelled_jobs.contains(&request.job)
+            || !animals.contains(request.animal)
+            || !staff
+                .get(request.staff)
+                .is_ok_and(|current| current.job == request.job)
+            || !jobs.get(request.job).is_ok_and(|(job, claim, behavior)| {
+                job.kind == StaffJobKind::Capture
+                    && job.target == request.animal
+                    && claim.staff == request.staff
+                    && behavior.execution_id == Some(request.execution_id)
+            })
+        {
             continue;
         }
         commands
@@ -99,6 +125,8 @@ pub(super) fn validate_staff_capture_requests_and_clear_animal_emergency_state(
         animal_captured_messages.write(AnimalCaptured {
             animal: request.animal,
             staff: request.staff,
+            job: request.job,
+            execution_id: request.execution_id,
         });
     }
 }

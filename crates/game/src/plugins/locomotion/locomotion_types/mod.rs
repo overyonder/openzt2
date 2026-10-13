@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::{platform::collections::HashMap, prelude::*};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[repr(transparent)]
@@ -370,28 +370,32 @@ impl SpatialGrid {
     }
 }
 
-/// Sparse live closures over immutable terrain-derived node pairs. The topology system
-/// integration updates this only when a gate changes.
+/// Sparse references to canonical fence entities crossed by terrain graph edges.
+/// Collision policy and gate state remain owned by their definitions and entities.
 #[derive(Resource, Debug, Default)]
 pub struct NavigationOverlay {
-    blocked_edges: HashSet<(u32, u32)>,
+    fence_crossings: HashMap<(u32, u32), Vec<Entity>>,
     pub revision: u64,
 }
 
 impl NavigationOverlay {
-    pub fn set_blocked(&mut self, from: u32, to: u32, blocked: bool) {
-        let changed = if blocked {
-            self.blocked_edges.insert((from, to))
-        } else {
-            self.blocked_edges.remove(&(from, to))
-        };
-        if changed {
+    pub(super) fn replace_fence_crossings(
+        &mut self,
+        mut crossings: HashMap<(u32, u32), Vec<Entity>>,
+    ) {
+        for fences in crossings.values_mut() {
+            fences.sort_unstable();
+        }
+        if self.fence_crossings != crossings {
+            self.fence_crossings = crossings;
             self.revision = self.revision.wrapping_add(1);
         }
     }
 
-    pub fn edge_blocked(&self, from: u32, to: u32) -> bool {
-        self.blocked_edges.contains(&(from, to))
+    pub(super) fn fence_crossings(&self, from: u32, to: u32) -> &[Entity] {
+        self.fence_crossings
+            .get(&(from, to))
+            .map_or(&[], Vec::as_slice)
     }
 }
 

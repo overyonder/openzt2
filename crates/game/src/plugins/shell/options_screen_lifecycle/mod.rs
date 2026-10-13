@@ -1,10 +1,10 @@
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use crate::plugins::{
     settings::{
-        display_settings_types::DisplaySettings, graphics_settings_types::GraphicsSettings,
-        online_message_policy_types::OnlineMessagePolicy,
+        display_settings_types::DisplaySettings, online_message_policy_types::OnlineMessagePolicy,
         options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
     },
     ui::ui_document_lifecycle_contracts::ShowUiRole,

@@ -80,7 +80,7 @@ fn days_in_year(policy: &SimulationCalendarPolicy, year: u32) -> u16 {
         )
 }
 
-fn days_in_month(policy: &SimulationCalendarPolicy, year: u32, month: u8) -> u8 {
+pub(crate) fn days_in_month(policy: &SimulationCalendarPolicy, year: u32, month: u8) -> u8 {
     let ordinary_month_days = policy.month_lengths[usize::from(month - 1)];
     if matches!(policy.leap, SimulationCalendarLeapPolicy::Gregorian)
         && month == 2

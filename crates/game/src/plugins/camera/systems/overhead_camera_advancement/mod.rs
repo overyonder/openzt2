@@ -1,10 +1,10 @@
 use avian3d::prelude::SpatialQuery;
 use bevy::{camera::ScalingMode, prelude::*};
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
+use crate::plugins::terrain::terrain_chunk_types::{
+    EditedTerrainSamples, TerrainChunk, TerrainIndex,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     super::{

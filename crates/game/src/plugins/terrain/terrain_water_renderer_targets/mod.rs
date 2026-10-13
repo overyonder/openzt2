@@ -2,20 +2,20 @@ use super::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use super::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use super::terrain_water_renderer_types::WATER_BUMP_COMBINATION_RENDER_LAYER;
 use super::terrain_water_renderer_types::WATER_RENDER_TARGET_SIDE;
-use crate::assets::material::material_asset_types::MaterialAsset;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use crate::plugins::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderView;
 use crate::plugins::model_render::authored_model_material_pass_projection::WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use crate::plugins::model_render::authored_model_material_pass_projection::WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::ClearColorConfig;
 use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use bevy::render::storage::ShaderBuffer;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::material::material_asset_types::MaterialAsset;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 #[derive(Component)]
 struct AuthoredTerrainWaterBumpCombinationQuad;

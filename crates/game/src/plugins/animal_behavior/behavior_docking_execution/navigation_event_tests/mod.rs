@@ -48,6 +48,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
                         target_animation_clip_asset_key: None,
                         locomotion_speed: None,
                         redock: false,
+                        radial_distance_m: None,
                     })],
                 ),
             }]),
@@ -63,6 +64,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         action: 0,
         repetitions: 0,
         next_action_tick: 1,
+        object: None,
         interaction_slot: None,
         stack: Default::default(),
     };

@@ -23,13 +23,13 @@ use super::{
 };
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_animal_entity_from_resolved_components(
+pub(crate) fn spawn_animal_entity_from_resolved_components(
     commands: &mut Commands,
     species: AssetId,
     resolved_components: ResolvedAnimalSpawnComponents,
     persistent_identifier: PersistentId,
     world_membership: WorldMember,
-    habitat_entity: Entity,
+    habitat_entity: Option<Entity>,
     mut transform: Transform,
     parents: Parents,
     born_tick: u64,
@@ -56,12 +56,16 @@ pub(super) fn spawn_animal_entity_from_resolved_components(
             parents,
             persistent_identifier,
             world_membership,
-            HabitatMember { habitat_entity },
             HabitatLocatable,
             transform,
             Visibility::Inherited,
         ))
         .id();
+    if let Some(habitat_entity) = habitat_entity {
+        commands
+            .entity(animal_entity)
+            .insert(HabitatMember { habitat_entity });
+    }
     let mut animal_entity_commands = commands.entity(animal_entity);
     insert_authored_species_classification_markers(
         &mut animal_entity_commands,

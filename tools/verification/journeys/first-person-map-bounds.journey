@@ -1,0 +1,139 @@
+# Walking camera map edges (#94). Review all captures and repeat with native input.
+# Shipped alpinesml.dat has 162m extents, 217 samples per axis, 0.75m cells.
+# Stock maps/index.xml orders the three larger Alpine choices before this row;
+# the non-launchable tiny test map is excluded by ordinary catalogue hydration.
+start main-menu
+expect-visible "Freeform Button"
+click "Freeform Button"
+phase map-selection
+click "alpine"
+until rows "Map List" == 7
+expect-text "Map Biome" "Alpine"
+capture reopened-map-selection
+until settled
+click "map choice 3"
+click "Play Map"
+phase in-game
+until world_map_is_small_alpine == 1
+expect-hidden "Loading Screen"
+expect unlimited_cash == 1
+capture another-map-entered
+expect map_min_x_m == 0
+expect map_max_x_m == 162
+expect map_min_z_m == -162
+expect map_max_z_m == 0
+click "close"
+until hidden "Buy Info Panel"
+until placement_previews == 0
+until construction_tool_active == 0
+until steady camera_height_m 30
+expect camera_focus_x_m >= 0
+expect camera_focus_x_m <= 162
+expect camera_focus_z_m >= -162
+expect camera_focus_z_m <= 0
+snapshot small-alpine-overhead
+capture small-alpine-overhead
+click "firstperson"
+until immersive_mode_active == 1
+until first_person_button_selected == 1
+until steady camera_height_m 30
+expect camera_x_m >= 0
+expect camera_x_m <= 162
+expect camera_z_m >= -162
+expect camera_z_m <= 0
+capture walking-start
+# Stop walking when the edge is reached, rather than sending 3200 taps regardless.
+# The travel budget is an upper bound; movement remains ordinary keyboard input.
+hold W until camera_map_edge_distance_m == 0 within 6400
+until steady camera_x_m 30 within 120
+until steady camera_z_m 30 within 120
+expect camera_x_m >= 0
+expect camera_x_m <= 162
+expect camera_z_m >= -162
+expect camera_z_m <= 0
+expect camera_map_edge_distance_m == 0
+capture walking-edge
+# More outward input must not cross the edge; tangential movement is still allowed.
+key W 120
+until steady camera_x_m 30 within 120
+until steady camera_z_m 30 within 120
+expect camera_x_m >= 0
+expect camera_x_m <= 162
+expect camera_z_m >= -162
+expect camera_z_m <= 0
+expect camera_map_edge_distance_m == 0
+snapshot edge-after-outward-input
+wait 60
+expect camera_x_m == @edge-after-outward-input
+expect camera_z_m == @edge-after-outward-input
+capture walking-edge-held
+key S 120
+until steady camera_x_m 30 within 120
+until steady camera_z_m 30 within 120
+expect camera_map_edge_distance_m > 0
+expect camera_x_m >= 0
+expect camera_x_m <= 162
+expect camera_z_m >= -162
+expect camera_z_m <= 0
+capture walking-away-from-edge
+key ESCAPE
+until immersive_mode_active == 0
+until overhead_button_selected == 1
+until steady camera_height_m 30
+expect camera_x_m == @small-alpine-overhead
+expect camera_z_m == @small-alpine-overhead
+expect camera_height_m == @small-alpine-overhead
+expect camera_pitch_deg == @small-alpine-overhead
+expect camera_fov_deg == @small-alpine-overhead
+capture restored-overhead-after-edge
+
+# Test overhead wheel limits on this same Small Alpine map before leaving it.
+move 800 400
+expect ui_over_ui == 0
+wheel 1 120
+until steady camera_height_m 30 within 1800
+snapshot close-limit
+capture close-limit
+wheel 1 10
+until steady camera_height_m 30
+expect camera_height_m == @close-limit
+# Reverse the backlog; a steady clamped height need not mean the queue is empty.
+wheel -1 120
+until steady camera_height_m 30 within 1800
+expect camera_height_m > @close-limit
+snapshot far-limit
+capture far-limit
+wheel -1 10
+until steady camera_height_m 30
+expect camera_height_m == @far-limit
+expect camera_x_m == @far-limit
+expect camera_z_m == @far-limit
+wheel 3
+until steady camera_height_m 30
+expect camera_height_m < @far-limit
+expect camera_fov_deg == @small-alpine-overhead
+snapshot after-inward-notch
+capture after-inward-notch
+wheel -1
+until steady camera_height_m 30
+expect camera_height_m > @after-inward-notch
+expect camera_height_m < @far-limit
+snapshot after-outward-notch
+capture after-outward-notch
+until steady camera_height_m 60
+expect camera_height_m == @after-outward-notch
+# Preserve the zoomed overhead pose across an immersive round trip.
+click "firstperson"
+until immersive_mode_active == 1
+key ESCAPE
+until immersive_mode_active == 0
+until camera_height_m == @after-outward-notch
+expect camera_x_m == @after-outward-notch
+expect camera_z_m == @after-outward-notch
+expect camera_pitch_deg == @after-outward-notch
+expect camera_fov_deg == @after-outward-notch
+capture restored-overhead
+
+return-to-menu
+expect-visible "Freeform Button"
+capture returned-menu-after-edge

@@ -5,6 +5,10 @@ use openzt2_game_data::ui_document::node_presentation::UiNodeVisualState;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UiVisualLayer(pub(crate) UiNodeVisualState);
 
+/// Decorative skin nodes borrow the background slot of their owning control.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct UiVisualBackgroundSlotOwner(pub(crate) Entity);
+
 #[derive(Component, Debug, Clone)]
 pub(crate) struct UiVisualSound(pub(crate) Handle<AudioSource>);
 

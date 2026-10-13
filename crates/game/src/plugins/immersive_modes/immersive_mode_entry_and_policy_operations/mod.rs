@@ -4,7 +4,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::camera::camera_control_message_types::SetCameraMode;
 use crate::plugins::camera::camera_runtime_state_types::CameraMode;
 use crate::plugins::camera::camera_runtime_state_types::ZooCamera;

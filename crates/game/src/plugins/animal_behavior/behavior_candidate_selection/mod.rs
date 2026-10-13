@@ -162,3 +162,6 @@ pub(crate) fn score_supported_behavior_task(
     }
     (has_need_adjustment && score.is_finite()).then_some(score)
 }
+
+#[cfg(test)]
+mod inherited_species_task_compatibility_tests;

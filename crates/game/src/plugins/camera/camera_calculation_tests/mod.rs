@@ -141,6 +141,39 @@ fn one_wheel_notch_queues_eight_hundredths_at_double_zoom_rate() {
 }
 
 #[test]
+fn reversing_wheel_at_far_clamp_moves_inward_immediately_for_only_the_new_impulse() {
+    let camera_tuning = camera_tuning_for_calculation_tests();
+    let mut rig = overhead_camera_rig_for_calculation_tests();
+    rig.distance = 80.0;
+    let mut queue = WheelZoomQueue::Idle;
+    let advance_zoom = |rig: &mut OverheadRig, queue: &mut WheelZoomQueue| {
+        let wheel_zoom = consume_wheel_zoom(queue, 1.0 / 60.0);
+        apply_overhead_zoom_delta(
+            rig,
+            &camera_tuning,
+            0.0,
+            -wheel_zoom * camera_tuning.zoom_speed_mps / 60.0,
+        );
+    };
+
+    queue_wheel_zoom(&mut queue, -20.0);
+    advance_zoom(&mut rig, &mut queue);
+    assert_eq!(rig.distance, 80.0);
+    queue_wheel_zoom(&mut queue, 1.0);
+    advance_zoom(&mut rig, &mut queue);
+    assert!((rig.distance - 79.0).abs() < 1e-5);
+
+    // One notch lasts 0.08 s: five active 60 Hz ticks at 2 * 30 m/s
+    // move inward 5 m. The cancelled outward backlog contributes no movement.
+    for _ in 0..4 {
+        advance_zoom(&mut rig, &mut queue);
+    }
+    assert!((rig.distance - 75.0).abs() < 1e-5);
+    advance_zoom(&mut rig, &mut queue);
+    assert!((rig.distance - 75.0).abs() < 1e-5);
+}
+
+#[test]
 fn minimum_zoom_retains_and_then_consumes_the_close_in_residual() {
     let camera_tuning = camera_tuning_for_calculation_tests();
     let mut overhead_camera_rig = overhead_camera_rig_for_calculation_tests();

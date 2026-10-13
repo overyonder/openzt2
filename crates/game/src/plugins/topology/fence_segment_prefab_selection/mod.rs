@@ -242,13 +242,7 @@ mod tests {
                 cardinal_curve_135: AssetId::from_virtual_path("test/fence90curve135"),
                 diagonal_curve_135: AssetId::from_virtual_path("test/fence45curve135"),
             },
-            gate_policy: FenceGatePolicy {
-                prefab: AssetId::default(),
-                open_animation: AssetId::default(),
-                close_animation: AssetId::default(),
-                trigger_distance_cm: 0,
-                auto_close_ticks: 0,
-            },
+            gate_policy: FenceGatePolicy::default(),
         }
     }
 

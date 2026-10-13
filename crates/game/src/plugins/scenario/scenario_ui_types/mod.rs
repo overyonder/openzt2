@@ -25,11 +25,10 @@ pub(super) enum ScenarioObjectiveStatusFilter {
     Neutral,
 }
 
-/// Authored goal-list projection cursor.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+/// The live objectives an authored goal list shows, one per row in order.
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub(super) struct ScenarioGoalListProjection {
-    pub(super) scenario: AssetId,
-    pub(super) projected_rows: u16,
+    pub(super) objectives: Vec<Entity>,
 }
 
 /// Stable reference from an authored goal row to its live objective.

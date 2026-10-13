@@ -52,6 +52,7 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
         action: 0,
         repetitions: 0,
         next_action_tick: 0,
+        object: None,
         interaction_slot: None,
         stack: ArrayVec::new(),
     };

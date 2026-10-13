@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::PlacementFailure;
 use crate::plugins::construction::construction_transaction_types::PrepareDeletion;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
@@ -36,9 +36,13 @@ pub(super) fn prepare_placed_object_removal_edit(
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     mut prepared: MessageWriter<ObjectPlacementEditPrepared>,
     mut rejected: MessageWriter<ObjectPlacementEditPreparationRejected>,
+    transport_sales: crate::plugins::transport_tours::transport_track_sale::TransportTrackSaleQueries,
 ) {
     let catalogue = active_definitions.get(&definitions);
     for request in requests.read() {
+        if transport_sales.requires_transport_sale(request.target) {
+            continue;
+        }
         let Ok((id, placeable, transform, occupancy, prefab)) = placed.get(request.target) else {
             continue;
         };

@@ -24,11 +24,13 @@ impl TerrainDerivedNavigationGraph {
         terrain_cell: UVec2,
         height_centimetres: i32,
         contains_water: bool,
+        minimum_triangle_normal_y: f32,
     ) -> Option<()> {
         let node = self
             .calculate_navigation_node_for_terrain_cell(terrain_cell.to_array())
             .and_then(|index| self.navigation_nodes.get_mut(index as usize))?;
         node.height_centimetres = height_centimetres;
+        node.minimum_triangle_normal_y = minimum_triangle_normal_y;
         if contains_water {
             node.eligibility_flags.0 |= NavFlags::WATER.0;
         } else {

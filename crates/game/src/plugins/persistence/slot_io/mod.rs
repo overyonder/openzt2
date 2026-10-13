@@ -1,4 +1,10 @@
 mod animal_adoption_offer_inventory_snapshot_section;
+mod animal_snapshot_application;
+mod animal_snapshot_capture;
+#[cfg(test)]
+mod animal_snapshot_round_trip_tests;
+mod animal_snapshot_section_encoding;
+mod animal_snapshot_types;
 pub(super) mod delete_snapshot_file_request_execution;
 mod economy_snapshot_application;
 mod economy_snapshot_capture;
@@ -9,12 +15,23 @@ pub(super) mod load_snapshot_file_request_execution;
 pub(super) mod loaded_snapshot_application_execution;
 mod loaded_snapshot_live_world_application;
 mod loaded_snapshot_reference_validation;
-mod pending_snapshot_application_types;
+mod maintenance_snapshot_application;
+mod maintenance_snapshot_capture;
+mod maintenance_snapshot_section_encoding;
+#[cfg(test)]
+mod maintenance_snapshot_tests;
+mod maintenance_snapshot_types;
+pub(crate) mod pending_snapshot_application_types;
 mod persistence_failure_message_publication;
 mod persistence_slot_filesystem_task_types;
+#[cfg(test)]
+pub(in crate::plugins) mod photo_baseline_snapshot_tests;
 mod photo_snapshot_application;
+mod photo_snapshot_baseline_readiness;
 mod photo_snapshot_capture;
 mod photo_snapshot_section_encoding;
+#[cfg(test)]
+mod photo_snapshot_tests;
 mod photo_snapshot_types;
 pub(super) mod save_slot_catalogue_load_execution;
 mod save_snapshot_file_write_task_execution;
@@ -24,6 +41,10 @@ mod show_snapshot_capture;
 mod show_snapshot_section_encoding;
 mod show_snapshot_types;
 mod snapshot_container_section_assembly;
+mod staff_snapshot_application;
+mod staff_snapshot_capture;
+mod staff_snapshot_section_encoding;
+mod staff_snapshot_types;
 mod supported_snapshot_section_validation;
 mod tank_snapshot_application;
 mod tank_snapshot_capture;

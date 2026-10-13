@@ -1,13 +1,13 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashSet, prelude::*};
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::aquatic::aquatic_simulation_types::WaterQuality;
 
 use super::{
     staff_job_types::{JobClaim, JobProgress, StaffJob},
-    staff_lifecycle_messages::{StaffJobCompleted, TankWaterCleaned},
+    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted, TankWaterCleaned},
 };
 
 pub(in crate::plugins::staff) fn apply_completed_tank_maintenance_work(
@@ -17,12 +17,17 @@ pub(in crate::plugins::staff) fn apply_completed_tank_maintenance_work(
     mut tank_water_quality: Query<&mut WaterQuality>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
     mut cleaned_tank_water: MessageWriter<TankWaterCleaned>,
+    mut cancellations: MessageReader<CancelStaffJobRequest>,
+    mut cancelled_jobs: Local<HashSet<Entity>>,
 ) {
+    cancelled_jobs.clear();
+    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
     for (job_entity, job, _, claim) in &mut jobs {
-        if job.kind != StaffJobKind::MaintainTank {
+        // Cancellation is settled in Cleanup, after this terminal effect in Act.
+        if job.kind != StaffJobKind::MaintainTank || cancelled_jobs.contains(&job_entity) {
             continue;
         }
         let applied = match job.kind {

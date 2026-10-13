@@ -2,10 +2,14 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestControllerDefinition;
 use openzt2_game_data::AssetId;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::feeding::container_quantity::DrinkContainer;
 use crate::plugins::feeding::container_quantity::FoodContainer;
+use crate::plugins::animal_health::types::Dead;
+use crate::plugins::animal_lifecycle::types::Animal;
+use crate::plugins::animal_welfare::types::{Hunger, MAX_NEED_Q16};
+use crate::plugins::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use crate::plugins::staff::staff_job_types::StaffJob;
 use crate::plugins::staff::staff_lifecycle_messages::CancelStaffJobRequest;
 use crate::plugins::staff::staff_lifecycle_messages::StaffJobRequest;
@@ -181,8 +185,8 @@ pub(super) fn reconcile_staff_request_rows_on_definition_revision(
     }
 }
 
-/// Evaluates requests against food and drink container levels. Trash-level
-/// requests have no live sample until their units are known.
+/// Evaluates authored container and animal hunger controllers against their
+/// live owners. Unsupported attributes remain unsampled.
 pub(super) fn evaluate_staff_request_rows(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -193,6 +197,7 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
     )>,
+    animal_hunger: Query<&Hunger, (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>)>,
     jobs: Query<(Entity, &StaffJob)>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
@@ -214,9 +219,34 @@ pub(super) fn evaluate_staff_request_rows(
             let Some(row) = find_row(rows, state.row) else {
                 continue;
             };
-            if row.attribute_key != Some(food_level_key()) {
-                continue;
-            }
+            let sample = if row.attribute_key == Some(food_level_key()) {
+                sample
+            } else if row.attribute_key == Some(AssetId::from_key("hunger")) {
+                let Ok(hunger) = animal_hunger.get(entity) else {
+                    // A dead, crated or no-longer-initialized animal cannot own
+                    // feeding work. Resume with a fresh sample if it returns.
+                    state.previous = None;
+                    if let Some(token) = row.request.token {
+                        if let Some(kind) = job_kind(token) {
+                            cancel_matching_job(
+                                StaffRequestJobKey {
+                                    kind,
+                                    target: entity,
+                                    token,
+                                },
+                                &jobs,
+                                &mut cancellations,
+                            );
+                        }
+                    }
+                    continue;
+                };
+                // Controllers use authored deprivation on 0..100, whereas
+                // the welfare owner stores wellness on 0..1000 in Q16.
+                Some((MAX_NEED_Q16 - hunger.0.clamp(0, MAX_NEED_Q16)) / 10)
+            } else {
+                None
+            };
             let Some(sample) = sample else {
                 continue;
             };
@@ -357,7 +387,7 @@ fn evaluate_staff_request_row(
 }
 
 fn job_kind(token: AssetId) -> Option<StaffJobKind> {
-    if token == fill_food_container_token() {
+    if token == fill_food_container_token() || token == AssetId::from_key("t_feedanimal") {
         Some(StaffJobKind::Feed)
     } else if token == empty_trash_token() || token == empty_recycling_bin_token() {
         Some(StaffJobKind::EmptyBin)

@@ -1,6 +1,6 @@
 use openzt2_game_data::audio::{AudioUsage, AudioVariant, VARIANT_CUE_REFERENCE};
 
-use crate::assets::audio::audio_asset_types::{AudioView, ResolvedAudioCue};
+use openzt2_game_assets::audio::audio_asset_types::{AudioView, ResolvedAudioCue};
 
 pub(super) fn resolve_weighted_audio_cue_variant<'a>(
     audio_asset_view: AudioView<'a>,

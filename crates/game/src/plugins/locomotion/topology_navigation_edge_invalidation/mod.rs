@@ -1,9 +1,9 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
 
 use crate::plugins::topology::{
-    gate_operation_types::Gate,
     topology_edit_types::TopologyChanged,
-    topology_graph_types::{FenceEdge, TopologyNode},
+    topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode},
+    topology_grid_geometry::horizontal_world_segments_intersect,
 };
 
 use super::{
@@ -13,13 +13,14 @@ use super::{
     terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
 };
 
-/// Projects live gate state into the sparse edge overlay and dirties only
+/// Projects references to crossed fences into the sparse edge overlay and dirties only
 /// routes whose remaining polyline intersects a changed topology rectangle.
 pub(super) fn synchronize_navigation_edge_blocking_and_invalidate_routes_after_topology_changes(
     mut topology_changes: MessageReader<TopologyChanged>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     mut navigation_edge_overlay: ResMut<NavigationOverlay>,
-    gate_edges: Query<(&Gate, &FenceEdge)>,
+    fence_edges: Query<(Entity, &FenceEdge)>,
+    topology_grid: Res<TopologyGrid>,
     topology_nodes: Query<&TopologyNode>,
     mut active_routes: Query<(&GlobalTransform, &Route, &mut Destination)>,
 ) {
@@ -29,76 +30,121 @@ pub(super) fn synchronize_navigation_edge_blocking_and_invalidate_routes_after_t
     };
     let terrain_derived_navigation_graph =
         active_navigation_graph.terrain_derived_navigation_graph();
+    let mut rebuild_crossings = active_navigation_graph.is_changed();
     for topology_change in topology_changes.read() {
-        synchronize_closed_gate_blocking_in_navigation_edge_overlay(
-            terrain_derived_navigation_graph,
-            topology_change.bounds,
-            &gate_edges,
-            &topology_nodes,
-            &mut navigation_edge_overlay,
-        );
+        rebuild_crossings = true;
+        let changed_world_bounds =
+            calculate_topology_rectangle_world_cell_bounds(topology_change.bounds, *topology_grid);
         for (route_start_transform, route, mut destination) in &mut active_routes {
             if remaining_route_intersects_changed_topology_rectangle(
                 route_start_transform.translation(),
                 route,
-                topology_change.bounds,
+                changed_world_bounds,
             ) {
                 destination.set_changed();
             }
         }
     }
+    if rebuild_crossings {
+        synchronize_fence_crossings_in_navigation_edge_overlay(
+            terrain_derived_navigation_graph,
+            &fence_edges,
+            &topology_nodes,
+            *topology_grid,
+            &mut navigation_edge_overlay,
+        );
+    }
 }
 
-fn synchronize_closed_gate_blocking_in_navigation_edge_overlay(
+fn synchronize_fence_crossings_in_navigation_edge_overlay(
     terrain_derived_navigation_graph: &TerrainDerivedNavigationGraph,
-    changed_topology_bounds: IRect,
-    gate_edges: &Query<(&Gate, &FenceEdge)>,
+    fence_edges: &Query<(Entity, &FenceEdge)>,
     topology_nodes: &Query<&TopologyNode>,
+    topology_grid: TopologyGrid,
     navigation_edge_overlay: &mut NavigationOverlay,
 ) {
-    let Ok(navigation_node_count) =
-        u32::try_from(terrain_derived_navigation_graph.navigation_node_count())
+    let cell_size =
+        f32::from(terrain_derived_navigation_graph.terrain_cell_size_centimetres) * 0.01;
+    if cell_size <= 0.0 {
+        return;
+    }
+    let dimensions = terrain_derived_navigation_graph.terrain_tile_grid_dimensions;
+    let cells_per_tile = u32::from(terrain_derived_navigation_graph.terrain_cells_per_tile);
+    let Some(maximum_cell) = dimensions[0]
+        .checked_mul(cells_per_tile)
+        .and_then(|count| count.checked_sub(1))
+        .and_then(|cell| i32::try_from(cell).ok())
+        .zip(
+            dimensions[1]
+                .checked_mul(cells_per_tile)
+                .and_then(|count| count.checked_sub(1))
+                .and_then(|cell| i32::try_from(cell).ok()),
+        )
+        .map(|(x, y)| IVec2::new(x, y))
     else {
         return;
     };
-    for source_navigation_node in 0..navigation_node_count {
-        for edge in terrain_derived_navigation_graph
-            .iterate_outgoing_navigation_graph_edges(source_navigation_node)
-        {
-            let destination_navigation_node = edge.destination_node;
-            let edge_bounds = calculate_navigation_edge_world_cell_bounds(
-                terrain_derived_navigation_graph,
-                source_navigation_node,
-                destination_navigation_node,
-            );
-            if !inclusive_rectangles_intersect(edge_bounds, changed_topology_bounds) {
-                continue;
-            }
-            let blocked_by_closed_gate = gate_edges.iter().any(|(gate, fence_edge)| {
-                if gate.open {
-                    return false;
-                }
-                let (Ok(first_topology_node), Ok(second_topology_node)) = (
-                    topology_nodes.get(fence_edge.a),
-                    topology_nodes.get(fence_edge.b),
-                ) else {
-                    return false;
+    let mut crossings = HashMap::<(u32, u32), Vec<Entity>>::new();
+    // Graph edges join adjacent terrain cells. Visit only each fence's small
+    // cell rectangle, rather than comparing every graph edge to every fence.
+    for (entity, fence) in fence_edges.iter() {
+        let (Ok(a), Ok(b)) = (topology_nodes.get(fence.a), topology_nodes.get(fence.b)) else {
+            continue;
+        };
+        let a = topology_grid.cell_translation(a.cell).xz();
+        let b = topology_grid.cell_translation(b.cell).xz();
+        let a_cell = Vec2::new(a.x, -a.y) / cell_size;
+        let b_cell = Vec2::new(b.x, -b.y) / cell_size;
+        let minimum = (a_cell.min(b_cell).floor().as_ivec2() - IVec2::ONE).max(IVec2::ZERO);
+        let maximum = (a_cell.max(b_cell).floor().as_ivec2() + IVec2::ONE).min(maximum_cell);
+        for y in minimum.y..=maximum.y {
+            for x in minimum.x..=maximum.x {
+                let Some(source_navigation_node) = terrain_derived_navigation_graph
+                    .calculate_navigation_node_for_terrain_cell([
+                        u32::try_from(x).expect("clamped terrain column"),
+                        u32::try_from(y).expect("clamped terrain row"),
+                    ])
+                else {
+                    continue;
                 };
-                inclusive_rectangles_intersect(
-                    edge_bounds,
-                    create_inclusive_rectangle_from_two_cells(
-                        first_topology_node.cell.xy(),
-                        second_topology_node.cell.xy(),
-                    ),
-                )
-            });
-            navigation_edge_overlay.set_blocked(
-                source_navigation_node,
-                destination_navigation_node,
-                blocked_by_closed_gate,
-            );
+                for edge in terrain_derived_navigation_graph
+                    .iterate_outgoing_navigation_graph_edges(source_navigation_node)
+                {
+                    let destination_navigation_node = edge.destination_node;
+                    let Some((source, destination)) = terrain_derived_navigation_graph
+                        .calculate_navigation_node_world_position_centimetres(
+                            source_navigation_node,
+                        )
+                        .zip(
+                            terrain_derived_navigation_graph
+                                .calculate_navigation_node_world_position_centimetres(
+                                    destination_navigation_node,
+                                ),
+                        )
+                    else {
+                        continue;
+                    };
+                    let source = Vec2::new(source[0] as f32, source[2] as f32) * 0.01;
+                    let destination =
+                        Vec2::new(destination[0] as f32, destination[2] as f32) * 0.01;
+                    if horizontal_world_segments_intersect(source, destination, a, b) {
+                        crossings
+                            .entry((source_navigation_node, destination_navigation_node))
+                            .or_default()
+                            .push(entity);
+                    }
+                }
+            }
         }
     }
+    navigation_edge_overlay.replace_fence_crossings(crossings);
+}
+
+fn calculate_topology_rectangle_world_cell_bounds(bounds: IRect, grid: TopologyGrid) -> IRect {
+    calculate_world_segment_cell_bounds(
+        grid.cell_translation(bounds.min.extend(0)),
+        grid.cell_translation(bounds.max.extend(0)),
+    )
 }
 
 fn remaining_route_intersects_changed_topology_rectangle(
@@ -117,35 +163,6 @@ fn remaining_route_intersects_changed_topology_rectangle(
         previous_route_position = next_route_position;
     }
     false
-}
-
-fn calculate_navigation_edge_world_cell_bounds(
-    terrain_derived_navigation_graph: &TerrainDerivedNavigationGraph,
-    source_navigation_node: u32,
-    destination_navigation_node: u32,
-) -> IRect {
-    let Some((source_position_centimetres, destination_position_centimetres)) =
-        terrain_derived_navigation_graph
-            .calculate_navigation_node_world_position_centimetres(source_navigation_node)
-            .zip(
-                terrain_derived_navigation_graph
-                    .calculate_navigation_node_world_position_centimetres(
-                        destination_navigation_node,
-                    ),
-            )
-    else {
-        return IRect::EMPTY;
-    };
-    create_inclusive_rectangle_from_two_cells(
-        IVec2::new(
-            source_position_centimetres[0] / 100,
-            source_position_centimetres[2] / 100,
-        ),
-        IVec2::new(
-            destination_position_centimetres[0] / 100,
-            destination_position_centimetres[2] / 100,
-        ),
-    )
 }
 
 fn calculate_world_segment_cell_bounds(first_position: Vec3, second_position: Vec3) -> IRect {

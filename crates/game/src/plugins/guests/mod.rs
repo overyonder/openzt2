@@ -14,6 +14,10 @@ pub mod guest_simulation_types;
 pub(crate) mod guest_survey_execution;
 mod guest_target_eligibility;
 mod guest_task_need_facts;
+mod guest_task_progress_diagnostics;
+mod guest_task_target_loss;
+mod guest_view_animals_execution;
+mod guest_viewing_lifecycle;
 pub(crate) mod view_event_execution;
 
 use bevy::prelude::*;
@@ -29,32 +33,25 @@ use guest_destination_and_viewing_execution::{
 use guest_lifecycle_and_memory_execution::{
     advance_guest_lifecycle, age_guest_memories, apply_guest_reactions, despawn_departed_guests,
 };
-use guest_need_execution::{
-    apply_behavior_guest_needs, apply_guest_satisfaction_adjustments, decay_guest_needs,
-};
+use guest_need_execution::{apply_guest_satisfaction_adjustments, decay_guest_needs};
 use guest_survey_execution::{
     adjust_guest_survey_data, initialize_guest_survey, survey_guest_needs,
 };
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use guest_simulation_types::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub struct GuestsPlugin;
 
 impl Plugin for GuestsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<view_event_execution::BehaviorViewEventEmitted>()
+        app.init_resource::<view_event_execution::ViewEventSequence>()
+            .add_message::<view_event_execution::BehaviorViewEventEmitted>()
             .add_message::<GuestReaction>()
             .add_message::<GuestReactionApplied>()
             .add_message::<AdjustGuestSatisfaction>()
-            .add_message::<AdjustGuestAmusement>()
-            .add_message::<AdjustGuestHunger>()
-            .add_message::<AdjustGuestThirst>()
-            .add_message::<AdjustGuestRest>()
-            .add_message::<AdjustGuestRestroom>()
             .add_message::<AdjustGuestSurveyData>()
-            .add_message::<SetAmusementPaintLevel>()
             .add_message::<GuestArrived>()
             .add_message::<GuestReachedEntrance>()
             .add_message::<GuestDeparted>()
@@ -68,14 +65,17 @@ impl Plugin for GuestsPlugin {
                     report_changed_guest_arrival_failures,
                     adjust_guest_survey_data,
                     apply_guest_satisfaction_adjustments,
-                    apply_behavior_guest_needs,
                 )
                     .in_set(GameSet::Intent)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 Update,
-                guest_animation_owner_projection::project_guest_animation_owners
+                (
+                    guest_animation_owner_projection::request_authored_animation_sets_for_resolved_guest_models,
+                    guest_animation_owner_projection::attach_loaded_animation_sets_to_guest_models,
+                    guest_animation_owner_projection::project_guest_animation_owners,
+                )
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -83,6 +83,7 @@ impl Plugin for GuestsPlugin {
                 FixedUpdate,
                 (
                     initialize_spawned_guests,
+                    guest_task_target_loss::fail_guest_tasks_whose_target_is_gone,
                     hydrate_viewing_opportunities,
                     decay_guest_needs,
                     guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications,
@@ -91,6 +92,7 @@ impl Plugin for GuestsPlugin {
                     react_to_visible_litter,
                     choose_guest_destination,
                     guest_self_task_selection::select_idle_guest_tasks,
+                    guest_task_progress_diagnostics::report_guest_task_progress_changes,
                 )
                     .chain()
                     .in_set(FixedGameSet::Think)
@@ -100,8 +102,13 @@ impl Plugin for GuestsPlugin {
                 FixedUpdate,
                 (
                     view_event_execution::emit_authored_view_events,
+                    guest_view_animals_execution::watch_animals_for_current_view_actions,
                     spawn_arriving_guests,
+                    // Release old observations before consuming replacement arrivals;
+                    // validate newly registered observations before advancing them.
+                    guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     begin_viewing,
+                    guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     advance_viewing,
                     apply_guest_reactions,
                     cancel_failed_guest_destinations,
@@ -140,3 +147,6 @@ mod tests;
 
 #[cfg(test)]
 mod guest_navigation_result_ownership_tests;
+
+#[cfg(test)]
+mod viewing_reaction_composition_tests;

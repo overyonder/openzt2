@@ -1,17 +1,15 @@
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use bevy::prelude::*;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        information::catalogue_types::SelectedCatalogueEntry,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
+use crate::plugins::{
+    information::catalogue_types::SelectedCatalogueEntry,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::research_types::{ResearchProjectAvailability, StartResearchProjectRequest};
 use crate::plugins::ui::authored_ui_action_projection_components::UiResearchActions;

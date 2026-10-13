@@ -2,11 +2,13 @@
 
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::camera::camera_control_message_types::SetCameraMode;
 use crate::plugins::camera::camera_runtime_state_types::{CameraMode, ZooCamera};
 use crate::plugins::locomotion::locomotion_types::{NavAgent, NavFlags};
+use crate::plugins::world_spawn::world_membership_types::WorldMember;
+use crate::plugins::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 
 use super::{
     immersive_mode_control_types::FirstPersonControl,
@@ -25,7 +27,8 @@ pub(super) fn enter_pending_super_staff_mode(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
     (definitions, active_definitions): (Res<Assets<WorldDefinitionAsset>>, Res<WorldDefinitions>),
     cameras: Query<Entity, With<ZooCamera>>,
-    camera_transforms: Query<&Transform, With<ZooCamera>>,
+    camera_transforms: Query<(&Transform, &WorldMember), With<ZooCamera>>,
+    world_bounds: Query<&WorldTerrainHorizontalBounds>,
     start_surface: SuperStaffAvatarStartSurface,
     mut commands: Commands,
     mut camera_requests: MessageWriter<SetCameraMode>,
@@ -56,7 +59,7 @@ pub(super) fn enter_pending_super_staff_mode(
     else {
         return;
     };
-    let (Some(walking_camera), Ok(overhead_camera)) = (
+    let (Some(walking_camera), Ok((overhead_camera, world_member))) = (
         definitions.find_camera(camera_definition),
         camera_transforms.single(),
     ) else {
@@ -64,6 +67,15 @@ pub(super) fn enter_pending_super_staff_mode(
             controller,
             pending,
             ModeEntryFailure::MissingTool,
+            &mut commands,
+        );
+        return;
+    };
+    let Ok(bounds) = world_bounds.get(world_member.root) else {
+        record_pending_immersive_mode_entry_failure(
+            controller,
+            pending,
+            ModeEntryFailure::RuleDenied,
             &mut commands,
         );
         return;
@@ -87,9 +99,11 @@ pub(super) fn enter_pending_super_staff_mode(
     // The player starts facing the overhead view's heading, with the
     // first-person camera's own initial pitch.
     let (heading_yaw, _, _) = overhead_camera.rotation.to_euler(EulerRot::YXZ);
-    let avatar_transform = Transform::from_translation(
-        start_surface.find_avatar_start_position(overhead_camera.translation, heading_yaw),
-    )
+    let avatar_transform = Transform::from_translation(start_surface.find_avatar_start_position(
+        overhead_camera.translation,
+        heading_yaw,
+        bounds,
+    ))
     .with_rotation(Quat::from_rotation_y(heading_yaw));
     // The camera reads the avatar's global pose in this frame, before
     // transform propagation has run for the new entity.
@@ -99,6 +113,7 @@ pub(super) fn enter_pending_super_staff_mode(
             avatar_transform,
             GlobalTransform::from(avatar_transform),
             avatar_locomotion,
+            *world_member,
         ))
         .id();
     let entry = PendingImmersiveEntry {

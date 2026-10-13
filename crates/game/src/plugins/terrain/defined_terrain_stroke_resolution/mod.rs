@@ -3,8 +3,8 @@ use openzt2_game_data::world_definitions::terrain_editing_brushes::{
     TerrainEditingBrushFalloff, TerrainEditingBrushOperation,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 
 use super::terrain_brush_types::{

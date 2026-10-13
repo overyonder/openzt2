@@ -1,9 +1,7 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::animation_playback::animation_playback_controller_types::AnimationPlaybackController,
-};
+use crate::plugins::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::animation_graph_playback_message_types::{
     AnimationGraphNodePlaybackRequest, AnimationGraphNodePlaybackRequestRejected,

@@ -1,9 +1,7 @@
-use bevy::{mesh::VertexAttributeValues, prelude::*};
+use bevy::{asset::AssetId, mesh::VertexAttributeValues, prelude::*};
 
-use crate::{
-    assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
-    plugins::world_spawn::prefab_model_tint::PrefabModelTint,
-};
+use crate::plugins::world_spawn::prefab_model_tint::PrefabModelTint;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 use super::ModelExpanded;
 
@@ -14,9 +12,20 @@ pub(super) struct ProjectedPrefabTintMaterial {
 }
 
 #[derive(Component)]
-pub(super) struct ProjectedPrefabTintMesh {
+#[expect(
+    clippy::redundant_pub_crate,
+    reason = "The sibling verification owner borrows this component through its crate-only module."
+)]
+pub(crate) struct ProjectedPrefabTintMesh {
     handle: Handle<Mesh>,
     authored_vertex_colors: Box<[[f32; 4]]>,
+}
+
+impl ProjectedPrefabTintMesh {
+    /// Borrows the retained projection inputs without retaining the source asset.
+    pub(crate) fn mesh_and_authored_colors(&self) -> (AssetId<Mesh>, &[[f32; 4]]) {
+        (self.handle.id(), &self.authored_vertex_colors)
+    }
 }
 
 pub(super) fn project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors(

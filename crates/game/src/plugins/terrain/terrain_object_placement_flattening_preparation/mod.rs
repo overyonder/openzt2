@@ -1,9 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use crate::plugins::aquatic::tank_floor_edit_types::TankFloorEdit;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
 use crate::plugins::construction::construction_interaction_types::PlacementFailure;
 use crate::plugins::construction::construction_transaction_types::PrepareConstruction;
@@ -28,7 +29,7 @@ use super::{
 pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<&ConstructionPreview>,
+    previews: Query<&ConstructionPreview, Without<TankFloorEdit>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     terrain_index: Res<TerrainIndex>,

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=OpenZT2
+Comment=Build and manage a zoo using your Zoo Tycoon 2 game files
+Exec=openzt2-launch
+Icon=org.openzt2.OpenZT2
+Terminal=false
+Categories=Game;Simulation;
+StartupNotify=true

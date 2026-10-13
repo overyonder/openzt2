@@ -1,0 +1,89 @@
+# #182: shipped restroom glass retains the compiled ViewToWorld expression.
+# Buffer writes are published ShaderBuffer updates, not GPU readback or pixel proof.
+# Review the named captures independently; #194/#195/#196 still require integration proof.
+start freeform-map
+snapshot journey-before
+click "construction"
+click "Building Tab"
+until rows "Building Typelist" >= 1
+wheel-to-catalogue "bathroomsmall_df"
+select-catalogue "bathroomsmall_df"
+expect selected_catalogue_entry_available == 1
+capture reflection-catalogue-preview
+move 1150 300
+until placement_valid_previews == 1
+capture reflection-placement-preview
+click 1150 300
+until placed_objects > @entered-map
+expect construction_commit_failures == @journey-before
+key ESCAPE
+until placement_previews == 0
+expect construction_tool_active == 0
+click "close"
+until hidden "Buy Info Panel"
+click 1158 270                  # the small restroom model sits above and right of its placement point
+until visible "Building Info"
+expect reflection_selected_is_bathroom == 1
+until reflection_draws > 0
+until reflection_input_matches_view == 1
+expect reflection_buffer_present == 1
+expect reflection_evaluation_failures == 0
+expect reflection_output_rows == 3
+expect reflection_output_columns == 4
+expect reflection_output_components == 12
+until steady reflection_input_identity 30 within 300
+snapshot reflection-before
+capture reflection-before
+wait 60                         # stationary accepted input must cause no new evaluation/write
+expect reflection_evaluations == @reflection-before
+expect reflection_buffer_writes == @reflection-before
+expect reflection_buffer_identity == @reflection-before
+expect reflection_material_identity == @reflection-before
+expect reflection_output_identity == @reflection-before
+
+key Q 40
+until steady reflection_input_identity 30 within 300
+expect reflection_input_identity != @reflection-before
+expect reflection_output_identity != @reflection-before
+expect reflection_evaluations > @reflection-before
+expect reflection_buffer_writes > @reflection-before
+expect reflection_input_matches_view == 1
+expect reflection_evaluation_failures == 0
+expect reflection_buffer_identity == @reflection-before
+expect reflection_material_identity == @reflection-before
+expect reflection_view_identity == @reflection-before
+snapshot reflection-rotated
+capture reflection-rotated
+wait 60
+expect reflection_evaluations == @reflection-rotated
+expect reflection_buffer_writes == @reflection-rotated
+expect reflection_output_identity == @reflection-rotated
+
+key E 40                       # ordinary inverse camera input; no pose assignment
+until steady reflection_input_identity 30 within 300
+expect reflection_input_identity != @reflection-rotated
+expect reflection_output_identity != @reflection-rotated
+expect reflection_evaluations > @reflection-rotated
+expect reflection_buffer_writes > @reflection-rotated
+expect reflection_input_matches_view == 1
+expect reflection_evaluation_failures == 0
+expect reflection_buffer_identity == @reflection-before
+expect reflection_material_identity == @reflection-before
+expect reflection_view_identity == @reflection-before
+expect placed_objects == @reflection-before
+snapshot reflection-restored
+capture reflection-restored
+wait 60
+expect reflection_evaluations == @reflection-restored
+expect reflection_buffer_writes == @reflection-restored
+expect reflection_output_identity == @reflection-restored
+# Exact restoration pixels/pose need independent review: Q/E rounding is not
+# equivalent to directly assigning the original matrix bits.
+click "close"
+until hidden "Building Info"
+# Reverse the construction transaction after restoring the camera with inverse input.
+key CTRL+Z
+until placed_objects == @entered-map
+expect construction_commit_failures == @journey-before
+
+restore freeform-map

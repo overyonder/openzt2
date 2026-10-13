@@ -1,6 +1,7 @@
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::simulation_time::deterministic_random_stream::DeterministicRng;
 use bevy::prelude::*;
+use crate::plugins::locomotion::locomotion_types::SpatialGrid;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDefinition;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestGenerationPolicy;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestRarity;
@@ -107,34 +108,75 @@ pub(super) fn guest_spawn_probability(
         .clamp(0.0, 1.0)
 }
 
+/// Where a guest appears: displaced from the entrance gate when guests spawn
+/// at the entrance, otherwise at the authored world emitter. `None` while the
+/// map's extent is not yet known.
 pub(super) fn guest_arrival_position(
     policy: &GuestGenerationPolicy,
     entrance: Vec3,
+    gate_rotation: Quat,
+    grid: &SpatialGrid,
     rng: &mut DeterministicRng,
-) -> Vec3 {
+) -> Option<Vec3> {
     let base = if policy.spawn_at_entrance {
-        entrance
-            + Vec3::new(
-                policy.arrival_offset_cm[0] as f32 * 0.01,
-                0.0,
-                policy.arrival_offset_cm[1] as f32 * 0.01,
-            )
+        displaced_from_entrance_gate(entrance, gate_rotation, policy.arrival_offset_m, grid)?
     } else {
+        // Source ground (x, y) is Bevy (x, -z).
         Vec3::new(
-            policy.default_emitter_cm[0] as f32 * 0.01,
+            policy.default_emitter_m[0],
             entrance.y,
-            policy.default_emitter_cm[1] as f32 * 0.01,
+            -policy.default_emitter_m[1],
         )
     };
-    if !policy.stagger || policy.stagger_square_cm == 0 {
-        return base;
+    if !policy.stagger || policy.stagger_square_m <= 0.0 {
+        return Some(base);
     }
-    let width = policy.stagger_square_cm as f32 * 0.01;
-    base + Vec3::new(
-        (random_unit(rng) - 0.5) * width,
-        0.0,
-        (random_unit(rng) - 0.5) * width,
+    let width = policy.stagger_square_m;
+    Some(
+        base + Vec3::new(
+            (random_unit(rng) - 0.5) * width,
+            0.0,
+            (random_unit(rng) - 0.5) * width,
+        ),
     )
+}
+
+/// Applies an authored guest-manager displacement, in metres along the gate's
+/// own source x and y axes, to the entrance anchor.
+///
+/// The authored arrival displacement (100 m out from the gate) can leave the
+/// map, where nothing can walk. The original's world extends past the playable
+/// map; ours ends at the navigation grid, so the point is pulled back along the
+/// displacement to the last point inside the grid, half a cell in from its
+/// edge so it lies within a cell. Guests still appear outside the gate and walk
+/// in. `None` while the grid is not yet built.
+pub(super) fn displaced_from_entrance_gate(
+    entrance: Vec3,
+    gate_rotation: Quat,
+    offset_m: [f32; 2],
+    grid: &SpatialGrid,
+) -> Option<Vec3> {
+    if grid.width == 0 || grid.height == 0 {
+        return None;
+    }
+    // Source ground (x, y) is Bevy (x, -z) in the gate's local frame.
+    let displacement = gate_rotation * Vec3::new(offset_m[0], 0.0, -offset_m[1]);
+    let inset = grid.cell_size_m * 0.5;
+    let minimum = grid.origin + Vec2::splat(inset);
+    let maximum = grid.origin + Vec2::new(grid.width as f32, grid.height as f32) * grid.cell_size_m
+        - Vec2::splat(inset);
+    let start = entrance.xz();
+    let delta = displacement.xz();
+    // Largest fraction of the displacement that stays inside the inset grid.
+    let mut reach = 1.0_f32;
+    for axis in 0..2 {
+        if delta[axis] > 0.0 {
+            reach = reach.min((maximum[axis] - start[axis]) / delta[axis]);
+        } else if delta[axis] < 0.0 {
+            reach = reach.min((minimum[axis] - start[axis]) / delta[axis]);
+        }
+    }
+    Some(entrance + displacement * reach.clamp(0.0, 1.0))
 }
 
 pub(super) fn random_unit(rng: &mut DeterministicRng) -> f32 {

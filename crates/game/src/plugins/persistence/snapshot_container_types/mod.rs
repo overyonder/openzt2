@@ -47,10 +47,11 @@ pub(super) enum WorldSnapshotSectionKind {
     GesturesPuzzles,
     SimulationTime,
     Environment,
+    AdoptionOffers,
 }
 
 impl WorldSnapshotSectionKind {
-    pub(super) const ENCODING_ORDER: [Self; 25] = [
+    pub(super) const ENCODING_ORDER: [Self; 26] = [
         Self::World,
         Self::Terrain,
         Self::Topology,
@@ -76,6 +77,7 @@ impl WorldSnapshotSectionKind {
         Self::GesturesPuzzles,
         Self::SimulationTime,
         Self::Environment,
+        Self::AdoptionOffers,
     ];
 
     pub(super) const fn section_directory_index(self) -> usize {

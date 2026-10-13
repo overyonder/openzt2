@@ -3,9 +3,9 @@ use bevy::{
     time::{Fixed, Virtual},
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::world_spawn::selected_world_identity::SelectedWorldIdentity;
 
 use super::{
@@ -82,18 +82,17 @@ pub(crate) fn initialize_simulation_time_from_selected_world(
             tick_in_day,
         });
         commands.insert_resource(calculated_calendar);
-        commands.insert_resource(SimulationControl {
-            speed_tier: 0,
-            paused: false,
-        });
+        commands.insert_resource(SimulationControl::new(0, false));
         commands.insert_resource(zoo_seed);
         break;
     }
 }
 
-pub(in crate::plugins::simulation_time) fn remove_simulation_time_after_leaving_world(
-    mut commands: Commands,
-) {
+pub(in crate::plugins) fn remove_simulation_time_after_leaving_world(mut commands: Commands) {
+    remove_world_simulation_time_resources(&mut commands);
+}
+
+pub(in crate::plugins) fn remove_world_simulation_time_resources(commands: &mut Commands) {
     commands.remove_resource::<ZooClock>();
     commands.remove_resource::<ZooCalendar>();
     commands.remove_resource::<SimulationControl>();

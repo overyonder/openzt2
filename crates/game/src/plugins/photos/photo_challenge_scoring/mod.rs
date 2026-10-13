@@ -3,11 +3,11 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
-use crate::assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::persistence::generated_photo_persistence_types::PersistChallengePhotoJpegCopy;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
+use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
+use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     photo_capture_types::{

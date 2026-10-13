@@ -5,16 +5,20 @@ use super::locomotion_types::{DirectLocomotion, NavAgent, NavFlags, Route, Spati
 #[test]
 fn physics_navigation_faces_authored_forward_and_stays_stopped_after_arrival() {
     use super::locomotion_types::{Arrived, Destination, Steering};
+    use crate::plugins::topology::topology_graph_types::TopologyGrid;
     use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
     use bevy::prelude::*;
 
     let mut app = App::new();
     let mut time = Time::<Fixed>::default();
     time.advance_by(std::time::Duration::from_millis(20));
-    app.insert_resource(time).add_message::<Arrived>().add_systems(
-        Update,
-        super::avian_navigation_agent_driving::drive_avian_navigation_agent_velocities_and_complete_routes,
-    );
+    app.insert_resource(time)
+        .init_resource::<TopologyGrid>()
+        .add_message::<Arrived>()
+        .add_systems(
+            Update,
+            super::avian_navigation_agent_driving::drive_avian_navigation_agent_velocities_and_complete_routes,
+        );
     let agent = app
         .world_mut()
         .spawn((
@@ -24,6 +28,7 @@ fn physics_navigation_faces_authored_forward_and_stays_stopped_after_arrival() {
                 acceleration_mps2: 4.0,
                 capabilities: NavFlags::GUEST,
             },
+            Transform::IDENTITY,
             GlobalTransform::IDENTITY,
             RigidBody::Kinematic,
             LinearVelocity::default(),

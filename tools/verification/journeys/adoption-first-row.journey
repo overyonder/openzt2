@@ -1,0 +1,129 @@
+# The initially highlighted animal purchase row activates without pressing a
+# different row (#181). Contents and portraits still require pixel review.
+start freeform-map
+click "animals"
+until rows "Animal Typelist" >= 1
+until catalogue_selected_is_aardvark == 1
+until catalogue_selected_visible_rows == 1
+expect catalogue_selected_visible_first_rows == 1
+until text "Entity Name Label" "Aardvark"
+until text "Cost Display" "$10,000"
+expect selected_catalogue_entry_available == 1
+capture animal-initial-row
+click "icon" 0                  # first row, already selected; no alternate row
+move 820 400
+until catalogue_selected_is_aardvark == 1
+until catalogue_selected_visible_rows == 1
+expect catalogue_selected_visible_first_rows == 1
+until text "Entity Name Label" "Aardvark"
+until text "Cost Display" "$10,000"
+expect selected_catalogue_entry_available == 1
+until catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+until animal_preview_animated_visible_meshes > 0
+until catalogue_detail_preview_scenes == 1
+until catalogue_detail_preview_matching_visible_meshes > 0
+# These are renderer readiness checks. Named captures must show readable rows,
+# the highlight, and recognizable portrait/animal pixels before acceptance.
+capture animal-first-row-clicked
+
+# Cancel the current preview while retaining the purchase subject. The next
+# press must create it again; an inherited preview cannot satisfy this check.
+key ESCAPE
+until placement_previews == 0
+expect catalogue_selected_is_aardvark == 1
+expect catalogue_selected_visible_rows == 1
+expect catalogue_selected_visible_first_rows == 1
+expect-text "Entity Name Label" "Aardvark"
+expect-text "Cost Display" "$10,000"
+click "icon" 0
+move 820 400
+until catalogue_selected_is_aardvark == 1
+until catalogue_selected_visible_rows == 1
+expect catalogue_selected_visible_first_rows == 1
+until text "Entity Name Label" "Aardvark"
+until text "Cost Display" "$10,000"
+expect selected_catalogue_entry_available == 1
+until catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+until animal_preview_animated_visible_meshes > 0
+until catalogue_detail_preview_scenes == 1
+until catalogue_detail_preview_matching_visible_meshes > 0
+# These are renderer readiness checks. Named captures must show readable rows,
+# the highlight, and recognizable portrait/animal pixels before acceptance.
+
+# A species has one purchase row; gender selection does not add variant rows.
+click "Male button"
+wait 2                          # apply the gender action before pressing the species row
+click "icon" 0
+move 800 450
+until catalogue_selected_is_aardvark == 1
+until catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+until placement_visible_previews == 1
+until animal_preview_animated_visible_meshes > 0
+capture animal-male-choice-preview
+click "Female Button"
+wait 2
+click "icon" 0
+move 820 440
+until catalogue_selected_is_aardvark == 1
+until catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+until cursor_over_terrain == 1
+until placement_visible_previews == 1
+until animal_preview_animated_visible_meshes > 0
+capture animal-species-preview
+# Inspect the base animal at both pointer positions; a visible root or footprint is insufficient.
+move 820 400
+until cursor_over_terrain == 1
+until animal_preview_animated_visible_meshes > 0
+capture animal-species-moved-preview
+click "Animal Food Tab"
+until visible "Food Typelist"
+until catalogue_selected_is_aardvark == 0
+select-catalogue "terrain_branches" in "Food Typelist"
+move 800 450
+wait 30                         # a leftover preview from the previous tab would appear here (#98)
+# Switching catalogue tabs replaces the previous preview instead of leaving it behind (#98).
+expect placement_previews == 1
+expect placement_visible_previews == 1
+until text "Entity Name Label" "Branches"
+until text "Cost Display" "$75"
+expect selected_catalogue_entry_available == 1
+until catalogue_matching_placement_previews == 1
+until catalogue_detail_preview_scenes == 1
+until catalogue_detail_preview_matching_visible_meshes > 0
+capture food-preview
+click "Animal Enrichment Tab"
+wait 30                         # the tab's own icons replace the previous tab's
+click "icon" 1
+move 820 440
+until placement_visible_previews == 1
+capture enrichment-preview
+
+# Returning from enrichment restores the original animal selection.
+click "Buy Animal Tab"
+move 820 400
+until catalogue_selected_is_aardvark == 1
+until catalogue_selected_visible_rows == 1
+expect catalogue_selected_visible_first_rows == 1
+until text "Entity Name Label" "Aardvark"
+until text "Cost Display" "$10,000"
+expect selected_catalogue_entry_available == 1
+until catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+until animal_preview_animated_visible_meshes > 0
+until catalogue_detail_preview_scenes == 1
+until catalogue_detail_preview_matching_visible_meshes > 0
+# These are renderer readiness checks. Named captures must show readable rows,
+# the highlight, and recognizable portrait/animal pixels before acceptance.
+capture animal-choice-returned
+wait 30
+expect catalogue_matching_placement_previews == 1
+expect placement_previews == 1
+expect catalogue_detail_preview_scenes == 1
+key ESCAPE
+until placement_previews == 0
+
+restore freeform-map

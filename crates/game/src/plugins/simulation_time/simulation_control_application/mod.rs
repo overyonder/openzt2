@@ -1,15 +1,16 @@
 use bevy::{prelude::*, time::Virtual};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::simulation_control_types::{
-    SetSimulationPaused, SetSimulationSpeed, SimulationControl, SimulationControlChanged,
+    AuthoredUiTemporarySimulationPause, SetSimulationSpeed, SimulationControl,
+    SimulationControlChanged, SimulationPauseRequest,
 };
 
 pub(in crate::plugins::simulation_time) fn apply_requested_simulation_control_changes(
     mut speed_requests: MessageReader<SetSimulationSpeed>,
-    mut pause_requests: MessageReader<SetSimulationPaused>,
+    mut pause_requests: MessageReader<SimulationPauseRequest>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut simulation_control: ResMut<SimulationControl>,
@@ -35,7 +36,7 @@ pub(in crate::plugins::simulation_time) fn apply_requested_simulation_control_ch
         );
     }
     for request in pause_requests.read() {
-        set_simulation_paused(&mut simulation_control, request.0);
+        simulation_control.apply_pause_request(*request);
     }
 
     let speed_multiplier = &speed_multipliers[usize::from(simulation_control.speed_tier)];
@@ -46,13 +47,53 @@ pub(in crate::plugins::simulation_time) fn apply_requested_simulation_control_ch
         // must continue driving player-owned fixed transactions while paused.
         virtual_time.unpause();
     }
-    if *simulation_control == previous_control {
+    if simulation_control.speed_tier == previous_control.speed_tier
+        && simulation_control.paused == previous_control.paused
+    {
         return;
     }
     control_changes.write(SimulationControlChanged {
         speed_tier: simulation_control.speed_tier,
         paused: simulation_control.paused,
     });
+}
+
+/// Reconcile the surviving authored holds together, after UI routing/commands
+/// have applied transfers and document teardown.
+pub(super) fn reconcile_authored_ui_temporary_pause_holds(
+    temporary_holds: Query<(Entity, &AuthoredUiTemporarySimulationPause)>,
+    parents: Query<&ChildOf>,
+    visibility: Query<&Visibility>,
+    owners: Query<()>,
+    pending_roles: Res<crate::plugins::ui::ui_document_lifecycle_contracts::UiRoleRequests>,
+    mut simulation_control: ResMut<SimulationControl>,
+    mut control_changes: MessageWriter<SimulationControlChanged>,
+) {
+    let shown = |node| {
+        std::iter::successors(Some(node), |entity| {
+            parents.get(*entity).ok().map(ChildOf::parent)
+        })
+        .all(|entity| {
+            !visibility
+                .get(entity)
+                .is_ok_and(|value| *value == Visibility::Hidden)
+        })
+    };
+    let held = temporary_holds
+        .iter()
+        .any(|(node, intent)| intent.0 && shown(node))
+        || pending_roles
+            .temporary_pause_transfer_owners()
+            .any(|owner| owners.contains(owner) && shown(owner));
+    if simulation_control.temporary_ui_pause_hold_matches_current_control(held) {
+        return;
+    }
+    if simulation_control.set_temporary_ui_pause_held(held) {
+        control_changes.write(SimulationControlChanged {
+            speed_tier: simulation_control.speed_tier,
+            paused: simulation_control.paused,
+        });
+    }
 }
 
 pub(crate) fn simulation_is_running(simulation_control: Option<Res<SimulationControl>>) -> bool {
@@ -74,16 +115,5 @@ pub(crate) fn accept_requested_simulation_speed_tier(
         return false;
     }
     simulation_control.speed_tier = requested_speed_tier;
-    true
-}
-
-pub(crate) fn set_simulation_paused(
-    simulation_control: &mut SimulationControl,
-    paused: bool,
-) -> bool {
-    if simulation_control.paused == paused {
-        return false;
-    }
-    simulation_control.paused = paused;
     true
 }

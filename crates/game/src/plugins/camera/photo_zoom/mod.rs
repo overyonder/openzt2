@@ -4,9 +4,9 @@ use super::{
     camera_runtime_state_types::{CameraDefinition, CameraIntent, ZooCamera},
     fixed_aspect_perspective_projection::FixedAspectPerspectiveProjection,
 };
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use crate::plugins::{
     input::input_types::{
         ActionSource, ActiveInputDevice, DeviceControlAxes, PrimaryPointerInputState,
@@ -30,6 +30,7 @@ pub(super) fn apply_photo_camera_zoom(
     mut commands: Commands,
     time: Res<Time<Real>>,
     pointer: Res<PrimaryPointerInputState>,
+    capture: Res<crate::plugins::ui::picking::UiPointerCapture>,
     axes: Res<DeviceControlAxes>,
     active_input: Res<ActiveInputDevice>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -101,7 +102,9 @@ pub(super) fn apply_photo_camera_zoom(
                 state.scale = maximum - (maximum - minimum) * value.0.clamp(0, 100) as f32 / 100.0;
             }
         }
-        let wheel = if pointer.wheel_y == 0.0 {
+        let wheel = if pointer.wheel_y == 0.0
+            || capture.wheel != crate::plugins::ui::picking::UiWheelCapture::World
+        {
             0.0
         } else {
             pointer.wheel_y.signum()

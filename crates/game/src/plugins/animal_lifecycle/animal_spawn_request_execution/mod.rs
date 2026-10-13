@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::habitat::habitat_types::Habitat;
 use crate::plugins::simulation_time::deterministic_random_stream::ZooSeed;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
@@ -63,7 +63,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
             resolved_components,
             persistent_identifier,
             world_membership,
-            request.habitat,
+            Some(request.habitat),
             request.transform,
             request.parents,
             zoo_clock.tick,

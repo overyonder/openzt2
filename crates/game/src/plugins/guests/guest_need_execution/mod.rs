@@ -1,16 +1,10 @@
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::guest_need_rows;
 use bevy::prelude::*;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use super::guest_simulation_calculations::apply_q16;
-use super::guest_simulation_types::AdjustGuestAmusement;
-use super::guest_simulation_types::AdjustGuestHunger;
-use super::guest_simulation_types::AdjustGuestRest;
-use super::guest_simulation_types::AdjustGuestRestroom;
 use super::guest_simulation_types::AdjustGuestSatisfaction;
-use super::guest_simulation_types::AdjustGuestThirst;
-use super::guest_simulation_types::AmusementPaintLevel;
 use super::guest_simulation_types::Guest;
 use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestArchetype;
@@ -24,7 +18,6 @@ use super::guest_simulation_types::GuestSatisfaction;
 use super::guest_simulation_types::GuestSocial;
 use super::guest_simulation_types::GuestThirst;
 use super::guest_simulation_types::GuestViewingNeed;
-use super::guest_simulation_types::SetAmusementPaintLevel;
 use super::guest_simulation_types::VisitTime;
 
 pub(crate) fn apply_guest_satisfaction_adjustments(
@@ -39,57 +32,6 @@ pub(crate) fn apply_guest_satisfaction_adjustments(
         // permille in the canonical component instead of truncating each event.
         satisfaction.add_wellness_q16(adjustment.delta_q16.saturating_mul(10));
     }
-}
-
-pub(crate) fn apply_behavior_guest_needs(
-    mut amusement: MessageReader<AdjustGuestAmusement>,
-    mut hunger: MessageReader<AdjustGuestHunger>,
-    mut thirst: MessageReader<AdjustGuestThirst>,
-    mut rest: MessageReader<AdjustGuestRest>,
-    mut restroom: MessageReader<AdjustGuestRestroom>,
-    mut paint: MessageReader<SetAmusementPaintLevel>,
-    mut commands: Commands,
-    mut amusement_needs: Query<&mut GuestAmusement>,
-    mut hunger_needs: Query<&mut GuestHunger>,
-    mut thirst_needs: Query<&mut GuestThirst>,
-    mut rest_needs: Query<&mut GuestEnergy>,
-    mut restroom_needs: Query<&mut GuestRestroom>,
-) {
-    amusement.read().for_each(|change| {
-        if let Ok(mut need) = amusement_needs.get_mut(change.guest) {
-            let need = &mut *need;
-            apply_q16(&mut need.value, &mut need.residual_q16, change.delta_q16);
-        }
-    });
-    hunger.read().for_each(|change| {
-        if let Ok(mut need) = hunger_needs.get_mut(change.guest) {
-            let need = &mut *need;
-            apply_q16(&mut need.value, &mut need.residual_q16, change.delta_q16);
-        }
-    });
-    thirst.read().for_each(|change| {
-        if let Ok(mut need) = thirst_needs.get_mut(change.guest) {
-            let need = &mut *need;
-            apply_q16(&mut need.value, &mut need.residual_q16, change.delta_q16);
-        }
-    });
-    rest.read().for_each(|change| {
-        if let Ok(mut need) = rest_needs.get_mut(change.guest) {
-            let need = &mut *need;
-            apply_q16(&mut need.value, &mut need.residual_q16, change.delta_q16);
-        }
-    });
-    restroom.read().for_each(|change| {
-        if let Ok(mut need) = restroom_needs.get_mut(change.guest) {
-            let need = &mut *need;
-            apply_q16(&mut need.value, &mut need.residual_q16, change.delta_q16);
-        }
-    });
-    paint.read().for_each(|change| {
-        if let Ok(mut easel) = commands.get_entity(change.easel) {
-            easel.insert(AmusementPaintLevel(change.level_q16));
-        }
-    });
 }
 
 #[allow(clippy::type_complexity)]
@@ -109,6 +51,7 @@ pub(crate) fn decay_guest_needs(
             &mut GuestEnergy,
             &mut GuestRestroom,
             &mut GuestSocial,
+            &mut GuestAmusement,
             Option<&mut GuestViewingNeed>,
             &mut GuestSatisfaction,
         ),
@@ -136,6 +79,7 @@ pub(crate) fn decay_guest_needs(
         mut energy,
         mut restroom,
         mut social,
+        mut amusement,
         viewing_need,
         mut satisfaction,
     ) in &mut guests
@@ -201,6 +145,12 @@ pub(crate) fn decay_guest_needs(
             &mut social.value,
             &mut social.residual_q16,
             needs[6].adjustment_q16,
+        );
+        let amusement = &mut *amusement;
+        apply_q16(
+            &mut amusement.value,
+            &mut amusement.residual_q16,
+            needs[7].adjustment_q16,
         );
     }
 }

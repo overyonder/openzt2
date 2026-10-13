@@ -1,14 +1,15 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::world_spawn::prefab_presentation_types::PrefabPresentation;
+use crate::plugins::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
 use super::{
-    gate_operation_types::GateMechanism,
+    gate_operation_types::Gate,
     path_support_hydration::PathSupportPrefab,
-    topology_graph_types::PathTile,
+    topology_graph_types::{FenceEdge, PathTile},
     topology_presentation_types::{
         FenceSegmentPrefab, FenceTerrainEndpointSkewPresentation, TopologyPresentation,
     },
@@ -22,7 +23,8 @@ pub(super) fn hydrate_topology_prefab_presentations(
         (
             Entity,
             Option<&FenceSegmentPrefab>,
-            Option<&GateMechanism>,
+            Option<&Gate>,
+            Option<&FenceEdge>,
             Option<&PathTile>,
             Option<&PathSupportPrefab>,
         ),
@@ -39,11 +41,22 @@ pub(super) fn hydrate_topology_prefab_presentations(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (topology_entity, fence, gate, path, support) in &topology {
-        let scene = gate
-            .map(|gate| gate.prefab)
-            .filter(|id| *id != AssetId::default())
-            .or_else(|| fence.map(|fence| fence.asset))
+    for (topology_entity, fence, gate, edge, path, support) in &topology {
+        // A gate edge presents its authored segment model and, beside it, the
+        // actor named by its ZTGate physObj binder which carries the leaves.
+        let gate_scene = gate
+            .and_then(|_| definitions.find_fence(edge?.definition))
+            .map(|fence| fence.gate_policy.prefab)
+            .filter(|id| *id != AssetId::default());
+        let gate_handle = match gate_scene {
+            Some(scene) => match definitions.scene(scene) {
+                Some(handle) => Some(handle),
+                None => continue,
+            },
+            None => None,
+        };
+        let scene = fence
+            .map(|fence| fence.asset)
             .or_else(|| support.map(|support| support.0))
             .or_else(|| {
                 let path = path?;
@@ -93,6 +106,17 @@ pub(super) fn hydrate_topology_prefab_presentations(
                 ChildOf(second_transform),
                 PrefabPresentation::new(handle),
             ));
+            if let Some(gate_handle) = gate_handle {
+                commands.spawn((
+                    Transform::IDENTITY,
+                    Visibility::Inherited,
+                    ChildOf(second_transform),
+                    PrefabPresentation::new(gate_handle),
+                    AnimationPresentationOwner {
+                        gameplay_entity: topology_entity,
+                    },
+                ));
+            }
             commands
                 .entity(topology_entity)
                 .insert(FenceTerrainEndpointSkewPresentation {

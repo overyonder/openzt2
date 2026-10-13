@@ -4,8 +4,8 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::species::species_asset_types::SpeciesView;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::species::species_asset_types::SpeciesView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::habitat::habitat_types::Habitat;
 use crate::plugins::simulation_time::deterministic_random_stream::DeterministicRng;
 use crate::plugins::simulation_time::deterministic_random_stream::RngDomain;
@@ -150,7 +150,7 @@ pub(super) fn resolve_species_and_variant_to_animal_spawn_components(
     None
 }
 
-pub(super) fn lower_species_and_variant_to_animal_spawn_components(
+pub(crate) fn lower_species_and_variant_to_animal_spawn_components(
     species: &Species,
     variant: &SpeciesVariant,
     sex: Sex,
@@ -230,12 +230,14 @@ pub(super) fn choose_available_animal_sex(
     stage: LifeStage,
     rng: &mut DeterministicRng,
 ) -> Sex {
-    let female = species_index
-        .variants(species)
-        .any(|variant| species_variant_matches_sex_and_life_stage(variant, Sex::Female, stage));
-    let male = species_index
-        .variants(species)
-        .any(|variant| species_variant_matches_sex_and_life_stage(variant, Sex::Male, stage));
+    let female = species_index.variants(species).any(|variant| {
+        variant.probability != 0
+            && species_variant_matches_sex_and_life_stage(variant, Sex::Female, stage)
+    });
+    let male = species_index.variants(species).any(|variant| {
+        variant.probability != 0
+            && species_variant_matches_sex_and_life_stage(variant, Sex::Male, stage)
+    });
     match (female, male) {
         (true, true) => {
             if rng.range_u32(2) == Some(0) {

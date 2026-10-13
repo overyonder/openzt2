@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bevy::{math::DVec3, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::terrain_chunk_types::EditedTerrainSamples;
 use super::terrain_chunk_types::TerrainChunk;

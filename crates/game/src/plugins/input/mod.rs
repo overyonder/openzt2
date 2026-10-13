@@ -5,7 +5,7 @@ mod controller_pointer;
 mod gamepad_input_translation;
 pub(crate) mod input_binding_reconfiguration_operations;
 pub(crate) mod input_types;
-mod keyboard_and_mouse_input_translation;
+pub(crate) mod keyboard_and_mouse_input_translation;
 
 use bevy::prelude::*;
 
@@ -50,7 +50,7 @@ impl Plugin for GameInputPlugin {
             .add_systems(
                 Update,
                 controller_gameplay_actions::dispatch_controller_gameplay_actions.in_set(GameSet::Intent)
-                    .run_if(in_state(crate::application_lifecycle::GamePhase::InGame)),
+                    .run_if(in_state(openzt2_game_assets::application_lifecycle::GamePhase::InGame)),
             )
             .add_systems(
                 Update,

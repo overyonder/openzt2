@@ -2,8 +2,7 @@ use bevy::prelude::*;
 
 use super::{
     locomotion_types::{
-        LocomotionMode, NavAgent, NavFlags, NavigationFailure, NavigationOverlay, OpenNode, Route,
-        RouteScratch,
+        LocomotionMode, NavAgent, NavFlags, NavigationFailure, OpenNode, Route, RouteScratch,
     },
     terrain_derived_navigation_graph_types::{
         TerrainDerivedNavigationGraph,
@@ -14,9 +13,11 @@ use super::{
 
 pub(crate) fn plan_route(
     navigation: &TerrainDerivedNavigationGraph,
-    overlay: &NavigationOverlay,
+    edge_is_blocked: impl Fn(u32, u32) -> bool,
+    world_segment_is_blocked: impl Fn(Vec3, Vec3) -> bool,
     agent: &NavAgent,
     mode: LocomotionMode,
+    maximum_ground_slope_radians: Option<f32>,
     start_world: Vec3,
     destination: Vec3,
     route: &mut Route,
@@ -25,10 +26,22 @@ pub(crate) fn plan_route(
     if !start_world.is_finite() || !destination.is_finite() {
         return Err(NavigationFailure::OutsideWorld);
     }
-    let start =
-        nearest_eligible(navigation, agent, start_world).ok_or(NavigationFailure::NoStartNode)?;
-    let goal =
-        nearest_eligible(navigation, agent, destination).ok_or(NavigationFailure::OutsideWorld)?;
+    let minimum_normal_y = if mode == LocomotionMode::Ground {
+        maximum_ground_slope_radians
+            .map(|slope| {
+                if !slope.is_finite() || slope < 0.0 {
+                    return Err(NavigationFailure::NoRoute);
+                }
+                Ok(slope.min(std::f32::consts::FRAC_PI_2).cos().max(0.0))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+    let start = nearest_eligible(navigation, agent, start_world, minimum_normal_y)
+        .ok_or(NavigationFailure::NoStartNode)?;
+    let goal = nearest_eligible(navigation, agent, destination, minimum_normal_y)
+        .ok_or(NavigationFailure::OutsideWorld)?;
     if scratch.costs.len() != navigation.navigation_node_count()
         || scratch.previous.len() != navigation.navigation_node_count()
     {
@@ -64,7 +77,7 @@ pub(crate) fn plan_route(
         for edge in navigation.iterate_outgoing_navigation_graph_edges(current.node) {
             let next = edge.destination_node;
             if scratch.closed[next as usize]
-                || overlay.edge_blocked(current.node, next)
+                || edge_is_blocked(current.node, next)
                 || edge.edge_flags.0 & NavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0 != 0
                 || !traversal_allowed(edge.traversal_kind, mode)
             {
@@ -74,8 +87,12 @@ pub(crate) fn plan_route(
                 continue;
             };
             if next_node.eligibility_flags.0 & agent.capabilities.0 == 0
-                || f32::from(next_node.clearance_centimetres) * 0.01 < agent.radius_m
-                || f32::from(edge.width_centimetres) * 0.01 < agent.radius_m * 2.0
+                || f32::from(next_node.clearance_centimetres) < agent.radius_m * 100.0
+                || f32::from(edge.width_centimetres) < agent.radius_m * 200.0
+                || !cell_meets_ground_slope_limit(
+                    next_node.minimum_triangle_normal_y,
+                    minimum_normal_y,
+                )
             {
                 continue;
             }
@@ -135,10 +152,22 @@ pub(crate) fn plan_route(
     if route.points.capacity() < scratch.reverse_path.len().saturating_add(1) {
         return Err(NavigationFailure::NoRoute);
     }
-    for node in scratch.reverse_path.iter().rev().skip(1) {
+    // Retain the searched start cell for every actor. Snapped endpoints must
+    // not create an unchecked shortcut through a fence or closed gate.
+    for node in scratch.reverse_path.iter().rev() {
         push_if_turn(navigation_position(navigation, *node), &mut route.points);
     }
     push_if_turn(destination, &mut route.points);
+    let mut previous = start_world;
+    let crosses_boundary = route.points.iter().copied().any(|point| {
+        let blocked = world_segment_is_blocked(previous, point);
+        previous = point;
+        blocked
+    });
+    if crosses_boundary {
+        route.clear();
+        return Err(NavigationFailure::NoRoute);
+    }
     Ok(())
 }
 
@@ -146,15 +175,35 @@ fn nearest_eligible(
     navigation: &TerrainDerivedNavigationGraph,
     agent: &NavAgent,
     world: Vec3,
+    minimum_normal_y: Option<f32>,
 ) -> Option<u32> {
     let position = metres_to_cm(world)?;
+    if minimum_normal_y.is_some() {
+        // Snapping an animal to another cell can bypass a forbidden endpoint
+        // and make the final direct segment cross terrain the search rejected.
+        if world.x < 0.0 || world.z > 0.0 {
+            return None;
+        }
+        let cell_size_m = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
+        let cell = [
+            (world.x / cell_size_m).floor() as u32,
+            (-world.z / cell_size_m).floor() as u32,
+        ];
+        let index = navigation.calculate_navigation_node_for_terrain_cell(cell)?;
+        let node = navigation.find_navigation_node(index)?;
+        return (node.eligibility_flags.0 & agent.capabilities.0 != 0
+            && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
+            && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
+            && cell_meets_ground_slope_limit(node.minimum_triangle_normal_y, minimum_normal_y))
+        .then_some(index);
+    }
     navigation
         .find_candidate_node_indices_in_containing_terrain_tile(position)
         .filter(|index| {
             navigation.find_navigation_node(*index).is_some_and(|node| {
                 node.eligibility_flags.0 & agent.capabilities.0 != 0
                     && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
-                    && f32::from(node.clearance_centimetres) * 0.01 >= agent.radius_m
+                    && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
             })
         })
         .min_by_key(|index| {
@@ -165,6 +214,10 @@ fn nearest_eligible(
                 *index,
             )
         })
+}
+
+fn cell_meets_ground_slope_limit(normal_y: f32, minimum_normal_y: Option<f32>) -> bool {
+    minimum_normal_y.is_none_or(|minimum| normal_y.is_finite() && normal_y >= minimum)
 }
 
 fn traversal_allowed(

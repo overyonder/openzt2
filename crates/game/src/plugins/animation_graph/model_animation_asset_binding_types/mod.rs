@@ -1,6 +1,6 @@
 use bevy::{gltf::Gltf, prelude::*};
 
-use crate::assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 #[derive(Resource, Default)]
 pub(super) struct EmbeddedModelAnimationSetAssetHandlesByGltfAsset {

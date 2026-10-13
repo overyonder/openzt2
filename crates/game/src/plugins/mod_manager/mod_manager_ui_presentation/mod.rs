@@ -2,13 +2,14 @@ use bevy::{asset::UntypedAssetId, prelude::*};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use crate::{
-    application_lifecycle::GamePhase,
-    asset_source::AssetArchives,
-    assets::ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role,
     plugins::shell::{
         shell_navigation_request_types::ReturnToMainMenu, shell_selection_types::ShellScreen,
     },
     plugins::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled,
+};
+use openzt2_game_assets::{
+    application_lifecycle::GamePhase, asset_source::AssetArchives,
+    ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role,
 };
 
 use super::mod_manager_types::{

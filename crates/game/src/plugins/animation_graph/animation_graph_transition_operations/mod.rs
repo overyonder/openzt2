@@ -3,12 +3,10 @@ use openzt2_game_data::animation::animation_set::{
     AuthoredAnimationGraphEdge, AuthoredAnimationGraphNode,
 };
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::animation_playback::animation_playback_controller_types::{
-        AnimationPlaybackController, AnimationPlaybackRepetitionPolicy, AnimationPlaybackState,
-    },
+use crate::plugins::animation_playback::animation_playback_controller_types::{
+    AnimationPlaybackController, AnimationPlaybackRepetitionPolicy, AnimationPlaybackState,
 };
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::{
     animation_graph_playback_message_types::AnimationGraphNodePlaybackRequestRejectionReason,

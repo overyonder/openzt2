@@ -1,20 +1,21 @@
+mod edited_water_surface_eligibility;
 mod terrain_height_support_eligibility;
 mod unchanged_water_region_eligibility;
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::terrain::TerrainWaterDepth;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    assets::world_definitions::{
+use crate::plugins::{
+    aquatic::aquatic_simulation_types::Tank,
+    topology::topology_graph_types::{FenceEdge, PathTile},
+    transport_tours::transport_topology_types::TrackSegment,
+    world_spawn::world_membership_types::DefinitionId,
+};
+use openzt2_game_assets::{
+    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+    world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-    },
-    plugins::{
-        aquatic::aquatic_simulation_types::Tank,
-        topology::topology_graph_types::{FenceEdge, PathTile},
-        transport_tours::transport_topology_types::TrackSegment,
-        world_spawn::world_membership_types::DefinitionId,
     },
 };
 
@@ -96,10 +97,10 @@ impl TerrainDrySurfaceEligibility<'_, '_> {
         }
         if all_dry {
             Some(true)
-        } else if edited.is_none() {
-            self.on_land_in_unchanged_water_region(chunk, asset, minimum_x, minimum_z, world)
+        } else if let Some(edited) = edited {
+            self.on_land_with_edited_water(chunk, asset, edited, minimum_x, minimum_z, world)
         } else {
-            None
+            self.on_land_in_unchanged_water_region(chunk, asset, minimum_x, minimum_z, world)
         }
     }
 }

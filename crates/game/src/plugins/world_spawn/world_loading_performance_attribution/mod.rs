@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::asset_source::{AssetArchives, SceneLoadingAssetReadPerformanceSnapshot};
+use openzt2_game_assets::asset_source::{AssetArchives, SceneLoadingAssetReadPerformanceSnapshot};
 
 #[derive(Debug, Clone, Copy)]
 pub(super) enum WorldLoadingPerformanceStage {

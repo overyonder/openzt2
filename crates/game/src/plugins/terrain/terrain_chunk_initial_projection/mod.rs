@@ -4,16 +4,17 @@ use bevy::{
     camera::visibility::RenderLayers,
     gltf::{Gltf, GltfMesh},
     prelude::*,
+    tasks::ComputeTaskPool,
 };
 
-use crate::assets::{
+use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::{
     material::{
         material_asset_types::MaterialAsset, runtime::effect_pass_gpu_data::EffectPassMaterial,
     },
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
 };
-use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
 
 use super::{
     terrain_biome_detail_types::TerrainDetailProjectionState,
@@ -44,6 +45,9 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
         (Without<TerrainRenderChunk>, Without<TerrainChunkRejected>),
     >,
 ) {
+    // Validation keeps query order; only the independent surface compositions
+    // run on the compute pool, and their results apply in that same order.
+    let mut projectable = Vec::new();
     for (entity, chunk) in &chunks {
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
             continue;
@@ -107,7 +111,21 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             commands.entity(entity).insert(TerrainChunkRejected);
             continue;
         };
-        let Some(surface) = compose_terrain_surface_image(chunk, asset, &[], &images) else {
+        projectable.push((entity, chunk, asset, terrain_effect_passes, mesh));
+    }
+    let surfaces = {
+        let images = &*images;
+        ComputeTaskPool::get().scope(|scope| {
+            for (_, chunk, asset, _, _) in &projectable {
+                scope
+                    .spawn(async move { compose_terrain_surface_image(chunk, asset, &[], images) });
+            }
+        })
+    };
+    for ((entity, chunk, asset, terrain_effect_passes, mesh), surface) in
+        projectable.into_iter().zip(surfaces)
+    {
+        let Some(surface) = surface else {
             continue;
         };
         if let Entry::Occupied(_) = terrain_index.chunks.entry(chunk.coord) {

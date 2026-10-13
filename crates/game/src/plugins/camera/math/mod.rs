@@ -135,7 +135,7 @@ impl WheelDirection {
 }
 
 /// Zoom queued by wheel notches. An idle queue has no direction, so a notch in
-/// either direction starts a new queue, and an opposite notch empties it.
+/// either direction starts a new queue. An opposite notch replaces the backlog.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) enum WheelZoomQueue {
     #[default]
@@ -159,8 +159,7 @@ pub(crate) fn queue_wheel_zoom(queue: &mut WheelZoomQueue, wheel_notches: f32) {
                 seconds: seconds + impulse,
             }
         }
-        WheelZoomQueue::Pending { .. } => WheelZoomQueue::Idle,
-        WheelZoomQueue::Idle => WheelZoomQueue::Pending {
+        WheelZoomQueue::Pending { .. } | WheelZoomQueue::Idle => WheelZoomQueue::Pending {
             direction: notch,
             seconds: impulse,
         },

@@ -136,6 +136,8 @@ pub(super) fn complete_construction_payment_results(
                     construction_domain_status_after_rejected_redo_payment(progress.topology);
                 progress.placement =
                     construction_domain_status_after_rejected_redo_payment(progress.placement);
+                progress.aquatic =
+                    construction_domain_status_after_rejected_redo_payment(progress.aquatic);
                 progress.shows =
                     construction_domain_status_after_rejected_redo_payment(progress.shows);
                 progress.phase = EditCommitPhase::Complete;

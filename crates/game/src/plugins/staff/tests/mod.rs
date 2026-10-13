@@ -199,6 +199,7 @@ fn authored_keeper_feed_task(
         name: unique_identifier.to_string(),
         priority: Some(f32::from(priority)),
         reservation_tag: None,
+        sensor_tag: None,
         task_delay_seconds: None,
         subjects: vec!["keeper".to_string()],
         targets: vec!["fromtoken".to_string()],

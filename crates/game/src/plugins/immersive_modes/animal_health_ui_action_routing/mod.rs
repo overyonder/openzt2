@@ -5,19 +5,17 @@ use openzt2_game_data::ui_document::{
     action::animal_health::UiAnimalHealthAction, document::UiDocumentRole,
 };
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        information::entity_selection_types::SelectedEntity,
-        ui::{
-            authored_ui_action_projection_components::UiAnimalHealthActions,
-            authored_ui_activation_contracts::UiNodeActivated,
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            ui_document_lifecycle_contracts::ShowUiRole,
-        },
+use crate::plugins::{
+    information::entity_selection_types::SelectedEntity,
+    ui::{
+        authored_ui_action_projection_components::UiAnimalHealthActions,
+        authored_ui_activation_contracts::UiNodeActivated,
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        ui_document_lifecycle_contracts::ShowUiRole,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::animal_care_control_types::{
     AnimalCareTarget, DiseaseTreatmentControl, TranquilizerControl,

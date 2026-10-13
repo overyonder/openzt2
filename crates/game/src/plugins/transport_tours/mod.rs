@@ -15,6 +15,7 @@ mod transport_definition_hydration;
 mod transport_fact_validation;
 mod transport_fare_settlement;
 mod transport_fare_types;
+mod transport_guest_arrival;
 mod transport_hierarchy_queries;
 mod transport_relationship_cleanup;
 mod transport_rider_boarding;
@@ -26,6 +27,7 @@ mod transport_track_construction_preview;
 mod transport_track_construction_transaction;
 pub(crate) mod transport_track_construction_types;
 mod transport_track_piece_presentation;
+pub(crate) mod transport_track_sale;
 mod transport_ui_action_routing;
 mod transport_vehicle_movement;
 pub(crate) mod transport_vehicle_types;
@@ -33,11 +35,11 @@ mod vehicle_generation;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use crate::plugins::construction::{
     FixedConstructionPreparedDomainEditMaterializationSet, FixedConstructionSet,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use self::{
     tour_scoring_types::TransportTripCompleted,
@@ -102,7 +104,10 @@ impl Plugin for TransportToursPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                transport_track_construction_transaction::prepare_transport_track_construction_edit
+                (
+                    transport_track_construction_transaction::prepare_transport_track_construction_edit,
+                    transport_track_sale::prepare_transport_track_sale,
+                )
                     .in_set(FixedConstructionSet::Prepare)
                     .after(
                         crate::plugins::construction::FixedConstructionTransactionMaterializationSet,
@@ -146,6 +151,8 @@ impl Plugin for TransportToursPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    transport_guest_arrival::request_transport_boarding_for_owned_guest_arrivals,
+                    transport_guest_arrival::cancel_interrupted_transport_queues,
                     transport_rider_boarding::accept_affordable_transport_boarding_requests_at_reachable_stations,
                     sky_tower_navigation::request_sky_tower_rider_navigation_to_authored_endpoint,
                     tour_view_scoring::observe_visible_tour_subjects_and_accumulate_rider_scores,

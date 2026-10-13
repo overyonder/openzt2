@@ -140,7 +140,15 @@ fn failed_entrance_route_retries_without_admitting_or_accepting_stale_failures()
 fn current_arrival_hands_off_service_once_without_rechecking_render_transform() {
     let mut app = App::new();
     app.add_message::<Arrived>()
+        .add_message::<NavigationFailed>()
         .add_message::<ServiceRequest>()
+        .insert_resource(
+            crate::plugins::simulation_time::simulation_clock_types::ZooClock {
+                tick: 0,
+                absolute_day: 0,
+                tick_in_day: 0,
+            },
+        )
         .add_systems(Update, begin_viewing);
     let facility = app
         .world_mut()

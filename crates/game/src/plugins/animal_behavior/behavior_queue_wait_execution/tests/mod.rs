@@ -16,6 +16,7 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
         action: 2,
         repetitions: 0,
         next_action_tick: 1,
+        object: None,
         interaction_slot: Some(0),
         stack: Default::default(),
     };

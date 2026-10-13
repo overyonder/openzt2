@@ -22,7 +22,7 @@ use super::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
 use super::ui_document_lifecycle_contracts::{
     HideUiDocument, ShowUiDocument, ShowUiRole, UiRoleRequests,
 };
-use crate::assets::{
+use openzt2_game_assets::{
     localization::{
         localization_asset_types::LocalizationAsset,
         localization_precedence_index::LocalizationPrecedenceIndex,
@@ -46,13 +46,41 @@ pub(super) struct PendingUiListRow {
     index: u16,
 }
 
+pub(super) fn cancel_pending_ui_role_projection(
+    world: &mut World,
+    owner: Entity,
+    role: openzt2_game_data::ui_document::document::UiDocumentRole,
+) {
+    super::cross_document_node_visibility::cancel_pending_cross_document_visibility(
+        world,
+        owner,
+        Some(role),
+    );
+    let Some(path) = select_bevy_asset_path_for_canonical_ui_document_role(role) else {
+        return;
+    };
+    let path = bevy::asset::AssetPath::parse(&path);
+    let pending: Vec<_> = world
+        .query::<(Entity, &PendingUiProjection)>()
+        .iter(world)
+        .filter_map(|(entity, pending)| {
+            (pending.owner == owner && pending.document.path() == Some(&path)).then_some(entity)
+        })
+        .collect();
+    for entity in pending {
+        world.entity_mut(entity).despawn();
+    }
+}
+
 pub(super) fn resolve_ui_roles(
+    mut commands: Commands,
     mut requests: MessageReader<ShowUiRole>,
     asset_server: Res<AssetServer>,
     roots: Query<(Entity, &ChildOf, &UiDocumentRoot)>,
     children: Query<&Children>,
     mut visibility: Query<&mut Visibility>,
-    pending: Query<&PendingUiProjection>,
+    pending: Query<(Entity, &PendingUiProjection)>,
+    owners: Query<()>,
     mut show: MessageWriter<ShowUiDocument>,
     mut deferred: ResMut<UiRoleRequests>,
 ) {
@@ -61,11 +89,15 @@ pub(super) fn resolve_ui_roles(
         .copied()
         .for_each(|request| deferred.request(request.role, request.owner));
     let mut requested = Vec::new();
-    for request in deferred.take() {
+    for pending_role in deferred.take() {
+        let request = pending_role.request;
+        if !owners.contains(request.owner) {
+            continue;
+        }
         let Some(document_asset_path) =
             select_bevy_asset_path_for_canonical_ui_document_role(request.role)
         else {
-            deferred.retain(request);
+            deferred.retain(pending_role);
             continue;
         };
         let document = asset_server.load(document_asset_path);
@@ -87,13 +119,28 @@ pub(super) fn resolve_ui_roles(
             }
             continue;
         }
-        if pending
+        if let Some((entity, _)) = pending
             .iter()
-            .any(|pending| pending.owner == request.owner && pending.document == document)
-            || requested
-                .iter()
-                .any(|(owner, handle)| *owner == request.owner && *handle == document)
+            .find(|(_, pending)| pending.owner == request.owner && pending.document == document)
         {
+            if pending_role.preserve_temporary_pause {
+                commands.entity(entity).insert(crate::plugins::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause::holding());
+            }
+            continue;
+        }
+        if requested
+            .iter()
+            .any(|(owner, handle)| *owner == request.owner && *handle == document)
+        {
+            continue;
+        }
+        if pending_role.preserve_temporary_pause {
+            commands.spawn((
+                PendingUiProjection { document: document.clone(), owner: request.owner },
+                ChildOf(request.owner),
+                crate::plugins::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause::holding(),
+            ));
+            requested.push((request.owner, document));
             continue;
         }
         trace!(role = ?request.role, "requesting UI role asset");
@@ -108,6 +155,7 @@ pub(super) fn resolve_ui_roles(
 pub(super) fn project_ui_documents(
     mut commands: Commands,
     mut requests: MessageReader<ShowUiDocument>,
+    mut cancellations: MessageReader<HideUiDocument>,
     pending: Query<(Entity, &PendingUiProjection)>,
     documents: Res<Assets<UiDocumentAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -117,11 +165,12 @@ pub(super) fn project_ui_documents(
     owners: Query<()>,
     mut failures: MessageWriter<UiDocumentAssetLoadFailed>,
 ) {
+    let cancelled_owners: Vec<_> = cancellations.read().map(|request| request.owner).collect();
     let image_selection_index = image_selection
         .as_deref()
         .map(UiAuthoredImageSelectionDiagnosticOverride::candidate_index);
     for (request_entity, request) in &pending {
-        if owners.get(request.owner).is_err() {
+        if cancelled_owners.contains(&request.owner) || owners.get(request.owner).is_err() {
             commands.entity(request_entity).despawn();
             continue;
         }
@@ -132,6 +181,7 @@ pub(super) fn project_ui_documents(
             ) {
                 failures.write(UiDocumentAssetLoadFailed {
                     owner: request.owner,
+                    document: request.document.clone(),
                 });
                 commands.entity(request_entity).despawn();
             }
@@ -160,7 +210,7 @@ pub(super) fn project_ui_documents(
         commands.entity(request_entity).despawn();
     }
     for request in requests.read() {
-        if owners.get(request.owner).is_err() {
+        if cancelled_owners.contains(&request.owner) || owners.get(request.owner).is_err() {
             continue;
         }
         let Some(document) = documents.get(&request.document) else {
@@ -170,6 +220,7 @@ pub(super) fn project_ui_documents(
             ) {
                 failures.write(UiDocumentAssetLoadFailed {
                     owner: request.owner,
+                    document: request.document.clone(),
                 });
                 continue;
             }
@@ -297,6 +348,31 @@ pub(super) fn reconcile_ui_list_rows(
                     );
                 });
         }
+        if lists
+            .get(pending_row.list)
+            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives)
+        {
+            // `ZTGoalPanel` places each objective's status list box directly in
+            // the panel, and each authors `walign="max"`: the row and its list
+            // boxes span the panel, and the label (`x="30" walign="max"`) runs
+            // to the panel's right edge. Without a definite row width the
+            // label's grid column collapses to its min-content and wraps one
+            // character per line. The row stacks its status list boxes and
+            // stretches them across its width, as their authored region does.
+            commands
+                .entity(root)
+                .entry::<Node>()
+                .and_modify(|mut node| {
+                    node.width = percent(100.0);
+                    node.display = Display::Flex;
+                    node.flex_direction = FlexDirection::Column;
+                    node.align_items = AlignItems::Stretch;
+                });
+            commands
+                .entity(root)
+                .entry::<super::authored_ui_layout_participation::UiAuthoredLayoutDisplay>()
+                .and_modify(|mut authored| authored.set_authored_display(Display::Flex));
+        }
         commands.entity(root).insert(UiListRow {
             list: pending_row.list,
             index: pending_row.index,
@@ -351,8 +427,22 @@ pub(super) fn hide_ui_documents(
     mut commands: Commands,
     mut requests: MessageReader<HideUiDocument>,
     roots: Query<(Entity, &ChildOf), With<UiDocumentRoot>>,
+    pending: Query<(Entity, &PendingUiProjection)>,
+    mut roles: ResMut<UiRoleRequests>,
 ) {
     for request in requests.read() {
+        roles.cancel(request.owner, None);
+        let owner = request.owner;
+        commands.queue(move |world: &mut World| {
+            super::cross_document_node_visibility::cancel_pending_cross_document_visibility(
+                world, owner, None,
+            );
+        });
+        for (entity, pending) in &pending {
+            if pending.owner == request.owner {
+                commands.entity(entity).despawn();
+            }
+        }
         for (root, parent) in &roots {
             if parent.parent() == request.owner {
                 commands.entity(root).despawn();
@@ -383,6 +473,7 @@ mod tests {
     fn hide_removes_the_complete_owned_tree() {
         let mut app = App::new();
         app.add_message::<HideUiDocument>()
+            .init_resource::<UiRoleRequests>()
             .add_systems(Update, hide_ui_documents);
         let owner = app.world_mut().spawn_empty().id();
         let root = app

@@ -2,20 +2,17 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::animal_shows::UiShowAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        immersive_modes::{
-            immersive_mode_message_types::EnterImmersiveMode,
-            immersive_mode_state_types::ImmersiveMode,
-        },
-        information::entity_selection_types::SelectedEntity,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
+use crate::plugins::{
+    immersive_modes::{
+        immersive_mode_message_types::EnterImmersiveMode, immersive_mode_state_types::ImmersiveMode,
+    },
+    information::entity_selection_types::SelectedEntity,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     show_editor_interaction_types::{

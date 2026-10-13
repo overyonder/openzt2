@@ -13,16 +13,19 @@ pub(crate) mod zoo_cleanliness_projection;
 use bevy::prelude::*;
 
 use crate::{
-    application_lifecycle::GamePhase,
     application_schedule::FixedGameSet,
     plugins::staff::{
         staff_job_behavior_start_and_completion::settle_staff_jobs_after_authored_behavior_finishes,
         staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs,
     },
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use self::{
-    animal_habitat_waste_cleaning_staff_job_execution::advance_active_staff_habitat_waste_cleaning_jobs,
+    animal_habitat_waste_cleaning_staff_job_execution::{
+        apply_authored_staff_habitat_waste_termination,
+        complete_applied_habitat_cleanup_after_behavior_exits,
+    },
     animal_waste_production::{
         initialize_animal_waste_production_schedule, produce_due_animal_habitat_waste,
     },
@@ -90,8 +93,13 @@ impl Plugin for MaintenancePlugin {
         game_application
             .add_systems(
                 FixedUpdate,
-                deteriorate_maintainable_world_objects_after_zoo_days_advance
+                (
+                    initialize_authored_maintenance_facts_for_world_objects,
+                    deteriorate_maintainable_world_objects_after_zoo_days_advance,
+                )
+                    .chain()
                     .in_set(FixedGameSet::Think)
+                    .before(request_staff_repairs_for_damaged_maintainable_objects)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -117,7 +125,6 @@ impl Plugin for MaintenancePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    initialize_authored_maintenance_facts_for_world_objects,
                     initialize_animal_waste_production_schedule,
                     apply_completed_service_maintenance_effects_to_facilities,
                     produce_due_animal_habitat_waste,
@@ -132,10 +139,20 @@ impl Plugin for MaintenancePlugin {
                     advance_active_staff_repair_jobs,
                     advance_active_staff_waste_container_emptying_jobs,
                     advance_active_staff_litter_sweeping_jobs,
-                    advance_active_staff_habitat_waste_cleaning_jobs,
                 )
                     .in_set(FixedGameSet::Act)
                     .after(settle_staff_jobs_after_authored_behavior_finishes)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    apply_authored_staff_habitat_waste_termination,
+                    complete_applied_habitat_cleanup_after_behavior_exits,
+                )
+                    .chain()
+                    .in_set(FixedGameSet::Act)
+                    .before(settle_staff_jobs_after_authored_behavior_finishes)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -149,3 +166,33 @@ impl Plugin for MaintenancePlugin {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) fn add_animal_waste_cleanup_test_systems(app: &mut App) {
+    app.init_resource::<IncrementalZooCleanlinessTotals>();
+    app.world_mut()
+        .register_component_hooks::<AnimalHabitatWaste>()
+        .on_add(add_animal_habitat_waste_to_cleanliness_totals)
+        .on_remove(remove_animal_habitat_waste_from_cleanliness_totals);
+    app.add_systems(
+        Update,
+        (
+            request_staff_cleaning_for_spawned_habitat_waste,
+            create_or_raise_priority_of_requested_staff_jobs,
+            classify_spawned_staff_jobs_by_maintenance_work_kind,
+        )
+            .chain()
+            .in_set(FixedGameSet::Think),
+    );
+    app.add_systems(
+        Update,
+        (
+            apply_authored_staff_habitat_waste_termination,
+            complete_applied_habitat_cleanup_after_behavior_exits,
+        )
+            .chain()
+            .in_set(FixedGameSet::Act)
+            .after(create_or_raise_priority_of_requested_staff_jobs)
+            .before(settle_staff_jobs_after_authored_behavior_finishes),
+    );
+}

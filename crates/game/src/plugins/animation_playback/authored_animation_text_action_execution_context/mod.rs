@@ -1,11 +1,11 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::{
-    assets::effect::{SpawnCompleteParticleEffectDocument, StopParticleEffectsAttachedToEntity},
-    plugins::{
-        animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest,
-        audio::audio_playback_message_types::PlayAudioClip,
-    },
+use crate::plugins::{
+    animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest,
+    audio::audio_playback_message_types::PlayAudioClip,
+};
+use openzt2_game_assets::effect::{
+    SpawnCompleteParticleEffectDocument, StopParticleEffectsAttachedToEntity,
 };
 
 use super::{

@@ -4,7 +4,7 @@ use openzt2_game_data::{
     world_definitions::catalogue_and_progression::zoopedia_entry_types::ZoopediaEntry, AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 
 pub(in crate::plugins::information) fn find_root_zoopedia_entry(
     world_definitions: WorldDefinitionsView<'_>,

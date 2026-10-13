@@ -118,8 +118,12 @@ pub(crate) struct WasteContainerEmptyingStaffJobKindMarker;
 #[derive(Component)]
 pub(crate) struct LooseLitterSweepingStaffJobKindMarker;
 
+/// The authored kill has consumed this job's target; retain the assignment
+/// through the remaining behavior actions and their terminal outcome.
 #[derive(Component)]
-pub(crate) struct AnimalHabitatWasteCleaningStaffJobKindMarker;
+pub(crate) struct AppliedHabitatWasteCleanup {
+    pub(crate) execution_id: u64,
+}
 
 #[derive(Component)]
 pub(crate) struct AuthoredMaintenanceFactsResolutionMarker;

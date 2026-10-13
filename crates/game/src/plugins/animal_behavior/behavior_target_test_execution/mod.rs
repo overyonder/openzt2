@@ -5,10 +5,10 @@ use openzt2_game_data::behavior::{
     action::target_test::BehaviorTargetTestKind, action_record::BehaviorAction,
 };
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::types::SpeciesHandle;
 use crate::plugins::guests::guest_simulation_types::GuestArchetype;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;

@@ -66,7 +66,7 @@ fn spawn_localized_zoopedia_rich_content_cell(
         .source_record
         .image_asset_path
         .as_deref()
-        .map(|image_path| input.asset_server.load(crate::assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path)))
+        .map(|image_path| input.asset_server.load(openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path)))
     {
         Some(image_handle) => commands
             .spawn((
@@ -212,7 +212,7 @@ fn spawn_localized_zoopedia_rich_content_image(
         .map(|image_path| {
             input
                 .asset_server
-                .load(crate::assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path))
+                .load(openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path))
         })
     else {
         return input.parent_entity;

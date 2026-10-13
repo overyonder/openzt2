@@ -1,0 +1,79 @@
+# The zookeeper recommendations panel reopens after its own close button (#61).
+start freeform-map
+click "animals"
+until rows "Animal Typelist" >= 1
+until settled
+wheel-to-catalogue "aardvark" in "Animal Typelist"
+select-catalogue "aardvark" in "Animal Typelist"
+until visible "sort button"
+expect-visible "Buy Info Panel"
+click "sort button"
+until visible "Sort Panel"
+capture recommendations-open
+# Named matches sort top-to-bottom: recommendations is above purchase info.
+click "close" 0
+until hidden "Sort Panel"
+expect-visible "Buy Info Panel"
+click "sort button"
+until visible "Sort Panel"
+click "close" 0
+until hidden "Sort Panel"
+wheel-to-catalogue "ibex" in "Animal Typelist"
+select-catalogue "ibex" in "Animal Typelist"
+expect-visible "sort button"
+click "sort button"
+until visible "Sort Panel"
+capture recommendations-selection-changed
+click "sort button"
+until hidden "Sort Panel"
+click "sort button"
+until visible "Sort Panel"
+click "close" 0
+until hidden "Sort Panel"
+click "construction"
+click "Building Tab"
+select-catalogue "StageEntertainer" in "Building Typelist"
+until visible "Buy Info Panel"
+until hidden "sort button"
+expect-hidden "Sort Panel"
+capture purchase-building
+click "close"
+until hidden "Buy Info Panel"
+until placement_previews == 0
+wait 180                        # the dismissed panel must stay closed
+expect-hidden "Buy Info Panel"
+select-catalogue "StageEntertainer" in "Building Typelist"
+until visible "Buy Info Panel"
+capture purchase-same-entry-reopened
+click "close"
+until hidden "Buy Info Panel"
+select-catalogue "bathroomsmall_df" in "Building Typelist"
+until visible "Buy Info Panel"
+capture purchase-different-entry-reopened
+click "close"
+until hidden "Buy Info Panel"
+click "animals"
+until rows "Animal Typelist" >= 1
+until settled
+wheel-to-catalogue "aardvark" in "Animal Typelist"
+select-catalogue "aardvark" in "Animal Typelist"
+until visible "sort button"
+expect-visible "Buy Info Panel"
+expect-hidden "Upkeep Panel"
+click "close"
+until hidden "Buy Info Panel"
+until placement_previews == 0
+select-catalogue "aardvark" in "Animal Typelist"
+until visible "sort button"
+expect-visible "Buy Info Panel"
+expect-hidden "Upkeep Panel"
+capture purchase-animal-reopened
+click "sort button"
+until visible "Sort Panel"
+click "close" 0
+until hidden "Sort Panel"
+click "close"
+until hidden "Buy Info Panel"
+until placement_previews == 0
+
+restore freeform-map

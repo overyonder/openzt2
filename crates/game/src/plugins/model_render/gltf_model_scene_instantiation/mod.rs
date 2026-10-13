@@ -4,18 +4,17 @@ use bevy::{
     world_serialization::WorldInstance,
 };
 
-use crate::{
-    assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
-    plugins::world_spawn::{
-        prefab_presentation_types::PrefabMaterialOverrides, prefab_presentation_types::PrefabModel,
-        prefab_presentation_types::PrefabRenderable,
-    },
+use crate::plugins::world_spawn::{
+    prefab_presentation_types::PrefabMaterialOverrides, prefab_presentation_types::PrefabModel,
+    prefab_presentation_types::PrefabRenderable,
 };
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 use super::{
     authored_model_material_pass_projection::{
         AdditionalAuthoredModelMaterialPass, AuthoredModelMaterialPassesProjected,
     },
+    model_scene_visibility_and_shadow_projection::ModelSceneVisibilityAndShadowPolicyProjected,
     ModelExpanded,
 };
 
@@ -190,6 +189,7 @@ fn release_hidden_prefab_model_assets_and_render_components(
         MeshMaterial3d<EffectPassMaterial>,
         GltfMaterialName,
         ModelExpanded,
+        ModelSceneVisibilityAndShadowPolicyProjected,
         AuthoredModelMaterialPassesProjected,
         HiddenPrefabModelWorldAssetInstanceReleasePending,
     )>();

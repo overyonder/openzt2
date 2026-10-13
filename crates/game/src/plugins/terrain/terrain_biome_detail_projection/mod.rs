@@ -5,12 +5,12 @@ use openzt2_game_data::world_definitions::biomes_locations_and_details::{
     BiomeDetailLevel, BiomeDetailSurface,
 };
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::plugins::settings::graphics_settings_types::EnvironmentalDetailObjectDensity;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::graphics_settings_types::EnvironmentalDetailObjectDensity;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use crate::plugins::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
 
 use super::{

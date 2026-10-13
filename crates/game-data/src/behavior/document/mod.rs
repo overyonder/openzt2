@@ -30,6 +30,10 @@ pub struct BehaviorTask {
     pub task_delay_seconds: Option<[f32; 2]>,
     #[serde(default)]
     pub reservation_tag: Option<AssetId>,
+    /// The sensor that offers this task's targets, such as `viewanimals` for
+    /// paths with an animal in view.
+    #[serde(default)]
+    pub sensor_tag: Option<AssetId>,
     pub subjects: Vec<String>,
     pub targets: Vec<String>,
     pub objects: Vec<String>,

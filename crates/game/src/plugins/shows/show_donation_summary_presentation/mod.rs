@@ -3,18 +3,16 @@ use openzt2_game_data::ui_document::{
     document::UiDocumentRole, node_property_binding::UiIntegerPropertyBindingSource,
 };
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        donations::donation_payment_types::DonationTotal,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            authored_ui_node_projection_components::UiValue,
-            authored_ui_node_projection_components::UiValueBinding,
-        },
+use crate::plugins::{
+    donations::donation_payment_types::DonationTotal,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        authored_ui_node_projection_components::UiValue,
+        authored_ui_node_projection_components::UiValueBinding,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     show_schedule_types::{ScheduledShowRow, SelectedShowScheduleRow},

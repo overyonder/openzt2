@@ -29,5 +29,5 @@ pub struct ScenarioTerminalResult {
 
 #[derive(Resource, Debug, Clone)]
 pub(crate) struct SelectedScenarioDocument(
-    pub Handle<crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>,
+    pub Handle<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>,
 );

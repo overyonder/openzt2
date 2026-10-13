@@ -1,6 +1,6 @@
 use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
 use crate::plugins::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use crate::plugins::topology::topology_graph_types::EdgeKey;
 

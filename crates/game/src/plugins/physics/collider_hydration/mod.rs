@@ -4,15 +4,13 @@ use avian3d::prelude::*;
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::scene_prefab::{PrefabColliderSource, ScenePrefabColliderLayerFlags};
 
-use crate::{
-    assets::{
-        model::model_asset_queries::loaded_gltf_model_mesh_asset_handles,
-        scene_prefab::ScenePrefabAsset,
-    },
-    plugins::world_spawn::{
-        world_membership_types::WorldMember, world_membership_types::WorldRoot,
-        world_terrain_hydration::WorldTerrainHorizontalBounds,
-    },
+use crate::plugins::world_spawn::{
+    world_membership_types::WorldMember, world_membership_types::WorldRoot,
+    world_terrain_hydration::WorldTerrainHorizontalBounds,
+};
+use openzt2_game_assets::{
+    model::model_asset_queries::loaded_gltf_model_mesh_asset_handles,
+    scene_prefab::ScenePrefabAsset,
 };
 
 /// Installs the immutable world edges as ordinary Avian collision geometry.

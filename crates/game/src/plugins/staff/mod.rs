@@ -36,10 +36,10 @@ use staff_lifecycle_messages::{
     StaffJobCancelled, StaffJobCompleted, StaffJobRequest, TankWaterCleaned,
 };
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use crate::plugins::construction::FixedConstructionSet;
 use crate::plugins::placement::ObjectPlacementPreviewUpdateSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub struct StaffPlugin;
 
@@ -97,6 +97,7 @@ impl Plugin for StaffPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    crate::plugins::animal_health::authored_disease_cure_execution::apply_authored_disease_cures_for_live_staff_claims,
                     staff_job_behavior_start_and_completion::release_staff_assignment_after_authored_behavior_failure_finishes,
                     staff_behavior_fact_completion_execution::acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems,
                     staff_behavior_terminal_target_termination_acknowledgement::acknowledge_staff_target_termination_owned_by_terminal_maintenance_systems,

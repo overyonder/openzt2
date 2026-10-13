@@ -49,10 +49,10 @@ pub(super) fn update_authored_tooltip_presentations(
     time: Res<Time>,
     capture: Res<UiPointerCapture>,
     active_localization: Res<
-        crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex,
+        openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex,
     >,
     localizations: Res<
-        Assets<crate::assets::localization::localization_asset_types::LocalizationAsset>,
+        Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>,
     >,
     mut tooltips: Query<(
         Entity,
@@ -216,7 +216,7 @@ fn set_tooltip_text(
     base_text_layout: &TextLayout,
     tooltip_text_padding: UiRect,
     floating: bool,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     key: AssetId,

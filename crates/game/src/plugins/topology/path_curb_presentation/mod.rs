@@ -4,9 +4,9 @@ use bevy::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::terrain::terrain_world_sampling::sample_terrain;
 use crate::plugins::terrain::terrain_world_sampling::terrain_chunk_at;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -47,8 +47,18 @@ struct GroundPathConnectedCurbBoundarySegment {
 /// Rendering state for the curb hierarchy projected from the current path
 /// neighborhood. Connectivity remains owned by PathTile and TopologyIndex.
 #[derive(Component)]
-pub(super) struct PathCurbsHydrated {
+pub(crate) struct PathCurbsHydrated {
     root: Option<Entity>,
+}
+
+impl PathCurbsHydrated {
+    pub(crate) const fn presentation_root(&self) -> Option<Entity> {
+        self.root
+    }
+
+    pub(crate) const fn has_projected_segments(&self) -> bool {
+        self.root.is_some()
+    }
 }
 
 /// Invalidates curb hierarchies whose exposed-edge result can have changed.

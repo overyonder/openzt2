@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::facility_economy_types::Price;
 use crate::plugins::economy::facility_economy_types::Wallet;
 use crate::plugins::guests::guest_simulation_types::Guest;

@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+mod consumable_compatibility;
 use openzt2_game_data::behavior::{
     action::modification::{
         BehaviorFact, BehaviorFactModification, BehaviorFactModificationOperation,
@@ -6,26 +7,24 @@ use openzt2_game_data::behavior::{
     action_record::BehaviorAction,
 };
 
-use crate::{
-    assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-    plugins::{
-        animal_health::types::{FreezeAnimal, ThawAnimal},
-        animal_lifecycle::types::Animal,
-        animal_welfare::types::{
-            AdjustBathroom, AdjustExercise, AdjustHealthNeed, AdjustHunger, AdjustHygiene,
-            AdjustPrivacy, AdjustRest, AdjustSocial, AdjustStimulation, AdjustThirst,
-        },
-        feeding::container_quantity::{
-            apply_authored_container_quantity_write, DrinkContainer, FoodContainer,
-        },
-        simulation_time::simulation_clock_types::ZooClock,
-        staff::{
-            staff_behavior_fact_completion_execution::behavior_fact_modification_is_owned_by_terminal_maintenance_system,
-            staff_employment_types::Staff,
-            staff_job_types::{CurrentJob, StaffJob},
-        },
+use crate::plugins::{
+    animal_health::types::{FreezeAnimal, ThawAnimal},
+    animal_lifecycle::types::Animal,
+    animal_welfare::types::{
+        AdjustBathroom, AdjustExercise, AdjustHealthNeed, AdjustHunger, AdjustHygiene,
+        AdjustPrivacy, AdjustRest, AdjustSocial, AdjustStimulation, AdjustThirst,
+    },
+    feeding::container_quantity::{
+        apply_authored_container_quantity_write, DrinkContainer, FoodContainer,
+    },
+    simulation_time::simulation_clock_types::ZooClock,
+    staff::{
+        staff_behavior_fact_completion_execution::behavior_fact_modification_is_owned_by_terminal_maintenance_system,
+        staff_employment_types::Staff,
+        staff_job_types::{CurrentJob, StaffJob},
     },
 };
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 use super::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use super::behavior_random_stream_state::BehaviorRandomStream;
@@ -68,6 +67,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut drink_containers: Query<(Entity, &mut DrinkContainer)>,
     animals: Query<(), With<Animal>>,
     jobs: Query<&StaffJob>,
+    compatibility: consumable_compatibility::AnimalConsumableCompatibility,
     mut commands: Commands,
 ) {
     for (entity, mut task, mut random, current_job) in &mut tasks {
@@ -112,6 +112,20 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
             ) else {
                 return false;
             };
+            if animals.contains(entity) && modification.modified_fact == BehaviorFact::FoodLevel {
+                use openzt2_game_data::world_definitions::world_objects::WorldObjectContainerContent;
+                let source = food_containers.get(affected_entity).ok().map(|(_, food)| {
+                    (food.food, WorldObjectContainerContent::Food)
+                }).or_else(|| drink_containers.get(affected_entity).ok().map(|(_, drink)| {
+                    (drink.drink, WorldObjectContainerContent::Drink)
+                }));
+                let Some((source, content)) = source else {
+                    return false;
+                };
+                if !compatibility.accepts(entity, affected_entity, source, content, &task, &assets) {
+                    return false;
+                }
+            }
             behavior_fact_modification_has_runtime_owner(
                 modification,
                 affected_entity,
@@ -142,6 +156,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
             // Authored needs measure deprivation on 0..100; welfare messages
             // adjust wellness on 0..1000, as in species need initialization.
             let wellness_delta_q16 = value_q16.saturating_mul(-10);
+            debug!(?animal, fact = ?modification.modified_fact, value_q16,
+                "behavior fact modification applied");
             match modification.modified_fact {
                 BehaviorFact::Bathroom => {
                     modification_messages.bathroom.write(AdjustBathroom {
@@ -230,11 +246,25 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                             container.capacity_q16,
                             value_q16,
                         );
+                        debug!(
+                            ?animal,
+                            ?target,
+                            amount_q16 = container.amount_q16,
+                            capacity_q16 = container.capacity_q16,
+                            "behavior food level written"
+                        );
                     } else if let Ok((_, mut container)) = drink_containers.get_mut(target) {
                         container.amount_q16 = apply_authored_container_quantity_write(
                             container.amount_q16,
                             container.capacity_q16,
                             value_q16,
+                        );
+                        debug!(
+                            ?animal,
+                            ?target,
+                            amount_q16 = container.amount_q16,
+                            capacity_q16 = container.capacity_q16,
+                            "behavior food level written"
                         );
                     } else {
                         unreachable!("FoodLevel target was validated before application");

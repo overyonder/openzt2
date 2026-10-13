@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::plugins::{
+    aquatic::tank_floor_edit_types::TankFloorEditAcknowledged,
     placement::placement_transaction_types::ObjectPlacementEditApplicationAcknowledged,
     shows::show_platform_upgrade_types::ShowPlatformUpgradeEditAcknowledged,
     terrain::terrain_edit_types::TerrainEditAcknowledged,
@@ -23,6 +24,7 @@ use super::construction_transaction_types::{
 
 #[derive(Clone, Copy)]
 enum ConstructionApplicationDomain {
+    Aquatic,
     Terrain,
     Topology,
     Placement,
@@ -32,6 +34,7 @@ enum ConstructionApplicationDomain {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_construction_domain_application_acknowledgements(
     mut commands: Commands,
+    mut tank_acknowledgements: MessageReader<TankFloorEditAcknowledged>,
     mut terrain_acknowledgements: MessageReader<TerrainEditAcknowledged>,
     mut topology_acknowledgements: MessageReader<TopologyEditAcknowledged>,
     mut object_placement_acknowledgements: MessageReader<
@@ -53,6 +56,15 @@ pub(crate) fn collect_construction_domain_application_acknowledgements(
     mut failed_construction_commits: MessageWriter<ConstructionCommitFailed>,
     mut committed_construction_transactions: MessageWriter<ConstructionCommitted>,
 ) {
+    for acknowledgement in tank_acknowledgements.read() {
+        accept_construction_domain_application_acknowledgement(
+            &mut construction_transactions,
+            acknowledgement.transaction,
+            acknowledgement.application,
+            acknowledgement.accepted,
+            ConstructionApplicationDomain::Aquatic,
+        );
+    }
     for acknowledgement in terrain_acknowledgements.read() {
         accept_construction_domain_application_acknowledgement(
             &mut construction_transactions,
@@ -233,6 +245,7 @@ fn construction_application_domain_status_mut(
     application_domain: ConstructionApplicationDomain,
 ) -> &mut DomainAckStatus {
     match application_domain {
+        ConstructionApplicationDomain::Aquatic => &mut progress.aquatic,
         ConstructionApplicationDomain::Terrain => &mut progress.terrain,
         ConstructionApplicationDomain::Topology => &mut progress.topology,
         ConstructionApplicationDomain::Placement => &mut progress.placement,
@@ -246,6 +259,7 @@ fn construction_application_has_rejected_domain(progress: &EditCommitProgress) -
         progress.topology,
         progress.placement,
         progress.shows,
+        progress.aquatic,
     ]
     .contains(&DomainAckStatus::Rejected)
 }

@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_health::types::Rampaging;
 use crate::plugins::habitat::habitat_types::HabitatMember;
 use crate::plugins::locomotion::locomotion_types::NavAgent;

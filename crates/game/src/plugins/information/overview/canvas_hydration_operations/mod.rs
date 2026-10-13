@@ -5,15 +5,13 @@ use bevy::{
 };
 use openzt2_game_data::{ui_document::widget::UiWidgetRecord, AssetId};
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_reusable_list_and_table_runtime_types::UiTablePolicy,
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_node_projection_components::UiNodeId,
-    },
+use crate::plugins::ui::{
+    authored_reusable_list_and_table_runtime_types::UiTablePolicy,
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_node_projection_components::UiNodeId,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::overview_types::OverviewMapCanvas;
 

@@ -1,0 +1,244 @@
+# diagnostic: select explicitly by name
+# #149: one process, unchanged 1600x900 target, profile, settings and Alpine Small.
+# Atlas pixel storage is distinct from RSS/GPU memory and overall host fitness.
+# Review every capture for readable text and measure process resources externally.
+start main-menu
+expect-text "currentprofile" "Default Profile"
+# Warm the unchanged profile and settings text through their ordinary controls.
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+click-row "profilelist" 0
+expect-text "Profile_Display" "Default Profile"
+move 800 850
+until settled
+key ESCAPE
+until hidden "profile_manager_dialog_shell"
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+move 800 850
+until settled
+click "Back"
+until hidden "Settings Panel"
+until visible "Freeform Button"
+move 800 850
+until settled
+# Reload the same small shipped map without changing content, scale or archives.
+click "Freeform Button"
+phase map-selection
+click "alpine"
+until rows "Map List" == 7
+until settled
+click "map choice 3"
+click "Play Map"
+phase in-game
+until world_map_is_small_alpine == 1
+return-to-menu
+until visible "Freeform Button"
+expect-text "currentprofile" "Default Profile"
+move 800 850
+until settled
+# Warm the unchanged profile and settings text through their ordinary controls.
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+click-row "profilelist" 0
+expect-text "Profile_Display" "Default Profile"
+move 800 850
+until settled
+key ESCAPE
+until hidden "profile_manager_dialog_shell"
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+move 800 850
+until settled
+click "Back"
+until hidden "Settings Panel"
+until visible "Freeform Button"
+move 800 850
+until settled
+# The whole finite visit set has now warmed, including the return/save prompt.
+until steady font_atlas_cpu_data_bytes 20 within 120
+expect font_atlas_keys > 0
+expect font_atlas_textures > 0
+expect font_atlas_cpu_data_bytes > 0
+expect font_atlas_missing_cpu_images == 0
+snapshot font-warmed-allocation
+expect font_ui_glyph_inputs > 0
+expect main_menu_profile_readable_bound_names == 1
+capture font-menu-baseline
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+click-row "profilelist" 0
+expect-text "Profile_Display" "Default Profile"
+move 800 850
+until settled
+expect font_ui_glyph_inputs > 0
+# Exact comparison after warming this finite text set, not a guessed byte budget.
+# Other image assets and new glyph slots are recorded for attribution, not treated
+# as atlas pixel allocations. Growth still needs independent runtime diagnosis.
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-profile-baseline
+key ESCAPE
+until hidden "profile_manager_dialog_shell"
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+move 800 850
+until settled
+expect font_ui_glyph_inputs > 0
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-options-baseline
+click "Back"
+until hidden "Settings Panel"
+# Reload the same small shipped map without changing content, scale or archives.
+click "Freeform Button"
+phase map-selection
+click "alpine"
+until rows "Map List" == 7
+until settled
+click "map choice 3"
+click "Play Map"
+phase in-game
+until world_map_is_small_alpine == 1
+return-to-menu
+until visible "Freeform Button"
+expect-text "currentprofile" "Default Profile"
+move 800 850
+until settled
+# Match actual resolved face/glyph/raster-size/variation/hinting/smoothing demand
+# before comparing retained allocations. A changed demand is a distinct failure.
+expect font_ui_glyph_input_identity_0 == @font-menu-baseline
+expect font_ui_glyph_input_identity_1 == @font-menu-baseline
+expect font_ui_glyph_input_identity_2 == @font-menu-baseline
+expect font_ui_glyph_input_identity_3 == @font-menu-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+expect main_menu_profile_readable_bound_names == 1
+capture font-menu-after-map-reload
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+click-row "profilelist" 0
+expect-text "Profile_Display" "Default Profile"
+move 800 850
+until settled
+expect font_ui_glyph_input_identity_0 == @font-profile-baseline
+expect font_ui_glyph_input_identity_1 == @font-profile-baseline
+expect font_ui_glyph_input_identity_2 == @font-profile-baseline
+expect font_ui_glyph_input_identity_3 == @font-profile-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-profile-after-map-reload
+key ESCAPE
+until hidden "profile_manager_dialog_shell"
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+move 800 850
+until settled
+expect font_ui_glyph_input_identity_0 == @font-options-baseline
+expect font_ui_glyph_input_identity_1 == @font-options-baseline
+expect font_ui_glyph_input_identity_2 == @font-options-baseline
+expect font_ui_glyph_input_identity_3 == @font-options-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-options-after-map-reload
+click "Back"
+until hidden "Settings Panel"
+# Reload the same small shipped map without changing content, scale or archives.
+click "Freeform Button"
+phase map-selection
+click "alpine"
+until rows "Map List" == 7
+until settled
+click "map choice 3"
+click "Play Map"
+phase in-game
+until world_map_is_small_alpine == 1
+return-to-menu
+until visible "Freeform Button"
+expect-text "currentprofile" "Default Profile"
+move 800 850
+until settled
+expect font_ui_glyph_input_identity_0 == @font-menu-baseline
+expect font_ui_glyph_input_identity_1 == @font-menu-baseline
+expect font_ui_glyph_input_identity_2 == @font-menu-baseline
+expect font_ui_glyph_input_identity_3 == @font-menu-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-menu-after-second-reload
+click "profile_manager_opener"
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+click-row "profilelist" 0
+expect-text "Profile_Display" "Default Profile"
+move 800 850
+until settled
+expect font_ui_glyph_input_identity_0 == @font-profile-baseline
+expect font_ui_glyph_input_identity_1 == @font-profile-baseline
+expect font_ui_glyph_input_identity_2 == @font-profile-baseline
+expect font_ui_glyph_input_identity_3 == @font-profile-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-profile-after-second-reload
+key ESCAPE
+until hidden "profile_manager_dialog_shell"
+click "Game Options Button"
+until visible "Settings Panel"
+expect-visible "Back"
+expect-visible "Apply"
+move 800 850
+until settled
+expect font_ui_glyph_input_identity_0 == @font-options-baseline
+expect font_ui_glyph_input_identity_1 == @font-options-baseline
+expect font_ui_glyph_input_identity_2 == @font-options-baseline
+expect font_ui_glyph_input_identity_3 == @font-options-baseline
+expect font_atlas_missing_cpu_images == 0
+expect font_atlas_keys == @font-warmed-allocation
+expect font_atlas_textures == @font-warmed-allocation
+expect font_atlas_cpu_data_bytes == @font-warmed-allocation
+expect font_atlas_cpu_capacity_bytes == @font-warmed-allocation
+expect font_asset_count == @font-warmed-allocation
+capture font-options-after-second-reload
+click "Back"
+until hidden "Settings Panel"
+until visible "Freeform Button"
+expect-hidden "profile_manager_dialog_shell"

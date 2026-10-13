@@ -19,16 +19,16 @@ use super::{
     topology_fence_definition_test_fixture::install_fence_definition_for_topology_transaction_tests,
     topology_graph_types::{TopologyGrid, TopologyIndex},
 };
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 #[test]
 fn undo_and_redo_restore_stable_identity_and_connectivity() {
     let mut app = App::new();
     app.insert_resource(Assets::<
-        crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+        openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     >::default())
         .insert_resource(Assets::<
-            crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
         >::default())
         .init_resource::<WorldDefinitions>()
         .init_resource::<crate::plugins::terrain::terrain_chunk_types::TerrainIndex>()

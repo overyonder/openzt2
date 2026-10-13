@@ -1,0 +1,70 @@
+# #164: South confirms the focused control; East dismisses one active dialog.
+# Native controller hardware and readable final pixels require independent review.
+start main-menu
+expect-hidden "mod manager"
+click "profile_manager_opener"       # ordinary pointer press establishes focus
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+expect-text "Profile_Display" "Default Profile"
+gamepad-connect
+until controller_connected_devices == 1 within 60
+expect controller_held_buttons == 0
+expect controller_confirm_requests == 0
+expect controller_cancel_requests == 0
+expect controller_ui_press_activations == 0
+snapshot controller-before-cancel
+capture controller-modal-before-cancel
+gamepad-button EAST
+until hidden "profile_manager_dialog_shell"
+wait 60                            # catch a delayed cancellation of its parent
+expect phase == @controller-before-cancel
+expect controller_cancel_requests == 1
+expect controller_confirm_requests == 0
+expect controller_ui_press_activations == 1
+expect controller_primary_pointer_requests == 0
+expect controller_other_requests == 0
+expect controller_held_buttons == 0
+expect controller_primary_pointer_held == 0
+expect controller_active_device == 1
+expect-visible "Freeform Button"
+expect-text "currentprofile" "Default Profile"
+# Hover a different control. Confirm must reopen the focused profile opener,
+# never activate the hovered Freeform control through a second pointer binding.
+move "Freeform Button"
+gamepad-button SOUTH
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
+wait 60
+expect phase == @controller-before-cancel
+expect controller_confirm_requests == 1
+expect controller_cancel_requests == 1
+expect controller_ui_press_activations == 2
+expect controller_primary_pointer_requests == 0
+expect controller_other_requests == 0
+expect controller_held_buttons == 0
+expect controller_primary_pointer_held == 0
+expect-text "Profile_Display" "Default Profile"
+capture controller-focused-confirm
+gamepad-button EAST
+until hidden "profile_manager_dialog_shell"
+wait 60
+expect controller_cancel_requests == 2
+expect controller_ui_press_activations == 3
+expect-visible "Freeform Button"
+# Ordinary navigation still works with the connected, released device.
+click "Freeform Button"
+phase map-selection
+until visible "Map List"
+until rows "Map List" >= 1
+click "Cancel Map"
+phase main-menu
+until visible "Freeform Button"
+expect-hidden "profile_manager_dialog_shell"
+expect controller_connected_devices == 1
+gamepad-disconnect
+until controller_connected_devices == 0 within 60
+expect controller_held_buttons == 0
+expect controller_active_device == 0
+expect controller_primary_pointer_held == 0
+expect-visible "Freeform Button"
+capture controller-shell-disconnected

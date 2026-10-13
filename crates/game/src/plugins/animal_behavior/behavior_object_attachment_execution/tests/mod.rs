@@ -18,6 +18,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
         id,
         kind: WorldObjectKind::Scenery,
         supports_show_tricks: false,
+        behavior_type_identifiers: Vec::new(),
         view_data: Vec::new(),
         detach_actions: vec![],
         selected_ui_broadcasts: vec![],

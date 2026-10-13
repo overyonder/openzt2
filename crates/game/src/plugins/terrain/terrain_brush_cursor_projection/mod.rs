@@ -1,12 +1,10 @@
 use bevy::{camera::visibility::RenderLayers, prelude::*};
 use openzt2_game_data::terrain::TerrainWaterDepth;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::construction::construction_tool_and_placement_policy_types::{
-        BiomeSurface, ConstructionPlacementPolicy,
-    },
+use crate::plugins::construction::construction_tool_and_placement_policy_types::{
+    BiomeSurface, ConstructionPlacementPolicy,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     terrain_brush_types::{TerrainBrushKind, TerrainBrushPreview},

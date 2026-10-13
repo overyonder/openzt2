@@ -3,6 +3,7 @@ use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::widget::UiWidgetRecord,
     ui_document::{
+        action::information::InformationViewCategory,
         document::UiDocumentRole,
         node_property_binding::{
             UiBooleanPropertyBindingSource, UiImagePropertyBindingSource,
@@ -13,18 +14,19 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
 use crate::plugins::construction::construction_tool_and_placement_policy_types::{
     ConstructionTool, SelectConstructionTool,
 };
 use crate::plugins::economy::authored_economy_fact_hydration::find_authored_object_or_placeable_price;
+use crate::plugins::input::input_types::ActionSource;
 use crate::plugins::ui::authored_multi_icon_presentation::UiMultiIconPolicy;
 use crate::plugins::ui::authored_ui_image_content_binding::UiImageBinding;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -38,14 +40,18 @@ use crate::plugins::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
 use super::super::{
     catalogue_types::{CatalogueDetails, PurchaseChoice, SelectedCatalogueEntry},
+    entity_selection_types::{SelectedEntity, SelectionRequest},
+    information_view_types::InformationViewClass,
     projection::{
         animal_pickup_release_information_projection::authored_multi_icon_key_for_conservation_status,
         text_replacement_operations::replace_projected_ui_text_if_changed,
     },
 };
 
-pub(in crate::plugins::information) fn dismiss_purchase_information_on_inspection_tool_request(
+pub(in crate::plugins::information) fn dismiss_purchase_information_on_inspection_request(
     mut tool_requests: MessageReader<SelectConstructionTool>,
+    selected_entity: Res<SelectedEntity>,
+    view_classes: Query<&InformationViewClass>,
     mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
 ) {
     // The authored purchase-panel close button returns to mode_selection.
@@ -54,17 +60,45 @@ pub(in crate::plugins::information) fn dismiss_purchase_information_on_inspectio
         .read()
         .last()
         .is_some_and(|request| request.0 == ConstructionTool::Inspect)
+        || selected_entity_uses_building_information_slot(selected_entity.0, &view_classes)
     {
-        selected_catalogue_entry.0 = None;
+        if selected_catalogue_entry.0.is_some() {
+            selected_catalogue_entry.0 = None;
+        }
+    }
+}
+
+pub(in crate::plugins::information) fn project_purchase_information_document_visibility_from_selected_subject(
+    selected: Res<SelectedCatalogueEntry>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    mut roots: Query<(&UiDocumentRoot, &mut Visibility)>,
+) {
+    for (root, mut visibility) in &mut roots {
+        if documents.get(&root.document).is_some_and(|document| {
+            document.canonical_ui_document().role == UiDocumentRole::PurchaseCatalogue
+        }) {
+            let next = if selected.0.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
     }
 }
 
 /// Selects the last catalogue choice produced during this update and opens its
 /// authored purchase-information document under the active HUD owner.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::plugins::information) fn select_catalogue_entry_and_open_purchase_information_document(
     mut purchase_choices: MessageReader<PurchaseChoice>,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
     mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
+    selected_entity: Res<SelectedEntity>,
+    view_classes: Query<&InformationViewClass>,
+    mut selection_requests: MessageWriter<SelectionRequest>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
     mut show_ui_role_requests: MessageWriter<ShowUiRole>,
@@ -82,6 +116,13 @@ pub(in crate::plugins::information) fn select_catalogue_entry_and_open_purchase_
         return;
     };
     selected_catalogue_entry.0 = Some(selected_definition);
+    if selected_entity_uses_building_information_slot(selected_entity.0, &view_classes) {
+        // Purchase and building inspection use the same authored right slot.
+        selection_requests.write(SelectionRequest {
+            entity: None,
+            source: ActionSource::System,
+        });
+    }
 
     let Some(hud_lifecycle_owner) = ui_document_roots.iter().find_map(|(root, parent)| {
         ui_document_assets
@@ -100,6 +141,20 @@ pub(in crate::plugins::information) fn select_catalogue_entry_and_open_purchase_
         role: UiDocumentRole::PurchaseCatalogue,
         owner: hud_lifecycle_owner,
     });
+}
+
+fn selected_entity_uses_building_information_slot(
+    selected: Option<Entity>,
+    view_classes: &Query<&InformationViewClass>,
+) -> bool {
+    selected.is_some_and(|subject| {
+        view_classes.get(subject).is_ok_and(|class| {
+            matches!(
+                class.0,
+                InformationViewCategory::Buildings | InformationViewCategory::Shows
+            )
+        })
+    })
 }
 
 pub(in crate::plugins::information) fn project_selected_catalogue_entry_to_purchase_information_document(

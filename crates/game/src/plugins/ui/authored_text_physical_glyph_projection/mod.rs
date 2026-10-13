@@ -15,7 +15,7 @@ use super::{
 
 /// Preserve system-font aspect when the authored canvas stretches. Bevy owns
 /// shaping, glyph atlases and drawing; node regions and images stay unchanged.
-pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
+pub(crate) fn preserve_authored_font_aspect_in_extracted_text_draws(
     windows: Extract<Query<&Window, With<PrimaryWindow>>>,
     hierarchy: Extract<Query<(Option<&UiLogicalCanvas>, Option<&ChildOf>)>>,
     text_nodes: Extract<
@@ -26,7 +26,7 @@ pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
                 &UiGlobalTransform,
                 &TextLayout,
                 &TextLayoutInfo,
-                Has<UiSingleLineTextAlignment>,
+                Option<&UiSingleLineTextAlignment>,
             ),
             (With<UiPhysicalFontSize>, With<Text>),
         >,
@@ -71,12 +71,16 @@ pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
             Justify::End | Justify::Right => 1.0,
             _ => 0.0,
         };
-        let width = if single_line {
+        let width = if single_line.is_some() {
             glyphs.size.x
         } else {
             node.content_box().size().x
         };
-        let anchor = node.content_box().min + Vec2::new(width * alignment, 0.0);
+        let text_offset = Vec2::new(
+            single_line.map_or(0.0, |alignment| alignment.horizontal_offset_pixels),
+            0.0,
+        );
+        let anchor = node.content_box().min + text_offset + Vec2::new(width * alignment, 0.0);
         let global = transform.affine();
         if global.matrix2.determinant().abs() <= f32::EPSILON {
             continue;
@@ -89,6 +93,8 @@ pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
             ))
             * Affine2::from_translation(-anchor)
             * global.inverse();
-        draw.transform = correction * draw.transform;
+        draw.transform = correction
+            * Affine2::from_translation(global.transform_vector2(text_offset))
+            * draw.transform;
     }
 }

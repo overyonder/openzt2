@@ -18,6 +18,7 @@ pub(in crate::plugins::camera) fn project_camera_actions_into_camera_intent(
     axes: Res<DeviceControlAxes>,
     pointer: Res<PrimaryPointerInputState>,
     tool: Res<ConstructionTool>,
+    capture: Res<crate::plugins::ui::picking::UiPointerCapture>,
     mut cameras: Query<
         (
             &mut CameraIntent,
@@ -63,7 +64,9 @@ pub(in crate::plugins::camera) fn project_camera_actions_into_camera_intent(
             intent.turn = (turn + intent.ui_turn).clamp(-1.0, 1.0);
             intent.pitch = if mouse_look { -axes.look.y } else { 0.0 };
             intent.zoom = (zoom + intent.ui_zoom).clamp(-1.0, 1.0);
-            queue_wheel_zoom(&mut intent.wheel_zoom, pointer.wheel_y);
+            if capture.wheel == crate::plugins::ui::picking::UiWheelCapture::World {
+                queue_wheel_zoom(&mut intent.wheel_zoom, pointer.wheel_y);
+            }
         } else {
             intent.pan_directions = [0.0; 4];
             intent.turn = 0.0;

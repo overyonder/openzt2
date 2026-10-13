@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct StaffJob {

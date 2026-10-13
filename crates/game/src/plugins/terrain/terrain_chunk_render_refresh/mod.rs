@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::terrain_change_tracking_types::{TerrainDirty, TerrainDirtyFlags};
 use super::terrain_chunk_mesh_construction::construct_terrain_chunk_mesh;

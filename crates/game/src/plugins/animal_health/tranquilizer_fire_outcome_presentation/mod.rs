@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::assets::effect::SpawnCompleteParticleEffectDocument;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::effect::SpawnCompleteParticleEffectDocument;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::audio::audio_playback_message_types::PlayAudioCue;
 use crate::plugins::camera::camera_runtime_state_types::ZooCamera;
 

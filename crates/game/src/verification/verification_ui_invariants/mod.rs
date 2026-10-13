@@ -6,24 +6,23 @@ use crate::plugins::ui::{
 
 use super::{
     verification_journey_report::record_verification_failure,
-    verification_journey_state_types::{VerificationJourneyReport, VerificationJourneyRun},
+    verification_journey_state_types::{VerificationJourneyReport, VerificationJourneySession},
 };
 
 /// Checks that hold on every frame of every journey. Each is reported once.
 pub(crate) fn record_broken_verification_ui_invariants(
-    run: Res<VerificationJourneyRun>,
+    session: Res<VerificationJourneySession>,
     mut report: ResMut<VerificationJourneyReport>,
     interactions: Query<(&Interaction, &InheritedVisibility)>,
     scroll_decorations: Query<(&UiScrollDecoration, &Visibility, &InheritedVisibility)>,
     computed_nodes: Query<&ComputedNode>,
 ) {
-    if run.finished {
+    if session.finished {
         return;
     }
-    let location = run
-        .journey
+    let location = session
         .steps
-        .get(run.step_index)
+        .get(session.step_index)
         .map_or_else(String::new, |step| step.source_location.clone());
     let hovered = interactions
         .iter()

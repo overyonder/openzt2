@@ -1,14 +1,18 @@
 //! Terrain endpoint fitting for the source-authored fence skew component.
 
-use bevy::prelude::*;
+use bevy::{diagnostic::FrameCount, prelude::*};
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
 use crate::plugins::terrain::terrain_chunk_types::TerrainChunk;
 use crate::plugins::terrain::terrain_chunk_types::TerrainIndex;
 use crate::plugins::terrain::terrain_edit_types::TerrainChanged;
 use crate::plugins::terrain::terrain_world_sampling::sample_terrain;
 use crate::plugins::terrain::terrain_world_sampling::terrain_chunk_at;
+use crate::verification::verification_capture_readiness::world_presentation_diagnostics::{
+    FenceTerrainFittingAttempt, FenceTerrainFittingObservation,
+};
+use crate::verification::verification_staff_gate_topology_diagnostics::StaffGateTopologyObservation;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     topology_graph_types::TopologyGrid,
@@ -28,7 +32,11 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     grid: Res<TopologyGrid>,
+    frame: Option<Res<FrameCount>>,
+    mut observation: Option<ResMut<StaffGateTopologyObservation>>,
+    mut fitting_history: FenceTerrainFittingObservation,
     mut fences: Query<(
+        Entity,
         Ref<FenceTerrainEndpointPresentationCells>,
         Ref<FenceTerrainEndpointSkewPresentation>,
         &mut Transform,
@@ -39,22 +47,91 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
     >,
 ) {
     let terrain_was_changed = terrain_changed.read().next().is_some();
-    for (endpoint_cells, presentation, mut fence_transform) in &mut fences {
-        if !terrain_was_changed
-            && !endpoint_cells.is_changed()
-            && !presentation.is_changed()
-            && !grid.is_changed()
-        {
+    fitting_history.begin_frame();
+    for (entity, endpoint_cells, presentation, mut fence_transform) in &mut fences {
+        let triggers = [
+            terrain_was_changed,
+            endpoint_cells.is_changed(),
+            presentation.is_changed(),
+            grid.is_changed(),
+        ];
+        let gate_skipped = !triggers.iter().any(|changed| *changed);
+        let observed_owner = fitting_history.observes_owner(entity);
+        if gate_skipped && !observed_owner {
             continue;
         }
         let first_world_xz = grid.cell_translation(endpoint_cells.first).xz();
         let second_world_xz = grid.cell_translation(endpoint_cells.second).xz();
+        let skew_before = if observed_owner {
+            presentation
+                .transform_entities()
+                .map(|entity| presentation_transforms.get(entity).ok().copied())
+        } else {
+            [None, None]
+        };
+        let mut attempt = if observed_owner {
+            fitting_history.begin_owner(
+                entity,
+                endpoint_cells.endpoint_cells(),
+                presentation.transform_entities(),
+                triggers,
+                first_world_xz.distance(second_world_xz),
+                *fence_transform,
+                skew_before,
+            )
+        } else {
+            None
+        };
+        let frame_number = frame.as_ref().map(|frame| frame.0);
+        if gate_skipped {
+            // Only the four observed owners probe the same sampler with the
+            // production gate closed. No transforms or fitting triggers change.
+            for (endpoint, world_xz) in [first_world_xz, second_world_xz].into_iter().enumerate() {
+                let _ = sample_terrain_height_at_world_position(
+                    world_xz,
+                    &terrain_index,
+                    &terrain_assets,
+                    &terrain_chunks,
+                    attempt
+                        .as_mut()
+                        .map(|attempt| (&fitting_history, attempt, endpoint)),
+                );
+            }
+            fitting_history.finish_owner(
+                attempt,
+                "gate skipped; observation-only samples; no production fit",
+                *fence_transform,
+                skew_before,
+                frame_number,
+            );
+            continue;
+        }
+        if let Some(observation) = observation.as_mut() {
+            observation.record_endpoint_fitting(
+                entity,
+                &endpoint_cells,
+                *grid,
+                frame.as_ref().map(|frame| frame.0),
+                None,
+                "fitting attempted but not completed",
+            );
+        }
         let Some(first_height_m) = sample_terrain_height_at_world_position(
             first_world_xz,
             &terrain_index,
             &terrain_assets,
             &terrain_chunks,
+            attempt
+                .as_mut()
+                .map(|attempt| (&fitting_history, attempt, 0)),
         ) else {
+            fitting_history.finish_owner(
+                attempt,
+                "first endpoint sample unavailable",
+                *fence_transform,
+                skew_before,
+                frame_number,
+            );
             continue;
         };
         let Some(second_height_m) = sample_terrain_height_at_world_position(
@@ -62,11 +139,28 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
             &terrain_index,
             &terrain_assets,
             &terrain_chunks,
+            attempt
+                .as_mut()
+                .map(|attempt| (&fitting_history, attempt, 1)),
         ) else {
+            fitting_history.finish_owner(
+                attempt,
+                "second endpoint sample unavailable",
+                *fence_transform,
+                skew_before,
+                frame_number,
+            );
             continue;
         };
         let horizontal_length_m = first_world_xz.distance(second_world_xz);
         if !horizontal_length_m.is_finite() || horizontal_length_m <= f32::EPSILON {
+            fitting_history.finish_owner(
+                attempt,
+                "horizontal length rejected",
+                *fence_transform,
+                skew_before,
+                frame_number,
+            );
             continue;
         }
         fence_transform.translation.y = first_height_m;
@@ -76,13 +170,48 @@ pub(super) fn fit_fence_presentations_to_terrain_endpoint_heights(
             decompose_local_x_vertical_shear_into_two_bevy_transforms(
                 height_change_per_horizontal_metre,
             );
-        let Ok([mut first, mut second]) = presentation_transforms
-            .get_many_mut([presentation.first_transform, presentation.second_transform])
-        else {
+        let child_transforms = presentation_transforms
+            .get_many_mut([presentation.first_transform, presentation.second_transform]);
+        if let Some(attempt) = attempt.as_mut() {
+            attempt.record_child_query_result(
+                child_transforms
+                    .as_ref()
+                    .map(|_| ())
+                    .map_err(|error| *error),
+            );
+        }
+        let Ok([mut first, mut second]) = child_transforms else {
+            fitting_history.finish_owner(
+                attempt,
+                "child query failed after owner height written",
+                *fence_transform,
+                skew_before,
+                frame_number,
+            );
             continue;
         };
         *first = first_transform;
         *second = second_transform;
+        fitting_history.finish_owner(
+            attempt,
+            "production fit completed",
+            *fence_transform,
+            [Some(*first), Some(*second)],
+            frame_number,
+        );
+        if let Some(observation) = observation.as_mut() {
+            observation.record_endpoint_fitting(
+                entity,
+                &endpoint_cells,
+                *grid,
+                frame.as_ref().map(|frame| frame.0),
+                Some((
+                    Vec3::new(first_world_xz.x, first_height_m, first_world_xz.y),
+                    Vec3::new(second_world_xz.x, second_height_m, second_world_xz.y),
+                )),
+                "existing terrain endpoint fitting completed",
+            );
+        }
     }
 }
 
@@ -91,11 +220,33 @@ fn sample_terrain_height_at_world_position(
     terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    observation: Option<(
+        &FenceTerrainFittingObservation,
+        &mut FenceTerrainFittingAttempt,
+        usize,
+    )>,
 ) -> Option<f32> {
-    let terrain_chunk = terrain_chunk_at(terrain_index, world_xz)?;
-    let (chunk, edited) = terrain_chunks.get(terrain_chunk).ok()?;
-    let terrain_asset = terrain_assets.get(&chunk.asset)?;
-    sample_terrain(chunk, terrain_asset, edited, world_xz).map(|point| point.height_m)
+    let terrain_chunk = terrain_chunk_at(terrain_index, world_xz);
+    let chunk = terrain_chunk.and_then(|entity| terrain_chunks.get(entity).ok());
+    let terrain_asset = chunk.and_then(|(chunk, _)| terrain_assets.get(&chunk.asset));
+    let height_m = chunk
+        .zip(terrain_asset)
+        .and_then(|((chunk, edited), asset)| {
+            sample_terrain(chunk, asset, edited, world_xz).map(|point| point.height_m)
+        });
+    if let Some((observation, attempt, endpoint)) = observation {
+        observation.record_endpoint_sample(
+            attempt,
+            endpoint,
+            world_xz,
+            terrain_index,
+            terrain_chunk,
+            chunk,
+            terrain_asset.is_some(),
+            height_m,
+        );
+    }
+    height_m
 }
 
 /// A vertical shear along authored local X cannot be represented by one TRS

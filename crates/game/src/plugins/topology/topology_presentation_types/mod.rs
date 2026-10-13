@@ -12,19 +12,31 @@ pub(crate) struct FenceSegmentPrefab {
 
 /// Endpoint indexes used to fit a fence to the terrain.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FenceTerrainEndpointPresentationCells {
+pub(crate) struct FenceTerrainEndpointPresentationCells {
     pub(super) first: IVec3,
     pub(super) second: IVec3,
+}
+
+impl FenceTerrainEndpointPresentationCells {
+    pub(crate) const fn endpoint_cells(&self) -> [IVec3; 2] {
+        [self.first, self.second]
+    }
 }
 
 /// Two hierarchy nodes whose transforms reproduce the endpoint skew from
 /// `BFSkewComponent`.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct FenceTerrainEndpointSkewPresentation {
+pub(crate) struct FenceTerrainEndpointSkewPresentation {
     pub(super) first_transform: Entity,
     pub(super) second_transform: Entity,
 }
 
+impl FenceTerrainEndpointSkewPresentation {
+    pub(crate) const fn transform_entities(&self) -> [Entity; 2] {
+        [self.first_transform, self.second_transform]
+    }
+}
+
 /// Presentation root to replace when the topology changes.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TopologyPresentation(pub(super) Option<Entity>);
+pub(crate) struct TopologyPresentation(pub(super) Option<Entity>);

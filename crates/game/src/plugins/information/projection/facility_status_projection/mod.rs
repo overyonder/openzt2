@@ -77,6 +77,8 @@ pub(in crate::plugins::information) fn project_selected_facility_status_to_visib
                 UiIntegerPropertyBindingSource::FacilityOperatingDays => {
                     opened.map(|opened| i64::from(zoo_clock.absolute_day.saturating_sub(opened.0)))
                 }
+                UiIntegerPropertyBindingSource::FacilityOperatingMonths => opened
+                    .map(|opened| i64::from(zoo_clock.absolute_day.saturating_sub(opened.0) / 30)),
                 UiIntegerPropertyBindingSource::DonationTotalCents => {
                     donations.map(|donations| donations.amount.0)
                 }

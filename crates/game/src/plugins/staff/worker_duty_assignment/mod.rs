@@ -4,11 +4,11 @@ use openzt2_game_data::{
     world_definitions::staff_management::{StaffJobKind, StaffRoleKind},
 };
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 
 use super::{
     staff_assignment_types::{
@@ -133,7 +133,7 @@ pub(super) fn apply_staff_worker_duty_assignments(
 
 fn staff_role_accepts_worker_duty(
     definitions: WorldDefinitionsView<'_>,
-    behavior_declarations: crate::assets::behavior::behavior_asset_types::BehaviorDeclarationIndexView<'_>,
+    behavior_declarations: openzt2_game_assets::behavior::behavior_asset_types::BehaviorDeclarationIndexView<'_>,
     staff_role: &StaffRole,
     worker_duty: UiWorkerDuty,
 ) -> bool {

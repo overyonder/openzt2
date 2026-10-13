@@ -3,7 +3,7 @@ use std::{cell::RefCell, collections::BTreeSet};
 use bevy::prelude::*;
 use mlua::{Lua, Scope};
 
-use crate::assets::lua_script::{
+use openzt2_game_assets::lua_script::{
     lua_script_archive_path_index::LuaScriptArchivePathIndex,
     lua_script_asset_loading::LuaScriptAsset,
 };

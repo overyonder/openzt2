@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::assets::animation::animation_set_asset_types::AnimationSetAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;

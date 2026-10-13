@@ -1,15 +1,17 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::locomotion::locomotion_types::Arrived;
 use crate::plugins::locomotion::locomotion_types::NavigateTo;
 use crate::plugins::locomotion::locomotion_types::NavigationRequestSequence;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
+use super::guest_arrival_calculations::displaced_from_entrance_gate;
 use super::guest_simulation_calculations::apply_permille_delta;
+use crate::plugins::locomotion::locomotion_types::SpatialGrid;
 use super::guest_simulation_calculations::memory_value;
 use super::guest_simulation_calculations::push_memory;
 use super::guest_simulation_calculations::should_leave;
@@ -19,6 +21,7 @@ use super::guest_simulation_types::DeparturePending;
 use super::guest_simulation_types::Guest;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestDeparted;
+use super::guest_simulation_types::GuestDeparturePoints;
 use super::guest_simulation_types::GuestDestination;
 use super::guest_simulation_types::GuestEducation;
 use super::guest_simulation_types::GuestEnergy;
@@ -42,7 +45,21 @@ use crate::plugins::behavior_task_execution_types::BehaviorTaskExecutionState;
 use super::guest_definition_queries::find_guest_definition;
 use super::guest_definition_queries::find_reaction;
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn apply_guest_reactions(
+    mut emitted: MessageReader<super::view_event_execution::BehaviorViewEventEmitted>,
+    mut commands: Commands,
+    members: Query<(
+        &WorldMember,
+        Option<&crate::plugins::world_spawn::world_membership_types::DefinitionId>,
+    )>,
+    observations: Query<(&GuestDestination, Option<&GuestNavigationRequest>)>,
+    interruptions: Query<(), Or<(
+        With<BehaviorTaskExecutionState>,
+        With<crate::plugins::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet>,
+        With<crate::plugins::economy::service_types::ServiceReservation>,
+        With<crate::plugins::locomotion::locomotion_types::Destination>,
+    )>>,
     mut incoming: MessageReader<GuestReaction>,
     mut applied: MessageWriter<GuestReactionApplied>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -55,16 +72,24 @@ pub(crate) fn apply_guest_reactions(
             &mut GuestSatisfaction,
             &mut GuestEducation,
             &mut GuestMemories,
+            Option<&Viewing>,
+            Option<&super::guest_simulation_types::GuestViewReactionReceipt>,
         ),
         With<Guest>,
     >,
 ) {
+    let events: Vec<_> = emitted.read().collect();
     let Some(definitions) = active_definitions.get(&definitions) else {
+        incoming.clear();
         return;
     };
+    // Deferred component writes must also suppress duplicates in this batch.
+    let mut receipts = std::collections::HashMap::new();
     let mut survey = survey;
-    for reaction in incoming.read() {
-        let Ok((archetype, phase, mut satisfaction, mut education, mut memories)) =
+    let mut reactions: Vec<_> = incoming.read().copied().collect();
+    reactions.sort_by_key(|reaction| reaction.view_event.map_or(0, |origin| origin.event_id));
+    for reaction in &reactions {
+        let Ok((archetype, phase, mut satisfaction, mut education, mut memories, viewing, receipt)) =
             guests.get_mut(reaction.guest)
         else {
             continue;
@@ -73,6 +98,75 @@ pub(crate) fn apply_guest_reactions(
             continue;
         };
         let survey_policy = asset.guest_generation().map(|p| &p.need_survey);
+        let mut reaction = *reaction;
+        if reaction.kind == GuestMemoryKind::AnimalView {
+            let Some(origin) = reaction.view_event else {
+                continue;
+            };
+            if viewing != Some(&origin.viewing)
+                || origin.viewing.subject != reaction.subject
+                || *phase != GuestPhase::Visiting
+                || interruptions.contains(reaction.guest)
+                || !observations
+                    .get(reaction.guest)
+                    .is_ok_and(|(destination, request)| {
+                        destination.purpose == GuestVisitPurpose::View
+                            && Some(destination.entity) == origin.viewing.area
+                            && request.is_none_or(|request| request.0.is_none())
+                    })
+            {
+                continue;
+            }
+            let Some(event) = events.iter().find(|event| {
+                event.event_id == origin.event_id && event.source == reaction.subject
+            }) else {
+                continue;
+            };
+            let Ok((guest_world, _)) = members.get(reaction.guest) else {
+                continue;
+            };
+            let Ok((subject_world, subject_definition)) = members.get(reaction.subject) else {
+                continue;
+            };
+            if guest_world.root != subject_world.root
+                || origin.viewing.area.is_none_or(|area| {
+                    !members
+                        .get(area)
+                        .is_ok_and(|(area_world, _)| area_world.root == guest_world.root)
+                })
+                || subject_definition
+                    .is_none_or(|definition| definition.0 != event.source_definition)
+                || definitions
+                    .find_object(event.source_definition)
+                    .is_none_or(|definition| {
+                        !definition
+                            .view_data
+                            .iter()
+                            .any(|row| row.name == event.view_key)
+                    })
+            {
+                continue;
+            }
+            let Some(policy) = find_reaction(definition, GuestMemoryKind::AnimalView) else {
+                continue;
+            };
+            if survey_policy.is_none() {
+                continue;
+            }
+            let last = receipts
+                .entry(reaction.guest)
+                .or_insert_with(|| receipt.map_or(0, |receipt| receipt.0));
+            if origin.event_id <= *last {
+                continue;
+            }
+            *last = origin.event_id;
+            commands.entity(reaction.guest).insert(
+                super::guest_simulation_types::GuestViewReactionReceipt(*last),
+            );
+            // Read current policy rather than accepting deltas queued before a reload.
+            reaction.satisfaction_delta_permille = policy.satisfaction_delta;
+            reaction.education_delta_permille = policy.education_delta;
+        }
         let education_delta = survey_policy
             .map(|policy| {
                 cap_positive(
@@ -149,6 +243,7 @@ pub(crate) fn apply_guest_reactions(
             guest: reaction.guest,
             subject: reaction.subject,
             kind: reaction.kind,
+            viewing: viewing.copied(),
         });
     }
 }
@@ -170,11 +265,19 @@ pub(crate) fn advance_guest_lifecycle(
             &GuestThirst,
             &GuestEnergy,
             &GuestRestroom,
+            &GuestDeparturePoints,
             Option<&GuestDestination>,
         ),
         With<Guest>,
     >,
-    entrances: Query<(Entity, &PersistentId, &WorldMember, &ZooEntrance)>,
+    entrances: Query<(
+        Entity,
+        &PersistentId,
+        &WorldMember,
+        &ZooEntrance,
+        &GlobalTransform,
+    )>,
+    grid: Res<SpatialGrid>,
     members: Query<&WorldMember, With<Guest>>,
     mut requests: Query<&mut GuestNavigationRequest, With<Guest>>,
     tasks: Query<(), With<BehaviorTaskExecutionState>>,
@@ -188,7 +291,7 @@ pub(crate) fn advance_guest_lifecycle(
         return;
     };
     for arrival in arrived.read() {
-        let Ok((guest, _, phase, _, satisfaction, education, _, _, _, _, destination)) =
+        let Ok((guest, _, phase, _, satisfaction, education, _, _, _, _, _, destination)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
@@ -235,6 +338,7 @@ pub(crate) fn advance_guest_lifecycle(
         thirst,
         energy,
         restroom,
+        departure_points,
         destination,
     ) in &mut guests
     {
@@ -244,6 +348,7 @@ pub(crate) fn advance_guest_lifecycle(
         if *phase == GuestPhase::Visiting {
             visit.elapsed_ticks = visit.elapsed_ticks.saturating_add(1);
             if should_leave(
+                departure_points.0,
                 satisfaction.0,
                 hunger.value,
                 thirst.value,
@@ -253,7 +358,8 @@ pub(crate) fn advance_guest_lifecycle(
                 info!(target: "openzt2_gameplay_journey", ?guest,
                     satisfaction = satisfaction.0, hunger = hunger.value,
                     thirst = thirst.value, energy = energy.value,
-                    restroom = restroom.value, visit_ticks = visit.elapsed_ticks,
+                    restroom = restroom.value, departure_points_q16 = departure_points.0,
+                    visit_ticks = visit.elapsed_ticks,
                     "guest leaving after needs evaluation");
                 *phase = GuestPhase::Leaving;
                 commands
@@ -275,10 +381,10 @@ pub(crate) fn advance_guest_lifecycle(
         let Ok(member) = members.get(guest) else {
             continue;
         };
-        let Some((entrance_entity, _, _, entrance)) = entrances
+        let Some((entrance_entity, _, _, entrance, gate)) = entrances
             .iter()
-            .filter(|(_, _, entrance_member, _)| entrance_member.root == member.root)
-            .min_by_key(|(_, id, _, _)| id.0)
+            .filter(|(_, _, entrance_member, _, _)| entrance_member.root == member.root)
+            .min_by_key(|(_, id, _, _, _)| id.0)
         else {
             continue;
         };
@@ -287,13 +393,13 @@ pub(crate) fn advance_guest_lifecycle(
         };
         let exit = asset
             .guest_generation()
-            .map(|policy| {
-                entrance.exit
-                    + Vec3::new(
-                        policy.departure_offset_cm[0] as f32 * 0.01,
-                        0.0,
-                        policy.departure_offset_cm[1] as f32 * 0.01,
-                    )
+            .and_then(|policy| {
+                displaced_from_entrance_gate(
+                    entrance.exit,
+                    gate.rotation(),
+                    policy.departure_offset_m,
+                    &grid,
+                )
             })
             .unwrap_or(entrance.exit);
         let request_id = navigation_request_sequence.next();

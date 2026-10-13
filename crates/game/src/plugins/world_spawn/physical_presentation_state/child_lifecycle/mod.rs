@@ -2,8 +2,8 @@
 
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 
 use super::super::{
@@ -44,7 +44,7 @@ pub(in crate::plugins::world_spawn) fn advance_authored_child_lifetimes(
     assets: Res<Assets<WorldDefinitionAsset>>,
     owners: Query<&PrefabObjectPresentationAttachmentProjection>,
     mut children: Query<(Entity, &mut PhysicalChildPlayback), With<PrefabPresentationHydrated>>,
-    settings: Res<crate::plugins::settings::graphics_settings_types::GraphicsSettings>,
+    settings: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
     mut notifications: MessageWriter<PhysicalPresentationRequest>,
 ) {
     let Some(definitions) = definitions.get(&assets) else {

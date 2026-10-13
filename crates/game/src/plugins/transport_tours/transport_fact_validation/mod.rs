@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackDefinition;
 
-use crate::assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
+use openzt2_game_assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
 
 use super::{
     transport_topology_types::{TrackSegment, TransportStation},

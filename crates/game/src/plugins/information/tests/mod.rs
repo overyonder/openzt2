@@ -179,22 +179,26 @@ fn assert_animal_catalogue_mode_initialization(mode: crate::game_session_types::
         .map(|event| (event.node, event.trigger))
         .collect::<Vec<_>>();
     let freeform = mode == crate::game_session_types::WorldSessionMode::Freeform;
-    assert!(actions.contains(&(
-        purchase,
-        if freeform {
-            UiTrigger::On
-        } else {
-            UiTrigger::Off
-        }
-    )));
-    assert!(actions.contains(&(
-        adoption,
-        if freeform {
-            UiTrigger::Off
-        } else {
-            UiTrigger::On
-        }
-    )));
+    // The selected tab's On arms placement through its type list, so world
+    // entry only runs the losing tab's Off; opening the panel runs the On.
+    assert_eq!(
+        actions,
+        [(if freeform { adoption } else { purchase }, UiTrigger::Off)]
+    );
+    assert_eq!(
+        app.world()
+            .get::<UiSelected>(purchase)
+            .expect("purchase tab")
+            .0,
+        freeform
+    );
+    assert_eq!(
+        app.world()
+            .get::<UiSelected>(adoption)
+            .expect("adoption tab")
+            .0,
+        !freeform
+    );
     assert_eq!(
         *app.world()
             .get::<Visibility>(purchase)

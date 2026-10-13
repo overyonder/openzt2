@@ -4,11 +4,11 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::photo_challenge_types::{
     PhotoChallenge, PhotoChallengeProgress, PhotoChallengeSet, PhotoChallengeSetProgress,
@@ -32,6 +32,12 @@ pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
     let Some(revision) = scenarios.revision() else {
         return;
     };
+    if roots.iter().all(|(_, initialized)| {
+        initialized.is_some_and(|initialized| initialized.matches_revision(revision))
+    }) || !scenarios.catalogue_documents_are_loaded(&assets)
+    {
+        return;
+    }
     let Some(scenarios) = scenarios.get(&assets) else {
         return;
     };

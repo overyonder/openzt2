@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_scenario::WorldMapSupportedGameModeFlags, AssetId};
 
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::shell_selection_types::{
     GlobeMarker, ShellScreen, ShellSelection, WorldChoice, WorldChoiceView,

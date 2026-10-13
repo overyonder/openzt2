@@ -25,6 +25,7 @@ pub mod research_types;
 mod research_ui_action_routing;
 mod research_ui_presentation;
 mod scenario_award_point_adjustment;
+pub(crate) mod scenario_content_availability;
 pub mod unlock_types;
 mod zoo_rating_calculations;
 mod zoo_rating_recomputation;
@@ -50,9 +51,10 @@ use unlock_types::{
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use crate::plugins::construction::FixedConstructionSet;
 use crate::plugins::simulation_time::simulation_control_application::simulation_is_running;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub struct ProgressionPlugin;
 
@@ -76,6 +78,13 @@ impl Plugin for ProgressionPlugin {
             .add_message::<RecordCompletedChallengeRequest>()
             .add_message::<ProgressionAwardGrantCandidate>()
             .add_message::<AdjustScenarioAwardPointTotalRequest>()
+            .add_message::<adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>()
+            .add_systems(
+                Update,
+                scenario_content_availability::apply_scenario_content_availability_requests
+                    .in_set(GameSet::Intent)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 OnExit(GamePhase::InGame),
                 progression_session_reset::reset_all_progression_state_when_game_session_ends,
@@ -129,11 +138,9 @@ impl Plugin for ProgressionPlugin {
                     fame_progression::update_fame_and_apply_authored_fame_unlocks,
                     profile_challenge_fact_recording::
                         record_endangered_animal_births_for_profile_challenges,
-                    research_execution::refresh_authored_research_availability,
-                    research_execution::
-                        validate_start_research_requests_and_request_payments,
                     research_execution::advance_research_availability_unlock_countdowns
                         .run_if(simulation_is_running),
+                    research_execution::refresh_authored_research_availability,
                     research_execution::advance_active_research_projects_by_one_tick
                         .run_if(simulation_is_running),
                     fame_history_recording::record_current_fame_in_monthly_history,
@@ -146,8 +153,6 @@ impl Plugin for ProgressionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    research_execution::start_paid_research_projects,
-                    research_execution::discard_rejected_research_payment_operations,
                     research_execution::complete_research_projects_and_apply_authored_unlocks,
                     catalogue_unlock_application::apply_catalogue_definition_unlock_requests,
                     award_evaluation_and_granting::grant_earned_progression_awards,
@@ -170,5 +175,24 @@ impl Plugin for ProgressionPlugin {
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             );
+        add_research_purchase_systems(app);
     }
+}
+
+/// Starting research is a player purchase. Like construction, it is paid while
+/// the simulation is paused; only its progress waits for the running clock.
+fn add_research_purchase_systems(app: &mut App) {
+    app.add_systems(
+        FixedUpdate,
+        (
+            research_execution::validate_start_research_requests_and_request_payments
+                .in_set(FixedConstructionSet::RequestEconomy),
+            (
+                research_execution::start_paid_research_projects,
+                research_execution::discard_rejected_research_payment_operations,
+            )
+                .chain()
+                .in_set(FixedConstructionSet::CompleteEconomy),
+        ),
+    );
 }

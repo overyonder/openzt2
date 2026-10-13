@@ -72,43 +72,6 @@ impl GuestViewingNeed {
     }
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct AmusementPaintLevel(pub i32);
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdjustGuestAmusement {
-    pub guest: Entity,
-    pub delta_q16: i32,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdjustGuestHunger {
-    pub guest: Entity,
-    pub delta_q16: i32,
-}
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdjustGuestThirst {
-    pub guest: Entity,
-    pub delta_q16: i32,
-}
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdjustGuestRest {
-    pub guest: Entity,
-    pub delta_q16: i32,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AdjustGuestRestroom {
-    pub guest: Entity,
-    pub delta_q16: i32,
-}
-
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SetAmusementPaintLevel {
-    pub easel: Entity,
-    pub level_q16: i32,
-}
-
 /// Canonical wellness permille plus its fractional Q16 remainder.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GuestSatisfaction(pub u16, pub(crate) u16);
@@ -155,11 +118,22 @@ pub struct VisitTime {
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct DeparturePending;
 
+/// A selected observation, not proof of terrain-layer eligibility for view events.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Viewing {
-    pub subject: Entity,
-    pub elapsed_ticks: u64,
+#[relationship(relationship_target = GuestViewers)]
+pub(crate) struct Viewing {
+    #[relationship]
+    pub(crate) subject: Entity,
+    /// Generic relationship insertion has no destination owner and is revoked.
+    pub(crate) area: Option<Entity>,
+    pub(crate) started_tick: u64,
 }
+
+/// Bevy maintains this collection from guest-owned observations. Despawning a
+/// subject removes observations, never the guests themselves.
+#[derive(Component, Debug, Default)]
+#[relationship_target(relationship = Viewing)]
+pub(crate) struct GuestViewers(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestDestination {
@@ -257,6 +231,7 @@ pub struct AdjustGuestSurveyData {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestReaction {
+    pub(crate) view_event: Option<GuestViewReactionOrigin>,
     pub guest: Entity,
     pub subject: Entity,
     pub kind: GuestMemoryKind,
@@ -264,12 +239,27 @@ pub struct GuestReaction {
     pub education_delta_permille: i16,
 }
 
+/// Identity captured by recipient delivery, never reconstructed at application.
+/// Delivery and reaction application consume an emission in the same fixed step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct GuestViewReactionOrigin {
+    pub(crate) event_id: u64,
+    pub(crate) viewing: Viewing,
+}
+
+/// Monotonic emitted-event receipt, retained across viewing-session changes.
+#[derive(Component, Default)]
+pub(crate) struct GuestViewReactionReceipt(pub(crate) u64);
+
 /// Confirms that one reaction reached and mutated its canonical guest.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GuestReactionApplied {
     pub guest: Entity,
     pub subject: Entity,
     pub kind: GuestMemoryKind,
+    /// Observation identity at application, so queued reactions cannot authorize
+    /// an opportunity for a replacement viewing session.
+    pub(crate) viewing: Option<Viewing>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -308,6 +298,17 @@ pub struct RequestGuestArrivals {
 pub(crate) enum GuestArrivalFailure {
     MissingPolicy,
     MissingEntrance,
-    InvalidDefinition(AssetId),
+    /// The guest definition lacks one of the authored need state variables.
+    MissingNeedRows(AssetId),
+    /// The guest's world object is not among the loaded definitions.
+    MissingObject {
+        guest: AssetId,
+        object: AssetId,
+    },
+    /// The guest's world object names a prefab scene no definition registers.
+    MissingPrefabScene {
+        guest: AssetId,
+        prefab: AssetId,
+    },
     PersistentId(PersistentIdError),
 }

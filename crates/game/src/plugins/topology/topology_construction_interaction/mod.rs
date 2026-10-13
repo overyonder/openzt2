@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::CommitConstruction;
 use crate::plugins::construction::construction_interaction_types::ConstructionCursor;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
@@ -18,6 +18,7 @@ use crate::plugins::terrain::terrain_chunk_types::TerrainIndex;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use crate::verification::verification_staff_gate_topology_diagnostics::StaffGateAnchorInputObservation;
 
 use super::{
     topology_construction_planning::{
@@ -160,6 +161,7 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     mut fences: MessageWriter<PlaceFence>,
     mut paths: MessageWriter<PlacePath>,
     mut commits: MessageWriter<CommitConstruction>,
+    mut anchor_observation: StaffGateAnchorInputObservation,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -190,6 +192,17 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     }
     let Ok((preview, fence, path)) = previews.single() else {
         if primary_pointer.just_pressed && !ui_capture.over_ui {
+            if let ConstructionTool::Fence(definition) = *tool {
+                anchor_observation.record_initial_anchor_press(
+                    root,
+                    definition,
+                    *grid,
+                    &primary_pointer,
+                    cursor,
+                    &ui_capture,
+                    cell,
+                );
+            }
             let transform = Transform::from_translation(grid.cell_translation(cell));
             let mut entity = commands.spawn((
                 ConstructionPreview {

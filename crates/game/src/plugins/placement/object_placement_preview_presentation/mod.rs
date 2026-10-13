@@ -5,9 +5,9 @@ use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_definitions::object_placement::{FootprintCell, FootprintCellFlags};
 use openzt2_game_data::AssetId;
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
 use crate::plugins::construction::construction_interaction_types::PlacementValidity;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -175,24 +175,6 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             continue;
         };
         let valid = matches!(preview.validity, PlacementValidity::Valid { .. });
-        let next = ObjectPlacementPreviewVisualState {
-            eighth_turns: turns,
-            valid,
-        };
-        if state.as_deref() == Some(&next)
-            && !definitions.is_changed()
-            && !active_definitions.is_changed()
-        {
-            continue;
-        }
-        let plane = plane
-            .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
-            .clone();
-        for (decal, owner) in &decals {
-            if owner.0 == entity {
-                commands.entity(decal).despawn();
-            }
-        }
         let footprint = select_authored_footprint_for_eighth_turns(definition, turns);
         let grid_size = match calculate_occupied_footprint_maximum_axis_span(footprint) {
             ..=2 => 0,
@@ -206,26 +188,69 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         };
         let pivot = Vec2::new(f32::from(pivot_cm[0]), f32::from(pivot_cm[1])) / 100.0;
         let inverse_rotation = preview.transform.rotation.inverse();
-        let material = if valid {
-            materials.footprint_valid.clone()
+        let footprint_material = if valid {
+            &materials.footprint_valid
         } else {
-            materials.footprint_invalid.clone()
+            &materials.footprint_invalid
         };
-        for cell in footprint
-            .iter()
-            .filter(|cell| footprint_cell_is_occupied(cell))
-        {
-            let local = IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
-            let world_offset = rotate_object_placement_point_by_quarter_turns(
-                local.as_vec2() + Vec2::splat(0.5) - pivot,
-                turns / 2,
-            );
-            let translation =
-                inverse_rotation.mul_vec3(Vec3::new(world_offset.x, 0.025, world_offset.y));
+        let grid_material = if turns & 1 == 0 {
+            &materials.grid_cardinal[grid_size]
+        } else {
+            &materials.grid_diagonal[grid_size]
+        };
+        let grid_radius = materials.grid_radius[grid_size];
+        let footprint_translations = || {
+            footprint
+                .iter()
+                .filter(|cell| footprint_cell_is_occupied(cell))
+                .map(move |cell| {
+                    let local = IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
+                    let world_offset = rotate_object_placement_point_by_quarter_turns(
+                        local.as_vec2() + Vec2::splat(0.5) - pivot,
+                        turns / 2,
+                    );
+                    inverse_rotation.mul_vec3(Vec3::new(world_offset.x, 0.025, world_offset.y))
+                })
+        };
+        // Compare the emitted draw inputs, not the change tick of the entire
+        // definition catalogue. Unchanged previews allocate no new projection.
+        if state.as_deref().is_some_and(|state| {
+            state.eighth_turns == turns
+                && state.valid == valid
+                && state.decal_rotation == inverse_rotation
+                && state.footprint_material == *footprint_material
+                && state.grid_material == *grid_material
+                && state.grid_radius == grid_radius
+                && state
+                    .footprint_translations
+                    .iter()
+                    .copied()
+                    .eq(footprint_translations())
+        }) {
+            continue;
+        }
+        let next = ObjectPlacementPreviewVisualState {
+            eighth_turns: turns,
+            valid,
+            footprint_translations: footprint_translations().collect(),
+            decal_rotation: inverse_rotation,
+            footprint_material: footprint_material.clone(),
+            grid_material: grid_material.clone(),
+            grid_radius,
+        };
+        let plane = plane
+            .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
+            .clone();
+        for (decal, owner) in &decals {
+            if owner.0 == entity {
+                commands.entity(decal).despawn();
+            }
+        }
+        for translation in &next.footprint_translations {
             commands.spawn((
                 Mesh3d(plane.clone()),
-                MeshMaterial3d(material.clone()),
-                Transform::from_translation(translation).with_rotation(inverse_rotation),
+                MeshMaterial3d(next.footprint_material.clone()),
+                Transform::from_translation(*translation).with_rotation(next.decal_rotation),
                 ObjectPlacementPreviewDecal,
                 ObjectPlacementPreviewOwner(entity),
                 ChildOf(entity),
@@ -233,17 +258,13 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         }
         commands.spawn((
             Mesh3d(plane),
-            MeshMaterial3d(if turns & 1 == 0 {
-                materials.grid_cardinal[grid_size].clone()
-            } else {
-                materials.grid_diagonal[grid_size].clone()
-            }),
+            MeshMaterial3d(next.grid_material.clone()),
             Transform::from_xyz(0.0, 0.015, 0.0)
-                .with_rotation(inverse_rotation)
+                .with_rotation(next.decal_rotation)
                 .with_scale(Vec3::new(
-                    materials.grid_radius[grid_size] * 2.0,
+                    next.grid_radius * 2.0,
                     1.0,
-                    materials.grid_radius[grid_size] * 2.0,
+                    next.grid_radius * 2.0,
                 )),
             ObjectPlacementPreviewDecal,
             ObjectPlacementPreviewOwner(entity),

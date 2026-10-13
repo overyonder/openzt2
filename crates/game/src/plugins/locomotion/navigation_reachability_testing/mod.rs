@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use super::{
     animal_navigation_policy::AnimalNavigationPolicy,
+    fence_navigation_policy::FenceNavigationPolicy,
     locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, LocomotionCapacity, LocomotionMode, NavAgent,
         NavigationFailure, NavigationOverlay, ReachabilityTested, Route, RouteScratch,
@@ -24,6 +25,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
         Option<&AnimalVariant>,
     )>,
     animal_policy: AnimalNavigationPolicy,
+    fence_policy: FenceNavigationPolicy,
     mut reachability_test_route: Local<Option<Route>>,
     mut pathfinding_scratch: Local<RouteScratch>,
 ) {
@@ -67,13 +69,37 @@ pub(super) fn test_requested_navigation_destination_reachability(
                     navigation_agent_transform,
                     animal_variant,
                 )| {
-                    let navigation_agent = animal_policy
-                        .agent_with_authored_radius(navigation_agent, animal_variant)?;
+                    let (navigation_agent, maximum_ground_slope_radians) = animal_policy
+                        .agent_with_authored_collision_limits(navigation_agent, animal_variant)?;
                     plan_route(
                         terrain_derived_navigation_graph,
-                        &navigation_edge_overlay,
+                        |from, to| {
+                            navigation_edge_overlay
+                                .fence_crossings(from, to)
+                                .iter()
+                                .any(|fence| {
+                                    fence_policy.fence_blocks_actor(
+                                        *fence,
+                                        navigation_agent.capabilities,
+                                        fence_policy
+                                            .actor_types
+                                            .actor_types(reachability_test_request.entity),
+                                    )
+                                })
+                        },
+                        |from, to| {
+                            fence_policy.world_segment_blocks_actor(
+                                from,
+                                to,
+                                navigation_agent.capabilities,
+                                fence_policy
+                                    .actor_types
+                                    .actor_types(reachability_test_request.entity),
+                            )
+                        },
                         &navigation_agent,
                         *locomotion_mode,
+                        maximum_ground_slope_radians,
                         navigation_agent_transform.translation(),
                         reachability_test_request.destination,
                         reachability_test_route,

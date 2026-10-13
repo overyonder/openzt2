@@ -1,0 +1,54 @@
+# A guest on its way to a burger stand loses it before buying: the stand is
+# undone while the guest is tasked there. The guest pays nothing, holds
+# nothing, leaves the failed task and chooses another (#114).
+# The path is built first so that undo removes the stand alone.
+start freeform-map
+until guests > 0 within 4800          # guests first arrive about 3100 frames after a map loads
+until guests_visiting > 0 within 9000 # they appear at the map edge and walk to the gate to pay
+click "construction"
+snapshot before-path
+click "Path Tab"
+select-catalogue "asphalt"
+move 815 210                    # on the entrance road east of the gate
+click 815 210
+move 939 294                    # beyond the stand's place, along its dock side
+until placement_valid_previews == 1 within 120
+click 939 294
+until paths > @before-path
+key ESCAPE                      # drop the follow-on path preview
+until placement_previews == 0
+click "Building Tab"
+until rows "Building Typelist" >= 1
+move "Building Typelist"
+wheel 100                       # return to the beginning if the shared map retained a scroll offset
+until catalogue_scroll_x == 0
+wheel-to-catalogue "foodstand_burger_df"
+until catalogue_burger_unclipped == 1 within 120
+snapshot before-stand
+select-catalogue "foodstand_burger_df"
+expect selected_catalogue_entry_available == 1
+move 933 239                    # beside the branch, as in guest-amenities
+until placement_valid_previews == 1
+click 933 239
+until placed_objects > @before-stand
+expect construction_commit_failures == @before-stand
+key ESCAPE                      # leave repeat placement
+until placement_previews == 0
+expect simulation_paused == 0
+until guests_tasked_at_type_families > 0 within 3600
+capture guest-heading-to-stand
+snapshot stand-claimed
+key CTRL+Z                      # the stand disappears under the guest's task
+until placed_objects == @before-stand.placed_objects
+until guests_tasked_at_type_families == 0 within 600
+capture purchase-interrupted
+expect guest_purchases == @stand-claimed
+expect guest_held_items == @stand-claimed
+until guest_task_starts > @stand-claimed within 1800   # the guest moves on to another task
+expect guest_purchases == @stand-claimed
+
+key CTRL+Z                      # the path
+until paths == @before-path
+expect construction_commit_failures == @before-stand
+
+restore freeform-map

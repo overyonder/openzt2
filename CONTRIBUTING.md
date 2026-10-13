@@ -43,7 +43,27 @@ Running the game requires your own Zoo Tycoon 2 files. The Nix environment
 looks in `vendor/original-software` by default; `OPENZT2_Z2F_PATH` can point to
 another directory. Original game files must stay out of Git.
 
-For an optimised development build, add `--profile profiling` to `cargo run`.
+Use the default `dev` profile for routine gameplay changes and verification.
+It optimizes workspace code at level 1 and dependencies at level 3, with
+incremental compilation enabled and LTO disabled.
+
+Use `--profile profiling` for performance measurements. It inherits the
+shipping optimization settings and retains limited debug information.
+
+| Setting | `dev` | `profiling` | `release` |
+| --- | --- | --- | --- |
+| Workspace optimization | 1 | 3 | 3 |
+| Dependency optimization | 3 | 3 | 3 |
+| LTO | Off | Thin | Thin |
+| Codegen units | 256 | 1 | 1 |
+| Incremental compilation | On | Off | Off |
+| Debug information | Limited | Limited | None |
+| Stripping | None | None | Symbols |
+
+The verification runner defaults to `dev`; `--profiling`, `--perf` and
+`--tracy` select `profiling`. Reuse a matching binary with `--no-build` when only the
+journey changes.
+
 For the shipping binary, use `direnv exec . cargo build --locked --release
 -p openzt2_game --bin openzt2`. Release linking takes considerably longer.
 
@@ -90,14 +110,16 @@ The native dependency script needs a fresh staging directory. Once it has
 succeeded, reuse the same directory for subsequent Cargo builds; rerun the
 script with a fresh prefix when the native sources or patches change.
 
-To produce a `.deb` or `.dmg`, including dependency licences:
+To produce release packages, including dependency licences:
 
 ```sh
 cargo install --locked --features cli cargo-about --version 0.9.0
 direnv exec . python3 tools/release/package.py package
 ```
 
-Debian packages must be built on a native Linux host, not in the Nix shell.
+Linux packaging also needs the [Linux packaging tools and runtimes](tools/release/linux/README.md).
+It produces `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak from one build.
+These packages must be built on a native Linux host, not in the Nix shell.
 
 ### Windows
 

@@ -114,7 +114,7 @@ pub(super) fn transformed_model_bounds(
             .0
             .abs()
             .max_element();
-        crate::assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
+        openzt2_game_assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
             model,
             gltf_meshes,
             meshes,

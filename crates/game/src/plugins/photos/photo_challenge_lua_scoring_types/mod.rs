@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use mlua::Lua;
 
-use crate::assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 #[derive(Default)]
 pub(super) struct PhotoChallengeLuaScoringVirtualMachineContexts {

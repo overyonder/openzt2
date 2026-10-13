@@ -238,7 +238,7 @@ fn input_chord_is_pressed_by_keyboard_or_mouse(
     }
 }
 
-fn input_chord_was_just_pressed_by_keyboard_or_mouse(
+pub(crate) fn input_chord_was_just_pressed_by_keyboard_or_mouse(
     input_chord: InputChord,
     keyboard_keys: &ButtonInput<KeyCode>,
     mouse_buttons: &ButtonInput<MouseButton>,

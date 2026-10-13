@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use crate::plugins::animal_behavior::behavior_set_start_request_types::StartBehaviorSet;
 use crate::plugins::animal_lifecycle::types::Animal;

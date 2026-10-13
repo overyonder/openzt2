@@ -12,7 +12,8 @@ use super::{
 };
 
 pub(super) const WORLD_SNAPSHOT_CONTAINER_MAGIC_SIGNATURE_BYTES: [u8; 8] = *b"OZT2SAVE";
-pub(super) const WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION: u32 = 11;
+// Version 13 identifies photo challenges across documents. Earlier containers are rejected.
+pub(super) const WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION: u32 = 13;
 pub(super) const WORLD_SNAPSHOT_CONTAINER_HEADER_BYTE_COUNT: usize = 76;
 pub(super) const WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT: usize = 24;
 pub(super) const WORLD_SNAPSHOT_SECTION_COUNT: usize = WORLD_SNAPSHOT_SECTION_KIND_COUNT;

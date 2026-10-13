@@ -3,10 +3,8 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 
 use super::authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot};
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::authored_ui_activation_contracts::UiNodeActivated,
-};
+use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 /// Entity-local presentation clock and cursor for one loaded authored timed
 /// action sequence. Event records remain borrowed from the UI document.

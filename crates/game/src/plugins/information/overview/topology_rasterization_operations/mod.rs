@@ -8,7 +8,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::topology::topology_graph_types::FenceEdge;
 use crate::plugins::topology::topology_graph_types::PathTile;
 use crate::plugins::transport_tours::transport_topology_types::TrackSegment;

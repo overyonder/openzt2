@@ -46,6 +46,7 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     *update_sound_position_during_playback,
                 ),
             AuthoredAnimationTextAction::AttachPendingObject
+            | AuthoredAnimationTextAction::SpawnObject
             | AuthoredAnimationTextAction::AttachNamedObject { .. }
             | AuthoredAnimationTextAction::DetachObject => {
                 self.object_commands.write(
@@ -165,8 +166,7 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     animation_playback_controller_entity,
                     animation_graph_node_asset_key,
                 ),
-            AuthoredAnimationTextAction::SpawnObject
-            | AuthoredAnimationTextAction::CreateObject { .. }
+            AuthoredAnimationTextAction::CreateObject { .. }
             | AuthoredAnimationTextAction::CreateObjectOverride { .. }
             | AuthoredAnimationTextAction::DestroyObject { .. }
             | AuthoredAnimationTextAction::KillAnimationSubject => {}

@@ -111,10 +111,18 @@ impl VerificationInputInjection<'_, '_> {
     }
 
     pub(crate) fn scroll_wheel_lines(&mut self, lines: f32) {
+        self.scroll_wheel(MouseScrollUnit::Line, lines);
+    }
+
+    pub(super) fn scroll_wheel_pixels(&mut self, pixels: f32) {
+        self.scroll_wheel(MouseScrollUnit::Pixel, pixels);
+    }
+
+    fn scroll_wheel(&mut self, unit: MouseScrollUnit, delta: f32) {
         self.mouse_wheels.write(MouseWheel {
-            unit: MouseScrollUnit::Line,
+            unit,
             x: 0.0,
-            y: lines,
+            y: delta,
             window: self.primary_window.0,
             phase: TouchPhase::Moved,
         });
@@ -189,6 +197,8 @@ fn logical_key_for_verification_key_code(key_code: KeyCode) -> Key {
         KeyCode::End => Key::End,
         KeyCode::PageUp => Key::PageUp,
         KeyCode::PageDown => Key::PageDown,
+        KeyCode::F5 => Key::F5,
+        KeyCode::F6 => Key::F6,
         KeyCode::Equal => Key::Character("=".into()),
         KeyCode::Minus => Key::Character("-".into()),
         KeyCode::ArrowLeft => Key::ArrowLeft,
@@ -197,6 +207,7 @@ fn logical_key_for_verification_key_code(key_code: KeyCode) -> Key {
         KeyCode::ArrowDown => Key::ArrowDown,
         KeyCode::KeyA => Key::Character("a".into()),
         KeyCode::KeyD => Key::Character("d".into()),
+        KeyCode::KeyG => Key::Character("g".into()),
         KeyCode::KeyP => Key::Character("p".into()),
         KeyCode::KeyS => Key::Character("s".into()),
         KeyCode::KeyW => Key::Character("w".into()),

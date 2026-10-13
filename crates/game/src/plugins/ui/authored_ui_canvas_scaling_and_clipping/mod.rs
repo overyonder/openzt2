@@ -5,7 +5,7 @@ use crate::plugins::settings::display_settings_types::DisplaySettings;
 use super::authored_tree_expansion_and_row_indentation::UiAuthoredTreeRowPhysicalIndent;
 
 #[derive(Component, Clone, Copy)]
-pub(super) struct UiLogicalCanvas(Vec2);
+pub(crate) struct UiLogicalCanvas(Vec2);
 
 impl UiLogicalCanvas {
     pub(super) fn from_logical_size(logical_size: Vec2) -> Self {

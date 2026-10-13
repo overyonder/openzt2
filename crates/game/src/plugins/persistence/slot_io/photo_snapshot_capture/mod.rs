@@ -96,12 +96,22 @@ pub(super) fn capture_sorted_photo_and_challenge_progress_snapshot_records_from_
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         }
         challenge_progress_snapshot_records.push(PhotoChallengeProgressSnapshotRecord {
-            challenge_row_index: photo_challenge.row,
+            challenge_definition_identifier: photo_challenge.id,
             completed_by_photo_persistent_identifier,
             rating_stars: photo_challenge_progress.rating_stars,
         });
     }
-    challenge_progress_snapshot_records.sort_unstable_by_key(|record| record.challenge_row_index);
+    challenge_progress_snapshot_records
+        .sort_unstable_by_key(|record| record.challenge_definition_identifier);
+    if challenge_progress_snapshot_records
+        .windows(2)
+        .any(|adjacent| {
+            adjacent[0].challenge_definition_identifier
+                == adjacent[1].challenge_definition_identifier
+        })
+    {
+        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+    }
 
     Ok((photo_snapshot_records, challenge_progress_snapshot_records))
 }

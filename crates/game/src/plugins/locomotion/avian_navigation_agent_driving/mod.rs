@@ -2,6 +2,7 @@ use avian3d::prelude::{AngularVelocity, LinearVelocity, RigidBody};
 use bevy::prelude::*;
 
 use super::{
+    fence_navigation_policy::FenceNavigationPolicy,
     locomotion_types::{
         Arrived, Destination, DirectLocomotion, Docking, LocomotionMode, NavAgent, Route, Steering,
     },
@@ -13,10 +14,12 @@ use super::{
 pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
+    fences: FenceNavigationPolicy,
     mut avian_navigation_agents: Query<(
         Entity,
         &NavAgent,
         &GlobalTransform,
+        &Transform,
         &RigidBody,
         &mut LinearVelocity,
         &mut AngularVelocity,
@@ -34,6 +37,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         navigation_agent_entity,
         navigation_agent,
         global_transform,
+        transform,
         rigid_body,
         mut linear_velocity,
         mut angular_velocity,
@@ -83,6 +87,18 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
                 .clamp_length_max(navigation_agent.max_speed_mps);
         }
 
+        // Physics updates the world actor's root Transform each fixed step;
+        // GlobalTransform can still describe the preceding rendered frame.
+        let position = transform.translation;
+        if fences.gate_blocks_movement(
+            navigation_agent_entity,
+            navigation_agent.capabilities,
+            position,
+            position + linear_velocity.0 * fixed_delta_seconds,
+        ) {
+            linear_velocity.x = 0.0;
+            linear_velocity.z = 0.0;
+        }
         let horizontal_velocity = Vec2::new(linear_velocity.x, linear_velocity.z);
         if !direct_locomotion && horizontal_velocity.length_squared() > 0.0001 {
             let desired_forward_direction =

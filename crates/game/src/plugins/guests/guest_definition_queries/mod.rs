@@ -1,3 +1,4 @@
+use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestDessert;
 use super::guest_simulation_types::GuestEnergy;
 use super::guest_simulation_types::GuestGift;
@@ -5,7 +6,7 @@ use super::guest_simulation_types::GuestHunger;
 use super::guest_simulation_types::GuestRestroom;
 use super::guest_simulation_types::GuestSocial;
 use super::guest_simulation_types::GuestThirst;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityServiceKind;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDefinition;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
@@ -23,9 +24,10 @@ pub(super) fn find_guest_definition<'a>(
     definitions.find_guest(id).map(|row| (definitions, row))
 }
 
+/// Authored need rows in `GuestNeedKind` declaration order.
 pub(super) fn guest_need_rows<'a>(
     definition: &'a GuestDefinition,
-) -> Option<[&'a GuestNeedDefinition; 7]> {
+) -> Option<[&'a GuestNeedDefinition; 8]> {
     let needs = &definition.needs;
     Some([
         needs
@@ -49,20 +51,14 @@ pub(super) fn guest_need_rows<'a>(
         needs
             .iter()
             .find(|need| matches!(&need.kind, GuestNeedKind::Social))?,
+        needs
+            .iter()
+            .find(|need| matches!(&need.kind, GuestNeedKind::Amusement))?,
     ])
 }
 
-pub(super) fn reconsider_threshold(needs: [&GuestNeedDefinition; 7], kind: &GuestNeedKind) -> u16 {
-    let index = match kind {
-        GuestNeedKind::Hunger => 0,
-        GuestNeedKind::Thirst => 1,
-        GuestNeedKind::Dessert => 2,
-        GuestNeedKind::Gift => 3,
-        GuestNeedKind::Energy => 4,
-        GuestNeedKind::Restroom => 5,
-        GuestNeedKind::Social => 6,
-    };
-    needs[index].reconsider_threshold
+pub(super) fn reconsider_threshold(needs: [&GuestNeedDefinition; 8], kind: &GuestNeedKind) -> u16 {
+    needs[*kind as usize].reconsider_threshold
 }
 
 pub(super) fn find_reaction<'a>(
@@ -84,6 +80,7 @@ pub(super) fn need_value(
     energy: &GuestEnergy,
     restroom: &GuestRestroom,
     social: &GuestSocial,
+    amusement: &GuestAmusement,
 ) -> u16 {
     match kind {
         GuestNeedKind::Hunger => hunger.value,
@@ -93,6 +90,7 @@ pub(super) fn need_value(
         GuestNeedKind::Energy => energy.value,
         GuestNeedKind::Restroom => restroom.value,
         GuestNeedKind::Social => social.value,
+        GuestNeedKind::Amusement => amusement.value,
     }
 }
 

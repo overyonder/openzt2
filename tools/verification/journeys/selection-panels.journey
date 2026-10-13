@@ -1,21 +1,27 @@
 # Selecting world objects opens the right panel, the close button hides it (#63),
 # and selecting the entrance does not keep showing the previous object (#73).
-include boot-to-freeform-map.steps
+start freeform-map
 click 930 425                   # tree beside the entrance path
-wait 180                        # the info panel document is projected on first use
+until visible "Tree Info"       # the info panel document is projected on first use
 expect selected == 1
-expect-visible "Tree Info"
 capture tree-selected
 click "close"
-wait 60
-expect-hidden "Tree Info"
+until hidden "Tree Info"
 expect selected == 0
-capture panel-closed
 click 930 425
-wait 60
-expect-visible "Tree Info"
+until visible "Tree Info"
 click 560 450                   # zoo entrance gate
-wait 60
+until visible "zoo status layout"      # the entrance opens zoo information instead
 expect-hidden "Tree Info"
-expect-visible "zoo status"      # the entrance opens zoo information instead
 capture entrance-selected
+click "close"
+until hidden "zoo status layout"
+
+# The goals control is also available without a challenge.
+click "scenariogoals"
+until visible "goals layout"
+capture goals-without-challenge
+key ESCAPE
+until hidden "goals layout"
+
+restore freeform-map

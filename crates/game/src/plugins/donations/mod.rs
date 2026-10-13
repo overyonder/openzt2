@@ -26,8 +26,8 @@ use self::{
         reject_donation_candidates_after_navigation_failure,
     },
     donation_opportunity_observation::{
+        observe_donation_opportunities_after_applied_viewing_reactions,
         remove_guest_donation_observation_after_viewing_ends,
-        update_guest_donation_observation_after_viewed_subject_changes,
     },
     donation_payment_settlement::{
         settle_completed_donation_transactions_and_update_acceptor_totals,
@@ -63,11 +63,16 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                     initialize_new_guests_with_deterministic_donation_random_streams,
                     hydrate_authored_donation_acceptors_and_docking_points,
                     initialize_new_donation_acceptors_with_operating_age_and_profit,
-                    update_guest_donation_observation_after_viewed_subject_changes,
                     choose_donation_candidates_from_new_guest_observations,
                 )
                     .chain()
                     .in_set(FixedGameSet::Think),
+            )
+            .add_systems(
+                FixedUpdate,
+                observe_donation_opportunities_after_applied_viewing_reactions
+                    .after(crate::plugins::guests::guest_lifecycle_and_memory_execution::apply_guest_reactions)
+                    .in_set(FixedGameSet::Act),
             )
             .add_systems(
                 FixedUpdate,

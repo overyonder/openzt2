@@ -9,15 +9,16 @@ mod animal_adoption_pricing;
 mod animal_age_resolution;
 mod animal_ageing_execution;
 pub(crate) mod animal_birth_and_release_contracts;
-mod animal_entity_spawning;
+mod animal_birth_execution;
+pub(crate) mod animal_entity_spawning;
 mod animal_habitat_placement_validation;
 mod animal_lineage_reference_cleanup;
 pub(crate) mod animal_presentation_attachment;
 mod animal_release_execution;
 mod animal_spawn_operation_contracts;
 mod animal_spawn_request_execution;
-mod animal_spawn_resolution;
-mod animal_spawn_resolution_types;
+pub(crate) mod animal_spawn_resolution;
+pub(crate) mod animal_spawn_resolution_types;
 pub(crate) mod types;
 mod ui_actions;
 
@@ -25,10 +26,10 @@ use bevy::prelude::*;
 
 use crate::plugins::placement::ObjectPlacementPreviewUpdateSet;
 use crate::{
-    application_lifecycle::GamePhase,
     application_schedule::{FixedGameSet, GameSet},
     plugins::simulation_time::simulation_control_application::simulation_is_running,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use animal_adoption_contracts::{
     AdoptAnimal, AnimalAdopted, BeginAnimalAdoptionPlacement, DeclineCurrentAnimalAdoptionOffers,
@@ -74,6 +75,11 @@ impl Plugin for AnimalLifecyclePlugin {
                     .after(ObjectPlacementPreviewUpdateSet),
             )
             .add_systems(
+                Update,
+                animal_presentation_attachment::project_animal_animation_owners
+                    .in_set(GameSet::Presentation),
+            )
+            .add_systems(
                 FixedUpdate,
                 animal_ageing_execution::
                     advance_animal_life_stages_from_elapsed_simulation_time
@@ -93,6 +99,7 @@ impl Plugin for AnimalLifecyclePlugin {
                         reject_animal_adoptions_after_rejected_transactions,
                     animal_spawn_request_execution::
                         spawn_animals_requested_by_gameplay_operations,
+                    animal_birth_execution::complete_due_animal_pregnancies,
                 )
                     .chain()
                     .in_set(FixedGameSet::Act)

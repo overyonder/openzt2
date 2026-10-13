@@ -8,8 +8,52 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::hotkey::UiDocumentHotkeyControlState;
 
 use crate::plugins::input::input_types::ActionSource;
+use crate::plugins::input::{
+    input_types::{GameAction, GameActionInputBindings, InputChord},
+    keyboard_and_mouse_input_translation::input_chord_was_just_pressed_by_keyboard_or_mouse,
+};
 
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct AuthoredHotkeyGameplayInputOverlap<'w, 's> {
+    hotkeys: Query<'w, 's, &'static UiAuthoredHotkeyKeyboardActivationBinding>,
+    bindings: Res<'w, GameActionInputBindings>,
+    keys: Res<'w, ButtonInput<KeyCode>>,
+    buttons: Res<'w, ButtonInput<MouseButton>>,
+}
+
+impl AuthoredHotkeyGameplayInputOverlap<'_, '_> {
+    pub(crate) fn uses_just_translated_game_action_chord(
+        &self,
+        node: Entity,
+        action: GameAction,
+    ) -> bool {
+        let Ok(hotkey) = self.hotkeys.get(node) else {
+            return false;
+        };
+        self.bindings
+            .entries
+            .iter()
+            .filter(|binding| binding.action == action)
+            .flat_map(|binding| std::iter::once(binding.primary).chain(binding.alternate))
+            .any(|chord| {
+                let contains_key = match chord {
+                    InputChord::Key(key) | InputChord::ModifiedKey { key, .. } => key == hotkey.key,
+                    InputChord::KeyPair(first, second) => {
+                        first == hotkey.key || second == hotkey.key
+                    }
+                    _ => false,
+                };
+                contains_key
+                    && input_chord_was_just_pressed_by_keyboard_or_mouse(
+                        chord,
+                        &self.keys,
+                        &self.buttons,
+                    )
+            })
+    }
+}
 
 /// A hotkey proxy. It names its receiver by document preorder index and
 /// deliberately has no `UiNodeId`, so node lookups never mistake it for the

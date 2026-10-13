@@ -4,15 +4,13 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::{
-    assets::scene_prefab::ScenePrefabAsset,
-    plugins::{
-        animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets,
-        world_spawn::prefab_presentation_types::{
-            PrefabPresentation, PrefabPresentationHydrated, PrefabShadowPolicy,
-        },
+use crate::plugins::{
+    animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets,
+    world_spawn::prefab_presentation_types::{
+        PrefabPresentation, PrefabPresentationHydrated, PrefabShadowPolicy,
     },
 };
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use super::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;

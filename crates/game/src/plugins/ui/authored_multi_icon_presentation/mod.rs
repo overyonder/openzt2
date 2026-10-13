@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{node_layout::UiNodeRegionMetric, widget::UiWidgetRecord};
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::authored_ui_node_projection_components::{
     UiDocumentOwner, UiDocumentRoot, UiNodeId, UiValue,

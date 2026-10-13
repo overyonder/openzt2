@@ -4,14 +4,12 @@ use openzt2_game_data::ui_document::action::{
     UiTrigger,
 };
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_selection_state::UiSelected,
-    },
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_selection_state::UiSelected,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::information_view_types::{InformationViewClass, InformationViewFilters};
 use crate::plugins::ui::authored_ui_action_projection_components::UiInformationActions;

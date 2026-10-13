@@ -36,6 +36,7 @@ impl UiDocumentRole {
             Self::Zoopedia => "zoopedia",
             Self::Scenario => "scenario",
             Self::ChallengeOffer => "challenge-offer",
+            Self::InstantChallengeOffer => "instant-challenge-offer",
             Self::PhotoAlbum => "photo-album",
             Self::PhotoMode => "photo-mode",
             Self::AnimalCareCatalogue => "animal-care-catalogue",

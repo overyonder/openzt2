@@ -1,4 +1,5 @@
 use arrayvec::ArrayVec;
+mod compatibility_fixtures;
 use bevy::prelude::*;
 use openzt2_game_data::behavior::scalar::BehaviorScalarQ16;
 use openzt2_game_data::{
@@ -15,21 +16,19 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::{
-    assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-    plugins::{
-        animal_behavior::behavior_fact_modification::apply_supported_current_behavior_fact_modifications,
-        animal_health::types::{FreezeAnimal, ThawAnimal},
-        animal_welfare::types::{
-            AdjustBathroom, AdjustExercise, AdjustHealthNeed, AdjustHunger, AdjustHygiene,
-            AdjustPrivacy, AdjustRest, AdjustSocial, AdjustStimulation, AdjustThirst,
-        },
-        behavior_task_execution_types::{BehaviorTaskExecutionPhase, BehaviorTaskExecutionState},
-        feeding::container_quantity::{FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16},
-        simulation_time::simulation_clock_types::ZooClock,
-        staff::staff_employment_types::Staff,
+use crate::plugins::{
+    animal_behavior::behavior_fact_modification::apply_supported_current_behavior_fact_modifications,
+    animal_health::types::{FreezeAnimal, ThawAnimal},
+    animal_welfare::types::{
+        AdjustBathroom, AdjustExercise, AdjustHealthNeed, AdjustHunger, AdjustHygiene,
+        AdjustPrivacy, AdjustRest, AdjustSocial, AdjustStimulation, AdjustThirst,
     },
+    behavior_task_execution_types::{BehaviorTaskExecutionPhase, BehaviorTaskExecutionState},
+    feeding::container_quantity::{FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16},
+    simulation_time::simulation_clock_types::ZooClock,
+    staff::staff_employment_types::Staff,
 };
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 fn install_action_app() -> (App, Entity, Entity) {
     let mut app = App::new();
@@ -54,12 +53,13 @@ fn install_action_app() -> (App, Entity, Entity) {
     let target = app
         .world_mut()
         .spawn(FoodContainer {
-            food: AssetId::from_key("FoodDish_Meat"),
+            food: AssetId::from_key("fooddish_meat"),
             amount_q16: 0,
             capacity_q16: AUTHORED_CONTAINER_CAPACITY_Q16,
         })
         .id();
     let actor = app.world_mut().spawn(Staff).id();
+    let _ = compatibility_fixtures::install_definitions(&mut app, actor, target);
     (app, actor, target)
 }
 
@@ -76,6 +76,7 @@ fn add_food_level_action(app: &mut App, delta_q16: i32) -> Handle<BehaviorDocume
         priority: None,
         task_delay_seconds: None,
         reservation_tag: None,
+        sensor_tag: None,
         subjects: Vec::new(),
         targets: Vec::new(),
         objects: Vec::new(),
@@ -96,11 +97,19 @@ fn attach_task(
     target: Entity,
     document: Handle<BehaviorDocumentAsset>,
 ) {
+    let program = app
+        .world()
+        .resource::<Assets<BehaviorDocumentAsset>>()
+        .get(&document)
+        .unwrap()
+        .behavior_task_at_index(0)
+        .unwrap()
+        .id;
     app.world_mut()
         .entity_mut(actor)
         .insert(BehaviorTaskExecutionState {
             execution_id: 1,
-            program: AssetId::from_key("test:food"),
+            program,
             target: Some(target),
             document,
             declaration: 0,
@@ -108,6 +117,7 @@ fn attach_task(
             action: 0,
             repetitions: 0,
             next_action_tick: 0,
+            object: None,
             interaction_slot: None,
             stack: ArrayVec::new(),
         });
@@ -188,6 +198,7 @@ fn non_food_level_operation_still_requires_animal_owner() {
                 priority: None,
                 task_delay_seconds: None,
                 reservation_tag: None,
+                sensor_tag: None,
                 subjects: Vec::new(),
                 targets: Vec::new(),
                 objects: Vec::new(),

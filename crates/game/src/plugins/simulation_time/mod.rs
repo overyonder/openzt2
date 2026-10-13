@@ -5,26 +5,26 @@ pub(crate) mod simulation_control_application;
 pub(crate) mod simulation_control_types;
 pub(crate) mod simulation_control_ui_presentation;
 pub(crate) mod simulation_time_world_lifecycle;
-mod zoo_calendar_calculation;
+pub(crate) mod zoo_calendar_calculation;
 mod zoo_clock_advancement;
 mod zoo_date_ui_presentation;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub struct SimulationTimePlugin;
 
 use simulation_clock_types::{ZooCalendar, ZooDayAdvanced, ZooYearAdvanced};
 use simulation_control_types::{
-    SetSimulationPaused, SetSimulationSpeed, SimulationControl, SimulationControlChanged,
+    SetSimulationSpeed, SimulationControl, SimulationControlChanged, SimulationPauseRequest,
 };
 
 impl Plugin for SimulationTimePlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<SetSimulationSpeed>()
-            .add_message::<SetSimulationPaused>()
+            .add_message::<SimulationPauseRequest>()
             .add_message::<SimulationControlChanged>()
             .add_message::<ZooDayAdvanced>()
             .add_message::<ZooYearAdvanced>()
@@ -45,16 +45,26 @@ impl Plugin for SimulationTimePlugin {
                 simulation_control_application::apply_requested_simulation_control_changes
                     .in_set(GameSet::Intent)
                     .after(simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world)
+                    .after(crate::plugins::shell::ShellNavigationAfterSettings)
                     .run_if(resource_exists::<SimulationControl>),
             )
             .add_systems(
                 Update,
-                (
-                    simulation_control_action_routing::route_pause_game_action_to_simulation_control_requests,
-                    simulation_control_action_routing::route_authored_ui_simulation_actions_to_simulation_control_requests,
-                )
+                simulation_control_action_routing::route_pause_game_action_to_simulation_control_requests
                     .in_set(GameSet::Intent)
                     .before(simulation_control_application::apply_requested_simulation_control_changes),
+            )
+            .add_systems(
+                Update,
+                simulation_control_action_routing::route_authored_ui_simulation_actions_to_simulation_control_requests
+                    .in_set(crate::plugins::ui::UiSet::Routing),
+            )
+            .add_systems(
+                Update,
+                simulation_control_application::reconcile_authored_ui_temporary_pause_holds
+                    .after(crate::plugins::ui::UiSet::Notifications)
+                    .in_set(GameSet::Ui)
+                    .run_if(resource_exists::<SimulationControl>),
             )
             .add_systems(
                 Update,
@@ -62,6 +72,7 @@ impl Plugin for SimulationTimePlugin {
                     zoo_date_ui_presentation::project_authoritative_zoo_calendar_into_authored_zoo_date_text
                         .run_if(resource_exists::<ZooCalendar>),
                     simulation_control_ui_presentation::project_simulation_pause_state_into_authored_paused_node_visibility
+                        .after(simulation_control_application::reconcile_authored_ui_temporary_pause_holds)
                         .run_if(resource_exists::<SimulationControl>),
                 )
                     .in_set(GameSet::Ui)

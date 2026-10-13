@@ -5,18 +5,16 @@ use openzt2_game_data::ui_document::{
     action::persistence::UiPersistenceAction, document::UiDocumentRole,
 };
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_reusable_list_and_table_runtime_types::{UiListPolicy, UiListRow},
-        authored_text_edit_bevy_adaptation::UiTextEditPolicy,
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_node_projection_components::UiValue,
-        authored_ui_selection_state::UiSelected,
-        ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
-    },
+use crate::plugins::ui::{
+    authored_reusable_list_and_table_runtime_types::{UiListPolicy, UiListRow},
+    authored_text_edit_bevy_adaptation::UiTextEditPolicy,
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_node_projection_components::UiValue,
+    authored_ui_selection_state::UiSelected,
+    ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     persistence_failure_types::{
@@ -34,6 +32,44 @@ use super::{
 };
 use crate::plugins::ui::authored_ui_action_projection_components::UiPersistenceActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
+
+/// Queue the receiver before the same activation's presentation actions hide
+/// its opener. The queue owns the transfer until projection takes it over.
+pub(super) fn route_authored_save_dialog_opening_requests(
+    mut activations: MessageReader<UiNodeActivated>,
+    documents: Res<Assets<UiDocumentAsset>>,
+    nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
+    roots: Query<(&UiDocumentRoot, &ChildOf)>,
+    dialog_owner: GameViewDocumentOwner,
+    control: Option<
+        Res<crate::plugins::simulation_time::simulation_control_types::SimulationControl>,
+    >,
+    mut roles: ResMut<crate::plugins::ui::ui_document_lifecycle_contracts::UiRoleRequests>,
+) {
+    for activation in activations.read() {
+        let Ok((actions, owner)) = nodes.get(activation.node) else {
+            continue;
+        };
+        let Ok((root, lifecycle_owner)) = roots.get(owner.0) else {
+            continue;
+        };
+        let Some(document) = documents.get(&root.document) else {
+            continue;
+        };
+        if actions.authored_action_records(document).any(|record| {
+            record.trigger == activation.trigger
+                && record.action == UiPersistenceAction::OpenSaveSlotCatalogueForSaving
+        }) {
+            roles.request_preserving_temporary_pause(
+                UiDocumentRole::SaveGame,
+                dialog_owner.owner(lifecycle_owner.parent()),
+                control
+                    .as_deref()
+                    .is_some_and(|control| control.temporary_ui_pause_is_held()),
+            );
+        }
+    }
+}
 
 pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
@@ -101,6 +137,8 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                                     }))
                                 .then(|| text.value().to_string())
                             });
+                    info!(target: "openzt2_persistence", document = ?ui_document_owner.0,
+                        slot, draft = ?submitted_world_display_name, "save dialog submission");
                     if let Some(name) = submitted_world_display_name {
                         let name = name.trim();
                         if name.is_empty() || name.chars().any(char::is_control) {
@@ -207,12 +245,14 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     } else {
                         UiDocumentRole::SavedGames
                     };
-                    persistence_action_messages
-                        .show_ui_document_requests
-                        .write(ShowUiRole {
-                            role,
-                            owner: dialog_owner.owner(lifecycle_owner.parent()),
-                        });
+                    if role != UiDocumentRole::SaveGame {
+                        persistence_action_messages
+                            .show_ui_document_requests
+                            .write(ShowUiRole {
+                                role,
+                                owner: dialog_owner.owner(lifecycle_owner.parent()),
+                            });
+                    }
                     persistence_action_messages
                         .load_save_slot_catalogue_requests
                         .write(LoadSaveSlotCatalogue);

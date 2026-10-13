@@ -5,17 +5,65 @@ use openzt2_game_data::ui_document::{
         presentation::UiPresentationAction,
     },
     document::UiDocumentRole,
+    node_property_binding::UiBooleanPropertyBindingSource,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::persistence::save_slot_types::WorldSnapshotLoadedFromSlot;
+use crate::plugins::{
+    camera::camera_runtime_state_types::{CameraMode, ZooCamera},
+    immersive_modes::immersive_mode_state_types::{ActiveImmersiveMode, ImmersiveMode},
+};
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
+use super::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use super::authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot};
 use super::authored_ui_selection_binding::UiSelectedBinding;
 use super::authored_ui_selection_state::UiSelected;
 use crate::plugins::ui::authored_ui_action_projection_components::{
     UiImmersiveModeActions, UiInformationActions, UiPresentationActions,
 };
+
+pub(super) fn reflect_accepted_camera_mode_in_main_toolbar(
+    cameras: Query<(Entity, &CameraMode), With<ZooCamera>>,
+    immersive_modes: Query<&ActiveImmersiveMode>,
+    mut buttons: Query<(
+        &UiSelectedBinding,
+        &mut UiSelected,
+        &mut UiPreviousSelection,
+    )>,
+) {
+    let camera = cameras.single().ok();
+    let active = camera.and_then(|(camera, _)| {
+        immersive_modes
+            .iter()
+            .find(|active| active.camera == camera)
+    });
+    let photo = active.is_some_and(|active| active.mode == ImmersiveMode::Photo)
+        && camera.is_some_and(|(_, mode)| *mode == CameraMode::Free);
+    for (binding, mut selected, mut previous) in &mut buttons {
+        let current = match &binding.0 {
+            UiBooleanPropertyBindingSource::OverheadViewSelected => {
+                camera.is_some_and(|(_, mode)| {
+                    // Guest view and ordinary follow-camera use remain within
+                    // the authored overhead branch.
+                    *mode == CameraMode::Overhead
+                        || matches!(mode, CameraMode::Follow(_))
+                            && active.is_none_or(|active| active.mode == ImmersiveMode::GuestView)
+                })
+            }
+            UiBooleanPropertyBindingSource::FirstPersonViewSelected => {
+                camera.is_some_and(|(_, mode)| matches!(mode, CameraMode::FirstPerson(_)))
+            }
+            UiBooleanPropertyBindingSource::PhotoViewSelected => photo,
+            _ => continue,
+        };
+        if selected.0 != current {
+            selected.0 = current;
+            // Reflection must not re-run a mode's authored On/Off commands.
+            previous.synchronize_with_non_authored_selection_change(current);
+        }
+    }
+}
 
 /// Restores the initial toggle presentation established by the original
 /// `setup_main_gui_toolbar` after UI document projects the authored HUD and after a

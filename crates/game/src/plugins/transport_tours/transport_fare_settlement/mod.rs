@@ -43,6 +43,7 @@ pub(super) fn complete_paid_transport_trips_and_publish_guest_reactions(
             rating: pending_fare.rating,
         });
         guest_reactions.write(GuestReaction {
+            view_event: None,
             guest: pending_fare.guest,
             subject: pending_fare.circuit,
             kind: GuestMemoryKind::Tour,

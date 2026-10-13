@@ -2,12 +2,12 @@ use std::collections::HashSet;
 
 use openzt2_game_data::AssetId;
 
+use crate::game_session_types::WorldSessionMode;
 use crate::plugins::animal_lifecycle::adoption_offer_inventory_types::{
     AnimalAdoptionOffer, AnimalAdoptionOfferInventory, AnimalAdoptionOfferSlot,
 };
-use crate::{
-    assets::species::species_asset_types::SpeciesView, plugins::progression::fame_types::Fame,
-};
+use crate::plugins::progression::fame_types::Fame;
+use openzt2_game_assets::species::species_asset_types::SpeciesView;
 
 use super::super::persistence_failure_types::WorldSnapshotPersistenceFailure;
 
@@ -18,8 +18,13 @@ const ANIMAL_ADOPTION_OFFER_SLOT_SNAPSHOT_BYTE_COUNT: usize =
 
 pub(super) fn append_encoded_animal_adoption_offer_inventory_snapshot_section(
     snapshot_section_bytes: &mut Vec<u8>,
-    inventory: &AnimalAdoptionOfferInventory,
+    inventory: Option<&AnimalAdoptionOfferInventory>,
 ) {
+    // The section envelope distinguishes absence from a present zero-slot
+    // inventory: absence has no payload, while presence retains its RNG state.
+    let Some(inventory) = inventory else {
+        return;
+    };
     let slots = inventory.slots();
     let random_state_and_stream = inventory.random_state_and_stream();
     random_state_and_stream
@@ -57,7 +62,15 @@ pub(super) fn append_encoded_animal_adoption_offer_inventory_snapshot_section(
 pub(super) fn decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
     snapshot_section_bytes: &[u8],
     declared_slot_record_count: u32,
-) -> Result<AnimalAdoptionOfferInventory, WorldSnapshotPersistenceFailure> {
+    session_mode: WorldSessionMode,
+) -> Result<Option<AnimalAdoptionOfferInventory>, WorldSnapshotPersistenceFailure> {
+    if snapshot_section_bytes.is_empty() {
+        if declared_slot_record_count != 0 {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        validate_animal_adoption_offer_inventory_presence_for_session_mode(None, session_mode)?;
+        return Ok(None);
+    }
     let slot_count = usize::try_from(declared_slot_record_count)
         .map_err(|_| WorldSnapshotPersistenceFailure::CapacityExceeded)?;
     if slot_count > usize::from(u16::MAX)
@@ -143,12 +156,24 @@ pub(super) fn decode_and_validate_animal_adoption_offer_inventory_snapshot_secti
     if reader.remaining_byte_count() != 0 {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
-    Ok(
+    Ok(Some(
         AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
             slots,
             random_state_and_stream,
         ),
-    )
+    ))
+}
+
+pub(super) fn validate_animal_adoption_offer_inventory_presence_for_session_mode(
+    inventory: Option<&AnimalAdoptionOfferInventory>,
+    session_mode: WorldSessionMode,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    match (session_mode, inventory) {
+        (WorldSessionMode::Freeform, _) | (_, Some(_)) => Ok(()),
+        (WorldSessionMode::Challenge | WorldSessionMode::Campaign, None) => {
+            Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
+        }
+    }
 }
 
 pub(super) fn validate_animal_adoption_offer_inventory_against_loaded_authored_content(
@@ -241,5 +266,78 @@ impl<'a> AnimalAdoptionOfferInventorySnapshotSectionReader<'a> {
 
     fn remaining_byte_count(&self) -> usize {
         self.bytes.len().saturating_sub(self.byte_offset)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_twelve_offer_bytes_preserve_stock_timers_and_random_state() {
+        // Independently specified little-endian payload: one populated option,
+        // one vacant option waiting 2.5 seconds, and the existing RNG header.
+        let mut payload = vec![
+            1, 2, 3, 4, 5, 6, 7, 8, 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 32, 64, 1,
+        ];
+        payload.extend_from_slice(&[0x11; 16]);
+        payload.extend_from_slice(&[3, 0, 5, 0, 0, 0, 192, 63, 1, 0, 0, 200, 64, 0, 0, 128, 62]);
+        payload.extend_from_slice(&[0; 34]);
+        let expected = AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
+            vec![
+                AnimalAdoptionOfferSlot::from_restored_adoption_offer_slot_state(
+                    [
+                        Some(AnimalAdoptionOffer::from_restored_adoption_offer_state(
+                            AssetId([0x11; 16]),
+                            [3, 5],
+                            1.5,
+                            Some(6.25),
+                            0.25,
+                        )),
+                        None,
+                    ],
+                    [0.0, 2.5],
+                ),
+            ],
+            [0x0807_0605_0403_0201, 3],
+        );
+        for mode in [
+            WorldSessionMode::Freeform,
+            WorldSessionMode::Challenge,
+            WorldSessionMode::Campaign,
+        ] {
+            let decoded = decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
+                &payload, 1, mode,
+            )
+            .unwrap();
+            assert_eq!(decoded.as_ref(), Some(&expected));
+            let mut encoded = Vec::new();
+            append_encoded_animal_adoption_offer_inventory_snapshot_section(
+                &mut encoded,
+                decoded.as_ref(),
+            );
+            assert_eq!(encoded, payload);
+        }
+
+        // The same independently specified RNG header represents a present
+        // zero-slot inventory; it must not become the absent Freeform state.
+        let zero_slots = decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
+            &payload[..16],
+            0,
+            WorldSessionMode::Freeform,
+        )
+        .unwrap();
+        let expected_zero_slots =
+            AnimalAdoptionOfferInventory::from_restored_adoption_offer_inventory_state(
+                Vec::new(),
+                [0x0807_0605_0403_0201, 3],
+            );
+        assert_eq!(zero_slots.as_ref(), Some(&expected_zero_slots));
+        let mut encoded_zero_slots = Vec::new();
+        append_encoded_animal_adoption_offer_inventory_snapshot_section(
+            &mut encoded_zero_slots,
+            zero_slots.as_ref(),
+        );
+        assert_eq!(encoded_zero_slots, payload[..16]);
     }
 }

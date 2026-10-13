@@ -2,24 +2,22 @@ use super::{
     money_types::Money,
     monthly_finance_types::{MonthlyFinance, MonthlyFinanceHistory},
 };
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+use crate::plugins::ui::{
+    authored_reusable_list_and_table_runtime_types::{
+        SetUiListRowCount, UiListPolicy, UiListRow, UiTablePolicy,
     },
-    plugins::ui::{
-        authored_reusable_list_and_table_runtime_types::{
-            SetUiListRowCount, UiListPolicy, UiListRow, UiTablePolicy,
-        },
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_text_content_binding::UiTextBinding,
-    },
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_text_content_binding::UiTextBinding,
 };
 use bevy::prelude::*;
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
+    },
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+};
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::{

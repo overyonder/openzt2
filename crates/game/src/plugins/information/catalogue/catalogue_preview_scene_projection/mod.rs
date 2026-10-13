@@ -4,6 +4,7 @@ use bevy::{
         visibility::RenderLayers, ClearColorConfig, PerspectiveProjection, RenderTarget,
         SubCameraView,
     },
+    ecs::{entity_disabling::Disabled, query::Allow},
     prelude::*,
     render::render_resource::{TextureFormat, TextureUsages},
 };
@@ -12,12 +13,12 @@ use openzt2_game_data::{
     world_definitions::world_objects::WorldObjectKind, AssetId,
 };
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
@@ -44,17 +45,27 @@ const AUTHORED_BUY_INFORMATION_PREVIEW_SIZE: UVec2 = UVec2::new(97, 85);
 const AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR: Vec3 = Vec3::new(19.5, -7.85, 6.37);
 
 #[derive(Component)]
-pub(in crate::plugins::information) struct CataloguePreviewScene {
+pub(crate) struct CataloguePreviewScene {
     definition: AssetId,
     catalogue_revision: u64,
     scene: Entity,
+}
+
+impl CataloguePreviewScene {
+    pub(crate) fn definition(&self) -> AssetId {
+        self.definition
+    }
+
+    pub(crate) fn scene(&self) -> Entity {
+        self.scene
+    }
 }
 
 #[derive(Component)]
 pub(in crate::plugins::information) struct CataloguePreviewPrefab(Handle<ScenePrefabAsset>);
 
 #[derive(Component)]
-pub(in crate::plugins::information) struct CataloguePreviewOwner(Entity);
+pub(crate) struct CataloguePreviewOwner(Entity);
 
 #[derive(Component)]
 pub(in crate::plugins::information) struct CataloguePreviewRenderable;
@@ -135,6 +146,15 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                         .then_some(fence.gate_policy.prefab)
                         .unwrap_or(fence.segments.cardinal_straight)
                     })
+                })
+                .or_else(|| {
+                    object
+                        .named_physical_presentations
+                        .iter()
+                        .find(|presentation| {
+                            presentation.required && presentation.prefab != AssetId::default()
+                        })
+                        .map(|presentation| presentation.prefab)
                 })
         });
         let Some(prefab) = prefab.and_then(|prefab| definitions.scene(prefab)) else {
@@ -252,7 +272,7 @@ pub(crate) fn synchronize_catalogue_preview_camera_activity_with_authored_image_
     }
 }
 
-pub(crate) fn hydrate_catalogue_preview_scene_prefab_render_trees(
+pub(in crate::plugins::information) fn hydrate_catalogue_preview_scene_prefab_render_trees(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     requests: Query<(Entity, &CataloguePreviewPrefab)>,
@@ -272,7 +292,7 @@ pub(crate) fn hydrate_catalogue_preview_scene_prefab_render_trees(
     }
 }
 
-pub(crate) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
+pub(in crate::plugins::information) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -310,7 +330,7 @@ pub(crate) fn attach_loaded_species_animation_to_catalogue_preview_renderables(
     }
 }
 
-pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment(
+pub(in crate::plugins::information) fn apply_authored_catalogue_preview_initial_animation_repetition_policy_after_attachment(
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     newly_resolved_animation_controllers: Query<
@@ -349,9 +369,11 @@ pub(crate) fn apply_authored_catalogue_preview_initial_animation_repetition_poli
 
 pub(crate) fn retire_catalogue_preview_scenes_without_ui_owners(
     mut commands: Commands,
-    scenes: Query<(Entity, &CataloguePreviewOwner)>,
-    owners: Query<(), With<CataloguePreviewScene>>,
+    scenes: Query<(Entity, &CataloguePreviewOwner), (Without<Camera>, Allow<Disabled>)>,
+    owners: Query<(), (With<CataloguePreviewScene>, Allow<Disabled>)>,
 ) {
+    // Cameras keep the same owner marker for activity and diagnostics. The
+    // scene root alone retires their linked hierarchy.
     for (scene, owner) in &scenes {
         if owners.get(owner.0).is_err() {
             commands.entity(scene).despawn();

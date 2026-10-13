@@ -100,6 +100,8 @@ pub(crate) struct TranquilizeRequest {
 pub(crate) struct CaptureAnimalRequest {
     pub(crate) animal: Entity,
     pub(crate) staff: Entity,
+    pub(crate) job: Entity,
+    pub(crate) execution_id: u64,
 }
 
 // Player tranquilizer-tool state, intent, presentation, and firing outcomes.
@@ -170,4 +172,6 @@ pub(crate) struct AnimalDied {
 pub(crate) struct AnimalCaptured {
     pub(crate) animal: Entity,
     pub(crate) staff: Entity,
+    pub(crate) job: Entity,
+    pub(crate) execution_id: u64,
 }

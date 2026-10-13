@@ -1,0 +1,118 @@
+# #183 G entry only: the winning overheadmode authors key release into
+# mode_first_person, whose default child is mode_super_staff. Escape and the
+# Overhead control use existing cancellation; G-to-exit is not covered here.
+# Review captures and repeat with native keyboard input before acceptance.
+start freeform-map
+snapshot journey-before
+until placement_previews == 0
+until construction_tool_active == 0
+until overhead_button_selected == 1
+until steady camera_height_m 30
+expect walking_mode_entry_requests == @journey-before
+expect walking_mode_entries == @journey-before
+expect walking_mode_cancelled_exits == @journey-before
+snapshot before-guest-shortcut
+
+# A real authored modal owns input, without a focused text editor.
+key F6
+until visible "save current game"
+expect-visible "save_button"
+expect-visible "no_button"
+key G
+wait 60
+expect-visible "save current game"
+expect walking_mode_entry_requests == @journey-before
+expect walking_mode_entries == @journey-before
+expect immersive_mode_active == 0
+expect camera_x_m == @before-guest-shortcut
+expect camera_z_m == @before-guest-shortcut
+expect camera_height_m == @before-guest-shortcut
+expect overhead_button_selected == 1
+expect-hidden "Save Game Shell"
+expect-hidden "Load Game Shell"
+key ESCAPE
+until hidden "save current game"
+until simulation_paused == @before-guest-shortcut within 120
+expect world_snapshot_save_requests == @before-guest-shortcut
+expect world_snapshot_load_requests == @before-guest-shortcut
+
+# SaveName is a document-local draft. Typing uses physical G and normal text
+# input; exact edited text proves focus, while no walking request may escape.
+key F5
+until visible "SaveName"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "g"
+until text "SaveName" "g" within 120
+wait 60
+expect walking_mode_entry_requests == @journey-before
+expect walking_mode_entries == @journey-before
+expect immersive_mode_active == 0
+expect camera_x_m == @before-guest-shortcut
+expect camera_z_m == @before-guest-shortcut
+expect camera_height_m == @before-guest-shortcut
+key ESCAPE
+until hidden "Save Game Shell"
+until simulation_paused == @before-guest-shortcut within 120
+expect world_snapshot_save_requests == @before-guest-shortcut
+
+key G
+until walking_mode_controllers == 1 within 120
+until walking_mode_entries == @journey-before+1 within 120
+until first_person_button_selected == 1 within 120
+until steady camera_height_m 30
+wait 60                         # catch duplicate or delayed entry requests
+expect walking_mode_entry_requests == @journey-before+1
+expect walking_mode_entries == @journey-before+1
+expect walking_mode_cancelled_exits == @journey-before
+expect overhead_button_selected == 0
+expect photo_button_selected == 0
+expect camera_height_m != @before-guest-shortcut
+expect camera_x_m >= @entered-map.map_min_x_m
+expect camera_x_m <= @entered-map.map_max_x_m
+expect camera_z_m >= @entered-map.map_min_z_m
+expect camera_z_m <= @entered-map.map_max_z_m
+capture guest-shortcut-entered
+key ESCAPE
+until walking_mode_controllers == 0 within 120
+until immersive_mode_active == 0 within 120
+until walking_mode_cancelled_exits == @journey-before+1 within 120
+until overhead_button_selected == 1 within 120
+until steady camera_height_m 30
+expect first_person_button_selected == 0
+expect photo_button_selected == 0
+expect camera_x_m == @before-guest-shortcut
+expect camera_z_m == @before-guest-shortcut
+expect camera_height_m == @before-guest-shortcut
+expect camera_pitch_deg == @before-guest-shortcut
+expect camera_fov_deg == @before-guest-shortcut
+expect simulation_paused == @before-guest-shortcut
+expect-hidden "In Game Options"
+capture guest-shortcut-escaped
+
+# Re-entry after cancellation uses the same accepted owner, then ordinary
+# Overhead cancellation restores the saved camera without a second controller.
+key G
+until walking_mode_controllers == 1 within 120
+until walking_mode_entries == @journey-before+2 within 120
+until first_person_button_selected == 1 within 120
+expect walking_mode_entry_requests == @journey-before+2
+click "overhead"
+until walking_mode_controllers == 0 within 120
+until walking_mode_cancelled_exits == @journey-before+2 within 120
+until overhead_button_selected == 1 within 120
+until steady camera_height_m 30
+wait 60
+expect immersive_mode_active == 0
+expect walking_mode_entry_requests == @journey-before+2
+expect walking_mode_entries == @journey-before+2
+expect camera_x_m == @before-guest-shortcut
+expect camera_z_m == @before-guest-shortcut
+expect camera_height_m == @before-guest-shortcut
+expect camera_pitch_deg == @before-guest-shortcut
+expect camera_fov_deg == @before-guest-shortcut
+expect simulation_paused == @before-guest-shortcut
+expect construction_tool_active == @before-guest-shortcut
+
+restore freeform-map

@@ -1,9 +1,15 @@
 use bevy::prelude::*;
 
 use crate::plugins::{
+    animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
+    behavior_task_execution_types::BehaviorTaskExecutionState,
     economy::facility_economy_types::Wallet,
-    guests::guest_simulation_types::{Guest, GuestSatisfaction},
-    locomotion::locomotion_types::{DockAt, NavAgent, NavigationRequestSequence, SpatialGrid},
+    economy::service_types::ServiceReservation,
+    guests::guest_simulation_types::{Guest, GuestPhase, GuestSatisfaction, Viewing},
+    locomotion::locomotion_types::{
+        Destination, DockAt, NavAgent, NavigationRequestSequence, SpatialGrid,
+    },
+    world_spawn::world_membership_types::WorldMember,
 };
 
 use super::{
@@ -13,7 +19,8 @@ use super::{
     donation_guest_decision_types::{
         DonationCandidate, DonationObservation, DonationProgress, DonationRng,
     },
-    donation_opportunity_types::{DonationAcceptor, DonationUsePoint},
+    donation_opportunity_types::{DonationAcceptor, DonationOpportunity, DonationUsePoint},
+    donation_payment_types::DonationPaymentRequested,
 };
 
 pub(super) fn choose_donation_candidates_from_new_guest_observations(
@@ -28,12 +35,20 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
             &NavAgent,
             &DonationObservation,
             &mut DonationRng,
+            &Viewing,
+            &GuestPhase,
+            &WorldMember,
         ),
         (
             With<Guest>,
             Changed<DonationObservation>,
             Without<DonationCandidate>,
             Without<DonationProgress>,
+            Without<DonationPaymentRequested>,
+            Without<Destination>,
+            Without<BehaviorTaskExecutionState>,
+            Without<PendingBehaviorSet>,
+            Without<ServiceReservation>,
         ),
     >,
     acceptors: Query<(
@@ -41,7 +56,9 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
         &DonationAcceptor,
         &DonationUsePoint,
         &GlobalTransform,
+        &WorldMember,
     )>,
+    subjects: Query<&WorldMember, With<DonationOpportunity>>,
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut docking_requests: MessageWriter<DockAt>,
 ) {
@@ -53,12 +70,24 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
         navigation_agent,
         observation,
         mut donation_rng,
+        viewing,
+        phase,
+        world,
     ) in &mut guests
     {
+        if *phase != GuestPhase::Visiting
+            || *viewing != observation.viewing
+            || !subjects
+                .get(viewing.subject)
+                .is_ok_and(|subject| subject.root == world.root)
+        {
+            continue;
+        }
         let Some((acceptor, use_point)) = find_nearest_matching_donation_acceptor(
             &spatial_grid,
             guest_transform.translation(),
             *observation,
+            world.root,
             &acceptors,
         ) else {
             continue;
@@ -100,11 +129,13 @@ fn find_nearest_matching_donation_acceptor(
     spatial_grid: &SpatialGrid,
     guest_position: Vec3,
     observation: DonationObservation,
+    world: Entity,
     acceptors: &Query<(
         Entity,
         &DonationAcceptor,
         &DonationUsePoint,
         &GlobalTransform,
+        &WorldMember,
     )>,
 ) -> Option<(Entity, DonationUsePoint)> {
     if !spatial_grid.cell_size_m.is_finite() || spatial_grid.cell_size_m <= 0.0 {
@@ -118,10 +149,13 @@ fn find_nearest_matching_donation_acceptor(
     // Donation acceptors are static world objects, not locomotion agents, so
     // they deliberately do not live in the agent-only avoidance grid. This
     // query runs only when a guest receives a new viewing observation.
-    for (acceptor_entity, acceptor, use_point, acceptor_transform) in acceptors.iter() {
+    for (acceptor_entity, acceptor, use_point, acceptor_transform, member) in acceptors.iter() {
+        if member.root != world {
+            continue;
+        }
         if acceptor
             .beneficiary
-            .is_some_and(|beneficiary| beneficiary != observation.subject)
+            .is_some_and(|beneficiary| beneficiary != observation.viewing.subject)
         {
             continue;
         }

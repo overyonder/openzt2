@@ -8,7 +8,7 @@ pub(crate) mod animation_graph_transition_operations;
 pub(crate) mod animation_presentation_relationship_types;
 mod authored_animation_graph_edge_blend_duration_interpretation;
 mod embedded_gltf_animation_asset_resolution;
-mod model_animation_asset_attachment;
+pub(crate) mod model_animation_asset_attachment;
 pub(crate) mod model_animation_asset_binding_types;
 
 use bevy::prelude::*;

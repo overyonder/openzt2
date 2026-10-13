@@ -10,7 +10,7 @@ pub(crate) struct TerrainRenderChunk;
 /// Ordinary Bevy image owned by the chunk material and recomposed after
 /// authored surface edits.
 #[derive(Component, Debug, Clone)]
-pub(super) struct TerrainSurfaceImage(pub Handle<Image>);
+pub(crate) struct TerrainSurfaceImage(pub Handle<Image>);
 
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub(super) struct TerrainChunkRejected;

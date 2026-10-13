@@ -1,12 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::animation::animation_set::AuthoredAnimationGraphNode;
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::animation_playback::animation_playback_controller_types::{
-        AnimationPlaybackController, AnimationPlaybackState,
-    },
+use crate::plugins::animation_playback::animation_playback_controller_types::{
+    AnimationPlaybackController, AnimationPlaybackState,
 };
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::{
     animation_graph_playback_message_types::{
@@ -19,10 +17,20 @@ use super::{
     model_animation_asset_binding_types::ModelAnimationAssetLibrary,
 };
 
+/// A request whose clip the subject's manifest names but has not loaded yet.
+/// Manifest clips load on demand, so the request waits for its own load.
+pub(crate) struct DeferredAnimationClipPlaybackRequest {
+    request: AnimationClipPlaybackRequest,
+    request_id: usize,
+}
+
+#[allow(clippy::too_many_lines)]
 pub(crate) fn execute_explicit_animation_clip_playback_requests(
-    animation_set_assets: Res<Assets<AnimationSetAsset>>,
+    asset_server: Res<AssetServer>,
+    mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,
     mut animation_clip_requests: MessageReader<AnimationClipPlaybackRequest>,
     mut rejected_animation_clip_requests: MessageWriter<AnimationClipPlaybackRequestRejected>,
+    mut deferred_requests: Local<Vec<DeferredAnimationClipPlaybackRequest>>,
     mut animation_playback_controllers: Query<(
         Entity,
         &AnimationPresentationOwner,
@@ -32,7 +40,26 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
         Option<&AnimationGraphEnabled>,
     )>,
 ) {
-    for (animation_clip_request, request_id) in animation_clip_requests.read_with_id() {
+    let new_requests = animation_clip_requests
+        .read_with_id()
+        .map(|(request, id)| DeferredAnimationClipPlaybackRequest {
+            request: request.clone(),
+            request_id: id.id,
+        })
+        .collect::<Vec<_>>();
+    // A newer request for the same subject supersedes one still loading.
+    deferred_requests.retain(|deferred| {
+        !new_requests.iter().any(|request| {
+            request.request.animation_subject_entity == deferred.request.animation_subject_entity
+        })
+    });
+    let pending_requests = std::mem::take(&mut *deferred_requests);
+    for DeferredAnimationClipPlaybackRequest {
+        request: animation_clip_request,
+        request_id,
+    } in pending_requests.into_iter().chain(new_requests)
+    {
+        let animation_clip_request = &animation_clip_request;
         let mut started = false;
         for (
             animation_playback_controller_entity,
@@ -104,7 +131,7 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             animation_playback_controller.playback_generation = animation_playback_controller
                 .playback_generation
                 .wrapping_add(1);
-            animation_playback_controller.explicit_clip_request_id = Some(request_id.id);
+            animation_playback_controller.explicit_clip_request_id = Some(request_id);
             animation_playback_controller
                 .animation_clip_asset_key
                 .clone_from(&animation_clip_request.animation_clip_asset_key);
@@ -118,12 +145,54 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             started = true;
             break;
         }
-        if !started {
+        if started {
+            continue;
+        }
+        // Start loading a clip the subject's manifest names; the request
+        // retries each update until the clip loads or its load fails.
+        let loading = animation_playback_controllers.iter().any(
+            |(controller, owner, library, _, _, enabled)| {
+                (controller == animation_clip_request.animation_subject_entity
+                    || owner.gameplay_entity == animation_clip_request.animation_subject_entity)
+                    && enabled.is_none_or(|enabled| enabled.0)
+                    && library
+                        .loaded_model_animation_set_asset_handles
+                        .iter()
+                        .any(|handle| {
+                            let key = &animation_clip_request.animation_clip_asset_key;
+                            let Some(set) = animation_set_assets.get(handle) else {
+                                return false;
+                            };
+                            if set.animation_clip_asset_load_is_pending(key) {
+                                return true;
+                            }
+                            // Only an unloaded, unfailed manifest clip starts
+                            // a load; reading first avoids marking the set
+                            // changed while its load is already underway.
+                            set.find_animation_clip_record_by_asset_key(key).is_none()
+                                && !set.animation_clip_asset_load_has_failed(key)
+                                && set
+                                    .find_animation_clip_source_reference_by_asset_key(key)
+                                    .is_some()
+                                && animation_set_assets.get_mut(handle).is_some_and(|mut set| {
+                                    set.request_animation_clip_asset_load(&asset_server, key)
+                                })
+                        })
+            },
+        );
+        if loading {
+            deferred_requests.push(DeferredAnimationClipPlaybackRequest {
+                request: animation_clip_request.clone(),
+                request_id,
+            });
+            continue;
+        }
+        {
             warn!(subject = ?animation_clip_request.animation_subject_entity,
                 clip = %animation_clip_request.animation_clip_asset_key,
                 "explicit animation clip has no ready enabled presentation containing the clip");
             rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
-                request_id: request_id.id,
+                request_id,
                 animation_subject_entity: animation_clip_request.animation_subject_entity,
                 animation_clip_asset_key: animation_clip_request.animation_clip_asset_key.clone(),
             });
@@ -158,7 +227,8 @@ mod tests {
     fn missing_presentation_rejects_the_exact_requested_clip() {
         let mut application = App::new();
         application
-            .init_resource::<Assets<AnimationSetAsset>>()
+            .add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<AnimationSetAsset>()
             .add_message::<AnimationClipPlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
             .add_systems(Update, execute_explicit_animation_clip_playback_requests);

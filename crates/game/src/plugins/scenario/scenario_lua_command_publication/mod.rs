@@ -17,7 +17,30 @@ pub(super) fn publish_commands_produced_by_scenario_lua_script(
     award_points: &mut MessageWriter<AdjustScenarioAwardPointTotalRequest>,
     challenge_offers: &mut MessageWriter<CreateScenarioChallengeOfferFromLuaSourcePathRequest>,
     panels: &mut MessageWriter<super::challenge_offer_types::ScenarioChallengePanelRequest>,
+    shown_rules: &mut MessageWriter<super::scenario_objective_types::ShowScenarioRuleRequest>,
+    available_content: &mut MessageWriter<
+        crate::plugins::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest,
+    >,
+    photo_challenge_sets: &mut MessageWriter<
+        super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest,
+    >,
 ) {
+    if let Some(set) = result.current_photo_challenge_set {
+        photo_challenge_sets.write(
+            super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest {
+                set,
+            },
+        );
+    }
+    for definition in result.available_content {
+        available_content.write(
+            crate::plugins::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest {
+                source: terminal,
+                definition,
+            },
+        );
+    }
+    let _ = shown_rules.write_batch(result.shown_rules);
     if let Some(panel) = result.challenge_panel {
         panels.write(panel);
     }

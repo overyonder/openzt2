@@ -5,6 +5,7 @@ use crate::plugins::habitat::habitat_types::Containment;
 
 use super::{
     animal_navigation_policy::AnimalNavigationPolicy,
+    fence_navigation_policy::FenceNavigationPolicy,
     locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Destination, DirectLocomotion, LocomotionCapacity,
         LocomotionMode, NavAgent, NavigationFailed, NavigationFailure, NavigationOverlay, Route,
@@ -21,6 +22,7 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     mut route_planning_scratch: Local<RouteScratch>,
     animal_policy: AnimalNavigationPolicy,
+    fence_policy: FenceNavigationPolicy,
     mut navigation_agents_with_changed_destinations: Query<
         (
             Entity,
@@ -73,13 +75,37 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
             continue;
         }
         let route_planning_result = animal_policy
-            .agent_with_authored_radius(navigation_agent, animal_variant)
-            .and_then(|navigation_agent| {
+            .agent_with_authored_collision_limits(navigation_agent, animal_variant)
+            .and_then(|(navigation_agent, maximum_ground_slope_radians)| {
                 plan_route(
                     terrain_navigation_graph,
-                    &navigation_overlay,
+                    |from, to| {
+                        navigation_overlay
+                            .fence_crossings(from, to)
+                            .iter()
+                            .any(|fence| {
+                                fence_policy.fence_blocks_actor(
+                                    *fence,
+                                    navigation_agent.capabilities,
+                                    fence_policy
+                                        .actor_types
+                                        .actor_types(navigation_agent_entity),
+                                )
+                            })
+                    },
+                    |from, to| {
+                        fence_policy.world_segment_blocks_actor(
+                            from,
+                            to,
+                            navigation_agent.capabilities,
+                            fence_policy
+                                .actor_types
+                                .actor_types(navigation_agent_entity),
+                        )
+                    },
                     &navigation_agent,
                     locomotion_mode.copied().unwrap_or_default(),
+                    maximum_ground_slope_radians,
                     global_transform.translation(),
                     destination.world,
                     &mut planned_route,
@@ -87,6 +113,31 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
                 )
             });
         if let Err(navigation_failure_reason) = route_planning_result {
+            // An exhausted search leaves the nodes reachable from the start
+            // closed; their count and extent show what encloses the agent.
+            let (reachable_nodes, reachable_min_cm, reachable_max_cm) = route_planning_scratch
+                .closed
+                .iter()
+                .enumerate()
+                .filter(|(_, closed)| **closed)
+                .filter_map(|(node, _)| {
+                    terrain_navigation_graph
+                        .calculate_navigation_node_world_position_centimetres(node as u32)
+                })
+                .fold(
+                    (0_u32, [i32::MAX; 3], [i32::MIN; 3]),
+                    |(count, minimum, maximum), position| {
+                        (
+                            count + 1,
+                            std::array::from_fn(|axis| minimum[axis].min(position[axis])),
+                            std::array::from_fn(|axis| maximum[axis].max(position[axis])),
+                        )
+                    },
+                );
+            debug!(agent = ?navigation_agent_entity, reason = ?navigation_failure_reason,
+                start = ?global_transform.translation(), destination = ?destination.world,
+                capabilities = ?navigation_agent.capabilities, reachable_nodes,
+                ?reachable_min_cm, ?reachable_max_cm, "route planning failed");
             planned_route.clear();
             commands
                 .entity(navigation_agent_entity)

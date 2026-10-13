@@ -210,9 +210,9 @@ pub(super) fn apply_physical_presentation_requests(
     mut commands: Commands,
     mut requests: MessageReader<PhysicalPresentationRequest>,
     mut pending: Local<Vec<PhysicalPresentationRequest>>,
-    definitions: Res<crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
-    assets: Res<Assets<crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
-    settings: Option<Res<crate::plugins::settings::graphics_settings_types::GraphicsSettings>>,
+    definitions: Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
+    assets: Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
+    settings: Option<Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>>,
     mut owners: Query<(&super::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection, &mut PhysicalPresentationControllers)>,
     presentation_owners: Query<(), With<super::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection>>,
 ) {

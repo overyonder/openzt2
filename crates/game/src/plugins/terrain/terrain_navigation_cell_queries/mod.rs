@@ -1,19 +1,19 @@
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     terrain_chunk_types::{EditedTerrainSamples, TerrainChunk},
     terrain_sample_grid_queries,
 };
 
-/// Combines the four corner samples into a cell's height and water measurements.
-pub(crate) fn read_navigation_cell_height_and_water_from_terrain_samples(
+/// Reads cell height, water and a conservative slope bound from live terrain.
+pub(crate) fn read_navigation_cell_geometry_from_terrain_samples(
     terrain_chunk: &TerrainChunk,
     terrain_asset: &TerrainAsset,
     edited_terrain_samples: Option<&EditedTerrainSamples>,
     terrain_cell: UVec2,
-) -> Option<(i32, bool)> {
+) -> Option<(i32, bool, f32)> {
     let sample_x = usize::try_from(terrain_cell.x).ok()?;
     let sample_z = usize::try_from(terrain_cell.y).ok()?;
     let terrain_cell_count = usize::from(terrain_chunk.side.checked_sub(1)?);
@@ -48,9 +48,19 @@ pub(crate) fn read_navigation_cell_height_and_water_from_terrain_samples(
             sample_z + 1,
         )?,
     ];
-    average_terrain_corner_samples_into_navigation_cell_height_and_water(
+    let (height, water) = average_terrain_corner_samples_into_navigation_cell_height_and_water(
         corner_samples.map(|sample| (i64::from(sample.height_cm), sample.water_style != 0)),
-    )
+    )?;
+    let minimum_normal_y = super::terrain_world_sampling::minimum_terrain_triangle_normal_y(
+        corner_samples.map(|sample| f32::from(sample.height_cm) * 0.01),
+        terrain_chunk.spacing_m,
+        terrain_sample_grid_queries::terrain_cell_uses_alternate_triangle_diagonal(
+            terrain_chunk,
+            terrain_asset,
+            terrain_cell,
+        )?,
+    )?;
+    Some((height, water, minimum_normal_y))
 }
 
 /// Applies the terrain-owned reduction from four corner samples to one

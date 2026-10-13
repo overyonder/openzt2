@@ -1,5 +1,7 @@
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_game_data::ui_document::{
+    action::UiTrigger, node_property_binding::UiBooleanPropertyBindingSource,
+};
 
 use super::authored_button_runtime_policy::UiButtonPolicy;
 use super::authored_ui_change_activation_dispatch::UiPreviousSelection;
@@ -24,9 +26,9 @@ impl UiAuthoredToggleGroupSelectionPolicy {
 /// Projects an authored toggle-set press into the presentation-only selected
 /// facts of its direct children.
 ///
-/// A selected binding marks the bound domain as authoritative. Those members
-/// still emit their ordinary typed activation, but UI never writes their
-/// selected fact speculatively.
+/// A selected binding marks the bound domain as authoritative. Camera-view
+/// radios request their authored On action; other bound groups are skipped.
+/// UI never writes a bound member's selected fact speculatively.
 pub(super) fn apply_authored_toggle_group_selection_transitions_from_presses(
     mut commands: Commands,
     mut activated: MessageReader<UiNodeActivated>,
@@ -35,7 +37,7 @@ pub(super) fn apply_authored_toggle_group_selection_transitions_from_presses(
     children: Query<&Children>,
     mut toggles: Query<(
         &mut UiSelected,
-        Has<UiSelectedBinding>,
+        Option<&UiSelectedBinding>,
         Option<&mut UiPreviousSelection>,
     )>,
 ) {
@@ -50,13 +52,31 @@ pub(super) fn apply_authored_toggle_group_selection_transitions_from_presses(
         let Ok(policy) = groups.get(group_entity) else {
             continue;
         };
-        let Ok((selected, bound, _)) = toggles.get(activation.node) else {
+        let Ok((selected, binding, _)) = toggles.get(activation.node) else {
             continue;
         };
-        if bound {
+        if selected.0 && !policy.allow_selected_member_repress {
             continue;
         }
-        if selected.0 && !policy.allow_selected_member_repress {
+        if let Some(binding) = binding {
+            if !matches!(
+                &binding.0,
+                UiBooleanPropertyBindingSource::OverheadViewSelected
+                    | UiBooleanPropertyBindingSource::FirstPersonViewSelected
+                    | UiBooleanPropertyBindingSource::PhotoViewSelected
+            ) {
+                continue;
+            }
+            // Camera radios request their authored On action. The domain
+            // presenter selects the winner only after the request is accepted.
+            let transition = UiNodeActivated {
+                node: activation.node,
+                source: activation.source,
+                trigger: UiTrigger::On,
+            };
+            commands.queue(move |world: &mut World| {
+                world.write_message(transition);
+            });
             continue;
         }
         let Ok(members) = children.get(group_entity) else {
@@ -69,9 +89,10 @@ pub(super) fn apply_authored_toggle_group_selection_transitions_from_presses(
             .filter(|member| *member != activation.node)
             .chain(std::iter::once(activation.node))
         {
-            let Ok((mut selected, bound, previous)) = toggles.get_mut(member) else {
+            let Ok((mut selected, binding, previous)) = toggles.get_mut(member) else {
                 continue;
             };
+            let bound = binding.is_some();
             let next = member == activation.node;
             let repressed =
                 member == activation.node && selected.0 && policy.allow_selected_member_repress;

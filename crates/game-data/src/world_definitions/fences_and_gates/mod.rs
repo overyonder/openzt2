@@ -8,7 +8,7 @@ mod fence_traversal_flag_operations;
 #[serde(transparent)]
 pub struct FenceTraversalBlockingFlags(u16);
 
-#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FenceDefinition {
     pub id: AssetId,
     pub object: AssetId,
@@ -30,11 +30,33 @@ pub struct FenceSegmentPrefabs {
     pub cardinal_curve_135: AssetId,
     pub diagonal_curve_135: AssetId,
 }
-#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FenceGatePolicy {
+    /// Animated gate model, presented beside the edge's authored segment model.
     pub prefab: AssetId,
-    pub open_animation: AssetId,
-    pub close_animation: AssetId,
+    /// Actor manifest owning the gate model's open and close clips.
+    #[serde(default)]
+    pub animation_set: AssetId,
+    pub open_animation: String,
+    pub close_animation: String,
     pub trigger_distance_cm: u16,
     pub auto_close_ticks: u32,
+    #[serde(default)]
+    pub close_distance_cm: u16,
+    /// Simulation seconds, stored as nanoseconds; independent of zoo-calendar scaling.
+    #[serde(default)]
+    pub poll_interval_ns: u64,
+    #[serde(default)]
+    pub open_for_entity_type: Option<AssetId>,
+    /// Types whose collision score becomes zero when this gate's `b_Open` is true.
+    /// None retains unconditional passage for definitions without conditional scores.
+    #[serde(default)]
+    pub open_passage_types: Option<Vec<GateOpenCollisionException>>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub struct GateOpenCollisionException {
+    pub entity_type: AssetId,
+    /// Authored ancestry categories used by the habitat boundary owner.
+    pub traversal_types: FenceTraversalBlockingFlags,
 }

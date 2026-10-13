@@ -1,8 +1,8 @@
 use bevy::prelude::{Component, Entity, Handle};
 use openzt2_game_data::AssetId;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::world_load_failure::WorldLoadFailure;
 

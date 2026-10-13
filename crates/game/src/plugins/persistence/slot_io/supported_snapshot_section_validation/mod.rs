@@ -31,15 +31,33 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
     )?;
     let world_section =
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::World);
+    let world_snapshot_record =
+        decode_and_validate_world_snapshot_section(snapshot_container_bytes, world_section)?;
     for snapshot_section in WorldSnapshotSectionKind::ENCODING_ORDER.into_iter().skip(1) {
         let section_byte_range =
             validated_snapshot_container.section_directory_entry(snapshot_section);
-        if snapshot_section == WorldSnapshotSectionKind::Animals {
+        if snapshot_section == WorldSnapshotSectionKind::Maintenance {
+            super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::Animals {
+            super::animal_snapshot_section_encoding::decode_animal_snapshot_records(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::Staff {
+            super::staff_snapshot_section_encoding::decode_staff_snapshot_records(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::AdoptionOffers {
             let section_payload_bytes = &snapshot_container_bytes[section_byte_range
                 .payload_byte_range_within_container(snapshot_container_bytes.len())?];
             decode_and_validate_animal_adoption_offer_inventory_snapshot_section(
                 section_payload_bytes,
                 section_byte_range.encoded_record_count,
+                world_snapshot_record.session_mode,
             )?;
         } else if snapshot_section == WorldSnapshotSectionKind::Aquatic {
             decode_and_validate_tank_snapshot_section(
@@ -97,6 +115,5 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
         }
     }
 
-    decode_and_validate_world_snapshot_section(snapshot_container_bytes, world_section)?;
     Ok(validated_snapshot_container)
 }

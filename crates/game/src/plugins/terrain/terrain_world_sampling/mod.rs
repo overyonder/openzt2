@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::{terrain::TerrainWaterDepth, AssetId};
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
 use super::terrain_sample_grid_queries::{
@@ -50,12 +50,8 @@ pub(crate) fn terrain_cell_averaged_normal(
     let h = |x, z| terrain_sample_height_metres(chunk, asset, edited, x, z);
     let (a, b, c, d) = (h(x, z)?, h(x + 1, z)?, h(x, z + 1)?, h(x + 1, z + 1)?);
     let alternate = terrain_cell_uses_alternate_triangle_diagonal(chunk, asset, cell)?;
-    let normal = if alternate {
-        Vec3::new(a - b, chunk.spacing_m, a - c) + Vec3::new(c - d, chunk.spacing_m, b - d)
-    } else {
-        Vec3::new(c - d, chunk.spacing_m, a - c) + Vec3::new(a - b, chunk.spacing_m, b - d)
-    }
-    .normalize_or_zero();
+    let [first, second] = terrain_triangle_gradients([a, b, c, d], chunk.spacing_m, alternate);
+    let normal = (first + second).normalize_or_zero();
     (normal != Vec3::ZERO).then_some(normal)
 }
 
@@ -183,6 +179,37 @@ fn dominant_edited_terrain_biome_channel(
         .map(|(channel, _)| channel as u32)
 }
 
+/// Upward triangle gradients in world-XZ corner order (00, 10, 01, 11).
+#[allow(clippy::many_single_char_names)] // Corner notation follows the terrain sampler.
+fn terrain_triangle_gradients([a, b, c, d]: [f32; 4], spacing: f32, alternate: bool) -> [Vec3; 2] {
+    if alternate {
+        [
+            Vec3::new(a - b, spacing, a - c),
+            Vec3::new(c - d, spacing, b - d),
+        ]
+    } else {
+        [
+            Vec3::new(c - d, spacing, a - c),
+            Vec3::new(a - b, spacing, b - d),
+        ]
+    }
+}
+
+/// A cell route crosses triangle interiors, so both must meet the slope limit.
+/// This conservative cell bound is not triangle connectivity or habitat membership.
+pub(crate) fn minimum_terrain_triangle_normal_y(
+    heights: [f32; 4],
+    spacing: f32,
+    alternate: bool,
+) -> Option<f32> {
+    if !spacing.is_finite() || spacing <= 0.0 || heights.iter().any(|height| !height.is_finite()) {
+        return None;
+    }
+    let [first, second] =
+        terrain_triangle_gradients(heights, spacing, alternate).map(Vec3::normalize_or_zero);
+    (first != Vec3::ZERO && second != Vec3::ZERO).then_some(first.y.min(second.y))
+}
+
 #[allow(clippy::many_single_char_names)] // These are the standard bilinear cell corner and local-coordinate names.
 fn triangles(
     a: f32,
@@ -194,27 +221,28 @@ fn triangles(
     z: f32,
     alternate: bool,
 ) -> (f32, Vec3) {
+    let gradients = terrain_triangle_gradients([a, b, c, d], spacing, alternate);
     if alternate {
         if x + z <= 1.0 {
             (
                 a + (b - a) * x + (c - a) * z,
-                Vec3::new(a - b, spacing, a - c).normalize_or_zero(),
+                gradients[0].normalize_or_zero(),
             )
         } else {
             (
                 d + (c - d) * (1.0 - x) + (b - d) * (1.0 - z),
-                Vec3::new(c - d, spacing, b - d).normalize_or_zero(),
+                gradients[1].normalize_or_zero(),
             )
         }
     } else if x <= z {
         (
             a + (c - a) * z + (d - c) * x,
-            Vec3::new(c - d, spacing, a - c).normalize_or_zero(),
+            gradients[0].normalize_or_zero(),
         )
     } else {
         (
             a + (b - a) * x + (d - b) * z,
-            Vec3::new(a - b, spacing, b - d).normalize_or_zero(),
+            gradients[1].normalize_or_zero(),
         )
     }
 }

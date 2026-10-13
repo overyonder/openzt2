@@ -61,6 +61,25 @@ pub struct StaffRoleDefinition {
     /// employee is drawn from. Empty roles present the role object's prefab.
     #[serde(default)]
     pub presentation_variants: Vec<StaffPresentationVariant>,
+    /// Authored `virtualNodes`: named points on the employee that behaviors
+    /// dock by, such as the spot a keeper puts food down.
+    #[serde(default)]
+    pub virtual_nodes: Vec<StaffVirtualNode>,
+}
+
+/// One named point in the employee's local space.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffVirtualNode {
+    /// Lowercase node name, the identity behaviors look nodes up by.
+    pub name: AssetId,
+    /// Offset in the employee's local space, in metres.
+    pub translation_m: [f32; 3],
+    /// Turn about the employee's up axis, in radians.
+    pub yaw_radians: f32,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]

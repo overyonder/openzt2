@@ -1,7 +1,7 @@
 use bevy::{gltf::Gltf, prelude::Assets};
 use openzt2_game_data::{scene_prefab::PrefabColliderSource, AssetId};
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 pub(crate) fn first_missing_prefab_collider_model_asset_id(
     prefab: &ScenePrefabAsset,

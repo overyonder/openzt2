@@ -8,7 +8,7 @@ use openzt2_game_data::world_definitions::{
     world_objects::WorldObjectKind,
 };
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::construction::construction_interaction_types::PlacementFailure;
 use crate::plugins::construction::construction_interaction_types::PlacementValidity;
 use crate::plugins::economy::money_types::Money;

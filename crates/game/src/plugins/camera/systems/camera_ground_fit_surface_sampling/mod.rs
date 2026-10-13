@@ -1,12 +1,12 @@
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
 use crate::plugins::terrain::terrain_chunk_types::TerrainChunk;
 use crate::plugins::terrain::terrain_chunk_types::TerrainIndex;
 use crate::plugins::terrain::terrain_world_sampling::sample_terrain;
 use crate::plugins::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 pub(super) fn sample_highest_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood(
     world_horizontal_position: Vec2,

@@ -2,13 +2,10 @@
 
 use bevy::prelude::*;
 
-use crate::{
-    assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
-    plugins::world_spawn::{
-        prefab_presentation_types::PrefabModel,
-        prefab_texture_replacements::PrefabTextureReplacements,
-    },
+use crate::plugins::world_spawn::{
+    prefab_presentation_types::PrefabModel, prefab_texture_replacements::PrefabTextureReplacements,
 };
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 /// The replaced material this primitive currently draws with.
 #[derive(Component)]

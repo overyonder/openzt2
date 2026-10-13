@@ -13,7 +13,7 @@ mod authored_drag_gesture;
 pub(crate) mod authored_globe_presentation_types;
 mod authored_globe_scene_presentation;
 mod authored_grid_layout_projection;
-mod authored_hotkey_keyboard_activation;
+pub(crate) mod authored_hotkey_keyboard_activation;
 pub(crate) mod authored_image_selection_diagnostic_override;
 pub(crate) mod authored_modal_presentation;
 pub(crate) mod authored_multi_icon_presentation;
@@ -21,7 +21,7 @@ pub(crate) mod authored_online_message_node_roles;
 mod authored_rail_camera_presentation;
 pub(crate) mod authored_reusable_list_and_table_runtime_types;
 pub(crate) mod authored_text_edit_bevy_adaptation;
-mod authored_text_physical_glyph_projection;
+pub(crate) mod authored_text_physical_glyph_projection;
 mod authored_timed_action_sequence;
 pub(crate) mod authored_toggle_selection_transitions;
 pub(crate) mod authored_tooltip_presentation;
@@ -49,7 +49,7 @@ mod authored_ui_source_rectangle_presentation;
 pub(crate) mod authored_ui_text_content_binding;
 pub(crate) mod authored_ui_text_layout_presentation;
 pub(crate) mod authored_ui_visual_types;
-mod authored_visual_layer_draw_order;
+pub(crate) mod authored_visual_layer_draw_order;
 mod authored_wheel_scroll;
 mod authored_window_interaction;
 mod controller_ui_action_routing;
@@ -87,8 +87,8 @@ use bevy::prelude::*;
 use self::ui_document_lifecycle_contracts::{
     HideUiDocument, InGameUiOwner, ShowUiDocument, ShowUiRole, UiRoleRequests,
 };
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::GameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub struct GameUiPlugin;
 
@@ -158,7 +158,7 @@ impl Plugin for GameUiPlugin {
             .add_systems(
                 Update,
                 (
-                    projection::hide_ui_documents,
+                    projection::hide_ui_documents.after(projection::resolve_ui_roles),
                     projection::resolve_ui_roles,
                     projection::project_ui_documents
                         .after(projection::hide_ui_documents)
@@ -179,7 +179,10 @@ impl Plugin for GameUiPlugin {
             )
             .add_systems(
                 Update,
-                cross_document_node_visibility::apply_pending_cross_document_node_visibility
+                (
+                    cross_document_node_visibility::apply_pending_cross_document_node_visibility,
+                    main_toolbar::reflect_accepted_camera_mode_in_main_toolbar,
+                )
                     .in_set(UiSet::DomainProjection),
             )
             .add_systems(
@@ -221,7 +224,9 @@ impl Plugin for GameUiPlugin {
                     (
                         controller_ui_action_routing::route_controller_authored_actions,
                         single_receiver_ui_cancellation::dismiss_one_active_ui_activity_from_cancel_requests
-                            .after(authored_ui_interaction_enabled_state_application::apply_authored_ui_node_interaction_enabled_state_changes),
+                            .after(authored_ui_interaction_enabled_state_application::apply_authored_ui_node_interaction_enabled_state_changes)
+                            .after(authored_text_edit_bevy_adaptation::synchronize_document_focus_into_bevy_text_input_focus)
+                            .after(authored_text_edit_bevy_adaptation::discard_pending_edits_and_focus_from_disabled_text_edits),
                         authored_ui_focus_navigation_and_activation::activate_focused_authored_ui_node_from_confirm_or_cancel
                             .after(authored_ui_focus_navigation_and_activation::navigate_authored_ui_focus_from_actions),
                         authored_ui_focus_navigation_and_activation::present_controller_authored_ui_focus
@@ -277,9 +282,9 @@ impl Plugin for GameUiPlugin {
                     (
                         graph_presentation::regenerate_visible_authored_graph_presentations_from_canonical_histories,
                         held_button_repeat::repeat_held_buttons,
-                        authored_wheel_scroll::scroll_hovered_authored_lists_or_wheel_scroll_windows_from_mouse_wheel,
+                        authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
                         scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values
-                            .after(authored_wheel_scroll::scroll_hovered_authored_lists_or_wheel_scroll_windows_from_mouse_wheel),
+                            .after(authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel),
                         slider::present_slider_values.after(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
                         slider::present_slider_value_labels.after(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
                         scrollbar_synchronization::present_authored_scrollbar_decorations_from_owned_bevy_overflow

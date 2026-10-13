@@ -6,9 +6,6 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::scenario::scenario_objective_types::ScenarioObjective;
 use crate::plugins::scenario::scenario_objective_types::ScenarioObjectiveDeadline;
 use crate::plugins::scenario::scenario_objective_types::ScenarioObjectiveProgress;
@@ -21,12 +18,17 @@ use crate::plugins::ui::authored_ui_node_projection_components::UiValue;
 use crate::plugins::ui::authored_ui_node_projection_components::UiValueBinding;
 use crate::plugins::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use crate::plugins::ui::authored_ui_text_content_binding::UiTextBinding;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 // Scenario bindings need both objective state and localized presentation data.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::plugins::information) fn project_active_scenario_status_to_authored_information_bindings(
     selected_scenario_document: Option<Res<SelectedScenarioDocument>>,
     scenario_documents: Res<Assets<WorldScenarioDocumentAsset>>,
+    world_scenarios: Res<WorldScenarios>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     zoo_clock: Res<ZooClock>,
@@ -41,13 +43,56 @@ pub(in crate::plugins::information) fn project_active_scenario_status_to_authore
     mut authored_integer_values: Query<(&UiValueBinding, &mut UiValue)>,
     mut authored_boolean_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
 ) {
-    let Some(scenario_document_asset) = selected_scenario_document
+    let world_scenarios = world_scenarios.get(&scenario_documents);
+    // Challenge maps have no selected campaign document, but their accepted
+    // challenges' objective text still projects into the goal list.
+    let selected_scenario_document = selected_scenario_document
         .as_deref()
         .and_then(|selection| scenario_documents.get(&selection.0))
+        .map(|asset| &asset.document);
+    let Some(localization_catalogue) =
+        active_localization.borrow_loaded_localization_view(&localization_assets)
     else {
         return;
     };
-    let scenario_document = &scenario_document_asset.document;
+    for (property_binding, mut projected_text) in &mut authored_text {
+        let UiTextPropertyBindingSource::ScenarioObjectiveText { objective } = &property_binding.0
+        else {
+            continue;
+        };
+        let Some(localization_key) =
+            scenario_objectives
+                .iter()
+                .find_map(|(live_objective, status, _, _)| {
+                    let record = world_scenarios?
+                        .scenario(live_objective.scenario)?
+                        .objectives
+                        .get(live_objective.record_index as usize)?;
+                    (record.id.0 == objective.0).then(|| match *status {
+                        ScenarioObjectiveStatus::Satisfied
+                            if record.success_text_key.0 != [0; 16] =>
+                        {
+                            AssetId(record.success_text_key.0)
+                        }
+                        ScenarioObjectiveStatus::Failed if record.failure_text_key.0 != [0; 16] => {
+                            AssetId(record.failure_text_key.0)
+                        }
+                        _ => AssetId(record.text_key.0),
+                    })
+                })
+        else {
+            continue;
+        };
+        projected_text.0.clear();
+        let _ = localization_catalogue.write_localized_text_with_format_arguments(
+            localization_key,
+            &[],
+            &mut projected_text.0,
+        );
+    }
+    let Some(scenario_document) = selected_scenario_document else {
+        return;
+    };
     let active_scenario_session = active_scenario_sessions.iter().next();
     let scenario_is_running = active_scenario_sessions
         .iter()
@@ -102,32 +147,11 @@ pub(in crate::plugins::information) fn project_active_scenario_status_to_authore
         };
     }
 
-    let Some(localization_catalogue) =
-        active_localization.borrow_loaded_localization_view(&localization_assets)
-    else {
-        return;
-    };
     for (property_binding, mut projected_text) in &mut authored_text {
         let localization_key = match &property_binding.0 {
             UiTextPropertyBindingSource::ScenarioDescription => active_scenario_session
                 .and_then(|session| scenario_document.find_scenario_record(session.definition))
                 .map(|scenario| AssetId(scenario.description_key.0)),
-            UiTextPropertyBindingSource::ScenarioObjectiveText { objective } => {
-                find_scenario_objective_status_by_authored_identifier(
-                    scenario_document,
-                    *objective,
-                    &scenario_objectives,
-                )
-                .map(|(record, status, _, _)| match *status {
-                    ScenarioObjectiveStatus::Satisfied if record.success_text_key.0 != [0; 16] => {
-                        AssetId(record.success_text_key.0)
-                    }
-                    ScenarioObjectiveStatus::Failed if record.failure_text_key.0 != [0; 16] => {
-                        AssetId(record.failure_text_key.0)
-                    }
-                    _ => AssetId(record.text_key.0),
-                })
-            }
             _ => continue,
         };
         let Some(localization_key) = localization_key else {

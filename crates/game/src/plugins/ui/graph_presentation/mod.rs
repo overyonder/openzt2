@@ -1,16 +1,14 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::information::InformationGraphType;
 
-use crate::{
-    assets::localization::{
-        localization_asset_types::LocalizationAsset,
-        localization_precedence_index::LocalizationPrecedenceIndex,
-    },
-    plugins::{
-        economy::monthly_finance_types::MonthlyFinanceHistory,
-        information::information_graph_types::InformationGraph,
-        progression::fame_history_types::FameHistory,
-    },
+use crate::plugins::{
+    economy::monthly_finance_types::MonthlyFinanceHistory,
+    information::information_graph_types::InformationGraph,
+    progression::fame_history_types::FameHistory,
+};
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
 };
 
 use super::graph_generated_geometry::{

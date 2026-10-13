@@ -5,7 +5,7 @@ use openzt2_game_data::ui_document::{
     node_style::{UiStyleFlags, UiStyleRecord},
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(super) fn authored_list_ancestor<'a>(
     document: &'a UiDocumentAsset,

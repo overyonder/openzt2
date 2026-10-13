@@ -15,7 +15,7 @@ pub(crate) struct InteractionCursor {
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InteractionPrefab {
     pub(crate) definition: AssetId,
-    pub(crate) handle: Handle<crate::assets::scene_prefab::ScenePrefabAsset>,
+    pub(crate) handle: Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

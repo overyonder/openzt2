@@ -16,9 +16,12 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     award_points: &'env RefCell<Vec<i32>>,
     challenge_offers: &'env RefCell<Vec<String>>,
     scenario: openzt2_game_data::AssetId,
+    shown_rules: &'env RefCell<Vec<super::scenario_objective_types::ShowScenarioRuleRequest>>,
+    available_content: &'env RefCell<Vec<openzt2_game_data::AssetId>>,
     requested_panel: &'env RefCell<
         Option<super::challenge_offer_types::ScenarioChallengePanelRequest>,
     >,
+    current_photo_challenge_set: &'env RefCell<Option<openzt2_game_data::AssetId>>,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
     let state = globals
@@ -64,16 +67,19 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     globals.set(
         "getCurrentMonth",
-        scope.create_function(move |_, ()| {
-            Ok(queries.zoo_calendar.map_or(0, |calendar| calendar.month))
-        })?,
+        // Shipped scripts compare this with months elapsed since the zoo
+        // opened: `checkchallenges` treats any value above zero as an
+        // established zoo, and `checkTimeLimit` adds months without wrapping.
+        scope.create_function(move |_, ()| Ok(queries.zoo_months_since_calendar_epoch))?,
     )?;
     globals.set(
         "getCurrentTimeOfDay",
+        // The shipped helper returns `ZT_GET_CURRENT_DAYOFMONTH`, the fraction
+        // of the current month elapsed.
         scope.create_function(move |_, ()| {
             Ok(queries
-                .zoo_clock
-                .map_or(0, |clock| u64::from(clock.tick_in_day)))
+                .zoo_month_progress
+                .map(|progress| progress.elapsed_fraction()))
         })?,
     )?;
     globals.set(
@@ -129,14 +135,64 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         "BFS_ADDSCENARIO",
         globals.get::<mlua::Function>("BFS_ADDSCENARIO")?,
     )?;
+    install_scenario_rule_visibility_command(scope, &scenario_manager, scenario, shown_rules)?;
+    scenario_manager.set(
+        "BFS_ADD_SCENARIO_OBJECT",
+        scope.create_function(move |_, (_, definition): (Table, String)| {
+            if definition.trim().is_empty() {
+                return Err(mlua::Error::runtime(
+                    "BFS_ADD_SCENARIO_OBJECT requires a definition name",
+                ));
+            }
+            available_content
+                .borrow_mut()
+                .push(openzt2_game_data::AssetId::from_key(&definition));
+            Ok(())
+        })?,
+    )?;
+    let economy_manager = lua.create_table()?;
+    economy_manager.set(
+        "ZT_GET_INFO",
+        scope.create_function(move |_, (_, request): (Table, Table)| {
+            use crate::plugins::economy::monthly_finance_types::{FinanceMetric, FinancePeriod};
+
+            if request.get::<String>("_type")? != "ZTEconomyInfo"
+                || request.get::<String>("period")? != "lifetime"
+                || request.get::<String>("category")? != "admissions"
+                || request.get::<String>("type")? != "totalUsers"
+            {
+                return Err(mlua::Error::runtime(
+                    "ZT_GET_INFO only exposes lifetime admissions totalUsers",
+                ));
+            }
+            if !queries.finance_history.has_initialized_month() {
+                return Err(mlua::Error::runtime("finance history is not initialized"));
+            }
+            Ok(queries
+                .finance_history
+                .finance_metric_value(FinanceMetric::TotalUsers, FinancePeriod::Lifetime))
+        })?,
+    )?;
     let ui_root =
         super::challenge_lua_ui::create_challenge_ui_root(lua, scope, scenario, requested_panel)?;
+    let photo_challenges =
+        super::scenario_lua_photo_challenge_queries::create_scenario_lua_photo_challenge_component(
+            lua,
+            scope,
+            queries,
+            current_photo_challenge_set,
+        )?;
+    let entity_manager = super::scenario_lua_entity_queries::create_scenario_lua_entity_manager(
+        lua, scope, queries,
+    )?;
     globals.set(
         "queryObject",
-        scope.create_function(move |lua, name: String| match name.as_str() {
+        scope.create_function(move |_, name: String| match name.as_str() {
             "BFScenarioMgr" => Ok(Value::Table(scenario_manager.clone())),
+            "ZTEconomyMgr" => Ok(Value::Table(economy_manager.clone())),
+            "BFGManager" => Ok(Value::Table(entity_manager.clone())),
             "UIRoot" => Ok(Value::Table(ui_root.clone())),
-            "ZTPhotoChallengesComponent" => Ok(Value::String(lua.create_string(&name)?)),
+            "ZTPhotoChallengesComponent" => Ok(Value::Table(photo_challenges.clone())),
             _ => Err(mlua::Error::runtime(format!(
                 "queryObject does not expose {name}"
             ))),
@@ -232,4 +288,24 @@ fn convert_lua_command_arguments_to_i32(values: MultiValue) -> mlua::Result<i32>
         .filter_map(|value| i32::try_from(value).ok())
         .next_back()
         .ok_or_else(|| mlua::Error::runtime("command requires a 32-bit integer"))
+}
+
+fn install_scenario_rule_visibility_command<'scope, 'env: 'scope>(
+    scope: &'scope Scope<'scope, 'env>,
+    scenario_manager: &Table,
+    scenario: openzt2_game_data::AssetId,
+    shown_rules: &'env RefCell<Vec<super::scenario_objective_types::ShowScenarioRuleRequest>>,
+) -> mlua::Result<()> {
+    scenario_manager.set(
+        "BFS_SHOWRULE",
+        scope.create_function(move |_, (_, name): (Table, String)| {
+            shown_rules.borrow_mut().push(
+                super::scenario_objective_types::ShowScenarioRuleRequest {
+                    scenario,
+                    rule: openzt2_game_data::AssetId::from_key(&name),
+                },
+            );
+            Ok(())
+        })?,
+    )
 }

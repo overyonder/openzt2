@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::plugins::{
+    aquatic::tank_floor_edit_types::{TankFloorEditPreparationRejected, TankFloorEditPrepared},
     economy::{account_transaction_types::TransactionRejection, money_types::Money},
     placement::placement_transaction_types::{
         ObjectPlacementEditPreparationRejected, ObjectPlacementEditPrepared,
@@ -20,6 +21,7 @@ use super::construction_transaction_types::{
 
 #[derive(Clone, Copy)]
 enum ConstructionPreparationDomain {
+    Aquatic,
     Terrain,
     Topology,
     Placement,
@@ -28,6 +30,8 @@ enum ConstructionPreparationDomain {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_construction_domain_preparation_results(
     mut commands: Commands,
+    mut prepared_tank_edits: MessageReader<TankFloorEditPrepared>,
+    mut rejected_tank_edits: MessageReader<TankFloorEditPreparationRejected>,
     mut prepared_terrain_edits: MessageReader<TerrainEditPrepared>,
     mut rejected_terrain_edits: MessageReader<TerrainEditPreparationRejected>,
     mut prepared_topology_edits: MessageReader<TopologyEditPrepared>,
@@ -41,6 +45,32 @@ pub(crate) fn collect_construction_domain_preparation_results(
     mut construction_transactions: Query<(Entity, &mut EditCommitProgress, &mut EditTransaction)>,
     mut failed_construction_commits: MessageWriter<ConstructionCommitFailed>,
 ) {
+    for prepared_edit in prepared_tank_edits.read() {
+        if accept_construction_domain_preparation(
+            &mut construction_transactions,
+            prepared_edit.transaction,
+            prepared_edit.cost,
+            ConstructionPreparationDomain::Aquatic,
+        )
+        .is_err()
+        {
+            reject_construction_preparation_cost_overflow(
+                &mut commands,
+                &mut construction_transactions,
+                &mut failed_construction_commits,
+                prepared_edit.transaction,
+            );
+        }
+    }
+    for rejected_edit in rejected_tank_edits.read() {
+        reject_construction_domain_preparation(
+            &mut commands,
+            &mut construction_transactions,
+            &mut failed_construction_commits,
+            rejected_edit.transaction,
+            rejected_edit.reason,
+        );
+    }
     for prepared_edit in prepared_terrain_edits.read() {
         if accept_construction_domain_preparation(
             &mut construction_transactions,
@@ -229,6 +259,7 @@ fn construction_preparation_domain_status(
     preparation_domain: ConstructionPreparationDomain,
 ) -> DomainAckStatus {
     match preparation_domain {
+        ConstructionPreparationDomain::Aquatic => progress.aquatic,
         ConstructionPreparationDomain::Terrain => progress.terrain,
         ConstructionPreparationDomain::Topology => progress.topology,
         ConstructionPreparationDomain::Placement => progress.placement,
@@ -240,6 +271,7 @@ fn construction_preparation_domain_status_mut(
     preparation_domain: ConstructionPreparationDomain,
 ) -> &mut DomainAckStatus {
     match preparation_domain {
+        ConstructionPreparationDomain::Aquatic => &mut progress.aquatic,
         ConstructionPreparationDomain::Terrain => &mut progress.terrain,
         ConstructionPreparationDomain::Topology => &mut progress.topology,
         ConstructionPreparationDomain::Placement => &mut progress.placement,

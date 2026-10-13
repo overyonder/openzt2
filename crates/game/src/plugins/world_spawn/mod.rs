@@ -30,6 +30,10 @@ pub(crate) mod world_membership_types;
 #[cfg(test)]
 mod persistent_id_tests;
 #[cfg(test)]
+mod world_load_failure_recovery_tests;
+#[cfg(test)]
+mod world_photo_baseline_tests;
+#[cfg(test)]
 mod world_unload_tests;
 
 mod starting_path_hydration;
@@ -72,10 +76,8 @@ mod world_object_selection;
 
 use bevy::prelude::*;
 
-use crate::{
-    application_lifecycle::GamePhase,
-    application_schedule::{FixedGameSet, GameSet},
-};
+use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(super) struct WorldSpawnPlugin;
 
@@ -102,7 +104,8 @@ impl Plugin for WorldSpawnPlugin {
                     hydrate_all_starting_paths_into_topology_once,
                     hydrate_bounded_world_prefab_record_batch,
                     apply_all_authored_world_spawn_values_once,
-                    complete_or_fail_finished_world_hydration,
+                    complete_or_fail_finished_world_hydration
+                        .in_set(world_load_completion_marker::WorldLoadCompletionSet),
                 )
                     .chain()
                     .in_set(GameSet::Intent)
@@ -111,7 +114,8 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 Update,
                 (
-                    unload_requested_worlds_and_their_members,
+                    unload_requested_worlds_and_their_members
+                        .before(accept_queued_world_load_after_required_assets_resolve),
                     world_entity_crating::remove_requested_world_entities_from_crates,
                     world_object_selection::request_selection_of_clicked_world_object_or_inspectable_ancestor,
                 )
@@ -123,6 +127,11 @@ impl Plugin for WorldSpawnPlugin {
                     advance_authored_prefab_rotation_cycles_from_elapsed_real_time,
                     advance_authored_prefab_transform_animations_from_elapsed_time,
                 )
+                    .in_set(GameSet::Presentation),
+            )
+            .add_systems(
+                Update,
+                named_physical_presentation_projection::project_named_presentation_animation_owners
                     .in_set(GameSet::Presentation),
             )
             .add_systems(

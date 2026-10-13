@@ -5,25 +5,23 @@ use openzt2_game_data::ui_document::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+use crate::plugins::ui::{
+    authored_reusable_list_and_table_runtime_types::{
+        SetUiListRowCount, UiListPolicy, UiListRow, UiTablePolicy,
     },
-    plugins::ui::{
-        authored_reusable_list_and_table_runtime_types::{
-            SetUiListRowCount, UiListPolicy, UiListRow, UiTablePolicy,
-        },
-        authored_ui_change_activation_dispatch::UiPreviousSelection,
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_node_projection_components::UiNodeId,
-        authored_ui_selection_state::UiSelected,
-        authored_ui_visual_types::UiVisualLayer,
+    authored_ui_change_activation_dispatch::UiPreviousSelection,
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_node_projection_components::UiNodeId,
+    authored_ui_selection_state::UiSelected,
+    authored_ui_visual_types::UiVisualLayer,
+};
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
     },
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 
 use super::overview_types::{OverviewLegendListState, OverviewLegendRow, OverviewMapCanvas};

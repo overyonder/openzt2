@@ -3,9 +3,9 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::animal_behavior::behavior_set_start_request_types::StartBehaviorSet;
 use crate::plugins::animal_lifecycle::types::Animal;
 use crate::plugins::guests::guest_simulation_types::Guest;
@@ -263,6 +263,7 @@ pub(super) fn observe_visible_tour_subjects_and_accumulate_rider_scores(
                         });
                     }
                     reactions.write(GuestReaction {
+                        view_event: None,
                         guest,
                         subject,
                         kind: GuestMemoryKind::Tour,

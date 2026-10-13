@@ -15,7 +15,7 @@ use super::{
 
 /// Open the load-slot menu after the save succeeds.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct OpenLoadSlotCatalogueAfterWorldSnapshotSave;
+pub(crate) struct OpenLoadSlotCatalogueAfterWorldSnapshotSave;
 
 #[derive(SystemParam)]
 pub(super) struct PersistenceUiActionMessageWriters<'w> {

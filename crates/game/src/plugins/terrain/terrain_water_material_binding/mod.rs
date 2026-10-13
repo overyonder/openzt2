@@ -1,8 +1,8 @@
 use super::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use super::terrain_water_renderer_types::WATER_RENDER_TARGET_SIDE;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use bevy::prelude::*;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::terrain::TerrainBiomeWaterPresentation;
 
 pub(super) fn bind_authored_water_surface_textures(

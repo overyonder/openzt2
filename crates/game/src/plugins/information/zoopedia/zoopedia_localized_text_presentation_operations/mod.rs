@@ -39,7 +39,7 @@ pub(super) fn project_localized_text_background_to_authored_ui_node(
         }
         return;
     };
-    let image = server.load(crate::assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path));
+    let image = server.load(openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(image_path));
     let left = add_pixel_offset_to_authored_ui_value(
         input.authored_text_node.left,
         presentation.background_offset_pixels[0],

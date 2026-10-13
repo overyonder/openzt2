@@ -1,5 +1,7 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct GateOperationSet;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Gate {
@@ -7,15 +9,11 @@ pub(crate) struct Gate {
     pub(crate) locked: bool,
 }
 
-/// Final source-selected presentation and timing for a gate. The open bit
-/// remains on `Gate`; animation state remains owned by Bevy's animator.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+/// Only the polling clock is live mechanism state. Policy is borrowed from
+/// the canonical fence definition; animation playback owns the gate's pose.
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct GateMechanism {
-    pub(crate) prefab: AssetId,
-    pub(crate) open_animation: AssetId,
-    pub(crate) close_animation: AssetId,
-    pub(crate) trigger_distance_cm: u16,
-    pub(crate) auto_close_ticks: u32,
+    pub(crate) elapsed_poll_time: std::time::Duration,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

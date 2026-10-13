@@ -3,16 +3,14 @@ use openzt2_game_data::{
     behavior::action_record::BehaviorAction, world_definitions::staff_management::StaffJobKind,
 };
 
-use crate::{
-    assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-    plugins::{
-        behavior_task_execution_types::{
-            advance_behavior_task_to_next_action, find_current_behavior_task_action,
-            BehaviorTaskExecutionState,
-        },
-        simulation_time::simulation_clock_types::ZooClock,
+use crate::plugins::{
+    behavior_task_execution_types::{
+        advance_behavior_task_to_next_action, find_current_behavior_task_action,
+        BehaviorTaskExecutionState,
     },
+    simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 use super::{
     staff_employment_types::Staff,
@@ -41,10 +39,7 @@ pub(super) fn acknowledge_staff_target_termination_owned_by_terminal_maintenance
         if termination.kill_target
             && !termination.kill_subject
             && behavior_task.target() == Some(job.target)
-            && matches!(
-                job.kind,
-                StaffJobKind::SweepLitter | StaffJobKind::CleanHabitat
-            )
+            && job.kind == StaffJobKind::SweepLitter
         {
             advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
         }

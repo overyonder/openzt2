@@ -2,10 +2,8 @@ use std::time::Duration;
 
 use bevy::{animation::RepeatAnimation, prelude::*};
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState,
-};
+use crate::plugins::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::{
     animation_playback_controller_ancestor_lookup::find_animation_playback_controller_ancestor,
@@ -73,29 +71,42 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
             continue;
         };
         let animation_set_asset_id = animation_playback_controller.animation_set_asset.id();
-        let bevy_animation_graph_and_clip_node_indexes =
-            standard_bevy_animation_graphs_by_animation_set_asset
-                .animation_graphs_by_animation_set_asset
-                .entry(animation_set_asset_id)
-                .or_insert_with(|| {
-                    let (bevy_animation_graph, bevy_animation_graph_nodes) =
-                        AnimationGraph::from_clips(
-                            animation_set_asset
-                                .animation_clips
-                                .iter()
-                                .map(|animation_clip| animation_clip.animation_clip_handle.clone()),
-                        );
-                    StandardBevyAnimationGraphAndClipNodeIndexes {
-                        animation_graph_handle: bevy_animation_graph_assets
-                            .add(bevy_animation_graph),
-                        clip_node_indexes: bevy_animation_graph_nodes,
-                    }
-                });
+        let cached_animation_graphs = &mut standard_bevy_animation_graphs_by_animation_set_asset
+            .animation_graphs_by_animation_set_asset;
+        // Clips that load on demand join the set after its graph was built;
+        // the set's asset event arrives later, so rebuild as soon as the set
+        // holds clips the cached graph lacks.
+        if cached_animation_graphs
+            .get(&animation_set_asset_id)
+            .is_some_and(|cached| {
+                cached.clip_node_indexes.len() != animation_set_asset.animation_clips.len()
+            })
+        {
+            cached_animation_graphs.remove(&animation_set_asset_id);
+        }
+        let bevy_animation_graph_and_clip_node_indexes = cached_animation_graphs
+            .entry(animation_set_asset_id)
+            .or_insert_with(|| {
+                let (bevy_animation_graph, bevy_animation_graph_nodes) = AnimationGraph::from_clips(
+                    animation_set_asset
+                        .animation_clips
+                        .iter()
+                        .map(|animation_clip| animation_clip.animation_clip_handle.clone()),
+                );
+                StandardBevyAnimationGraphAndClipNodeIndexes {
+                    animation_graph_handle: bevy_animation_graph_assets.add(bevy_animation_graph),
+                    clip_node_indexes: bevy_animation_graph_nodes,
+                }
+            });
+        let animation_graph_id = bevy_animation_graph_and_clip_node_indexes
+            .animation_graph_handle
+            .id();
         let requested_bevy_animation_graph_node =
             bevy_animation_graph_and_clip_node_indexes.clip_node_indexes[animation_clip_index];
         let requested_animation_player_binding = StandardBevyAnimationPlayerBinding {
             animation_playback_controller_entity,
             animation_set_asset_id,
+            animation_graph_id,
             animation_clip_asset_key: animation_playback_controller
                 .animation_clip_asset_key
                 .clone(),
@@ -103,7 +114,7 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
         let animation_player_binding_changed =
             current_animation_player_binding != Some(&requested_animation_player_binding);
         let bound_animation_graph_changed = current_animation_player_binding
-            .is_some_and(|binding| binding.animation_set_asset_id != animation_set_asset_id);
+            .is_some_and(|binding| binding.animation_graph_id != animation_graph_id);
         let authored_blend_duration = animation_graph_playback_state
             .and_then(AnimationGraphPlaybackState::active_blend_duration_milliseconds)
             .map_or(Duration::ZERO, |milliseconds| {
@@ -187,7 +198,7 @@ mod tests {
         AnimationPlaybackClock, AnimationPlaybackState,
     };
     use super::*;
-    use crate::assets::animation::animation_set_asset_types::AnimationClipRecord;
+    use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipRecord;
 
     #[test]
     fn standard_player_samples_controller_time_without_a_second_clock_advance() {

@@ -2,15 +2,15 @@ use super::terrain_water_mesh_construction::ConstructedTerrainWaterfallMeshGroup
 use super::terrain_water_presentation_types::TerrainWaterfallSurface;
 use super::terrain_water_renderer_types::AuthoredTerrainWaterfallDecalEffectPass;
 use super::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::audio::audio_playback_message_types::PlayAudioClip;
 use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use crate::plugins::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_authored_waterfall_groups(

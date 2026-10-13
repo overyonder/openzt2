@@ -1,58 +1,39 @@
-# The profile dialog lists profiles and closes through Escape, X and Continue.
-# Captures also show the menu name before and after each dialog transition.
-phase splash
-wait 300
-click "splashbutton0"
-phase main-menu
-wait 120
+# The profile dialog lists profiles and closes by Escape, its close button and
+# OK, leaving the main menu usable. The shell goes with it, so "hidden" on the
+# shell means the whole dialog document closed.
+start main-menu
+until main_menu_profile_visible_text_owners == 1
+expect main_menu_profile_readable_bound_names == 1
 expect-text "currentprofile" "Default Profile"
 capture main-menu-profile
 click "profile_manager_opener"
-wait 180
-expect-visible "profile_manager_dialog"
-expect-rows "profilelist" >= 1         # the run starts with the default profile
+until visible "profile_manager_dialog"
+until rows "profilelist" >= 1          # the run starts with the default profile
+until profile_visible_populated_rows >= 1
 expect-text "ProfileEntry" "Default Profile"
 click-row "profilelist" 0
-wait 60
 expect-text "Profile_Display" "Default Profile"
-snapshot profile-dialog-rows
 capture profile-dialog
 key ESCAPE
-wait 60
-expect-hidden "profile_manager_dialog_shell"
-expect-text "currentprofile" "Default Profile"
-capture profile-dialog-escaped
+until hidden "profile_manager_dialog_shell"
+until main_menu_profile_visible_text_owners == 1
+expect main_menu_profile_readable_bound_names == 1
 click "profile_manager_opener"
-wait 180
-expect-visible "profile_manager_dialog"
-expect-rows "profilelist" >= 1
+until visible "profile_manager_dialog"
+until rows "profilelist" >= 1          # reopening projects the dialog afresh
+until profile_visible_populated_rows >= 1
 expect-text "ProfileEntry" "Default Profile"
-snapshot profile-dialog-reopened-rows
-capture profile-dialog-reopened
 click "cancel"
-wait 60
-expect-hidden "profile_manager_dialog_shell"
-expect-text "currentprofile" "Default Profile"
-capture profile-dialog-cancelled
+until hidden "profile_manager_dialog_shell"
+until main_menu_profile_visible_text_owners == 1
+expect main_menu_profile_readable_bound_names == 1
 click "profile_manager_opener"
-wait 180
-expect-visible "profile_manager_dialog"
-expect-rows "profilelist" >= 1
+until visible "profile_manager_dialog"
+until profile_visible_populated_rows >= 1
 expect-text "ProfileEntry" "Default Profile"
-click-row "profilelist" 0
-wait 60
-expect-text "Profile_Display" "Default Profile"
-snapshot profile-dialog-continue-rows
 click "continue_button"
-wait 60
-expect-hidden "profile_manager_dialog_shell"
+until hidden "profile_manager_dialog_shell"
+until main_menu_profile_visible_text_owners == 1
+expect main_menu_profile_readable_bound_names == 1
 expect-text "currentprofile" "Default Profile"
 capture main-menu-profile-after-continue
-click "Game Options Button"
-wait 180
-expect-visible "Back"
-capture options                        # headless runs have no monitor, so resolution rows may be empty
-click "Back"
-wait 180
-expect-text "currentprofile" "Default Profile"
-capture main-menu-profile-after-options

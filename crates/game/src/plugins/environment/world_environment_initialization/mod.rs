@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::effect::SpawnParticleEffectEmitter;
-use crate::assets::effect::StopParticleEffectsAttachedToEntity;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::effect::SpawnParticleEffectEmitter;
+use openzt2_game_assets::effect::StopParticleEffectsAttachedToEntity;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use crate::plugins::audio::audio_environment_types::AudioSoundscape;
 use crate::plugins::audio::audio_playback_message_types::PlayAudioCue;
 use crate::plugins::simulation_time::deterministic_random_stream::DeterministicRng;
@@ -49,6 +49,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
         (Entity, &WorldRoot),
         (
             With<WorldLoadCompleted>,
+            With<crate::plugins::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
             Without<WorldEnvironmentInitialized>,
         ),
     >,
@@ -172,7 +173,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
 }
 
 fn select_scenario_environment_and_biome(
-    scenarios: crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenariosView<'_>,
+    scenarios: openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenariosView<'_>,
     scenario_identifier: AssetId,
 ) -> Option<(AssetId, AssetId)> {
     let map_identifier = scenarios

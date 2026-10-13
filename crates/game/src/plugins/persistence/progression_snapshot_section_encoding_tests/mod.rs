@@ -114,6 +114,17 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
         decoded_progression_snapshot_records.research_projects.len(),
         1
     );
+    let project = &decoded_progression_snapshot_records.research_projects[0];
+    assert_eq!(project.persistent_identifier, PersistentId(2));
+    assert_eq!(project.definition_identifier, AssetId([2; 16]));
+    assert_eq!(project.elapsed_simulation_ticks, 10);
+    assert_eq!(project.required_simulation_ticks, 20);
+    assert!(project.paused);
+    let availability = &decoded_progression_snapshot_records.research_project_availability[0];
+    assert_eq!(availability.persistent_identifier, PersistentId(5));
+    assert_eq!(availability.catalogue_item_identifier, AssetId([5; 16]));
+    assert!(!availability.available);
+    assert_eq!(availability.remaining_unlock_ticks, Some(30));
     assert_eq!(
         decoded_progression_snapshot_records
             .earned_progression_awards

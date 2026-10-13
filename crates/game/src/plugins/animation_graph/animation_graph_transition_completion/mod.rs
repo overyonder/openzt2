@@ -1,28 +1,34 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::animation_playback::{
+use crate::plugins::{
+    animation_playback::{
         animation_event_message_types::AnimationCompleted,
-        animation_playback_controller_types::AnimationPlaybackController,
+        animation_playback_controller_types::{
+            AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
+        },
     },
+    topology::gate_operation_types::Gate,
 };
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::{
     animation_graph_playback_state_types::AnimationGraphPlaybackState,
     animation_graph_transition_operations::enter_animation_graph_node_playback,
+    animation_presentation_relationship_types::AnimationPresentationOwner,
 };
 
 pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completion(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut completed_animations: MessageReader<AnimationCompleted>,
+    gates: Query<(), With<Gate>>,
     mut animation_playback_controllers: Query<(
         &mut AnimationPlaybackController,
         &mut AnimationGraphPlaybackState,
+        Option<&AnimationPresentationOwner>,
     )>,
 ) {
     for completed_animation in completed_animations.read() {
-        let Ok((mut animation_playback_controller, mut animation_graph_playback_state)) =
+        let Ok((mut animation_playback_controller, mut animation_graph_playback_state, owner)) =
             animation_playback_controllers
                 .get_mut(completed_animation.animation_playback_controller_entity)
         else {
@@ -30,6 +36,17 @@ pub(crate) fn complete_animation_graph_transitions_after_animation_clip_completi
         };
         if completed_animation.playback_generation
             != animation_playback_controller.playback_generation
+        {
+            continue;
+        }
+        // Gate state owns the finished open/closed pose until its next request.
+        // Other one-shot clips retain their return to the containing graph node.
+        if animation_playback_controller
+            .explicit_clip_request_id
+            .is_some()
+            && animation_playback_controller.playback_repetition_policy
+                == AnimationPlaybackRepetitionPolicy::PlayOnce
+            && owner.is_some_and(|owner| gates.get(owner.gameplay_entity).is_ok())
         {
             continue;
         }

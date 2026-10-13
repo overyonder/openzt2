@@ -24,7 +24,7 @@ use interaction_types::{
 use avian3d::prelude::PhysicsSystems;
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 /// Applies game interactions to Avian bodies.
 /// Root integration installs and configures `PhysicsPlugins` before this plugin.

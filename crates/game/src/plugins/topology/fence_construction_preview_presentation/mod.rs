@@ -2,10 +2,10 @@
 
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
 use crate::plugins::construction::construction_interaction_types::PlacementValidity;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -23,12 +23,15 @@ use super::{
     },
     topology_construction_planning::calculate_fence_construction_plan,
     topology_construction_preview_types::FencePreview,
-    topology_graph_types::{TopologyGrid, TopologyIndex},
+    topology_graph_types::{FenceEdge, TopologyGrid, TopologyIndex, TopologyNode},
     topology_grid_geometry::calculate_topology_edge_world_transform,
     topology_presentation_types::{
         FenceSegmentPrefab, FenceTerrainEndpointPresentationCells, TopologyPresentation,
     },
 };
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct FenceConstructionPreviewPresentationSegment {
@@ -46,10 +49,9 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     terrain: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    previews: Query<
-        (Entity, &FencePreview, &WorldMember),
-        (With<ConstructionPreview>, Changed<FencePreview>),
-    >,
+    previews: Query<(Entity, Ref<FencePreview>, &WorldMember), With<ConstructionPreview>>,
+    fences: Query<&FenceEdge>,
+    nodes: Query<&TopologyNode>,
     all_previews: Query<(), With<FencePreview>>,
     presentation_segments: Query<(
         Entity,
@@ -71,8 +73,11 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
         return;
     };
     for (owner, preview, world_member) in &previews {
+        if !preview.is_changed() && !index.is_changed() {
+            continue;
+        }
         let cells = calculate_fence_construction_plan(
-            preview,
+            &preview,
             &index,
             *grid,
             definitions,
@@ -83,10 +88,19 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
         .map(|(cells, _, _)| cells)
         .unwrap_or_default();
         let definition = definitions.find_fence(preview.definition);
-        let segments = cells
+        let mut segments = cells
             .windows(2)
             .map(|pair| (preview.definition, pair[0], pair[1]))
             .collect::<Vec<_>>();
+        // Pending segments must see the same junctions as the committed graph.
+        // Keep them first so their presentation indexes still match the plan.
+        segments.extend(fences.iter().filter_map(|edge| {
+            Some((
+                edge.definition,
+                nodes.get(edge.a).ok()?.cell,
+                nodes.get(edge.b).ok()?.cell,
+            ))
+        }));
         let partners = select_reciprocal_fence_curve_partners(&segments);
         for (segment_index, pair) in cells.windows(2).enumerate() {
             let Some(definition) = definition else { break };

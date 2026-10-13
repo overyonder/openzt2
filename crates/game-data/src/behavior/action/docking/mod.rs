@@ -7,6 +7,8 @@ pub struct BehaviorDockAction {
     pub target_animation_clip_asset_key: Option<String>,
     pub locomotion_speed: Option<BehaviorDockLocomotionSpeed>,
     pub redock: bool,
+    /// Radial docks stop this far from the target origin on the actor's side, facing it.
+    pub radial_distance_m: Option<f32>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize)]

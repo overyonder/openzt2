@@ -42,6 +42,9 @@ pub(super) fn receive_object_animation_commands(
             continue;
         };
         if state.request_id == Some(rejection.request_id) && state.owns(task) {
+            debug!(actor = ?rejection.animation_subject_entity,
+                clip = %rejection.animation_clip_asset_key,
+                "object attachment clip was refused: no animated presentation has it");
             mark_behavior_task_for_failure_and_stop_navigation(
                 rejection.animation_subject_entity,
                 &mut commands,
@@ -110,22 +113,14 @@ pub(super) fn receive_object_animation_commands(
                 let Some(definitions) = definitions.get(&definition_assets) else {
                     continue;
                 };
-                let Some(definition) = actors
+                let Some(holder) = actors
                     .get(actor)
                     .ok()
-                    .and_then(|id| definitions.find_object(id.0))
+                    .and_then(|id| super::holder::AttachmentHolder::find(&definitions, id.0))
                 else {
                     continue;
                 };
-                for (slot, _) in
-                    definition
-                        .interaction_slots
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, slot)| {
-                            !slot.is_queue && slot.reservation_tag == AssetId::default()
-                        })
-                {
+                for slot in holder.held_places() {
                     // AttachObject advances at its attach key. Its still-live
                     // clip may legitimately detach that item at a later key.
                     let owns_attached_item = task.is_some_and(|task| {
@@ -163,7 +158,7 @@ pub(super) fn receive_object_animation_commands(
         }
     }
     for event in completed.read() {
-        let Ok((owner, _)) = owners.get(event.animation_playback_controller_entity) else {
+        let Ok((owner, playback)) = owners.get(event.animation_playback_controller_entity) else {
             continue;
         };
         let Ok((task, state)) = pending.get(owner.gameplay_entity) else {
@@ -174,7 +169,8 @@ pub(super) fn receive_object_animation_commands(
             && state.owns(task)
             && state.joint.is_none()
         {
-            warn!(actor = ?owner.gameplay_entity, "attachment animation finished without its attach event");
+            warn!(actor = ?owner.gameplay_entity, clip = %playback.animation_clip_asset_key,
+                "attachment animation finished without its attach event");
             mark_behavior_task_for_failure_and_stop_navigation(
                 owner.gameplay_entity,
                 &mut commands,

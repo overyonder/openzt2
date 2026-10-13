@@ -3,8 +3,8 @@ use crate::plugins::simulation_time::deterministic_random_stream::ZooSeed;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::account_transaction_types::Account;
 use crate::plugins::economy::account_transaction_types::TransactionCompleted;
 use crate::plugins::economy::account_transaction_types::TransactionKind;
@@ -188,21 +188,16 @@ pub(super) fn advance_active_research_projects_by_one_tick(
 }
 
 pub(super) fn advance_research_availability_unlock_countdowns(
-    mut countdowns: Query<(
-        Entity,
-        &mut ResearchAvailabilityUnlockCountdown,
-        &mut ResearchProjectAvailability,
-    )>,
+    mut countdowns: Query<(Entity, &mut ResearchAvailabilityUnlockCountdown)>,
     mut commands: Commands,
-    mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
-    for (entity, mut countdown, mut availability) in &mut countdowns {
+    for (entity, mut countdown) in &mut countdowns {
         countdown.remaining_ticks = countdown.remaining_ticks.saturating_sub(1);
         if countdown.remaining_ticks != 0 {
             continue;
         }
-        availability.available = true;
-        changed.write(ProgressionFactChanged::Research(countdown.item));
+        // Expiry removes only the delay; the availability refresh still owns
+        // the authored fame and game-mode requirements.
         commands
             .entity(entity)
             .remove::<ResearchAvailabilityUnlockCountdown>();
@@ -271,6 +266,7 @@ pub(super) fn refresh_authored_research_availability(
         &mut ResearchProjectAvailability,
         Option<&ResearchAvailabilityUnlockCountdown>,
     )>,
+    mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -295,6 +291,7 @@ pub(super) fn refresh_authored_research_availability(
                 });
         if availability.available != available {
             availability.available = available;
+            changed.write(ProgressionFactChanged::Research(availability.item));
         }
     }
 }

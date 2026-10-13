@@ -9,7 +9,11 @@ use super::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_
 pub(super) fn project_prefab_model_level_of_detail_visibility(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
     groups: Query<Ref<GlobalTransform>>,
-    hierarchy: Query<(Option<&ChildOf>, Option<&RenderLayers>)>,
+    hierarchy: Query<(
+        Option<&ChildOf>,
+        Option<&RenderLayers>,
+        Option<&super::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+    )>,
     mut lods: Query<(
         Entity,
         Ref<GlobalTransform>,

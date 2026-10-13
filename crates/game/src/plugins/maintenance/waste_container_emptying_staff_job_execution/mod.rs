@@ -11,9 +11,9 @@ use super::{
         create_completed_staff_job_message, staff_member_owns_active_job,
     },
     maintenance_types::{
-        AnimalHabitatWasteCleaningStaffJobKindMarker, FacilityContainedWaste,
-        IncrementalZooCleanlinessTotals, LooseLitterSweepingStaffJobKindMarker,
-        MaintenanceRepairStaffJobKindMarker, WasteContainerEmptyingStaffJobKindMarker,
+        FacilityContainedWaste, IncrementalZooCleanlinessTotals,
+        LooseLitterSweepingStaffJobKindMarker, MaintenanceRepairStaffJobKindMarker,
+        WasteContainerEmptyingStaffJobKindMarker,
     },
 };
 
@@ -24,7 +24,6 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
             With<WasteContainerEmptyingStaffJobKindMarker>,
             Without<MaintenanceRepairStaffJobKindMarker>,
             Without<LooseLitterSweepingStaffJobKindMarker>,
-            Without<AnimalHabitatWasteCleaningStaffJobKindMarker>,
         ),
     >,
     staff_current_jobs: Query<&CurrentJob>,

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::plugins::{
+    aquatic::tank_floor_edit_types::{CommitTankFloorEdit, TankFloorEdit},
     placement::placement_transaction_types::{
         ApplyPreparedObjectPlacementEditRequest, PreparedObjectPlacementEdit,
     },
@@ -23,6 +24,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
     construction_transactions: Query<
         (
             Entity,
+            Option<&TankFloorEdit>,
             Option<&TerrainEdit>,
             Option<&TopologyEdit>,
             Option<&PreparedObjectPlacementEdit>,
@@ -33,6 +35,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
         ),
         Without<RollbackDispatched>,
     >,
+    mut tank_requests: MessageWriter<CommitTankFloorEdit>,
     mut terrain_rollback_requests: MessageWriter<CommitTerrainEdit>,
     mut topology_rollback_requests: MessageWriter<CommitTopologyEdit>,
     mut object_placement_rollback_requests: MessageWriter<ApplyPreparedObjectPlacementEditRequest>,
@@ -43,6 +46,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
 ) {
     for (
         transaction_entity,
+        tank_edit,
         terrain_edit,
         topology_edit,
         placement_edit,
@@ -64,6 +68,12 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
                 domain_status == DomainAckStatus::Applied
             }
         };
+        if tank_edit.is_some() && domain_was_changed(progress.aquatic) {
+            tank_requests.write(CommitTankFloorEdit {
+                transaction: transaction_entity,
+                application: EditApplication::FailureRollback,
+            });
+        }
         if terrain_edit.is_some() && domain_was_changed(progress.terrain) {
             terrain_rollback_requests.write(CommitTerrainEdit {
                 transaction: transaction_entity,

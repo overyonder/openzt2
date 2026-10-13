@@ -1,18 +1,20 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::ui_document::{action::shell_navigation::UiShellAction, document::*};
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        photos::photo_capture_types::CaptureScreenshotRequest,
-        simulation_time::simulation_control_types::{SetSimulationPaused, SimulationControl},
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
-        },
+use crate::plugins::{
+    information::{
+        catalogue_types::SelectedCatalogueEntry,
+        entity_selection_types::{SelectedEntity, SelectionRequest},
+    },
+    photos::photo_capture_types::CaptureScreenshotRequest,
+    simulation_time::simulation_control_types::{SimulationControl, SimulationPauseRequest},
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        ui_document_lifecycle_contracts::{GameViewDocumentOwner, ShowUiRole},
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     exit_confirmation_presentation::ExitConfirmationPending,
@@ -22,6 +24,13 @@ use super::{
 };
 use crate::plugins::ui::authored_ui_action_projection_components::UiShellActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
+
+#[derive(SystemParam)]
+pub(super) struct OverheadInformationDismissalTargets<'w> {
+    selected_entity: Res<'w, SelectedEntity>,
+    selected_catalogue_entry: ResMut<'w, SelectedCatalogueEntry>,
+    selection_requests: MessageWriter<'w, SelectionRequest>,
+}
 
 /// Consumes only gameplay-shell outcomes. Menu navigation remains in
 /// `route_authored_shell_ui_actions_to_navigation_requests`; persistence
@@ -39,9 +48,10 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
     mut show: MessageWriter<ShowUiRole>,
     simulation: Option<Res<SimulationControl>>,
     overlays: Query<(), With<InGameOptionsOverlay>>,
-    mut set_paused: MessageWriter<SetSimulationPaused>,
+    mut set_paused: MessageWriter<SimulationPauseRequest>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
     game_view: GameViewDocumentOwner,
+    mut information: OverheadInformationDismissalTargets,
 ) {
     for activation in activations.read() {
         let Ok((range, owner)) = nodes.get(activation.node) else {
@@ -84,6 +94,19 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                 }
                 UiShellAction::ShowInGameOptionsOverlay
                 | UiShellAction::OpenInGameOptionsFromOverheadEscape => {
+                    if record.action == UiShellAction::OpenInGameOptionsFromOverheadEscape {
+                        if information.selected_entity.0.is_some() {
+                            information.selection_requests.write(SelectionRequest {
+                                entity: None,
+                                source: activation.source,
+                            });
+                            continue;
+                        }
+                        if information.selected_catalogue_entry.0.is_some() {
+                            information.selected_catalogue_entry.0 = None;
+                            continue;
+                        }
+                    }
                     if !overlays.is_empty() {
                         continue;
                     }
@@ -98,7 +121,7 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                             Visibility::Inherited,
                         ))
                         .id();
-                    set_paused.write(SetSimulationPaused(true));
+                    set_paused.write(SimulationPauseRequest::Set(true));
                     // The menu belongs with the game view, so the dialogs it
                     // opens as it closes, such as returning to the main menu or
                     // saving, outlive it.

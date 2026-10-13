@@ -93,22 +93,39 @@ pub(super) fn start_synchronized_behavior_sets(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
+        // An object partner, such as a food stand, matches its set's subjects
+        // through its authored type family (`foodstand_burger` for
+        // `foodstand_burger_df`) as well as its own definition.
         let resolve = |entity, set| {
             let (species, staff, guest, object) = sources.identities.get(entity).ok()?;
+            let object_types = object
+                .and_then(|object| definitions.find_object(object.0))
+                .map_or(&[][..], |object| {
+                    object.behavior_type_identifiers.as_slice()
+                });
             declarations.find_behavior_set_location(
                 set,
                 behavior_subject_type_identifiers(species, staff, guest, definitions)
-                    .chain(object.map(|object| object.0)),
+                    .chain(object.map(|object| object.0))
+                    .chain(object_types.iter().copied()),
             )
         };
+        let (subject_set, target_set) = (
+            resolve(actor, action.subject_behavior_set),
+            resolve(target, action.target_behavior_set),
+        );
         let (
             Some((subject_document, subject_declaration)),
             Some((target_document, target_declaration)),
-        ) = (
-            resolve(actor, action.subject_behavior_set),
-            resolve(target, action.target_behavior_set),
-        )
+        ) = (subject_set.clone(), target_set.clone())
         else {
+            debug!(
+                ?actor,
+                ?target,
+                subject_set_found = subject_set.is_some(),
+                target_set_found = target_set.is_some(),
+                "synchronized behavior set has no declaration for its participant's types"
+            );
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
@@ -137,6 +154,7 @@ pub(super) fn start_synchronized_behavior_sets(
                     action: 0,
                     repetitions: 0,
                     next_action_tick: clock.tick.saturating_add(1),
+                    object: None,
                     interaction_slot: None,
                     stack: Default::default(),
                 },

@@ -42,8 +42,8 @@ use immersive_mode_message_types::{
 };
 use immersive_mode_state_types::{ActiveImmersiveMode, ImmersiveMode};
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::GameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(super) struct ImmersiveModesPlugin;
 

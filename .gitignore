@@ -4,6 +4,7 @@
 !/vendor/bevy_image/
 !/vendor/bevy_render/
 !/vendor/lunify/
+!/vendor/taffy/
 /build/
 /artifacts/
 /state/

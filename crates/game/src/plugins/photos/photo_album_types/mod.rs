@@ -6,6 +6,15 @@ use openzt2_game_data::AssetId as DomainAssetId;
 pub(super) const PHOTO_ALBUM_PAGE_SIZE: u32 = 8;
 pub(super) const PHOTO_CAMERA_ROLL_CAPACITY: u32 = 24;
 pub(super) const INITIAL_PHOTO_ALBUM_SPREADS: u32 = 5;
+pub(crate) const DEFAULT_PHOTO_ALBUM_NAME_KEY: &str = "ztphotomode:default_album_name";
+
+#[derive(Component)]
+pub(crate) struct DefaultPhotoAlbumStorageInitializedForWorld {
+    pub(super) album: Entity,
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct DefaultPhotoStorageInitializationSet;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct PhotoAlbum {

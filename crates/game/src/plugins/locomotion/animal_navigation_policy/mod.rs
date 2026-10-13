@@ -2,10 +2,8 @@
 
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::{
-    assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets},
-    plugins::animal_lifecycle::types::AnimalVariant,
-};
+use crate::plugins::animal_lifecycle::types::AnimalVariant;
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 
 use super::locomotion_types::{Destination, NavAgent, NavigationFailure, Route};
 
@@ -16,33 +14,40 @@ pub(super) struct AnimalNavigationPolicy<'w> {
 }
 
 impl AnimalNavigationPolicy<'_> {
-    pub(super) fn agent_with_authored_radius(
+    pub(super) fn agent_with_authored_collision_limits(
         &self,
         agent: &NavAgent,
         animal: Option<&AnimalVariant>,
-    ) -> Result<NavAgent, NavigationFailure> {
+    ) -> Result<(NavAgent, Option<f32>), NavigationFailure> {
         let Some(animal) = animal else {
-            return Ok(*agent);
+            return Ok((*agent, None));
         };
-        let radius = self
+        let policy = self
             .index
             .as_ref()
             .zip(self.assets.as_ref())
             .and_then(|(index, assets)| index.get(assets))
             .and_then(|species| species.find_variant(animal.0))
             .and_then(|variant| variant.navigation_collision_policy.as_ref())
-            .map(|policy| policy.radius_m)
-            .filter(|radius| radius.is_finite() && *radius >= 0.0)
+            .filter(|policy| {
+                policy.radius_m.is_finite()
+                    && policy.radius_m >= 0.0
+                    && policy.maximum_slope_radians.is_finite()
+                    && policy.maximum_slope_radians >= 0.0
+            })
             .ok_or(NavigationFailure::NoRoute)?;
-        Ok(NavAgent {
-            radius_m: radius,
-            ..*agent
-        })
+        Ok((
+            NavAgent {
+                radius_m: policy.radius_m,
+                ..*agent
+            },
+            Some(policy.maximum_slope_radians),
+        ))
     }
 }
 
 /// An asset reload or variant replacement invalidates routes planned with the
-/// previous collision radius. The destination planner replaces them on its next pass.
+/// previous collision limits. The destination planner replaces them on its next pass.
 pub(super) fn invalidate_animal_routes_after_policy_changes(
     policy: AnimalNavigationPolicy,
     mut animals: Query<(Ref<AnimalVariant>, &mut Destination, &mut Route)>,

@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 #[derive(Component, Clone, Debug)]
 pub struct AnimationPlaybackController {

@@ -23,6 +23,7 @@ use super::{
 pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
     commands: &mut Commands,
     show_snapshot_records: ShowSnapshotRecords,
+    restored_animals: &std::collections::BTreeMap<u64, Entity>,
     world_root_entity: Entity,
     entities_with_persistent_identifiers: &Query<(Entity, &PersistentId)>,
     show_stages_with_mutable_snapshot_state: &mut Query<
@@ -113,12 +114,21 @@ pub(super) fn apply_show_snapshot_records_to_live_show_stages_and_schedule(
             .performance_records
             .iter()
             .map(|performance_snapshot_record| {
-                entities_with_persistent_identifiers
-                    .iter()
-                    .find_map(|(entity, persistent_identifier)| {
-                        (*persistent_identifier
-                            == performance_snapshot_record.performer_persistent_identifier)
-                            .then_some(entity)
+                restored_animals
+                    .get(
+                        &performance_snapshot_record
+                            .performer_persistent_identifier
+                            .0,
+                    )
+                    .copied()
+                    .or_else(|| {
+                        entities_with_persistent_identifiers.iter().find_map(
+                            |(entity, persistent_identifier)| {
+                                (*persistent_identifier
+                                    == performance_snapshot_record.performer_persistent_identifier)
+                                    .then_some(entity)
+                            },
+                        )
                     })
                     .map(|performer_entity| ScheduledShowTrickPerformance {
                         performer: performer_entity,

@@ -8,18 +8,16 @@ use openzt2_game_data::{
 };
 
 use super::entity_selection_types::{Inspectable, SelectedEntity};
-use crate::{
-    assets::{
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-        world_definitions::{
-            world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-            world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-        },
-    },
-    plugins::ui::{
-        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
-        authored_ui_presentation_action_application::RequestUiPresentationAction,
-        ui_document_lifecycle_contracts::ShowUiRole,
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
+    authored_ui_presentation_action_application::RequestUiPresentationAction,
+    ui_document_lifecycle_contracts::ShowUiRole,
+};
+use openzt2_game_assets::{
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
 

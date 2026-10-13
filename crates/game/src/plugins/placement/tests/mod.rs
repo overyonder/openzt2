@@ -3,7 +3,7 @@ use openzt2_game_data::world_definitions::object_placement::{
 };
 use openzt2_game_data::AssetId;
 
-fn create_object_placeable_definition_test_fixture(
+pub(super) fn create_object_placeable_definition_test_fixture(
     constraints: PlacementConstraints,
 ) -> PlaceableDefinition {
     PlaceableDefinition {

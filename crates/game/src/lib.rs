@@ -1,21 +1,16 @@
-pub(crate) mod application_lifecycle;
 pub(crate) mod application_schedule;
-pub mod assets;
 #[cfg(feature = "dev-tools")]
 mod diagnostics;
 pub mod game_session_types;
 pub mod plugins;
 
-mod asset_source;
 mod launch;
 mod missing_game_content_screen;
 mod verification;
 
 use verification::verification_launch_arguments::VerificationLaunchRequest;
 
-use application_lifecycle::GamePhase;
 use application_schedule::{FixedGameSet, GameSet};
-use assets::openzt2_asset_loading_plugin_group::OpenZt2AssetLoadingPluginGroup;
 use bevy::{
     app::ScheduleRunnerPlugin,
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
@@ -30,6 +25,8 @@ use bevy::{
     winit::WinitPlugin,
 };
 use launch::GameLaunchConfiguration;
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::openzt2_asset_loading_plugin_group::OpenZt2AssetLoadingPluginGroup;
 use plugins::openzt2_game_plugin_group::OpenZt2GamePluginGroup;
 
 /// Reads the executable arguments, assembles the Bevy application, and runs
@@ -140,7 +137,9 @@ fn add_enabled_z2f_archives_as_default_asset_source(
     enabled_archive_paths: Vec<std::path::PathBuf>,
 ) -> std::io::Result<()> {
     let (asset_source, asset_archives) =
-        asset_source::create_bevy_asset_source_for_enabled_z2f_archives(enabled_archive_paths)?;
+        openzt2_game_assets::asset_source::create_bevy_asset_source_for_enabled_z2f_archives(
+            enabled_archive_paths,
+        )?;
     game_application.register_asset_source(AssetSourceId::Default, asset_source);
     game_application.insert_resource(asset_archives);
     Ok(())
@@ -174,27 +173,27 @@ fn add_default_bevy_platform_plugins(
             bevy::gltf::GltfPlugin::default()
                 .add_custom_vertex_attribute(
                     "UV_2",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_UV_2,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_UV_2,
                 )
                 .add_custom_vertex_attribute(
                     "UV_EFFECTS",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_UV_EFFECTS,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_UV_EFFECTS,
                 )
                 .add_custom_vertex_attribute(
                     "AUXILIARY_VECTOR",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_AUXILIARY_VECTOR,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_AUXILIARY_VECTOR,
                 )
                 .add_custom_vertex_attribute(
                     "BIOME_INDEX",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_BIOME_INDEX,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_BIOME_INDEX,
                 )
                 .add_custom_vertex_attribute(
                     "GROUND_COVER",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_GROUND_COVER,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_GROUND_COVER,
                 )
                 .add_custom_vertex_attribute(
                     "WATER_TYPE",
-                    assets::model::custom_vertex_attributes::ATTRIBUTE_WATER_TYPE,
+                    openzt2_game_assets::model::custom_vertex_attributes::ATTRIBUTE_WATER_TYPE,
                 ),
         )
         .set(RenderPlugin {
@@ -231,13 +230,19 @@ fn add_default_bevy_platform_plugins(
         });
     if verification_request.is_some_and(|request| !request.renders_to_window()) {
         // Disabling Winit guarantees headless runs never create a compositor window.
-        // Simulation advances 1/60 s per frame, and frames are paced at 60 Hz because
-        // UI animation and pointer activation run on real time.
-        let frame_duration = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        // Simulation and `Time<Real>` both advance 1/60 s per frame, so UI animation
+        // and pointer activation see the same steps unpaced; frames run back to back.
         game_application
-            .add_plugins(default_plugins.disable::<WinitPlugin>())
-            .insert_resource(TimeUpdateStrategy::ManualDuration(frame_duration))
-            .add_plugins(ScheduleRunnerPlugin::run_loop(frame_duration));
+            // Keep scripted Bevy input, but isolate it from host controllers.
+            .add_plugins(
+                default_plugins
+                    .disable::<WinitPlugin>()
+                    .disable::<bevy::gilrs::GilrsPlugin>(),
+            )
+            .insert_resource(TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f64(1.0 / 60.0),
+            ))
+            .add_plugins(ScheduleRunnerPlugin::run_loop(std::time::Duration::ZERO));
     } else {
         game_application.add_plugins(default_plugins);
     }
@@ -300,15 +305,21 @@ fn add_verification_when_requested(
     verification_request: Option<VerificationLaunchRequest>,
 ) {
     match verification_request {
-        Some(VerificationLaunchRequest::Journey {
-            journey,
-            output_directory,
+        Some(VerificationLaunchRequest::Journeys {
+            journeys,
+            routes,
+            output_root,
             windowed,
+            capture_mode,
+            budget,
         }) => {
             game_application.add_plugins(verification::VerificationJourneyPlugin {
-                journey,
-                output_directory,
+                journeys,
+                routes,
+                output_root,
                 windowed,
+                capture_mode,
+                budget,
             });
         }
         Some(VerificationLaunchRequest::MapLoad { map_index }) => {

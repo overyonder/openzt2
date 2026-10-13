@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::aquatic::aquatic_simulation_types::AquaticAnimal;
 use crate::plugins::aquatic::aquatic_simulation_types::AquaticWaterRequirement;
 use crate::plugins::aquatic::aquatic_simulation_types::LandWaterRequirement;

@@ -2,9 +2,9 @@ use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, platform::collections::HashSet, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::account_transaction_types::Account;
 use crate::plugins::economy::account_transaction_types::TransactionCompleted;
 use crate::plugins::economy::account_transaction_types::TransactionKind;
@@ -197,6 +197,7 @@ pub(in crate::plugins::staff) fn spawn_paid_staff_hires_from_ready_prefabs(
         if let Some(variant) = variant {
             attach_staff_presentation_variant(&mut commands, staff, variant, id.0, catalogue);
         }
+        super::spawned_staff_identification::attach_staff_virtual_nodes(&mut commands, staff, role);
         let mut staff_commands = commands.entity(staff);
         staff_commands.insert((
             Staff,

@@ -1,14 +1,12 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::audio_settings::UiAudioSettingAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_node_projection_components::UiValue,
-    },
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_node_projection_components::UiValue,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::audio_settings_types::{AudioSettings, ReplaceAudioSettingsRequest};
 use crate::plugins::ui::authored_ui_action_projection_components::UiAudioSettingActions;

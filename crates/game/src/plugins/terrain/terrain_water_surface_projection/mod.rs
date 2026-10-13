@@ -15,17 +15,17 @@ use super::terrain_water_renderer_types::AuthoredTerrainWaterSurfaceEffectPass;
 use super::terrain_water_renderer_types::TerrainWaterWaveStateKey;
 use super::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
 use super::terrain_waterfall_projection::spawn_authored_waterfall_groups;
-use crate::assets::material::material_asset_types::MaterialAsset;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::audio::audio_playback_message_types::PlayAudioClip;
 use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::material::material_asset_types::MaterialAsset;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(

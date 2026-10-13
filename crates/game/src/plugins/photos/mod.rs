@@ -39,7 +39,8 @@ use screenshot_capture::begin_requested_camera_screenshot_captures;
 
 use bevy::prelude::*;
 
-use crate::{application_lifecycle::GamePhase, application_schedule::GameSet, plugins::ui::UiSet};
+use crate::{application_schedule::GameSet, plugins::ui::UiSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(super) struct PhotosPlugin;
 
@@ -71,8 +72,8 @@ impl Plugin for PhotosPlugin {
             .add_systems(
                 Update,
                 (
-                    initialize_default_photo_album_and_camera_roll_for_loaded_worlds,
-                    begin_requested_album_photo_captures,
+                    begin_requested_album_photo_captures
+                        .after(initialize_default_photo_album_and_camera_roll_for_loaded_worlds),
                     begin_requested_camera_screenshot_captures,
                     delete_requested_photos_and_release_unpersisted_images,
                     photo_mode_presentation_lifecycle::
@@ -117,11 +118,29 @@ impl Plugin for PhotosPlugin {
         app.add_systems(
             Update,
             (
+                initialize_default_photo_album_and_camera_roll_for_loaded_worlds
+                    .in_set(photo_album_types::DefaultPhotoStorageInitializationSet),
                 hydrate_photo_challenges_and_sets_from_active_scenario_catalogue,
+                photo_album_storage::initialize_localized_default_photo_album_names
+                    .after(photo_album_types::DefaultPhotoStorageInitializationSet),
+            )
+                .in_set(GameSet::Intent)
+                .after(crate::plugins::world_spawn::world_load_completion_marker::WorldLoadCompletionSet)
+                .run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame)))
+                .run_if(
+                    resource_exists::<
+                        crate::plugins::world_spawn::persistent_id_types::PersistentIdAllocator,
+                    >,
+                ),
+        );
+        app.add_systems(
+            Update,
+            (
                 score_pending_photos_against_incomplete_lua_challenges,
                 update_photo_challenge_set_progress_from_completed_challenges,
             )
                 .chain()
+                .after(hydrate_photo_challenges_and_sets_from_active_scenario_catalogue)
                 .in_set(GameSet::Intent)
                 .run_if(in_state(GamePhase::InGame)),
         );

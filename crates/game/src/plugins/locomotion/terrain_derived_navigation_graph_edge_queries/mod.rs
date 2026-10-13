@@ -88,9 +88,11 @@ impl TerrainDerivedNavigationGraph {
                     destination_navigation_node,
                 )?,
             ),
+            // Clearance is a radius, so the narrower cell leaves twice its clearance.
             width_centimetres: source_node
                 .clearance_centimetres
-                .min(destination_node.clearance_centimetres),
+                .min(destination_node.clearance_centimetres)
+                .saturating_mul(2),
             traversal_kind: if traverses_water {
                 TerrainDerivedNavigationGraphTraversalKind::Swim
             } else if follows_path {

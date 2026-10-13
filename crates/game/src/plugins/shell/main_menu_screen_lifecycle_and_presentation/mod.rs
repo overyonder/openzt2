@@ -3,17 +3,15 @@ use openzt2_game_data::ui_document::{
     document::UiDocumentRole, node_property_binding::UiTextPropertyBindingSource,
 };
 
-use crate::{
-    assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image,
-    plugins::{
-        persistence::profile_types::LoadProfileIndex,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentRoot,
-            authored_ui_text_content_binding::UiTextBinding,
-            ui_document_lifecycle_contracts::UiRoleRequests,
-        },
+use crate::plugins::{
+    persistence::profile_types::LoadProfileIndex,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentRoot,
+        authored_ui_text_content_binding::UiTextBinding,
+        ui_document_lifecycle_contracts::UiRoleRequests,
     },
 };
+use openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 
 use super::{
     shell_screen_presentation_types::MainMenuLogoFallback,

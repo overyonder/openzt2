@@ -2,7 +2,7 @@
 //! demand-loaded presentation arrives.
 
 use super::*;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
 use crate::plugins::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
@@ -24,7 +24,8 @@ pub(super) fn reserve_detach_created_objects(
     occupancy: &mut InteractionContainerOccupancy,
     commands: &mut Commands,
 ) {
-    let Some(holder_policy) = definitions.find_object(holder_definition) else {
+    let Some(holder_policy) = super::holder::AttachmentHolder::find(definitions, holder_definition)
+    else {
         return;
     };
     for &(definition, destination) in created {
@@ -32,10 +33,8 @@ pub(super) fn reserve_detach_created_objects(
             continue;
         };
         let Some((slot, policy)) = holder_policy
-            .interaction_slots
-            .iter()
-            .enumerate()
-            .find(|(_, slot)| !slot.is_queue && slot.reservation_tag == destination)
+            .place_for(destination)
+            .and_then(|slot| Some((slot, holder_policy.place(slot)?)))
         else {
             continue;
         };
@@ -149,8 +148,10 @@ pub(super) fn hydrate_detach_created_objects(
         };
         let policy = if let Some((_, slot)) = membership {
             let Some(policy) = contained
-                .and_then(|contained| definitions.find_object(contained.holder_definition))
-                .and_then(|holder| holder.interaction_slots.get(slot))
+                .and_then(|contained| {
+                    super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
+                })
+                .and_then(|holder| holder.place(slot))
             else {
                 continue;
             };

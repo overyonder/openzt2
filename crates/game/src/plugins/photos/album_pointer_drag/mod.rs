@@ -4,18 +4,16 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::photography::UiPhotoAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        input::input_types::ActiveInputDevice,
-        ui::{
-            authored_ui_action_projection_components::UiPhotoActions,
-            authored_ui_activation_contracts::UiNodeActivated,
-            authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
-            picking::UiPointerCapture,
-        },
+use crate::plugins::{
+    input::input_types::ActiveInputDevice,
+    ui::{
+        authored_ui_action_projection_components::UiPhotoActions,
+        authored_ui_activation_contracts::UiNodeActivated,
+        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+        picking::UiPointerCapture,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::photo_album_types::{
     ActivePhotoAlbum, PhotoAlbum, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,

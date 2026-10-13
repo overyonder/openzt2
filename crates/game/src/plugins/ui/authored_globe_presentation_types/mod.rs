@@ -28,15 +28,15 @@ pub(crate) struct UiGlobePresentation {
 /// Globe models loaded with the UI document.
 #[derive(Component, Debug, Clone, Default)]
 pub(crate) struct UiGlobeSceneAssets {
-    pub(crate) primary: Option<Handle<crate::assets::scene_prefab::ScenePrefabAsset>>,
-    pub(crate) clouds: Option<Handle<crate::assets::scene_prefab::ScenePrefabAsset>>,
-    pub(crate) dot: Option<Handle<crate::assets::scene_prefab::ScenePrefabAsset>>,
-    pub(crate) selected_dot: Option<Handle<crate::assets::scene_prefab::ScenePrefabAsset>>,
+    pub(crate) primary: Option<Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    pub(crate) clouds: Option<Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    pub(crate) dot: Option<Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    pub(crate) selected_dot: Option<Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
 }
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct UiGlobeBiomeAsset(
-    pub(crate) Handle<crate::assets::scene_prefab::ScenePrefabAsset>,
+    pub(crate) Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
 );
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -80,7 +80,7 @@ pub(super) struct UiGlobeModelsHydrated;
 
 #[derive(Component, Debug, Clone)]
 pub(super) struct UiGlobePrefab {
-    pub(super) handle: Handle<crate::assets::scene_prefab::ScenePrefabAsset>,
+    pub(super) handle: Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
     pub(super) primary: bool,
 }
 

@@ -7,22 +7,20 @@ use openzt2_game_data::ui_document::action::camera::{
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        immersive_modes::{
-            immersive_mode_message_types::{EnterImmersiveMode, ExitImmersiveMode, ModeExitReason},
-            immersive_mode_state_types::{ActiveImmersiveMode, PendingImmersiveEntry},
-        },
-        information::entity_selection_types::SelectedEntity,
-        staff::staff_assignment_types::StaffAssignmentMode,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
-        world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds,
+use crate::plugins::{
+    immersive_modes::{
+        immersive_mode_message_types::{EnterImmersiveMode, ExitImmersiveMode, ModeExitReason},
+        immersive_mode_state_types::{ActiveImmersiveMode, PendingImmersiveEntry},
     },
+    information::entity_selection_types::SelectedEntity,
+    staff::staff_assignment_types::StaffAssignmentMode,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+    },
+    world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     camera_control_message_types::{FocusCamera, RestoreCameraMode, SetCameraMode},

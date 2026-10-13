@@ -1,6 +1,6 @@
-//! FX2 compilation and evaluation through vkd3d-shader and MojoShader.
+//! FX2 compilation and evaluation through vkd3d-shader and `MojoShader`.
 //!
-//! Inline shader assembly is assembled with MojoShader before FX2 compilation.
+//! Inline shader assembly is assembled with `MojoShader` before FX2 compilation.
 
 pub mod effect_compilation;
 pub mod effect_evaluation;

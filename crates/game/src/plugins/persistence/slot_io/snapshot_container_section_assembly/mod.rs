@@ -10,7 +10,10 @@ use super::super::{
     snapshot_container_types::WorldSnapshotSectionKind,
 };
 use super::{
-    animal_adoption_offer_inventory_snapshot_section::append_encoded_animal_adoption_offer_inventory_snapshot_section,
+    animal_adoption_offer_inventory_snapshot_section::{
+        append_encoded_animal_adoption_offer_inventory_snapshot_section,
+        validate_animal_adoption_offer_inventory_presence_for_session_mode,
+    },
     economy_snapshot_section_encoding::append_encoded_economy_snapshot_section,
     economy_snapshot_types::EconomySnapshotRecords,
     photo_snapshot_section_encoding::append_encoded_photo_snapshot_section,
@@ -32,7 +35,10 @@ use super::{
 pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     snapshot_container_bytes: &mut Vec<u8>,
     world_snapshot_record: &WorldSnapshotRecord,
-    animal_adoption_offer_inventory: &crate::plugins::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
+    animal_adoption_offer_inventory: Option<&crate::plugins::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory>,
+    animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
+    habitat_waste_records: &[super::maintenance_snapshot_types::HabitatWasteSnapshotRecord],
+    staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
     tank_snapshot_records: &[TankSnapshotRecord],
     economy_snapshot_records: &EconomySnapshotRecords,
     progression_snapshot_records: &ProgressionSnapshotRecords,
@@ -44,6 +50,19 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     photo_snapshot_records: &[PhotoSnapshotRecord],
     photo_challenge_progress_snapshot_records: &[PhotoChallengeProgressSnapshotRecord],
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
+    validate_animal_adoption_offer_inventory_presence_for_session_mode(
+        animal_adoption_offer_inventory,
+        world_snapshot_record.session_mode,
+    )?;
+    let animal_bytes = super::animal_snapshot_section_encoding::encode_animal_snapshot_records(
+        animal_snapshot_records,
+    )?;
+    let waste_bytes = super::maintenance_snapshot_section_encoding::encode_habitat_waste_records(
+        habitat_waste_records,
+    )?;
+    let staff_bytes = super::staff_snapshot_section_encoding::encode_staff_snapshot_records(
+        staff_snapshot_records,
+    )?;
     WorldSnapshotSectionKind::ENCODING_ORDER
         .into_iter()
         .try_for_each(|snapshot_section| match snapshot_section {
@@ -55,11 +74,34 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                     append_encoded_world_snapshot_section(section_bytes, world_snapshot_record);
                 },
             ),
+            WorldSnapshotSectionKind::Maintenance => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    habitat_waste_records.len() as u32,
+                    |bytes| bytes.extend_from_slice(&waste_bytes),
+                )
+            }
             WorldSnapshotSectionKind::Animals => {
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
-                    animal_adoption_offer_inventory.slot_count() as u32,
+                    animal_snapshot_records.len() as u32,
+                    |bytes| bytes.extend_from_slice(&animal_bytes),
+                )
+            }
+            WorldSnapshotSectionKind::Staff => append_encoded_world_snapshot_section_to_container(
+                snapshot_container_bytes,
+                snapshot_section,
+                staff_snapshot_records.len() as u32,
+                |bytes| bytes.extend_from_slice(&staff_bytes),
+            ),
+            WorldSnapshotSectionKind::AdoptionOffers => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    animal_adoption_offer_inventory
+                        .map_or(0, |inventory| inventory.slot_count() as u32),
                     |section_bytes| {
                         append_encoded_animal_adoption_offer_inventory_snapshot_section(
                             section_bytes,
@@ -198,7 +240,9 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 snapshot_container_bytes,
                 tank_snapshot_records
                     .len()
-                    .saturating_add(animal_adoption_offer_inventory.slot_count())
+                    .saturating_add(animal_snapshot_records.len())
+                    .saturating_add(habitat_waste_records.len())
+                    .saturating_add(staff_snapshot_records.len())
                     .saturating_add(show_stage_snapshot_records.len())
                     .saturating_add(scheduled_show_snapshot_records.len())
                     .saturating_add(scheduled_show_break_snapshot_records.len())

@@ -1,12 +1,12 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::{localization::LocalizationRichContentNode, AssetId};
 
-use crate::assets::localization::loaded_localization_queries::LoadedLocalizationView;
 use crate::plugins::ui::{
     authored_ui_node_projection_components::UiDocumentOwner,
     authored_ui_text_content_binding::UiTextBinding,
     authored_ui_text_layout_presentation::UiPhysicalFontSize,
 };
+use openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView;
 
 /// Text nodes and backgrounds used to display a Zoopedia page.
 #[derive(SystemParam)]

@@ -4,6 +4,7 @@ mod animal_health_staff_job_request_generation;
 mod animal_health_state_initialization;
 mod animal_rampage_execution;
 mod animal_tranquilization_and_capture_execution;
+pub(crate) mod authored_disease_cure_execution;
 mod disease_hint_ui_action_routing;
 mod disease_mortality_execution;
 mod disease_progression_calculations;
@@ -17,8 +18,8 @@ mod veterinary_treatment_execution;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use types::{
     AimTranquilizer, AnimalCaptured, AnimalDied, CaptureAnimalRequest, FireTranquilizer,

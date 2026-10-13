@@ -34,6 +34,14 @@ pub(super) struct BehaviorTransactionPayment {
     pub(super) transaction: AssetId,
 }
 
+/// The following quantity instruction commits with this payment, preventing
+/// interruption from leaving a paid, empty container.
+#[derive(Component)]
+pub(super) struct KeeperRefillPayment {
+    pub(super) job: Entity,
+    pub(super) definition: AssetId,
+}
+
 /// Usage belongs to the account's live entity; purchase and departure update it.
 #[derive(Component, Default)]
 pub(crate) struct EconomyUsage {

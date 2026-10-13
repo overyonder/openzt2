@@ -3,7 +3,6 @@
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::locomotion::locomotion_types::NavAgent;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
 use crate::plugins::terrain::terrain_chunk_types::TerrainChunk;
@@ -11,6 +10,7 @@ use crate::plugins::terrain::terrain_chunk_types::TerrainIndex;
 use crate::plugins::terrain::terrain_edit_types::TerrainChanged;
 use crate::plugins::terrain::terrain_world_sampling::sample_terrain;
 use crate::plugins::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::fitting_surface_types::TerrainFittingSurface;
 

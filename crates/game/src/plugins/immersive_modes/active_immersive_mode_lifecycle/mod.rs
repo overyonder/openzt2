@@ -104,8 +104,12 @@ fn remove_active_immersive_mode_state_and_restore_camera(
     if let Some(subject_entity) = active_mode.subject {
         // The super-staff avatar exists only while the player walks as it.
         if active_mode.mode == ImmersiveMode::SuperStaff {
-            if let Ok(mut avatar) = commands.get_entity(subject_entity) {
-                avatar.despawn();
+            // World teardown owns world members on a phase exit. Ordinary
+            // mode cancellation still removes this temporary actor here.
+            if exit_reason != ModeExitReason::GamePhaseChanged {
+                if let Ok(mut avatar) = commands.get_entity(subject_entity) {
+                    avatar.despawn();
+                }
             }
         } else {
             commands

@@ -2,39 +2,33 @@
 
 use bevy::prelude::*;
 
-use crate::{
-    assets::localization::{
-        localization_asset_types::LocalizationAsset,
-        localization_precedence_index::LocalizationPrecedenceIndex,
+use crate::plugins::{
+    persistence::{
+        generated_photo_persistence_types::DeleteGeneratedPhotoImageAndChallengeCopies,
+        profile_types::ProfileOptions,
     },
-    plugins::{
-        persistence::{
-            generated_photo_persistence_types::DeleteGeneratedPhotoImageAndChallengeCopies,
-            profile_types::ProfileOptions,
-        },
-        world_spawn::{
-            persistent_id_types::PersistentId, persistent_id_types::PersistentIdAllocator,
-            world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldMember,
-            world_membership_types::WorldRoot,
-        },
+    world_spawn::{
+        persistent_id_types::PersistentId, persistent_id_types::PersistentIdAllocator,
+        world_load_completion_marker::WorldLoadCompleted, world_membership_types::WorldMember,
+        world_membership_types::WorldRoot,
     },
+};
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
 };
 
 use super::{
     photo_album_types::{
-        ActivePhotoAlbum, AlbumMember, DeletePhotoRequest, PhotoAlbum, PhotoAlbumCapacityPages,
-        PhotoAlbumPage, PhotoCameraRoll, INITIAL_PHOTO_ALBUM_SPREADS,
+        ActivePhotoAlbum, AlbumMember, DefaultPhotoAlbumStorageInitializedForWorld,
+        DeletePhotoRequest, PhotoAlbum, PhotoAlbumCapacityPages, PhotoAlbumPage, PhotoCameraRoll,
+        DEFAULT_PHOTO_ALBUM_NAME_KEY, INITIAL_PHOTO_ALBUM_SPREADS,
     },
     photo_capture_types::{Photo, PhotoCaptureFailed, PhotoFailure},
 };
 
-#[derive(Component)]
-pub(super) struct DefaultPhotoAlbumStorageInitializedForWorld;
-
 pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
     profile: Res<ProfileOptions>,
-    active_localization: Res<LocalizationPrecedenceIndex>,
-    localizations: Res<Assets<LocalizationAsset>>,
     mut allocator: ResMut<PersistentIdAllocator>,
     roots: Query<
         Entity,
@@ -53,23 +47,13 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
         ),
         With<PhotoAlbum>,
     >,
-    names: Query<(), With<Name>>,
     mut commands: Commands,
     mut failed: MessageWriter<PhotoCaptureFailed>,
 ) {
-    let Some(default_name) = active_localization
-        .borrow_loaded_localization_view(&localizations)
-        .and_then(|localization| {
-            localization.find_plain_localized_text(openzt2_game_data::AssetId::from_key(
-                "ztphotomode:default_album_name",
-            ))
-        })
-    else {
-        return;
-    };
+    // Allocate at the post-import boundary; pending text must not move this ID.
     for root in &roots {
         let member = WorldMember { root };
-        if let Some((album, ..)) = albums
+        let album = if let Some((album, ..)) = albums
             .iter()
             .find(|row| row.1.root == root && row.2.is_some() && row.3.is_none())
         {
@@ -78,11 +62,7 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                 PhotoAlbumPage::default(),
                 PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
             ));
-            if !names.contains(album) {
-                commands
-                    .entity(album)
-                    .insert(Name::new(default_name.to_owned()));
-            }
+            album
         } else {
             let id = match allocator.allocate(root) {
                 Ok(id) => id,
@@ -93,18 +73,19 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
                     continue;
                 }
             };
-            commands.spawn((
-                PhotoAlbum {
-                    profile: profile.profile_identifier,
-                },
-                Name::new(default_name.to_owned()),
-                member,
-                id,
-                ActivePhotoAlbum,
-                PhotoAlbumPage::default(),
-                PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
-            ));
-        }
+            commands
+                .spawn((
+                    PhotoAlbum {
+                        profile: profile.profile_identifier,
+                    },
+                    member,
+                    id,
+                    ActivePhotoAlbum,
+                    PhotoAlbumPage::default(),
+                    PhotoAlbumCapacityPages(INITIAL_PHOTO_ALBUM_SPREADS),
+                ))
+                .id()
+        };
         if !albums
             .iter()
             .any(|row| row.1.root == root && row.3.is_some())
@@ -119,7 +100,39 @@ pub(super) fn initialize_default_photo_album_and_camera_roll_for_loaded_worlds(
         }
         commands
             .entity(root)
-            .insert(DefaultPhotoAlbumStorageInitializedForWorld);
+            .insert(DefaultPhotoAlbumStorageInitializedForWorld { album });
+    }
+}
+
+pub(super) fn initialize_localized_default_photo_album_names(
+    active_localization: Res<LocalizationPrecedenceIndex>,
+    localizations: Res<Assets<LocalizationAsset>>,
+    roots: Query<(Entity, &DefaultPhotoAlbumStorageInitializedForWorld), With<WorldRoot>>,
+    unnamed_albums: Query<&WorldMember, (With<PhotoAlbum>, Without<Name>)>,
+    mut commands: Commands,
+) {
+    if unnamed_albums.is_empty() {
+        return;
+    }
+    let Some(default_name) = active_localization
+        .borrow_loaded_localization_view(&localizations)
+        .and_then(|localization| {
+            localization.find_plain_localized_text(openzt2_game_data::AssetId::from_key(
+                DEFAULT_PHOTO_ALBUM_NAME_KEY,
+            ))
+        })
+    else {
+        return;
+    };
+    for (root, storage) in &roots {
+        if unnamed_albums
+            .get(storage.album)
+            .is_ok_and(|member| member.root == root)
+        {
+            commands
+                .entity(storage.album)
+                .insert(Name::new(default_name.to_owned()));
+        }
     }
 }
 

@@ -3,7 +3,6 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use crate::plugins::habitat::{
     habitat_membership_and_containment::locate_habitat_at_world_position,
     habitat_types::HabitatIndex,
@@ -13,6 +12,8 @@ use crate::plugins::terrain::terrain_chunk_types::{
 };
 use crate::plugins::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
 use crate::plugins::topology::topology_graph_types::TopologyGrid;
+use crate::plugins::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 /// The search advances along the overhead view's heading in placement-grid
 /// cell steps and gives up after this many cells.
@@ -44,25 +45,30 @@ impl SuperStaffAvatarStartSurface<'_, '_> {
     }
 
     /// Starts on the ground beneath the overhead camera. When that point is
-    /// off the map or inside an enclosure, the search walks forward along the
-    /// camera heading; if nothing qualifies, the camera position is used.
-    pub(super) fn find_avatar_start_position(&self, camera_eye: Vec3, heading_yaw: f32) -> Vec3 {
+    /// inside an enclosure, the search walks forward along the camera heading.
+    /// Entry and the retained fallback stay within the same world edges as movement.
+    pub(super) fn find_avatar_start_position(
+        &self,
+        camera_eye: Vec3,
+        heading_yaw: f32,
+        bounds: &WorldTerrainHorizontalBounds,
+    ) -> Vec3 {
         let step =
             (Quat::from_rotation_y(heading_yaw) * Vec3::NEG_Z).xz() * AVATAR_START_SEARCH_STEP_M;
-        let mut candidate = camera_eye.xz();
+        let start = camera_eye.xz().clamp(bounds.min, bounds.max);
+        let mut candidate = start;
         for _ in 0..AVATAR_START_SEARCH_STEP_COUNT {
             if !self.is_inside_habitat(candidate) {
                 if let Some(height) = self.terrain_height_at(candidate) {
                     return Vec3::new(candidate.x, height, candidate.y);
                 }
             }
-            candidate += step;
+            candidate = (candidate + step).clamp(bounds.min, bounds.max);
         }
         Vec3::new(
-            camera_eye.x,
-            self.terrain_height_at(camera_eye.xz())
-                .unwrap_or(camera_eye.y),
-            camera_eye.z,
+            start.x,
+            self.terrain_height_at(start).unwrap_or(camera_eye.y),
+            start.y,
         )
     }
 }

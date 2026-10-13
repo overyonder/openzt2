@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::animal_shows::{UiShowAction, UiShowPlatformUpgrade};
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_edit_history_types::ConstructionEditHistory;
 use crate::plugins::construction::construction_transaction_types::DomainAckStatus;
 use crate::plugins::construction::construction_transaction_types::EditApplication;
@@ -132,6 +132,7 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
                             topology: DomainAckStatus::NotExpected,
                             placement: DomainAckStatus::NotExpected,
                             shows: DomainAckStatus::Pending,
+                            aquatic: DomainAckStatus::NotExpected,
                         },
                         ShowPlatformUpgradeEdit {
                             stage,

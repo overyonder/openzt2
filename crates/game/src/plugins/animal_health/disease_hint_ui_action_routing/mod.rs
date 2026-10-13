@@ -3,16 +3,14 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::scenarios::UiScenarioAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        information::entity_selection_types::SelectedEntity,
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
+use crate::plugins::{
+    information::entity_selection_types::SelectedEntity,
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::types::Disease;
 use crate::plugins::ui::authored_ui_action_projection_components::UiScenarioActions;

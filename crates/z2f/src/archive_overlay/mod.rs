@@ -210,6 +210,26 @@ impl ArchiveSet {
         (revision, entries)
     }
 
+    /// Returns metadata for the same winning entry used by source reads.
+    #[must_use]
+    pub fn resolved_winning_entry(&self, path: &Path) -> Option<ResolvedArchiveEntry> {
+        let path = normalize_asset_path_for_case_insensitive_archive_lookup(path);
+        let state = self
+            .overlay_state
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let winner = winning_archive_entry_for_path(&state, &path)?.clone();
+        drop(state);
+        Some(ResolvedArchiveEntry {
+            normalized_asset_path: normalize_asset_path_for_case_insensitive_archive_lookup(
+                &winner.original_archive_path,
+            ),
+            original_archive_path: winner.original_archive_path,
+            archive_priority_index: winner.archive_priority_index,
+            zip_entry_ordinal: winner.zip_entry_index,
+        })
+    }
+
     /// Returns the first enabled archive and ZIP entry which declared a path.
     ///
     /// The original `BFType` registry retained a type's first registration even

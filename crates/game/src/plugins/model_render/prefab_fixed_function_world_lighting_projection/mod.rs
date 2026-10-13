@@ -1,18 +1,17 @@
 use bevy::{camera::visibility::RenderLayers, prelude::*, render::storage::ShaderBuffer};
 
-use crate::{
-    assets::material::runtime::effect_pass_gpu_data::{
-        D3d9FixedFunctionWorldLightContexts, D3d9FixedFunctionWorldLightRegisters,
-        EffectPassMaterial, D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS, FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
-        FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT,
-    },
-    plugins::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy,
+use crate::plugins::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::{
+    D3d9FixedFunctionWorldLightContexts, D3d9FixedFunctionWorldLightRegisters, EffectPassMaterial,
+    D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS, FIXED_FUNCTION_WORLD_LIGHT_BUFFER,
+    FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT,
 };
 
 use super::{
     authored_model_material_pass_projection::{
         EffectPassMaterialRenderViewProjection, EffectPassMaterialSourceRenderLayers,
     },
+    placed_object_relocation_model_presentation::RelocationModelRenderLayers,
     prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain,
     ModelExpanded,
 };
@@ -30,7 +29,11 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
         Option<&PrefabFixedFunctionWorldLightingPolicy>,
         Option<&ChildOf>,
     )>,
-    render_layer_hierarchy: Query<(Option<&ChildOf>, Option<&RenderLayers>)>,
+    render_layer_hierarchy: Query<(
+        Option<&ChildOf>,
+        Option<&RenderLayers>,
+        Option<&RelocationModelRenderLayers>,
+    )>,
     children: Query<&Children>,
     primitives: Query<
         (

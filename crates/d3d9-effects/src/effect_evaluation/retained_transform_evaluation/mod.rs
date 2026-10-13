@@ -47,7 +47,7 @@ impl RetainedD3d9TransformExpression {
     }
 
     #[must_use]
-    pub fn output_layout(&self) -> D3d9TransformOutputLayout {
+    pub const fn output_layout(&self) -> D3d9TransformOutputLayout {
         self.output_layout
     }
 
@@ -119,9 +119,14 @@ struct RetainedMojoShaderEffectAllocation(MojoShaderEffectAllocationOwner);
 // the Mutex/Arc lifetime. Native shader reference counters are never accessed concurrently.
 // The compiled allocation is only initialized by the loading path; later evaluations
 // read it and mutate exclusively their own parameter buffers and register storage.
+// Scratch borrows metadata but is dropped before the lock guard on every return
+// path. The last Arc uniquely owns final destruction, including after poisoning.
+// The general allocation owner remains non-Send: it also represents that borrowed
+// scratch, which must not escape its program's locked lifetime.
 #[allow(
     unsafe_code,
-    reason = "audited CPU allocation transfer behind serialized ownership"
+    clippy::non_send_fields_in_send_ty,
+    reason = "only this private wrapper transfers the owned CPU allocation under Arc/Mutex; the raw owner also represents borrowed scratch"
 )]
 unsafe impl Send for RetainedMojoShaderEffectAllocation {}
 

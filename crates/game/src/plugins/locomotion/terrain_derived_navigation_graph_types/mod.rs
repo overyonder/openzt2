@@ -11,9 +11,11 @@ pub(super) struct TerrainDerivedNavigationGraph {
     pub(super) navigation_nodes: Box<[TerrainDerivedNavigationGraphNode]>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct TerrainDerivedNavigationGraphNode {
     pub(super) height_centimetres: i32,
+    pub(super) minimum_triangle_normal_y: f32,
+    /// Free distance from the cell centre; agents compare it with their radius.
     pub(super) clearance_centimetres: u16,
     pub(super) water_depth_centimetres: u16,
     pub(super) eligibility_flags: NavFlags,
@@ -38,6 +40,7 @@ pub(super) enum TerrainDerivedNavigationGraphTraversalKind {
 pub(super) struct TerrainDerivedNavigationGraphEdge {
     pub(super) destination_node: u32,
     pub(super) traversal_cost_millimetres: u32,
+    /// Corridor width between two cells; agents compare it with their diameter.
     pub(super) width_centimetres: u16,
     pub(super) traversal_kind: TerrainDerivedNavigationGraphTraversalKind,
     pub(super) edge_flags: TerrainDerivedNavigationGraphEdgeFlags,

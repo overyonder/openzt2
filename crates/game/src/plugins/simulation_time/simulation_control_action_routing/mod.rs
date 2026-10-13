@@ -2,15 +2,17 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::simulation_time::UiSimulationAction;
 
 use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::input::input_types::{ActionRequest, GameAction},
+    plugins::input::input_types::{ActionRequest, ActionSource, GameAction},
     plugins::ui::{
         authored_ui_node_projection_components::UiDocumentOwner,
         authored_ui_node_projection_components::UiDocumentRoot,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
-use super::simulation_control_types::{SetSimulationPaused, SimulationControl};
+use super::simulation_control_types::{
+    AuthoredUiTemporarySimulationPause, SimulationControl, SimulationPauseRequest,
+};
 use crate::plugins::ui::authored_ui_action_projection_components::UiSimulationActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
 
@@ -18,28 +20,34 @@ use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
 pub(super) fn route_pause_game_action_to_simulation_control_requests(
     mut requested_game_actions: MessageReader<ActionRequest>,
     simulation_control: Option<Res<SimulationControl>>,
-    mut requested_pause_changes: MessageWriter<SetSimulationPaused>,
+    mut requested_pause_changes: MessageWriter<SimulationPauseRequest>,
 ) {
-    let Some(simulation_control) = simulation_control else {
+    if simulation_control.is_none() {
         return;
-    };
-    let mut next_paused_state = simulation_control.paused;
+    }
     for requested_game_action in requested_game_actions.read() {
         if requested_game_action.action == GameAction::Pause {
-            next_paused_state = !next_paused_state;
-            requested_pause_changes.write(SetSimulationPaused(next_paused_state));
+            requested_pause_changes.write(SimulationPauseRequest::ToggleRequested);
         }
     }
 }
 
 pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_requests(
+    mut commands: Commands,
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
+    mut game_actions: MessageReader<ActionRequest>,
+    hotkey_input: crate::plugins::ui::authored_hotkey_keyboard_activation::AuthoredHotkeyGameplayInputOverlap,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
     simulation_control: Option<Res<SimulationControl>>,
-    mut requested_pause_changes: MessageWriter<SetSimulationPaused>,
+    mut requested_pause_changes: MessageWriter<SimulationPauseRequest>,
 ) {
+    let keyboard_pause_was_translated = game_actions.read().fold(false, |translated, request| {
+        translated
+            || (request.action == GameAction::Pause
+                && request.source == ActionSource::KeyboardMouse)
+    });
     for activated_ui_node in activated_ui_nodes.read() {
         let Ok((authored_action_range, document_owner)) =
             simulation_action_nodes.get(activated_ui_node.node)
@@ -58,12 +66,27 @@ pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_request
             }
             match &authored_action_record.action {
                 UiSimulationAction::SetSimulationPaused { paused } => {
-                    requested_pause_changes.write(SetSimulationPaused(*paused));
+                    requested_pause_changes.write(SimulationPauseRequest::Set(*paused));
+                }
+                UiSimulationAction::SetTemporarySimulationPauseHeld { held } => {
+                    if simulation_control.is_none() {
+                        continue;
+                    }
+                    commands
+                        .entity(activated_ui_node.node)
+                        .insert(AuthoredUiTemporarySimulationPause(*held));
                 }
                 UiSimulationAction::ToggleSimulationPaused => {
-                    if let Some(simulation_control) = simulation_control.as_deref() {
-                        requested_pause_changes
-                            .write(SetSimulationPaused(!simulation_control.paused));
+                    // The same physical pause chord also has an authored HUD
+                    // receiver. Preserve other authored toggles as independent requests.
+                    let translated_echo = keyboard_pause_was_translated
+                        && activated_ui_node.source == ActionSource::KeyboardMouse
+                        && hotkey_input.uses_just_translated_game_action_chord(
+                            activated_ui_node.node,
+                            GameAction::Pause,
+                        );
+                    if simulation_control.is_some() && !translated_echo {
+                        requested_pause_changes.write(SimulationPauseRequest::ToggleRequested);
                     }
                 }
             }

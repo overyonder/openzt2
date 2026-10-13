@@ -28,7 +28,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     commands: &mut Commands,
     application: EditApplication,
     edit: &PreparedObjectPlacementMutation,
-    catalogue: crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     placed: &mut Query<(

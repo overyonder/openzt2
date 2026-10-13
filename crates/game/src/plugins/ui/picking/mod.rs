@@ -11,9 +11,21 @@ use bevy::{
     window::PrimaryWindow,
 };
 
-use crate::assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
+use openzt2_game_assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
 
 use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
+use super::{
+    authored_reusable_list_and_table_runtime_types::UiListPolicy,
+    authored_window_interaction::UiAuthoredWindowInteractionPolicy,
+};
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UiWheelCapture {
+    #[default]
+    World,
+    Blocked,
+    Scroll(Entity),
+}
 
 /// Whether the mouse currently resolves to an authored UI surface.
 ///
@@ -24,6 +36,7 @@ use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 pub(crate) struct UiPointerCapture {
     pub(crate) over_ui: bool,
     pub(crate) target: Option<Entity>,
+    pub(crate) wheel: UiWheelCapture,
     /// The live leaf which accepted this primary press, retained while held.
     pressed_target: Option<Entity>,
 }
@@ -58,6 +71,17 @@ pub(super) fn alpha_ui_picking(
     )>,
     clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
     parents: Query<&ChildOf, Without<OverrideClip>>,
+    hierarchy: Query<&ChildOf>,
+    scroll_panels: Query<
+        (
+            &ComputedNode,
+            &UiGlobalTransform,
+            &Node,
+            Option<&UiListPolicy>,
+            Option<&UiAuthoredWindowInteractionPolicy>,
+        ),
+        With<ScrollPosition>,
+    >,
     metadata: Res<Assets<InteractiveTextureMetadataAsset>>,
     pointer_input: Res<crate::plugins::input::input_types::PrimaryPointerInputState>,
     mut capture: ResMut<UiPointerCapture>,
@@ -70,9 +94,15 @@ pub(super) fn alpha_ui_picking(
     *capture = UiPointerCapture {
         over_ui: modal_input.0.is_some(),
         target: None,
+        wheel: if modal_input.0.is_some() {
+            UiWheelCapture::Blocked
+        } else {
+            UiWheelCapture::World
+        },
         pressed_target: None,
     };
     let mut mouse_hit = None::<(f32, Entity)>;
+    let mut mouse_wheel_hit = None::<(f32, UiWheelCapture)>;
     for (pointer, location) in pointers
         .iter()
         .filter_map(|(pointer, location)| Some((*pointer, location.location()?)))
@@ -94,6 +124,7 @@ pub(super) fn alpha_ui_picking(
 
             let mut picks = Vec::new();
             let mut depth = 0.0;
+            let mut wheel_hit = None;
             'stack: for partition in ui_stack.partition.iter().rev() {
                 for entity in ui_stack.uinodes[partition.clone()].iter().rev().copied() {
                     let Ok((
@@ -110,13 +141,37 @@ pub(super) fn alpha_ui_picking(
                         continue;
                     };
                     let interactive = interaction_enabled.is_some();
-                    if modal_input.0.is_some_and(|modal| !context.is_in_modal(entity, modal))
-                        || (pickable.is_none() && !interactive)
+                    if modal_input
+                        .0
+                        .is_some_and(|modal| !context.is_in_modal(entity, modal))
                         || target_camera.get() != Some(camera_entity)
                         || node.size() == Vec2::ZERO
                         || inherited_visibility.is_none_or(|visibility| !visibility.get())
-                        || !node.contains_point(*transform, pointer_position)
+                        || !authored_node_rectangle_contains_point(
+                            node,
+                            *transform,
+                            pointer_position,
+                        )
                         || !clip_check_recursive(pointer_position, entity, &clipping, &parents)
+                    {
+                        continue;
+                    }
+                    // A list's wheel viewport is rectangular even when its
+                    // click policy ignores empty space or transparent icons.
+                    if pointer.is_mouse() && wheel_hit.is_none() {
+                        if scroll_panels
+                            .get(entity)
+                            .is_ok_and(|(_, _, node, list, window)| {
+                                (list.is_some()
+                                    || window.is_some_and(|policy| policy.accepts_wheel_scroll()))
+                                    && (node.overflow.x == OverflowAxis::Scroll
+                                        || node.overflow.y == OverflowAxis::Scroll)
+                            })
+                        {
+                            wheel_hit = Some(UiWheelCapture::Scroll(entity));
+                        }
+                    }
+                    if (pickable.is_none() && !interactive)
                         // Every projected node carries an explicit policy.
                         // `Pickable::IGNORE` must pass through to the world;
                         // reporting it would make the canvas root capture the
@@ -133,6 +188,39 @@ pub(super) fn alpha_ui_picking(
                         !alpha_hit(&metadata, alpha, normalized.clamp(Vec2::ZERO, Vec2::ONE))
                     }) {
                         continue;
+                    }
+                    if pointer.is_mouse()
+                        && wheel_hit.is_none()
+                        && (interactive
+                            || pickable.is_none_or(|pickable| pickable.should_block_lower))
+                    {
+                        let receiver = std::iter::once(entity)
+                            .chain(hierarchy.iter_ancestors::<ChildOf>(entity))
+                            .find(|candidate| {
+                                scroll_panels.get(*candidate).is_ok_and(
+                                    |(node, transform, policy, list, window)| {
+                                        (list.is_some()
+                                            || window.is_some_and(|policy| {
+                                                policy.accepts_wheel_scroll()
+                                            }))
+                                            && (policy.overflow.x == OverflowAxis::Scroll
+                                                || policy.overflow.y == OverflowAxis::Scroll)
+                                            && authored_node_rectangle_contains_point(
+                                                node,
+                                                *transform,
+                                                pointer_position,
+                                            )
+                                            && clip_check_recursive(
+                                                pointer_position,
+                                                *candidate,
+                                                &clipping,
+                                                &parents,
+                                            )
+                                    },
+                                )
+                            });
+                        wheel_hit =
+                            Some(receiver.map_or(UiWheelCapture::Blocked, UiWheelCapture::Scroll));
                     }
                     picks.push((
                         entity,
@@ -162,6 +250,12 @@ pub(super) fn alpha_ui_picking(
                     depth += 0.000_01;
                 }
             }
+            if let Some(wheel_hit) = wheel_hit {
+                let order = camera.order as f32 + 0.5;
+                if mouse_wheel_hit.is_none_or(|(current, _)| order > current) {
+                    mouse_wheel_hit = Some((order, wheel_hit));
+                }
+            }
             if !picks.is_empty() {
                 if pointer.is_mouse() {
                     capture.over_ui = true;
@@ -172,6 +266,9 @@ pub(super) fn alpha_ui_picking(
     }
 
     capture.target = mouse_hit.map(|(_, entity)| entity);
+    if let Some((_, wheel_hit)) = mouse_wheel_hit {
+        capture.wheel = wheel_hit;
+    }
     capture.pressed_target = if pointer_input.just_pressed {
         capture.target
     } else if pointer_input.pressed {
@@ -203,6 +300,25 @@ pub(super) fn alpha_ui_picking(
         };
         interaction.set_if_neq(next);
     }
+}
+
+/// Whether `point` lies in the node's rectangle, edges included.
+///
+/// Bevy's `ComputedNode::contains_point` excludes the edges, so the shared
+/// edge of two touching nodes belongs to neither. Original layouts tile
+/// controls edge to edge: the boot splash covers the screen with six touching
+/// buttons, and a click on the screen's centre line hit none of them.
+/// Including both edges lets the uppermost of the two touching nodes take the
+/// click. Authored nodes have no rounded corners.
+fn authored_node_rectangle_contains_point(
+    node: &ComputedNode,
+    transform: UiGlobalTransform,
+    point: Vec2,
+) -> bool {
+    transform
+        .try_inverse()
+        .map(|inverse| inverse.transform_point2(point))
+        .is_some_and(|local| (local.abs() - 0.5 * node.size()).max_element() <= 0.0)
 }
 
 fn alpha_hit(

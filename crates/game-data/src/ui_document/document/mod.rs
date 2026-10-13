@@ -72,4 +72,5 @@ pub enum UiDocumentRole {
     AnimalCareCatalogue,
     ChallengeOffer,
     SaveGame,
+    InstantChallengeOffer,
 }

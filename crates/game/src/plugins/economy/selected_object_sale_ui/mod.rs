@@ -1,22 +1,20 @@
 use super::facility_economy_types::CurrentSellQuote;
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        world_definitions::{
-            world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-            world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
-        },
-    },
-    plugins::{
-        information::entity_selection_types::SelectedEntity,
-        ui::authored_ui_text_content_binding::UiTextBinding,
-        world_spawn::world_membership_types::DefinitionId,
-    },
+use crate::plugins::{
+    information::entity_selection_types::SelectedEntity,
+    ui::authored_ui_text_content_binding::UiTextBinding,
+    world_spawn::world_membership_types::DefinitionId,
 };
 use bevy::prelude::*;
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
+    },
+    world_definitions::{
+        world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+        world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    },
+};
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
@@ -24,7 +22,8 @@ use openzt2_game_data::{
 
 pub(super) fn project_selected_object_sale_confirmation(
     selected: Res<SelectedEntity>,
-    objects: Query<(&DefinitionId, Option<&Name>, Ref<CurrentSellQuote>)>,
+    objects: Query<(Option<&DefinitionId>, Option<&Name>, Ref<CurrentSellQuote>)>,
+    transport_sales: crate::plugins::transport_tours::transport_track_sale::TransportTrackSaleQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -36,9 +35,15 @@ pub(super) fn project_selected_object_sale_confirmation(
     let object = selected.0.and_then(|entity| objects.get(entity).ok());
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
     let definition = object.as_ref().and_then(|(definition, _, _)| {
-        active_definitions
-            .get(&definitions)?
-            .find_object(definition.0)
+        let definitions = active_definitions.get(&definitions)?;
+        let transport_definition = selected
+            .0
+            .and_then(|target| transport_sales.definition(target))
+            .and_then(|track| definitions.find_track(track))
+            .map(|track| track.object);
+        definitions.find_object(
+            transport_definition.or_else(|| definition.map(|definition| definition.0))?,
+        )
     });
     for (binding, mut text) in &mut fields {
         if !matches!(

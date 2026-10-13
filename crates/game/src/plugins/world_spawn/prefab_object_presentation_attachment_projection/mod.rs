@@ -3,8 +3,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::{
     physical_presentation_state::{
@@ -26,7 +26,7 @@ pub(super) fn project_default_authored_world_object_presentation_attachments(
     mut commands: Commands,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    prefab_assets: Res<Assets<crate::assets::scene_prefab::ScenePrefabAsset>>,
+    prefab_assets: Res<Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     mut pending: Query<
         (
             Entity,

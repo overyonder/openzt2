@@ -8,13 +8,11 @@ use openzt2_game_data::scene_prefab::{
     PrefabDirectionalLightKey, PrefabRailCameraCommand, PrefabRailCameraKey,
 };
 
-use crate::{
-    assets::scene_prefab::ScenePrefabAsset,
-    plugins::world_spawn::{
-        prefab_ambient_light_contribution::PrefabAmbientLightContribution,
-        prefab_presentation_render_tree::spawn_prefab_render_tree,
-    },
+use crate::plugins::world_spawn::{
+    prefab_ambient_light_contribution::PrefabAmbientLightContribution,
+    prefab_presentation_render_tree::spawn_prefab_render_tree,
 };
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::authored_ui_selection_state::UiSelected;
 

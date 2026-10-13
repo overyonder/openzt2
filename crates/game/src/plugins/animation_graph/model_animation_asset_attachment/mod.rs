@@ -1,15 +1,15 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::{
-        animation_playback::animation_playback_controller_types::{
-            AnimationPlaybackClock, AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
-            AnimationPlaybackState,
-        },
-        model_render::ModelExpanded,
-        world_spawn::prefab_presentation_types::PrefabModel,
+use crate::plugins::{
+    animation_playback::animation_playback_controller_types::{
+        AnimationPlaybackClock, AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
+        AnimationPlaybackState,
     },
+    model_render::ModelExpanded,
+    world_spawn::prefab_presentation_types::PrefabModel,
+};
+use openzt2_game_assets::{
+    animation::animation_set_asset_types::AnimationSetAsset, source_document::path::AssetPath,
 };
 
 use super::{
@@ -25,6 +25,8 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,
+    presentation_owners: Query<&AnimationPresentationOwner>,
+    parents: Query<&ChildOf>,
     pending_prefab_models: Query<
         (
             Entity,
@@ -69,7 +71,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         assert!(
             initial_animation_set_asset.model_asset_path.is_empty()
                 || openzt2_game_data::AssetId::from_virtual_path(
-                    &initial_animation_set_asset.model_asset_path,
+                    &AssetPath::new(&initial_animation_set_asset.model_asset_path).key(),
                 ) == prefab_model.model
                 // Archive paths are case-insensitive: manifests store them
                 // lowercased while prefabs keep the authored casing.
@@ -140,7 +142,13 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         prefab_model_commands.insert((
             ModelAnimationAttachmentResolved,
             AnimationPresentationOwner {
-                gameplay_entity: prefab_model_parent.map_or(prefab_model_entity, ChildOf::parent),
+                gameplay_entity: prefab_model_parent.map_or(prefab_model_entity, |parent| {
+                    std::iter::successors(Some(parent.parent()), |entity| {
+                        parents.get(*entity).ok().map(ChildOf::parent)
+                    })
+                    .find_map(|entity| presentation_owners.get(entity).ok())
+                    .map_or(parent.parent(), |owner| owner.gameplay_entity)
+                }),
             },
             ModelAnimationAssetLibrary {
                 loaded_model_animation_set_asset_handles,
@@ -201,15 +209,22 @@ fn select_initial_animation_clip_asset_key(
                     })
             },
             |graph_node| {
-                select_preferred_animation_clip_from_graph_node(animation_set_asset, graph_node)
-                    .or_else(|| {
-                        select_preferred_unloaded_animation_clip_from_graph_node(
-                            animation_set_asset,
-                            graph_node,
-                        )
-                    })
+                select_initial_animation_clip_asset_key_from_graph_node(
+                    animation_set_asset,
+                    graph_node,
+                )
             },
         )
+}
+
+/// The clip a model starts in when it enters `graph_node`, loaded or not.
+pub(crate) fn select_initial_animation_clip_asset_key_from_graph_node(
+    animation_set_asset: &AnimationSetAsset,
+    graph_node: &openzt2_game_data::animation::animation_set::AuthoredAnimationGraphNode,
+) -> Option<String> {
+    select_preferred_animation_clip_from_graph_node(animation_set_asset, graph_node).or_else(|| {
+        select_preferred_unloaded_animation_clip_from_graph_node(animation_set_asset, graph_node)
+    })
 }
 
 fn select_preferred_unloaded_animation_clip_from_graph_node(

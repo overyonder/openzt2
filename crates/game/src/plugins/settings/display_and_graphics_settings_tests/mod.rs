@@ -1,19 +1,21 @@
 use bevy::{prelude::*, window::PrimaryWindow};
+use openzt2_game_assets::graphics_settings_types::{
+    GraphicsSettings, ReplaceGraphicsSettingsRequest,
+};
 
 use crate::{
     application_schedule::GameSet,
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     plugins::{
         camera::camera_runtime_state_types::ZooCamera,
         environment::environment_presentation_types::EnvironmentLight,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::{
     display_settings_types::{
         DisplayMode, DisplaySettings, FramePacing, ReplaceDisplaySettingsRequest,
     },
-    graphics_settings_types::{GraphicsSettings, ReplaceGraphicsSettingsRequest},
     SettingsPlugin,
 };
 

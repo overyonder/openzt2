@@ -2,18 +2,23 @@ use super::{
     prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
     prefab_presentation_types::PrefabPresentation, world_membership_types::DefinitionId,
 };
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::{
+use crate::plugins::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use bevy::prelude::*;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use bevy::prelude::*;
 use openzt2_game_data::{
     world_definitions::world_objects::WorldObjectNamedPhysicalPresentationDefinition, AssetId,
 };
 
 #[derive(Component)]
 pub(super) struct NamedPhysicalPresentationsHydrated;
+
+/// A named physical object of its parent entity, such as a food stand's vendor.
+#[derive(Component)]
+pub(super) struct NamedPhysicalPresentation;
 
 pub(super) fn hydrate_required_named_physical_presentations(
     mut commands: Commands,
@@ -64,6 +69,7 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
             Visibility::Inherited,
             ChildOf(owner),
             PrefabAuthoredAttachmentIdentifier(presentation.name),
+            NamedPhysicalPresentation,
         ));
         if let Some(prefab) = prefab {
             child.insert(PrefabPresentation::new(prefab));
@@ -72,4 +78,29 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
     commands
         .entity(owner)
         .insert(NamedPhysicalPresentationsHydrated);
+}
+
+/// A named physical object performs its owner's behaviors, as a food stand's
+/// vendor hands over money and food, so its animations belong to the owner.
+/// Runs after animation attachment has given the controller its direct parent.
+pub(super) fn project_named_presentation_animation_owners(
+    mut controllers: Query<
+        (Entity, &mut AnimationPresentationOwner),
+        Changed<AnimationPresentationOwner>,
+    >,
+    parents: Query<&ChildOf>,
+    presentations: Query<&ChildOf, With<NamedPhysicalPresentation>>,
+) {
+    for (controller, mut owner) in &mut controllers {
+        let Some(presentation_owner) = parents
+            .iter_ancestors::<ChildOf>(controller)
+            .find_map(|ancestor| presentations.get(ancestor).ok())
+            .map(ChildOf::parent)
+        else {
+            continue;
+        };
+        if owner.gameplay_entity != presentation_owner {
+            owner.gameplay_entity = presentation_owner;
+        }
+    }
 }

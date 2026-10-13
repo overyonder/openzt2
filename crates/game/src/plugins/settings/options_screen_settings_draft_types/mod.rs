@@ -1,6 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 
-use super::{display_settings_types::DisplaySettings, graphics_settings_types::GraphicsSettings};
+use super::display_settings_types::DisplaySettings;
 
 /// Options-screen working copy. Accepted renderer resources remain unchanged
 /// until the authored accept action publishes replacement requests.

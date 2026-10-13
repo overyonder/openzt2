@@ -3,23 +3,25 @@
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
     behavior::eligibility::{
-        BehaviorCandidateEligibilityFact, BehaviorEligibilityFactComparison,
-        BehaviorEligibilityFactInput, BehaviorEligibilityFactValue, BehaviorSpatialEligibilityFact,
+        BehaviorCandidateEligibilityFact, BehaviorConditionEligibilityFact,
+        BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
+        BehaviorEligibilityFactValue, BehaviorSpatialEligibilityFact,
         BehaviorWelfareEligibilityFact,
     },
     world_definitions::guest_simulation_definitions::GuestNeedKind,
     AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_welfare::types::NeedTriggerState;
 use crate::plugins::animal_welfare::types::MAX_NEED_Q16;
 use crate::plugins::animal_welfare::types::Q16_ONE;
 
 use super::guest_simulation_types::*;
 
-/// Guest need ordering is local to this adapter; the hysteresis algorithm is shared.
+/// Trigger bits follow `GuestNeedKind` declaration order, then the signed
+/// viewing and happiness states; the hysteresis algorithm is shared.
 #[derive(Component, Default)]
 pub(super) struct GuestNeedTriggers {
     state: NeedTriggerState,
@@ -35,15 +37,19 @@ pub(super) struct GuestTaskNeedFacts {
     rest: &'static GuestEnergy,
     bathroom: &'static GuestRestroom,
     social: &'static GuestSocial,
+    amusement: &'static GuestAmusement,
     viewing: Option<&'static GuestViewingNeed>,
     happiness: Option<&'static GuestSatisfaction>,
 }
 
 impl GuestTaskNeedFactsItem<'_, '_> {
+    /// `subject_types` holds the archetype's authored type flags, such as the
+    /// `b_NoBuyHeadGift` a costumed guest carries.
     pub(super) fn satisfies(
         &self,
         fact: &BehaviorCandidateEligibilityFact,
         triggers: &GuestNeedTriggers,
+        subject_types: &[AssetId],
     ) -> bool {
         let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
             return false;
@@ -61,6 +67,7 @@ impl GuestTaskNeedFactsItem<'_, '_> {
                     BehaviorWelfareEligibilityFact::Rest => "rest",
                     BehaviorWelfareEligibilityFact::Bathroom => "bathroom",
                     BehaviorWelfareEligibilityFact::Social => "social",
+                    BehaviorWelfareEligibilityFact::Amusement => "amusement",
                     BehaviorWelfareEligibilityFact::Happiness => "happiness",
                     _ => return false,
                 };
@@ -68,6 +75,22 @@ impl GuestTaskNeedFactsItem<'_, '_> {
                     return false;
                 };
                 value
+            }
+            BehaviorEligibilityFactInput::Condition(condition) => {
+                let flag = match condition {
+                    BehaviorConditionEligibilityFact::NoBuyBackGift => "b_nobuybackgift",
+                    BehaviorConditionEligibilityFact::NoBuyHeadGift => "b_nobuyheadgift",
+                    BehaviorConditionEligibilityFact::NoBuyLeftHandGift => "b_nobuylhandgift",
+                    BehaviorConditionEligibilityFact::NoBuyRightHandGift => "b_nobuyrhandgift",
+                    BehaviorConditionEligibilityFact::NoBuyShirtGift => "b_nobuyshirtgift",
+                    BehaviorConditionEligibilityFact::NoBuyWaistGift => "b_nobuywaistgift",
+                    _ => return false,
+                };
+                if subject_types.contains(&AssetId::from_key(flag)) {
+                    1 << 16
+                } else {
+                    0
+                }
             }
             _ => return false,
         };
@@ -90,6 +113,7 @@ impl GuestTaskNeedFactsItem<'_, '_> {
             GuestNeedKind::Energy => (self.rest.value, self.rest.residual_q16),
             GuestNeedKind::Restroom => (self.bathroom.value, self.bathroom.residual_q16),
             GuestNeedKind::Social => (self.social.value, self.social.residual_q16),
+            GuestNeedKind::Amusement => (self.amusement.value, self.amusement.residual_q16),
         };
         (i32::from(value) * Q16_ONE + i32::from(residual)).clamp(0, MAX_NEED_Q16)
     }
@@ -103,12 +127,20 @@ impl GuestTaskNeedFactsItem<'_, '_> {
             return self
                 .happiness
                 .filter(|_| triggers.happiness_authored)
-                .map(|need| (need.source_q16(), triggers.state.0 & (1 << 8) != 0));
+                .map(|need| {
+                    (
+                        need.source_q16(),
+                        triggers.state.0 & (1 << HAPPINESS_TRIGGER_BIT) != 0,
+                    )
+                });
         }
         if attribute == AssetId::from_key("viewanimals") {
-            return self
-                .viewing
-                .map(|need| (need.value_q16, triggers.state.0 & (1 << 7) != 0));
+            return self.viewing.map(|need| {
+                (
+                    need.value_q16,
+                    triggers.state.0 & (1 << VIEWING_TRIGGER_BIT) != 0,
+                )
+            });
         }
         [
             ("hunger", GuestNeedKind::Hunger),
@@ -118,6 +150,7 @@ impl GuestTaskNeedFactsItem<'_, '_> {
             ("rest", GuestNeedKind::Energy),
             ("bathroom", GuestNeedKind::Restroom),
             ("social", GuestNeedKind::Social),
+            ("amusement", GuestNeedKind::Amusement),
         ]
         .into_iter()
         .find_map(|(name, kind)| {
@@ -131,16 +164,11 @@ impl GuestTaskNeedFactsItem<'_, '_> {
     }
 }
 
-fn need_index(kind: GuestNeedKind) -> usize {
-    match kind {
-        GuestNeedKind::Hunger => 0,
-        GuestNeedKind::Thirst => 1,
-        GuestNeedKind::Dessert => 2,
-        GuestNeedKind::Gift => 3,
-        GuestNeedKind::Energy => 4,
-        GuestNeedKind::Restroom => 5,
-        GuestNeedKind::Social => 6,
-    }
+const VIEWING_TRIGGER_BIT: usize = 8;
+const HAPPINESS_TRIGGER_BIT: usize = 9;
+
+const fn need_index(kind: GuestNeedKind) -> usize {
+    kind as usize
 }
 
 pub(super) fn observe_guest_need_triggers(
@@ -177,7 +205,7 @@ pub(super) fn observe_guest_need_triggers(
             );
         }
         // This need preserves signed authored thresholds; -100 must not be
-        // clamped to zero by the older seven-need unsigned wellness schema.
+        // clamped to zero by the unsigned wellness needs.
         if let Some(policy) = definition.viewing_need {
             let value = facts.viewing.map_or_else(
                 || GuestViewingNeed::new(policy.initial_q16).value_q16,
@@ -187,18 +215,18 @@ pub(super) fn observe_guest_need_triggers(
                 .trigger_q16
                 .is_some_and(|threshold| value >= threshold)
             {
-                state.state.0 |= 1 << 7;
+                state.state.0 |= 1 << VIEWING_TRIGGER_BIT;
             } else if policy
                 .cessation_q16
                 .is_some_and(|threshold| value <= threshold)
             {
-                state.state.0 &= !(1 << 7);
+                state.state.0 &= !(1 << VIEWING_TRIGGER_BIT);
             }
             if facts.viewing.is_none() {
                 commands.entity(entity).insert(GuestViewingNeed::new(value));
             }
         } else {
-            state.state.0 &= !(1 << 7);
+            state.state.0 &= !(1 << VIEWING_TRIGGER_BIT);
             if facts.viewing.is_some() {
                 commands.entity(entity).remove::<GuestViewingNeed>();
             }
@@ -210,15 +238,15 @@ pub(super) fn observe_guest_need_triggers(
                 .trigger_q16
                 .is_some_and(|threshold| value >= threshold)
             {
-                state.state.0 |= 1 << 8;
+                state.state.0 |= 1 << HAPPINESS_TRIGGER_BIT;
             } else if policy
                 .cessation_q16
                 .is_some_and(|threshold| value <= threshold)
             {
-                state.state.0 &= !(1 << 8);
+                state.state.0 &= !(1 << HAPPINESS_TRIGGER_BIT);
             }
         } else {
-            state.state.0 &= !(1 << 8);
+            state.state.0 &= !(1 << HAPPINESS_TRIGGER_BIT);
         }
         if triggers.is_none() {
             commands.entity(entity).insert(initial);

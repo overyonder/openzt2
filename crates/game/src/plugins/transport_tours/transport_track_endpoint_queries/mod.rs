@@ -4,7 +4,7 @@ use super::transport_topology_types::TrackProfile;
 use super::transport_topology_types::TrackSegment;
 use super::transport_topology_types::TransportStation;
 use super::transport_topology_types::TransportTrackJunction;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;

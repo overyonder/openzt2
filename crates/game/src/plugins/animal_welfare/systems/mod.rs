@@ -1,16 +1,13 @@
 use bevy::prelude::*;
 use openzt2_game_data::species::{NeedKind, SpeciesNeed};
 
-use crate::{
-    assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets},
-    plugins::{
-        animal_health::types::Dead,
-        animal_lifecycle::types::{Animal, SpeciesHandle},
-        habitat::habitat_types::{HabitatChanged, HabitatMember, HabitatSummary},
-        simulation_time::deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
-        world_spawn::persistent_id_types::PersistentId,
-    },
+use crate::plugins::{
+    animal_health::types::Dead,
+    animal_lifecycle::types::{Animal, SpeciesHandle},
+    simulation_time::deterministic_random_stream::{DeterministicRng, RngDomain, ZooSeed},
+    world_spawn::persistent_id_types::PersistentId,
 };
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 
 use super::{
     calculations::{
@@ -60,17 +57,11 @@ pub(super) fn initialize_animal_needs(
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
-        (
-            Entity,
-            &PersistentId,
-            &SpeciesHandle,
-            Option<&HabitatMember>,
-        ),
+        (Entity, &PersistentId, &SpeciesHandle),
         (With<Animal>, Without<AnimalWelfare>, Without<Dead>),
     >,
-    habitats: Query<&HabitatSummary>,
 ) {
-    for (entity, persistent_id, species, member) in &animals {
+    for (entity, persistent_id, species) in &animals {
         let Some(needs) = species_needs(&index, &assets, species) else {
             continue;
         };
@@ -83,10 +74,8 @@ pub(super) fn initialize_animal_needs(
             let sampled = minimum + random.range_u32(width).unwrap_or_default() as u16;
             i32::from(sampled) * Q16_ONE
         });
-        let suitability = member
-            .and_then(|member| habitats.get(member.habitat_entity).ok())
-            .and_then(|summary| index.get(&assets).map(|_| suitability(summary, needs)))
-            .unwrap_or_default();
+        // The next assessment uses live membership and species population.
+        let suitability = HabitatSuitability::default();
         let value = calculate_mean_animal_welfare_with_habitat_limit(
             std::array::from_fn(|index| initial[index]),
             suitability,
@@ -400,82 +389,6 @@ pub(super) fn set_animal_need(
     }
 }
 
-/// Weight the habitat biome areas by the species preferences.
-fn resolve_biome_map_score(summary: &HabitatSummary, environment: &SpeciesNeed) -> u16 {
-    let total = summary.land_area_square_metres + summary.water_area_square_metres;
-    if total <= 0.0 || !total.is_finite() {
-        return 0;
-    }
-    let preferences = &environment.preferences;
-    if preferences.is_empty() {
-        return 1000;
-    }
-    let mut weighted = 0.0_f64;
-    let mut weights = 0.0_f64;
-    for preference in preferences {
-        let weight = f64::from(preference.weight.max(0));
-        let area = summary
-            .biome_areas_square_metres
-            .iter()
-            .find(|(id, _)| id.0 == preference.target.0)
-            .map_or(0.0, |(_, area)| *area);
-        let quality = ((area / total).clamp(0.0, 1.0) * 1000.0).round() as u16;
-        let accepted = if quality >= preference.minimum_quality {
-            quality
-        } else {
-            0
-        };
-        weighted += f64::from(accepted) * weight;
-        weights += weight;
-    }
-    if weights == 0.0 {
-        1000
-    } else {
-        (weighted / weights).round().clamp(0.0, 1000.0) as u16
-    }
-}
-
-fn suitability(summary: &HabitatSummary, needs: [&SpeciesNeed; 11]) -> HabitatSuitability {
-    let has_space = !summary.boundary_is_breached
-        && summary.land_area_square_metres + summary.water_area_square_metres > 0.0;
-    let space = if has_space { 1000 } else { 0 };
-    let biome = resolve_biome_map_score(summary, needs[7]);
-    HabitatSuitability {
-        space,
-        biome,
-        overall: space.min(biome),
-    }
-}
-
-pub(super) fn assess_habitat_suitability(
-    assets: Res<Assets<SpeciesAsset>>,
-    index: Res<SpeciesAssets>,
-    mut events: MessageReader<HabitatChanged>,
-    mut animals: Query<
-        (&SpeciesHandle, &HabitatMember, &mut HabitatSuitability),
-        (With<Animal>, Without<Dead>),
-    >,
-    habitats: Query<&HabitatSummary>,
-) {
-    for event in events.read() {
-        let Ok(summary) = habitats.get(event.habitat_entity) else {
-            continue;
-        };
-        for (species, member, mut current) in &mut animals {
-            if member.habitat_entity != event.habitat_entity {
-                continue;
-            }
-            let Some(needs) = species_needs(&index, &assets, species) else {
-                continue;
-            };
-            let next = suitability(summary, needs);
-            if *current != next {
-                *current = next;
-            }
-        }
-    }
-}
-
 pub(super) fn derive_animal_welfare(
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
@@ -532,9 +445,6 @@ pub(super) fn derive_animal_welfare(
         let Ok((species, mut welfare, mut band)) = animals.get_mut(entity) else {
             continue;
         };
-        let Some(needs) = species_needs(&index, &assets, species) else {
-            continue;
-        };
         let values = [
             hunger.0,
             thirst.0,
@@ -548,6 +458,12 @@ pub(super) fn derive_animal_welfare(
             hygiene.0,
         ];
         let next_value = calculate_mean_animal_welfare_with_habitat_limit(values, *habitat);
+        if welfare.0 != next_value {
+            welfare.0 = next_value;
+        }
+        let Some(needs) = species_needs(&index, &assets, species) else {
+            continue;
+        };
         let critical = needs
             .iter()
             .take(10)
@@ -569,9 +485,6 @@ pub(super) fn derive_animal_welfare(
                 new: next_band,
             });
             *band = next_band;
-        }
-        if welfare.0 != next_value {
-            welfare.0 = next_value;
         }
     }
 }

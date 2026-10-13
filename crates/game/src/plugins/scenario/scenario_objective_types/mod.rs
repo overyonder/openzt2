@@ -39,3 +39,9 @@ pub struct ScenarioObjectiveStatusChanged {
 
 #[derive(Component, Debug, Default)]
 pub(crate) struct ScenarioObjectivePrerequisiteEntities(pub Box<[Entity]>);
+
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ShowScenarioRuleRequest {
+    pub(super) scenario: AssetId,
+    pub(super) rule: AssetId,
+}

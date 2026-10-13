@@ -18,7 +18,7 @@ use crate::plugins::{
     },
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use super::{

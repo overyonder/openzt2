@@ -8,8 +8,11 @@ use super::{
         Account, TransactionCompleted, TransactionRejected, TransactionRejection,
         TransactionRequest, TransactionSettled,
     },
-    behavior_transaction_state::{BehaviorTransactionPayment, PendingBehaviorTransaction},
+    behavior_transaction_state::{
+        BehaviorTransactionPayment, KeeperRefillPayment, PendingBehaviorTransaction,
+    },
     facility_economy_types::Wallet,
+    keeper_refill_settlement::KeeperRefillSettlement,
     money_types::Money,
     zoo_cash_types::{UnlimitedZooCash, ZooCash},
 };
@@ -103,18 +106,25 @@ pub(super) fn settle_requested_account_transactions(
     transaction_operations: Query<(
         Option<&TransactionSettled>,
         Option<&BehaviorTransactionPayment>,
+        Option<&KeeperRefillPayment>,
     )>,
-    behavior_tasks: Query<
-        (&BehaviorTaskExecutionState, &PendingBehaviorTransaction),
+    mut behavior_tasks: Query<
+        (&mut BehaviorTaskExecutionState, &PendingBehaviorTransaction),
         Without<PendingBehaviorTaskFailure>,
     >,
     mut operations_settled_this_tick: Local<HashSet<Entity>>,
+    mut keeper_refills: KeeperRefillSettlement,
 ) {
     operations_settled_this_tick.clear();
     for request in transaction_requests.read() {
+        // Completed behavior operations are despawned by their owner. A late
+        // replay must not become an unowned payment after that cleanup.
+        if transaction_operations.get(request.operation).is_err() {
+            continue;
+        }
         if transaction_operations
             .get(request.operation)
-            .is_ok_and(|(settled, _)| settled.is_some())
+            .is_ok_and(|(settled, _, _)| settled.is_some())
             || !operations_settled_this_tick.insert(request.operation)
         {
             continue;
@@ -124,7 +134,7 @@ pub(super) fn settle_requested_account_transactions(
             // Authored payments are valid only while the originating instruction
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
-            if let Ok((_, Some(owner))) = transaction_operations.get(request.operation) {
+            if let Ok((_, Some(owner), _)) = transaction_operations.get(request.operation) {
                 let valid = behavior_tasks
                     .get(owner.actor)
                     .is_ok_and(|(task, pending)| {
@@ -152,6 +162,17 @@ pub(super) fn settle_requested_account_transactions(
                 debit_account_balance,
                 credit_account_balance,
             )?;
+
+            if let Ok((_, Some(owner), Some(refill))) =
+                transaction_operations.get(request.operation)
+            {
+                let (mut task, _) = behavior_tasks
+                    .get_mut(owner.actor)
+                    .map_err(|_| TransactionRejection::Cancelled)?;
+                keeper_refills
+                    .commit(owner.actor, &mut task, refill)
+                    .ok_or(TransactionRejection::Cancelled)?;
+            }
 
             if !accounts_are_same {
                 if let Some(balance) = balance_changes.debit_account_balance {
@@ -206,9 +227,7 @@ pub(super) fn settle_requested_account_transactions(
             }
         }
 
-        // A producer may reserve and spawn the operation through deferred
-        // Commands in the same schedule. The per-tick set is authoritative in
-        // that case; established operations also retain a replay marker.
+        // The local set suppresses duplicates before this deferred marker lands.
         if transaction_operations.get(request.operation).is_ok() {
             commands
                 .entity(request.operation)

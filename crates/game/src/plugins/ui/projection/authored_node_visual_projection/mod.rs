@@ -17,7 +17,6 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::authored_ui_text_layout_presentation::{
     UiPhysicalFontSize, UiSingleLineTextAlignment, AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY,
 };
@@ -26,6 +25,7 @@ use crate::plugins::ui::authored_ui_visual_types::{
     UiVisualTextColor,
 };
 use crate::plugins::ui::localized_ui_text_writing::write_localized_ui_text;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(super) fn project_authored_node_visuals_into_bevy_presentation(
     commands: &mut Commands,
@@ -39,7 +39,7 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
     style: &UiStyleRecord,
     text_color_style: &UiStyleRecord,
     document: &UiDocumentAsset,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     enabled: bool,
@@ -425,7 +425,9 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
         ),
     ));
     if style.flags.0 & UiStyleFlags::WRAP_TEXT.0 == 0 {
-        commands.entity(entity).insert(UiSingleLineTextAlignment);
+        commands
+            .entity(entity)
+            .insert(UiSingleLineTextAlignment::default());
     }
     if style.font_underline {
         commands.entity(entity).insert(Underline);
@@ -437,10 +439,14 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
             |value| [i32::from(value[0]), i32::from(value[1])],
         );
     if shadow != [0, 0] {
-        commands.entity(entity).insert(TextShadow {
+        let mut text_shadow = TextShadow {
             offset: Vec2::new(shadow[0] as f32, shadow[1] as f32),
             ..default()
-        });
+        };
+        if let Some(alpha) = localized_presentation.and_then(|value| value.shadow_alpha) {
+            text_shadow.color = text_shadow.color.with_alpha(f32::from(alpha) / 255.0);
+        }
+        commands.entity(entity).insert(text_shadow);
     }
 }
 

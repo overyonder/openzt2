@@ -7,21 +7,19 @@ use super::{
 };
 use crate::plugins::ui::authored_ui_action_projection_components::UiEconomyActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    },
-    plugins::ui::{
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_text_content_binding::UiTextBinding,
-    },
+use crate::plugins::ui::{
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_text_content_binding::UiTextBinding,
 };
 use bevy::prelude::*;
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
+    },
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+};
 use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::{
@@ -119,7 +117,7 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
 }
 
 fn apply_localized_cash_text_presentation(
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     format_key: AssetId,

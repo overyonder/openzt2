@@ -1,7 +1,7 @@
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use crate::plugins::animal_lifecycle::types::SpeciesHandle;
 use crate::plugins::guests::guest_simulation_types::GuestArchetype;
 use crate::plugins::staff::staff_employment_types::StaffRole;
@@ -127,6 +127,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 action: 0,
                 repetitions: 0,
                 next_action_tick: 0,
+                object: None,
                 interaction_slot: None,
                 stack: ArrayVec::new(),
             })

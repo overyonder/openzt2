@@ -13,8 +13,8 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 pub(super) fn install_fence_definition_for_topology_transaction_tests(
     app: &mut App,
@@ -24,6 +24,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
             supports_show_tricks: false,
+            behavior_type_identifiers: Vec::new(),
             view_data: Vec::new(),
             detach_actions: Vec::new(),
             selected_ui_broadcasts: Vec::new(),
@@ -66,20 +67,14 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
             gate: AssetId::default(),
             post_prefab: AssetId::default(),
             segments: FenceSegmentPrefabs {
-                cardinal_straight: AssetId::default(),
-                diagonal_straight: AssetId::default(),
-                cardinal_curve_90: AssetId::default(),
-                diagonal_curve_90: AssetId::default(),
-                cardinal_curve_135: AssetId::default(),
-                diagonal_curve_135: AssetId::default(),
+                cardinal_straight: AssetId::from_key("test/cardinal_straight"),
+                diagonal_straight: AssetId::from_key("test/diagonal_straight"),
+                cardinal_curve_90: AssetId::from_key("test/cardinal_curve_90"),
+                diagonal_curve_90: AssetId::from_key("test/diagonal_curve_90"),
+                cardinal_curve_135: AssetId::from_key("test/cardinal_curve_135"),
+                diagonal_curve_135: AssetId::from_key("test/diagonal_curve_135"),
             },
-            gate_policy: FenceGatePolicy {
-                prefab: AssetId::default(),
-                open_animation: AssetId::default(),
-                close_animation: AssetId::default(),
-                trigger_distance_cm: 0,
-                auto_close_ticks: 0,
-            },
+            gate_policy: FenceGatePolicy::default(),
         }],
         ..default()
     };

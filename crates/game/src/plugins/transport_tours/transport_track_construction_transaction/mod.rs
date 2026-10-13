@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
 use crate::plugins::construction::construction_interaction_types::PlacementFailure;
 use crate::plugins::construction::construction_interaction_types::PlacementValidity;
@@ -109,6 +109,7 @@ pub(super) fn prepare_transport_track_construction_edit(
         commands
             .entity(request.transaction)
             .insert(PreparedTransportTrackConstructionEdit {
+                removes_track: false,
                 piece_entities: piece_entities.into_boxed_slice(),
                 destination_junction_entity,
                 definition: preview.definition,
@@ -145,11 +146,12 @@ pub(super) fn transport_track_piece_transform(
 
 fn transport_track_application_creates_entity(
     application: EditApplication,
+    removes_track: bool,
     entity_exists: bool,
 ) -> bool {
     match application {
-        EditApplication::InitialCommit | EditApplication::Redo => true,
-        EditApplication::Undo => false,
+        EditApplication::InitialCommit | EditApplication::Redo => !removes_track,
+        EditApplication::Undo => removes_track,
         EditApplication::FailureRollback => !entity_exists,
     }
 }
@@ -160,6 +162,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
     mut requests: MessageReader<ApplyPreparedTransportTrackConstructionEditRequest>,
     mut edits: Query<(&mut PreparedTransportTrackConstructionEdit, &WorldMember)>,
     persistent_entities: Query<(Entity, &PersistentId)>,
+    sales: super::transport_track_sale::TransportTrackSaleQueries,
     mut connections: MessageWriter<ConnectTransportTrackRequest>,
     mut disconnections: MessageWriter<DisconnectTransportTrackRequest>,
     mut acknowledged: MessageWriter<TransportTrackConstructionEditApplicationAcknowledged>,
@@ -174,6 +177,20 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
             continue;
         };
         if edit.application_in_flight.is_some() {
+            continue;
+        }
+        if edit.removes_track
+            && matches!(
+                request.application,
+                EditApplication::InitialCommit | EditApplication::Redo
+            )
+            && !sales.removal_still_matches(&edit)
+        {
+            acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
+                transaction: request.transaction,
+                application: request.application,
+                accepted: false,
+            });
             continue;
         }
         let live_entities = edit
@@ -208,6 +225,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
         }
         if !transport_track_application_creates_entity(
             request.application,
+            edit.removes_track,
             !live_entities.is_empty(),
         ) {
             if let Some(&route_segment) = live_entities.first() {

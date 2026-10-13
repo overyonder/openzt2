@@ -9,19 +9,24 @@ use openzt2_game_data::world_definitions::{
     transportation_and_tours::TransportationTrackKind,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::information::catalogue_types::PurchaseChoice;
 use crate::plugins::terrain::terrain_brush_types::TerrainBrushKind;
 
-use super::construction_tool_and_placement_policy_types::{
-    BiomeSurface, ConstructionPlacementPolicy, ConstructionTool, SelectConstructionTool,
+use super::{
+    construction_interaction_types::CancelConstruction,
+    construction_tool_and_placement_policy_types::{
+        BiomeSurface, ConstructionPlacementPolicy, ConstructionTool, SelectConstructionTool,
+    },
 };
 
 /// Hands a catalogue purchase to the construction owner only when the selected
 /// canonical definition is an authored object, fence, path, biome, or transport
 /// track. Animal adoption, staff, and other catalogue choices remain available
-/// to independent readers.
+/// to independent readers. Choosing a locked entry ends the placement begun by
+/// an earlier choice, since the selection has moved on to research.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn route_construction_purchase_choices(
     mut purchases: MessageReader<PurchaseChoice>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -29,7 +34,9 @@ pub(super) fn route_construction_purchase_choices(
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
     worlds: Query<(&SelectedWorldIdentity, Option<&ScenarioContentAvailability>), With<WorldRoot>>,
     mut policy: ResMut<ConstructionPlacementPolicy>,
+    mut tool: ResMut<ConstructionTool>,
     mut selections: MessageWriter<SelectConstructionTool>,
+    mut cancel: MessageWriter<CancelConstruction>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -51,6 +58,20 @@ pub(super) fn route_construction_purchase_choices(
                 )
             })
         {
+            // Selecting the purchase tool directly would also clear the
+            // catalogue selection, so leave the placement the way Escape does.
+            if matches!(
+                *tool,
+                ConstructionTool::Place(_)
+                    | ConstructionTool::Fence(_)
+                    | ConstructionTool::Path(_)
+                    | ConstructionTool::GroundTrackPlacement(Some(_))
+                    | ConstructionTool::SkyTrackPlacement(Some(_))
+                    | ConstructionTool::Terrain(TerrainBrushKind::Paint { .. })
+            ) {
+                cancel.write(CancelConstruction);
+                *tool = ConstructionTool::Inspect;
+            }
             continue;
         }
 

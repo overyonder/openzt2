@@ -13,6 +13,7 @@ pub enum GuestNeedKind {
     Energy,
     Restroom,
     Social,
+    Amusement,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub enum GuestVisitPurpose {
@@ -60,6 +61,20 @@ pub struct GuestDefinition {
     pub id: AssetId,
     pub object: AssetId,
     pub behavior_subject_type_identifiers: Vec<AssetId>,
+    /// The body's authored actor manifest (`BFActorComponent` `actorfile`),
+    /// whose clips the native model scene does not carry.
+    #[serde(default)]
+    pub model_animation_set: Option<AssetId>,
+    /// The ground locomotion's authored `stop` state, such as `Stand`: the
+    /// manifest graph node the body rests in.
+    #[serde(default)]
+    pub stationary_animation_graph_node: Option<String>,
+    #[serde(default)]
+    /// Authored `s_Torso` and `s_Waist` material names, respectively.
+    pub clothing_materials: [Option<String>; 2],
+    /// Authored inventory, hand and outfit containers that hold bought items.
+    #[serde(default)]
+    pub interaction_slots: Vec<super::world_objects::WorldObjectInteractionSlotDefinition>,
     pub name_pool: AssetId,
     pub rarity: GuestRarity,
     pub preferred_animal_view_factor_q16: u32,
@@ -181,12 +196,18 @@ pub struct GuestGenerationPolicy {
     pub maximum_guests_base: u32,
     pub maximum_guests_per_half_star: u32,
     pub spawn_at_entrance: bool,
-    pub arrival_offset_cm: [i32; 2],
-    pub departure_offset_cm: [i32; 2],
+    /// Authored `DisplacementX`/`DisplacementY`: metres along the entrance
+    /// gate's source x and y axes from the gate to where guests appear.
+    pub arrival_offset_m: [f32; 2],
+    /// Authored `DisplacementXLeave`/`DisplacementYLeave`, in the same frame,
+    /// to where departing guests walk before they leave.
+    pub departure_offset_m: [f32; 2],
     pub delay_ns: [u64; 2],
-    pub default_emitter_cm: [i32; 2],
+    /// Authored `DefaultEmitterX`/`DefaultEmitterY`: source world metres.
+    pub default_emitter_m: [f32; 2],
     pub stagger: bool,
-    pub stagger_square_cm: u32,
+    /// Authored `StaggerSquare`: side of the stagger square in metres.
+    pub stagger_square_m: f32,
     pub base_spawn_probability: f32,
     pub minimum_spawn_rate: f32,
     pub normal_admission_cents: [i32; 2],

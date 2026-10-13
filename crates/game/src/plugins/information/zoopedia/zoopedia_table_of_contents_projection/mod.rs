@@ -3,10 +3,10 @@ use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollecti
 use openzt2_game_data::AssetId;
 use std::collections::HashSet;
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::ui::authored_button_runtime_policy::UiButtonPolicy;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
@@ -118,7 +118,7 @@ pub(in crate::plugins::information) fn project_zoopedia_table_of_contents_rows(
     localizations: Res<Assets<LocalizationAsset>>,
     rows: Query<(Entity, &UiListRow, Option<&ZoopediaTableOfContentsRow>)>,
     lists: Query<(&UiDocumentOwner, &ZoopediaTableOfContentsState)>,
-    parents: Query<&ChildOf>,
+    children: Query<&Children>,
     mut buttons: Query<(
         Entity,
         &UiButtonPolicy,
@@ -145,11 +145,15 @@ pub(in crate::plugins::information) fn project_zoopedia_table_of_contents_rows(
     let Some(root) = find_root_zoopedia_entry(catalog) else {
         return;
     };
+    // Rows of one list share its visible entries; each row touches only its own subtree.
+    let mut visible_by_list = std::collections::HashMap::new();
     for (row_entity, row, current) in &rows {
         let Ok((owner, state)) = lists.get(row.list) else {
             continue;
         };
-        let visible = collect_visible_zoopedia_entries(catalog, root, &state.expanded_subjects);
+        let visible = visible_by_list.entry(row.list).or_insert_with(|| {
+            collect_visible_zoopedia_entries(catalog, root, &state.expanded_subjects)
+        });
         let Some((entry, depth)) = visible.get(usize::from(row.index)).copied() else {
             continue;
         };
@@ -163,10 +167,10 @@ pub(in crate::plugins::information) fn project_zoopedia_table_of_contents_rows(
             commands.entity(row_entity).insert(presentation);
         }
         let expanded_value = expandable && state.expanded_subjects.contains(&presentation.subject);
-        for (entity, mut tree, mut expanded) in &mut trees {
-            if !has_ancestor(entity, row_entity, &parents) {
+        for entity in children.iter_descendants(row_entity) {
+            let Ok((_, mut tree, mut expanded)) = trees.get_mut(entity) else {
                 continue;
-            }
+            };
             if tree.authored_item() != presentation.subject {
                 tree.set_authored_item(presentation.subject);
             }
@@ -177,22 +181,30 @@ pub(in crate::plugins::information) fn project_zoopedia_table_of_contents_rows(
                 expanded.set_expanded(expanded_value);
             }
         }
-        for (entity, policy, mut enabled, selected, current_action) in &mut buttons {
-            if !has_ancestor(entity, row_entity, &parents) {
+        for entity in children.iter_descendants(row_entity) {
+            let Ok((entity, policy, mut enabled, selected, current_action)) =
+                buttons.get_mut(entity)
+            else {
                 continue;
-            }
+            };
             if policy.selectable {
-                enabled.0 = expandable;
+                if enabled.0 != expandable {
+                    enabled.0 = expandable;
+                }
                 if current_action.is_some() {
                     commands
                         .entity(entity)
                         .remove::<ZoopediaTableOfContentsRow>();
                 }
                 if let Some(mut selected) = selected {
-                    selected.0 = expanded_value;
+                    if selected.0 != expanded_value {
+                        selected.0 = expanded_value;
+                    }
                 }
             } else {
-                enabled.0 = true;
+                if !enabled.0 {
+                    enabled.0 = true;
+                }
                 if current_action != Some(&presentation) {
                     commands.entity(entity).insert(presentation);
                 }
@@ -201,19 +213,14 @@ pub(in crate::plugins::information) fn project_zoopedia_table_of_contents_rows(
         let Some(label) = localization.find_plain_localized_text(AssetId(entry.title_key.0)) else {
             continue;
         };
-        for (entity, mut text) in &mut texts {
-            if has_ancestor(entity, row_entity, &parents) && text.0 != label {
+        for entity in children.iter_descendants(row_entity) {
+            let Ok((_, mut text)) = texts.get_mut(entity) else {
+                continue;
+            };
+            if text.0 != label {
                 text.0.clear();
                 text.0.push_str(label);
             }
         }
     }
-}
-
-fn has_ancestor(entity: Entity, ancestor: Entity, parents: &Query<&ChildOf>) -> bool {
-    std::iter::successors(Some(entity), |entity| {
-        parents.get(*entity).ok().map(ChildOf::parent)
-    })
-    .skip(1)
-    .any(|entity| entity == ancestor)
 }

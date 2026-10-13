@@ -5,8 +5,8 @@ mod container_quantity_hydration;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::FixedGameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(crate) struct FeedingPlugin;
 

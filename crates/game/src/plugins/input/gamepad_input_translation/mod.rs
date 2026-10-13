@@ -20,13 +20,14 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
     mut control_axes: ResMut<DeviceControlAxes>,
     mut active_input_device: ResMut<ActiveInputDevice>,
     mut action_requests: MessageWriter<ActionRequest>,
-    phase: Res<State<crate::application_lifecycle::GamePhase>>,
+    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     capture: Res<crate::plugins::ui::picking::UiPointerCapture>,
     modal_input: Res<crate::plugins::ui::active_authored_ui_context::AuthoredModalInputCapture>,
     mut navigation_repeat: Local<Option<(Entity, GameAction, f64)>>,
 ) {
     for (gamepad_entity, gamepad) in &connected_gamepads {
-        let ui_navigation = *phase.get() != crate::application_lifecycle::GamePhase::InGame
+        let ui_navigation = *phase.get()
+            != openzt2_game_assets::application_lifecycle::GamePhase::InGame
             || capture.over_ui
             || modal_input.0.is_some();
         let right_stick = apply_radial_gamepad_dead_zone(Vec2::new(

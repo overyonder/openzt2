@@ -1,11 +1,13 @@
 //! Authored object placement over loaded definitions and precise ECS indexes.
 
 mod automatic_object_placement_footprint_hydration;
+mod behavior_target_placement_application;
 mod biome_automatic_object_placement_edit_preparation;
 mod ground_path_object_placement_collision_queries;
 pub(crate) mod object_placement_definition_queries;
 mod object_placement_edit_application;
 mod object_placement_edit_direction;
+pub(crate) mod object_placement_headroom_diagnostic_types;
 mod object_placement_or_relocation_edit_preparation;
 mod object_placement_preview_lifecycle;
 mod object_placement_preview_permission_projection;
@@ -34,6 +36,7 @@ use object_placement_edit_application::apply_prepared_object_placement_edits;
 use object_placement_or_relocation_edit_preparation::prepare_object_placement_or_relocation_edit;
 use object_placement_preview_lifecycle::{
     animate_object_placement_preview_presentation_toward_authoritative_transform,
+    apply_authored_initial_animal_placement_preview_animation_repetition_policy,
     create_active_object_placement_preview, hydrate_object_placement_preview_prefab_render_tree,
     synchronize_object_placement_preview_with_construction_cursor,
 };
@@ -81,13 +84,13 @@ use placement_transaction_types::{
     RemovePlacedObjectRequest,
 };
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use crate::plugins::construction::{
     FixedConstructionPreparedDomainEditMaterializationSet, FixedConstructionSet,
 };
 use avian3d::prelude::PhysicsSystems;
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 /// Registers object-placement data and its explicit schedule order.
 pub struct ObjectPlacementPlugin;
@@ -97,6 +100,20 @@ pub(crate) struct ObjectPlacementPreviewUpdateSet;
 
 impl Plugin for ObjectPlacementPlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(
+            FixedUpdate,
+            behavior_target_placement_application::apply_behavior_target_placements
+                .in_set(FixedGameSet::Act)
+                .after(rebuild_placed_object_footprint_occupancy_index)
+                .before(FixedConstructionSet::Apply)
+                .run_if(in_state(GamePhase::InGame)),
+        );
+        app.add_systems(
+            FixedUpdate,
+            behavior_target_placement_application::settle_behavior_target_placement_payments
+                .in_set(FixedGameSet::Cleanup)
+                .run_if(in_state(GamePhase::InGame)),
+        );
         app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
             .init_resource::<ObjectPlacementCellCollectionScratch>()
             .add_message::<EvaluateObjectPlacementPreviewRequest>()
@@ -118,6 +135,7 @@ impl Plugin for ObjectPlacementPlugin {
                     hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
                     hydrate_automatic_object_placement_footprints_from_loaded_scene_prefabs,
                     hydrate_object_placement_preview_prefab_render_tree,
+                    apply_authored_initial_animal_placement_preview_animation_repetition_policy,
                     hydrate_object_placement_preview_materials_from_ui_document,
                     rotate_active_object_placement_preview_by_authored_increment,
                     synchronize_object_placement_preview_with_construction_cursor,

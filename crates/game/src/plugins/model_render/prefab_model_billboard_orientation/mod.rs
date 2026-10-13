@@ -8,7 +8,11 @@ use super::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_
 
 pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
-    hierarchy: Query<(Option<&ChildOf>, Option<&RenderLayers>)>,
+    hierarchy: Query<(
+        Option<&ChildOf>,
+        Option<&RenderLayers>,
+        Option<&super::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+    )>,
     global_transforms: Query<Ref<GlobalTransform>>,
     children: Query<&Children>,
     changed_transform_sources: Query<

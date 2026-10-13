@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_game_data::AssetId;
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 pub(crate) const MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT: usize = 16;
 
@@ -26,6 +26,9 @@ pub(crate) struct BehaviorTaskExecutionState {
     pub(crate) execution_id: u64,
     pub(crate) program: AssetId,
     pub(crate) target: Option<Entity>,
+    /// The item the task uses, such as the hamburger a guest eats. It is one
+    /// of the subject's held or inventory items named by the task's `Objects`.
+    pub(crate) object: Option<Entity>,
     pub(crate) document: Handle<BehaviorDocumentAsset>,
     pub(crate) declaration: usize,
     pub(crate) phase: BehaviorTaskExecutionPhase,
@@ -178,6 +181,12 @@ impl PendingBehaviorAnimationClipCompletion {
             BehaviorAction::RandomAnimation { weighted_clips, .. } => weighted_clips
                 .get(self.random_choice?)
                 .map(|(key, _)| key.as_str()),
+            // A target that holds no prop leaves only the attachment's clip.
+            BehaviorAction::AttachObject(attach)
+                if self.random_choice.is_none() && attach.attaches_target_held_prop() =>
+            {
+                attach.animation.as_deref()
+            }
             _ => None,
         }
     }

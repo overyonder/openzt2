@@ -3,18 +3,16 @@ use std::{cell::RefCell, collections::BTreeSet};
 use bevy::prelude::*;
 use mlua::{Function, Lua, Scope, Value};
 
-use crate::{
-    assets::lua_script::{
-        lua_script_archive_path_index::LuaScriptArchivePathIndex,
-        lua_script_asset_loading::LuaScriptAsset,
+use crate::plugins::{
+    lua_script_module_execution::{
+        execute_lua_script_module_once_per_virtual_machine,
+        install_lua_script_dependency_loading_functions,
     },
-    plugins::{
-        lua_script_module_execution::{
-            execute_lua_script_module_once_per_virtual_machine,
-            install_lua_script_dependency_loading_functions,
-        },
-        lua_value_conversion::convert_integral_lua_number_to_i64,
-    },
+    lua_value_conversion::convert_integral_lua_number_to_i64,
+};
+use openzt2_game_assets::lua_script::{
+    lua_script_archive_path_index::LuaScriptArchivePathIndex,
+    lua_script_asset_loading::LuaScriptAsset,
 };
 
 use super::{
@@ -31,7 +29,7 @@ impl PhotoChallengeLuaScoringVirtualMachineContexts {
         &mut self,
         challenge_identifier: openzt2_game_data::AssetId,
         scenario_document_asset_identifier: bevy::asset::AssetId<
-            crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
+            openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
         >,
         lua_script_source_path: &str,
         lua_script_asset_handle: &Handle<LuaScriptAsset>,

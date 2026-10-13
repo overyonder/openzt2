@@ -8,7 +8,7 @@ use bevy::{
 use crate::plugins;
 
 use super::{
-    verification_journey_state_types::VerificationJourneyRun,
+    verification_journey_state_types::VerificationJourneySession,
     verification_journey_types::{VERIFICATION_TARGET_HEIGHT, VERIFICATION_TARGET_WIDTH},
 };
 
@@ -21,7 +21,7 @@ pub(crate) struct VerificationCaptureTargetInstalled;
 /// Headless runs render every game camera into one offscreen image instead of a window.
 pub(crate) fn install_verification_capture_target_and_pointer_marker(
     mut commands: Commands,
-    mut run: ResMut<VerificationJourneyRun>,
+    mut session: ResMut<VerificationJourneySession>,
     mut images: ResMut<Assets<Image>>,
     cameras: Query<
         (Entity, &RenderTarget),
@@ -37,8 +37,8 @@ pub(crate) fn install_verification_capture_target_and_pointer_marker(
     >,
     marker: Query<(), With<VerificationPointerMarker>>,
 ) {
-    let windowed = run.windowed;
-    let target = run.capture_target.get_or_insert_with(|| {
+    let windowed = session.windowed;
+    let target = session.capture_target.get_or_insert_with(|| {
         if windowed {
             return RenderTarget::Window(bevy::window::WindowRef::Primary);
         }
@@ -60,6 +60,8 @@ pub(crate) fn install_verification_capture_target_and_pointer_marker(
                 .insert((target.clone(), VerificationCaptureTargetInstalled));
         }
     }
+    // The marker is a hollow ring so the object under the pointer, such as a
+    // placement preview centred on the hotspot, stays visible in captures.
     if marker.is_empty() {
         commands.spawn((
             VerificationPointerMarker,
@@ -72,8 +74,7 @@ pub(crate) fn install_verification_capture_target_and_pointer_marker(
                 border_radius: BorderRadius::all(px(7.0)),
                 ..default()
             },
-            BackgroundColor(Color::srgb(1.0, 0.05, 0.05)),
-            BorderColor::all(Color::WHITE),
+            BorderColor::all(Color::srgb(1.0, 0.05, 0.05)),
             GlobalZIndex(i32::MAX),
             Pickable::IGNORE,
         ));

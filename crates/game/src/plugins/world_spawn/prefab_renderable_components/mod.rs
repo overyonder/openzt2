@@ -1,6 +1,6 @@
 use openzt2_game_data::{scene_prefab::ScenePrefabRenderableVisibilityFlags, AssetId};
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::prefab_presentation_types::{
     PrefabMaterialOverride, PrefabMaterialOverrides, PrefabModel, PrefabRenderable,

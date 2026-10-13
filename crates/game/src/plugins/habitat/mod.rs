@@ -10,8 +10,8 @@ pub(crate) mod habitat_types;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::FixedGameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use habitat_types::{
     ContainmentChanged, HabitatChanged, HabitatIndex, RebuildHabitatRegionsWithinTopologyBounds,

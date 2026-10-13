@@ -1,0 +1,78 @@
+# Guests take tasks on buildings their tasks name by type family, such as a
+# burger stand's `foodstand_burger` or a restroom's `bathroomsmall` (#112).
+# Placement must be checked against the entrance path in the capture.
+start freeform-map
+until guests > 0 within 4800          # guests first arrive about 3100 frames after a map loads
+until guests_visiting > 0 within 9000 # they appear at the map edge and walk to the gate to pay
+click "construction"
+click "Building Tab"
+until rows "Building Typelist" >= 1
+snapshot amenity-before-wheel
+move "Building Typelist"
+wheel 100                       # return to the beginning if the shared map retained a scroll offset
+until catalogue_scroll_x == 0
+snapshot amenity-list-start
+wheel-to-catalogue "foodstand_burger_df"
+until catalogue_burger_unclipped == 1 within 120
+expect catalogue_scroll_x > @amenity-list-start
+expect catalogue_first_unclipped_row > @amenity-list-start
+expect camera_x_m == @amenity-before-wheel
+expect camera_z_m == @amenity-before-wheel
+expect camera_height_m == @amenity-before-wheel
+expect camera_pitch_deg == @amenity-before-wheel
+expect camera_fov_deg == @amenity-before-wheel
+snapshot before-amenity-placement
+select-catalogue "foodstand_burger_df"
+expect selected_catalogue_entry_available == 1
+move 933 239                    # beside the entrance path east of the gate, within inSight 40 of the entrance
+until placement_valid_previews == 1
+click 933 239
+until placed_objects > @entered-map
+expect construction_commit_failures == @before-amenity-placement
+expect construction_payments == @before-amenity-placement+1
+key ESCAPE                      # leave repeat placement
+until placement_previews == 0
+expect placed_burger_stands > @before-amenity-placement
+# Guests walk only on paths, so join the stand's dock side to the entrance
+# path: a straight asphalt path from the road (about 1.5 m beside the stand)
+# past its far side. Placement must be checked in the capture.
+snapshot before-path
+click "Path Tab"
+select-catalogue "asphalt"
+move 815 210                    # on the entrance road east of the gate
+click 815 210
+move 939 294                    # beyond the stand, along its dock side
+until placement_valid_previews == 1 within 120
+click 939 294
+until paths > @before-path
+expect construction_commit_failures == @before-amenity-placement
+key ESCAPE                      # drop the follow-on path preview
+until placement_previews == 0
+capture guest-amenity-placed
+expect simulation_paused == 0
+until guests_tasked_at_type_families > 0 within 1800
+capture guest-at-amenity
+snapshot stand-open
+# A guest who reaches the stand queues, pays once and carries the burger away (#114).
+until guest_purchases > @before-amenity-placement within 7200
+capture guest-purchase-paid
+expect guest_purchase_cents > @before-amenity-placement
+expect guest_repeat_purchases == @before-amenity-placement
+expect cash_cents > @stand-open
+until guest_held_items > @before-amenity-placement within 600
+capture guest-purchase-delivered
+# The guest then eats the burger it holds, which leaves trash and eases its hunger (#114).
+until guests_began_eating > 0 within 3600
+capture guest-eating
+until guests_fed_by_eating > 0 within 3600
+capture guest-fed
+expect guest_repeat_purchases == @before-amenity-placement     # eating gave the stand time to charge again
+
+# Undo the path and facility after observing delivery; leave the shared map without them.
+key CTRL+Z                      # the path
+until paths == @entered-map
+key CTRL+Z                      # the facility
+until placed_objects == @entered-map
+expect construction_commit_failures == @before-amenity-placement
+
+restore freeform-map

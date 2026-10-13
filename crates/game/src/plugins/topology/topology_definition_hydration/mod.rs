@@ -1,8 +1,7 @@
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::{
     gate_operation_types::{Gate, GateAutoClose, GateMechanism},
@@ -38,9 +37,9 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
         let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
             continue;
         };
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        if definitions.find_fence(edge.definition).is_none() {
             continue;
-        };
+        }
         let mut entity_commands = commands.entity(entity);
         if transform.is_none() {
             entity_commands.insert(calculate_topology_edge_world_transform(
@@ -57,14 +56,7 @@ pub(super) fn hydrate_save_loaded_topology_definition_facts(
             entity_commands.insert(Visibility::Inherited);
         }
         if gate.is_some() && mechanism.is_none() {
-            let policy = &definition.gate_policy;
-            entity_commands.insert(GateMechanism {
-                prefab: AssetId(policy.prefab.0),
-                open_animation: AssetId(policy.open_animation.0),
-                close_animation: AssetId(policy.close_animation.0),
-                trigger_distance_cm: policy.trigger_distance_cm,
-                auto_close_ticks: policy.auto_close_ticks,
-            });
+            entity_commands.insert(GateMechanism::default());
         }
         if gate.is_some() && timer.is_none() {
             entity_commands.insert(GateAutoClose(0));

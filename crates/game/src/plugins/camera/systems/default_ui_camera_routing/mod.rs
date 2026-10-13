@@ -1,9 +1,7 @@
 use bevy::prelude::*;
 
-use crate::{
-    application_lifecycle::GamePhase,
-    plugins::shell::shell_screen_presentation_types::{ShellClearCamera, ShellUiCamera},
-};
+use crate::plugins::shell::shell_screen_presentation_types::{ShellClearCamera, ShellUiCamera};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use super::super::camera_runtime_state_types::ZooCamera;
 

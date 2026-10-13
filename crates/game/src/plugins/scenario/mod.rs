@@ -8,7 +8,9 @@ mod scenario_goal_and_challenge_ui_action_routing;
 mod scenario_goal_panel_presentation;
 mod scenario_instantiation;
 mod scenario_lua_command_publication;
+mod scenario_lua_entity_queries;
 mod scenario_lua_game_api;
+mod scenario_lua_photo_challenge_queries;
 mod scenario_lua_query_fact_collection;
 pub(crate) mod scenario_lua_types;
 mod scenario_lua_virtual_machine;
@@ -16,9 +18,12 @@ mod scenario_lua_virtual_machine_invalidation;
 mod scenario_objective_lua_execution;
 mod scenario_objective_progression;
 pub mod scenario_objective_types;
+mod scenario_photo_challenge_selection;
 mod scenario_resolution;
+mod scenario_rule_visibility;
 mod scenario_selection_ui_action_routing;
 pub mod scenario_session_types;
+mod scenario_ui_modification_presentation;
 mod scenario_ui_types;
 
 use challenge_offer_types::{
@@ -30,8 +35,8 @@ use scenario_session_types::{ScenarioTerminalResult, SelectedScenarioDocument};
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ScenarioFixedUpdateStage {
@@ -52,6 +57,8 @@ impl Plugin for ScenarioPlugin {
             .add_message::<CreateScenarioChallengeOfferFromLuaSourcePathRequest>()
             .add_message::<ScenarioTerminalResult>()
             .add_message::<ScenarioObjectiveStatusChanged>()
+            .add_message::<scenario_objective_types::ShowScenarioRuleRequest>()
+            .add_message::<scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>()
             .add_systems(
                 Update,
                 scenario_lua_virtual_machine_invalidation::
@@ -99,6 +106,7 @@ impl Plugin for ScenarioPlugin {
                         create_challenge_offers_requested_by_scenario_scripts,
                     challenge_offer_execution::validate_and_apply_requested_challenge_responses,
                     challenge_offer_presentation::apply_authored_challenge_panel_requests,
+                    scenario_photo_challenge_selection::select_requested_current_photo_challenge_sets,
                 )
                     .chain()
                     .in_set(GameSet::Intent)
@@ -107,6 +115,9 @@ impl Plugin for ScenarioPlugin {
             .add_systems(
                 Update,
                 (
+                    scenario_rule_visibility::show_requested_scenario_rules,
+                    scenario_ui_modification_presentation::
+                        apply_mode_scenario_ui_modifications_to_projected_nodes,
                     challenge_offer_presentation::project_authored_challenge_panel_text,
                     scenario_goal_panel_presentation::
                         set_authored_scenario_goal_panel_row_counts,
@@ -122,7 +133,7 @@ impl Plugin for ScenarioPlugin {
             .add_systems(
                 FixedUpdate,
                 challenge_offer_lua_validation::
-                    evaluate_daily_lua_validation_scripts_until_one_challenge_is_offered
+                    evaluate_challenge_manager_and_validate_one_picked_challenge
                     .in_set(FixedGameSet::Think)
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),

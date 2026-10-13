@@ -1,0 +1,81 @@
+# Minimize must not select construction (#55); Maximize must restore controls (#197).
+# Named clicks use computed bounds, clipping and the ordinary alpha-aware picker.
+# Review captures and repeat the overlap with native input before acceptance.
+start freeform-map
+click "animals"
+until visible "Animal Tabs"
+key ESCAPE
+until placement_previews == 0
+until construction_tool_active == 0
+expect placement_previews == 0
+expect selected == 0
+expect-hidden "Construction Tabs"
+until visible "Primary Game Button Panel"
+until visible "minimize"
+until hidden "maximize"
+until settled
+until steady camera_height_m 30
+move "minimize"
+expect ui_over_ui == 1
+snapshot toolbar-expanded
+capture toolbar-expanded
+click "minimize"
+until hidden "Primary Game Button Panel"
+until hidden "minimize"
+until visible "maximize"
+until settled
+expect construction_tool_active == @toolbar-expanded
+expect selected == @toolbar-expanded
+expect selected_catalogue_entry_available == @toolbar-expanded
+expect placement_previews == @toolbar-expanded
+expect simulation_paused == @toolbar-expanded
+expect camera_x_m == @toolbar-expanded
+expect camera_z_m == @toolbar-expanded
+expect camera_height_m == @toolbar-expanded
+expect camera_pitch_deg == @toolbar-expanded
+expect camera_fov_deg == @toolbar-expanded
+expect-hidden "Construction Tabs"
+expect-hidden "In Game Options"
+capture toolbar-minimized
+move "maximize"
+expect ui_over_ui == 1
+click "maximize"               # authored restore runs on the button's release
+until visible "Primary Game Button Panel"
+until visible "minimize"
+until hidden "maximize"
+until settled
+expect construction_tool_active == @toolbar-expanded
+expect selected == @toolbar-expanded
+expect selected_catalogue_entry_available == @toolbar-expanded
+expect placement_previews == @toolbar-expanded
+expect simulation_paused == @toolbar-expanded
+expect camera_x_m == @toolbar-expanded
+expect camera_z_m == @toolbar-expanded
+expect camera_height_m == @toolbar-expanded
+expect camera_pitch_deg == @toolbar-expanded
+expect camera_fov_deg == @toolbar-expanded
+expect-hidden "Construction Tabs"
+expect-hidden "In Game Options"
+capture toolbar-restored
+# A deliberate construction press still selects its authored branch and tool.
+click "construction"
+until visible "Construction Tabs"
+until construction_tool_active == 1
+until settled
+expect construction_tool_active == 1
+expect-visible "Construction Tabs"
+expect-visible "Primary Game Button Panel"
+expect-hidden "maximize"
+expect simulation_paused == @toolbar-expanded
+expect selected == @toolbar-expanded
+expect camera_x_m == @toolbar-expanded
+expect camera_z_m == @toolbar-expanded
+expect camera_height_m == @toolbar-expanded
+expect camera_pitch_deg == @toolbar-expanded
+expect camera_fov_deg == @toolbar-expanded
+capture intentional-construction-selection
+key ESCAPE
+until construction_tool_active == 0
+until placement_previews == 0
+
+restore freeform-map

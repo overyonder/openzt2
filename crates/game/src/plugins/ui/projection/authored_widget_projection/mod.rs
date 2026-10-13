@@ -16,7 +16,6 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::construction::selected_biome_ui_projection::UiBiomePanel;
 use crate::plugins::input::input_types::ActionSource;
 use crate::plugins::ui::authored_button_attention_pulse_presentation::UiAuthoredButtonAttentionPulse;
@@ -53,6 +52,7 @@ use crate::plugins::ui::authored_window_interaction::UiAuthoredWindowInteraction
 use crate::plugins::ui::held_button_repeat::UiButtonHold;
 use crate::plugins::ui::scenario_objective_status_visual_classification::UiScenarioObjectiveStatusVisualClassification;
 use crate::plugins::ui::slider::{UiSliderAxis, UiSliderPolicy, UiSliderValuePresentation};
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(super) fn project_widget(
     commands: &mut Commands,
@@ -61,7 +61,7 @@ pub(super) fn project_widget(
     document: &UiDocumentAsset,
     node: &UiNodeDefinition,
     node_index: u32,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
 ) {

@@ -1,16 +1,15 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
-use crate::{
+use crate::plugins::{
+    camera::camera_runtime_state_types::ZooCamera, shell::shell_selection_types::WorldChoiceView,
+    terrain::terrain_chunk_presentation_types::TerrainRenderChunk,
+    ui::authored_ui_node_projection_components::UiDocumentRoot,
+    world_spawn::world_load_completion_marker::WorldLoadCompleted,
+};
+use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        camera::camera_runtime_state_types::ZooCamera,
-        shell::shell_selection_types::WorldChoiceView,
-        terrain::terrain_chunk_presentation_types::TerrainRenderChunk,
-        ui::authored_ui_node_projection_components::UiDocumentRoot,
-        world_spawn::world_load_completion_marker::WorldLoadCompleted,
-    },
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 
 /// A phase is ready once a player could act in it, not when the state first changes.
@@ -36,8 +35,19 @@ impl VerificationGamePhaseReadiness<'_, '_> {
             return false;
         }
         let any_root_visible = self.roots.iter().any(|(visibility, _)| visibility.get());
+        let role_visible = |role: UiDocumentRole| {
+            self.roots.iter().any(|(visibility, root)| {
+                visibility.get()
+                    && self
+                        .documents
+                        .get(&root.document)
+                        .is_some_and(|document| document.canonical_ui_document().role == role)
+            })
+        };
         match phase {
-            GamePhase::Boot | GamePhase::MainMenu | GamePhase::Loading => any_root_visible,
+            GamePhase::Boot | GamePhase::Loading => any_root_visible,
+            // The application root shows before the main menu itself.
+            GamePhase::MainMenu => role_visible(UiDocumentRole::MainMenu),
             GamePhase::MapSelection => {
                 any_root_visible && !self.world_choices.is_empty() && !self.meshes.is_empty()
             }
@@ -45,12 +55,7 @@ impl VerificationGamePhaseReadiness<'_, '_> {
                 !self.zoo_cameras.is_empty()
                     && !self.terrain_chunks.is_empty()
                     && !self.loaded_worlds.is_empty()
-                    && self.roots.iter().any(|(visibility, root)| {
-                        visibility.get()
-                            && self.documents.get(&root.document).is_some_and(|document| {
-                                document.canonical_ui_document().role == UiDocumentRole::InGameHud
-                            })
-                    })
+                    && role_visible(UiDocumentRole::InGameHud)
             }
         }
     }

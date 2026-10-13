@@ -5,23 +5,21 @@ use openzt2_game_data::ui_document::action::photography::UiPhotoAction;
 
 use bevy::prelude::*;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::{
-        immersive_modes::{
-            immersive_mode_control_types::PhotoControl,
-            immersive_mode_message_types::{ExitImmersiveMode, ModeExitReason},
-            immersive_mode_state_types::ActiveImmersiveMode,
-        },
-        ui::{
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-        },
-        world_spawn::{
-            persistent_id_types::PersistentIdAllocator, world_membership_types::WorldMember,
-        },
+use crate::plugins::{
+    immersive_modes::{
+        immersive_mode_control_types::PhotoControl,
+        immersive_mode_message_types::{ExitImmersiveMode, ModeExitReason},
+        immersive_mode_state_types::ActiveImmersiveMode,
+    },
+    ui::{
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+    },
+    world_spawn::{
+        persistent_id_types::PersistentIdAllocator, world_membership_types::WorldMember,
     },
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::album_operations::{
     change_active_photo_album_page_by_signed_offset, deselect_photo_in_album_display_slot,

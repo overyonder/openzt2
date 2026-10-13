@@ -1,13 +1,11 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_modal_presentation::UiAuthoredModalPresentation,
-        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
-    },
+use crate::plugins::ui::{
+    authored_modal_presentation::UiAuthoredModalPresentation,
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 /// The profile dialog's close button, Escape and OK hide its modal layout
 /// inside the dialog's shell. Remove the whole document once that layout is

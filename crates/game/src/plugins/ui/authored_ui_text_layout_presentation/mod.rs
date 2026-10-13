@@ -5,8 +5,10 @@ use bevy::{
 
 pub(crate) const AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY: &str = "Comic Neue";
 
-#[derive(Component)]
-pub(super) struct UiSingleLineTextAlignment;
+#[derive(Component, Default)]
+pub(crate) struct UiSingleLineTextAlignment {
+    pub(crate) horizontal_offset_pixels: f32,
+}
 
 /// Authored font height retained for localized rich-text descendants. Glyphs
 /// follow the canvas's vertical scale without acquiring its horizontal stretch.
@@ -59,31 +61,24 @@ pub(super) fn bind_authored_windows_font_roles_to_available_platform_font_famili
 /// missing horizontal offset instead of changing line breaking or baking
 /// font-specific positions.
 pub(super) fn align_authored_single_line_text_from_measured_glyph_run(
-    mut texts: Query<
-        (
-            &ComputedNode,
-            &TextLayout,
-            &TextLayoutInfo,
-            &mut UiTransform,
-        ),
-        With<UiSingleLineTextAlignment>,
-    >,
+    mut texts: Query<(
+        &ComputedNode,
+        &TextLayout,
+        &TextLayoutInfo,
+        &mut UiSingleLineTextAlignment,
+    )>,
 ) {
-    for (node, text_layout, layout, mut transform) in &mut texts {
+    for (node, text_layout, layout, mut alignment) in &mut texts {
         let remaining = (node.content_box().size() - layout.size).max(Vec2::ZERO);
         let horizontal = match text_layout.justify {
             Justify::Center => remaining.x * 0.5,
             Justify::End | Justify::Right => remaining.x,
             Justify::Start | Justify::Left | Justify::Justified => 0.0,
         };
-        let inverse_scale = node.inverse_scale_factor();
-        // BF text begins at the authored region's top edge. Its `align`
-        // attribute controls only the inline axis; vertically centering the
-        // measured run moves short labels behind lower visual borders (most
-        // visibly the photo-album page numbers).
-        let next = Val2::px(horizontal * inverse_scale, 0.0);
-        if transform.translation != next {
-            transform.translation = next;
+        // Offset extracted glyphs, never the node: display-field backgrounds
+        // and pointer regions must retain their authored geometry.
+        if alignment.horizontal_offset_pixels != horizontal {
+            alignment.horizontal_offset_pixels = horizontal;
         }
     }
 }

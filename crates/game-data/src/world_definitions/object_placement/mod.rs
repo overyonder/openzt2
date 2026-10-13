@@ -14,6 +14,10 @@ pub struct PlacementConstraints(u32);
 pub struct FootprintCellFlags(u16);
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "height modification, moving and automatic footprints, and ground-path blocking are independent authored placement rules"
+)]
 pub struct PlaceableDefinition {
     pub id: AssetId,
     /// Authored `ZTPlacementData.weight`. The placement cursor divides its

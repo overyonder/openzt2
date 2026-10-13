@@ -1,0 +1,525 @@
+# changes-world: populated save/load and habitat run after reversible Freeform checks
+start freeform-map
+# Inspect six Educator looks before saving this populated world.
+move 800 400
+wheel 1 14
+until steady camera_height_m 30
+click "staff"
+select-catalogue "educator"
+move 700 300
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+capture placement-preview
+click 700 300
+until staff == 1
+until placement_previews == 0
+select-catalogue "educator"
+move 800 300
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+click 800 300
+until staff == 2
+until placement_previews == 0
+select-catalogue "educator"
+move 900 300
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+click 900 300
+until staff == 3
+until placement_previews == 0
+select-catalogue "educator"
+move 700 420
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+click 700 420
+until staff == 4
+until placement_previews == 0
+select-catalogue "educator"
+move 800 420
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+click 800 420
+until staff == 5
+until placement_previews == 0
+select-catalogue "educator"
+move 900 420
+until placement_valid_previews == 1
+until placement_visible_previews == 1
+click 900 420
+until staff == 6
+until placement_previews == 0
+until settled
+capture hired-staff
+wait 60                         # inspect animation at a second point in time
+capture hired-staff-later
+
+move 800 400
+wheel -1 14
+until steady camera_height_m 30
+open-game-options
+key ESCAPE
+until hidden "In Game Options"
+
+expect world_limited_adoption_offer_inventory_present == 0
+click 560 450                   # the entrance opens zoo information
+until visible "userstring_zooname"
+expect-visible "zoo status"
+capture zoo-name-stock          # the map's own name shows in the box
+click "userstring_zooname"
+wait 30                         # the name field takes focus before typing
+snapshot editing-name
+key END
+key BACKSPACE 40
+type "www p g z"
+until text "userstring_zooname" "www p g z"
+expect simulation_paused == @editing-name
+expect immersive_mode_active == 0
+expect construction_tool_active == 0
+expect camera_x_m == @editing-name
+expect camera_z_m == @editing-name
+expect camera_height_m == @editing-name
+expect camera_pitch_deg == @editing-name
+expect camera_fov_deg == @editing-name
+expect zoo_name_editor_glyph_opacity > 0
+expect zoo_name_editor_glyphs_within_editor == 1
+expect zoo_name_editor_glyphs_within_clip == 1
+expect zoo_name_editor_background_draws > 0
+expect zoo_name_editor_background_below_foreground == 1
+until zoo_name_editor_caret_contained_and_nontransparent == 1 within 120
+capture zoo-name-shortcut-letters
+key BACKSPACE 40
+type "Verification Zoo"
+key ENTER
+until text "userstring_zooname" "Verification Zoo"
+click "close"
+until hidden "userstring_zooname"
+click 560 450
+until text "userstring_zooname" "Verification Zoo"
+
+# Zoo names commit on text change. Escape dismisses the panel, not the rename.
+click "userstring_zooname"
+key END
+key BACKSPACE 40
+type "Retained Zoo"
+wait 30                         # the typed name commits on text change before Escape
+key ESCAPE
+until hidden "userstring_zooname"
+click 560 450
+until text "userstring_zooname" "Retained Zoo"
+click "close"
+until hidden "userstring_zooname"
+
+# A save dialog draft must not rename the world when cancelled.
+key F5
+until visible "SaveName"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Cancelled Zoo"
+until text "SaveName" "Cancelled Zoo" within 120
+expect-zoo-name "Retained Zoo"
+expect save_name_editor_glyph_opacity > 0
+expect save_name_editor_glyphs_within_editor == 1
+expect save_name_editor_glyphs_within_clip == 1
+expect save_name_editor_background_draws > 0
+expect save_name_editor_background_below_foreground == 1
+until save_name_editor_caret_contained_and_nontransparent == 1 within 120
+key ESCAPE
+until hidden "Save Game Shell"
+expect-zoo-name "Retained Zoo"
+click 560 450
+until text "userstring_zooname" "Retained Zoo"
+# Save a concrete admissions state, then change it before loading the slot.
+until visible "close zoo toggle button"
+click "close zoo toggle button"
+until admissions_open == 0 within 120
+until text "open zoo selection" "CLOSED." within 120
+click "close"
+until hidden "userstring_zooname"
+
+# Submit a distinct save name, change live data, then restore the accepted save.
+key F5
+until visible "SaveName"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Saved Zoo"
+until text "SaveName" "Saved Zoo" within 120
+expect-zoo-name "Retained Zoo"
+expect photo_challenge_progress_count > 0
+expect world_photo_baseline_initialized == 1
+expect photo_challenge_unresolved_photo_references == 0
+expect staff == 6
+snapshot save-name-before-save
+capture save-name-before-save
+expect world_limited_adoption_offer_inventory_present == 0
+expect world_snapshot_save_requests == 0
+expect world_snapshot_save_completions == 0
+expect world_snapshot_load_requests == 0
+expect world_snapshot_load_completions == 0
+expect world_snapshot_persistence_failures == 0
+click "Save Game Button"
+until world_snapshot_save_requests == 1 within 120
+until world_snapshot_save_completions == 1 within 600
+until hidden "Save Game Shell" within 120
+expect world_snapshot_save_requests == 1
+expect world_snapshot_persistence_failures == 0
+expect saved_slot_matches_active_profile_and_world_name == 1
+expect-zoo-name "Saved Zoo"
+expect world_limited_adoption_offer_inventory_present == 0
+snapshot completed-named-save
+click 560 450
+until text "userstring_zooname" "Saved Zoo"
+until text "open zoo selection" "CLOSED." within 120
+click "userstring_zooname"
+key END
+key BACKSPACE 40
+type "Unsaved Zoo"
+until text "userstring_zooname" "Unsaved Zoo"
+click "open zoo toggle button"
+until admissions_open == 1 within 120
+until text "open zoo selection" "OPEN!" within 120
+expect-zoo-name "Unsaved Zoo"
+capture zoo-name-and-admissions-unsaved
+click "close"
+until hidden "userstring_zooname"
+key F6
+until visible "save current game"
+click "no_button"
+until visible "SavedGamesList"
+until rows "SavedGamesList" == 1
+expect world_snapshot_saved_slot == @completed-named-save
+click-row "SavedGamesList" 0
+click "TextButton Load"
+until world_snapshot_load_requests == 1 within 120
+expect world_snapshot_requested_load_slot == @completed-named-save.world_snapshot_saved_slot
+until world_snapshot_load_completions == 1 within 600
+phase in-game
+until hidden "Load Game Shell"
+expect world_snapshot_save_requests == 1
+expect world_snapshot_save_completions == 1
+expect world_snapshot_load_requests == 1
+expect world_snapshot_loaded_slot == @completed-named-save.world_snapshot_saved_slot
+expect world_snapshot_persistence_failures == 0
+expect-zoo-name "Saved Zoo"
+expect admissions_open == @save-name-before-save
+expect saved_slot_matches_active_profile_and_world_name == 1
+expect world_limited_adoption_offer_inventory_present == 0
+expect photo_challenge_progress_count == @save-name-before-save
+expect world_photo_baseline_initialized == 1
+expect photo_challenge_unresolved_photo_references == 0
+expect photo_challenge_progress_state_0 == @save-name-before-save
+expect photo_challenge_progress_state_1 == @save-name-before-save
+expect photo_challenge_progress_state_2 == @save-name-before-save
+expect photo_challenge_progress_state_3 == @save-name-before-save
+expect staff == @save-name-before-save
+click 560 450
+until text "userstring_zooname" "Saved Zoo"
+until text "open zoo selection" "CLOSED." within 120
+capture zoo-name-after-load
+
+# Restored admissions must also own the recreated panel's next toggle action.
+click "open zoo toggle button"
+until admissions_open == 1 within 120
+until text "open zoo selection" "OPEN!" within 120
+expect-zoo-name "Saved Zoo"
+click "close zoo toggle button"
+until admissions_open == 0 within 120
+until text "open zoo selection" "CLOSED." within 120
+expect-zoo-name "Saved Zoo"
+capture zoo-admissions-closed-after-load
+click "close"
+until hidden "userstring_zooname"
+
+snapshot before-habitat
+expect simulation_paused == 0
+click "construction"
+click "Fence Tab"
+select-catalogue "chainlink"
+snapshot fence-start
+click 1000 220
+click 1350 220
+until fences > @fence-start
+snapshot fence-start
+click 1350 470
+until fences > @fence-start
+snapshot fence-start
+click 1000 470
+until fences > @fence-start
+# Changing fence type starts a new chain at the clicked grid point, as in the
+# original game; it does not snap to nearby posts. Runs are whole segments, so
+# the last chainlink run ends on the post at 1050 475, short of the 1000 470
+# click. Anchor the staff gates on that post and close on the first anchor.
+select-catalogue "staffgate"
+expect selected_catalogue_entry_available == 1
+capture staff-gate-selected
+click 1050 475
+click 1000 220
+until habitat_staff_gates > 0
+expect open_habitat_staff_gates == 0
+until closed_staff_gate_clips > 0
+capture staff-gated-habitat
+until habitats == @before-habitat+1
+capture habitat-built
+expect simulation_paused == 0
+expect habitats == @before-habitat+1
+expect animals == 0
+expect staff == @before-habitat
+expect food_placed_objects == 0
+expect enrichment_placed_objects == 0
+snapshot before-food
+click "animals"
+until rows "Animal Typelist" >= 1
+click "Animal Food Tab"
+select-catalogue "terrain_branches" in "Food Typelist"
+move 1120 320
+until placement_valid_previews == 1
+expect placement_visible_previews == 1
+expect food_placed_objects == 0
+expect construction_payments == @before-food
+click 1120 320
+until food_placed_objects == 1
+until food_owned_habitat_objects == 1
+expect food_authored_initial_quantities == 1
+expect food_filled_food_containers == 1
+expect food_placement_payments == 1
+expect food_correct_placement_payments == 1
+expect enrichment_placed_objects == 0
+snapshot food-committed
+# Repeat placement is enabled by default; moving the new preview must not buy it.
+move 1200 290
+until placement_valid_previews == 1
+key ESCAPE
+until placement_previews == 0
+expect food_placed_objects == 1
+expect food_owned_habitat_objects == 1
+expect food_authored_initial_quantities == 1
+expect construction_payments == @food-committed
+expect cash_cents_without_guest_income == @food-committed
+click "Animal Enrichment Tab"
+wait 30                         # the tab's own icons replace the previous tab's
+click "icon" 1                  # pursuit ball
+move 1250 360
+until placement_valid_previews == 1
+expect placement_visible_previews == 1
+expect enrichment_placed_objects == 0
+expect construction_payments == @food-committed
+click 1250 360
+until enrichment_placed_objects == 1
+until enrichment_owned_habitat_objects == 1
+expect enrichment_authored_initial_quantities == 1
+expect enrichment_filled_food_containers == 0
+expect enrichment_placement_payments == 1
+expect enrichment_correct_placement_payments == 1
+expect food_placed_objects == 1
+expect food_owned_habitat_objects == 1
+expect food_authored_initial_quantities == 1
+expect food_placement_payments == 1
+snapshot enrichment-committed
+move 1200 290
+until placement_valid_previews == 1
+key ESCAPE
+until placement_previews == 0
+expect food_placed_objects == 1
+expect enrichment_placed_objects == 1
+expect food_owned_habitat_objects == 1
+expect enrichment_owned_habitat_objects == 1
+expect food_authored_initial_quantities == 1
+expect enrichment_authored_initial_quantities == 1
+expect food_placement_payments == 1
+expect food_correct_placement_payments == 1
+expect enrichment_placement_payments == 1
+expect enrichment_correct_placement_payments == 1
+expect construction_payments == @enrichment-committed
+expect cash_cents_without_guest_income == @enrichment-committed
+expect simulation_paused == 0
+capture habitat-food-and-enrichment-committed
+
+# Undo enrichment then food; the fence remains for the one-animal checks.
+key CTRL+Z
+until enrichment_placed_objects == 0
+key CTRL+Z
+until food_placed_objects == 0
+expect animals == 0
+expect habitats == @before-habitat+1
+
+expect staff == @before-habitat
+snapshot before-water
+click "animals"                 # reopens on the tab selected last, here Enrichment
+until visible "Animal Food Tab"
+click "Animal Food Tab"
+wheel-to-catalogue "fooddish_water"
+select-catalogue "fooddish_water" in "Food Typelist"
+move 1250 400
+until placement_valid_previews == 1
+click 1250 400
+until food_placed_objects == 1
+until food_owned_habitat_objects == 1
+expect food_authored_initial_quantities == 1
+expect food_correct_placement_payments > @before-water
+expect drinking_sources == 1
+expect drinking_source_is_water_dish == 1
+expect drinking_source_id > 0
+expect drinking_source_quantity == 100
+key ESCAPE                      # cancel repeat placement through the ordinary input route
+until placement_previews == 0
+expect simulation_paused == 0
+expect-hidden "In Game Options"
+snapshot water-placed
+capture finite-water-dish-placed
+click "Buy Animal Tab"
+until rows "Animal Typelist" >= 1
+click "Female Button"
+select-catalogue "aardvark" in "Animal Typelist"
+move 1170 340
+until placement_valid_previews == 1
+click 1170 340
+until contained_animals == 1
+until placement_previews == 0
+until construction_tool_active == 0
+expect animals == 1
+expect female_animals == 1
+expect drinking_aardvarks == 1
+expect drinking_source_shares_animal_habitat == 1
+expect drinking_source_id == @water-placed
+expect simulation_paused == 0
+capture aardvark-with-finite-water-source
+# Thirst is naturally initialized at 30..60 deprivation, rising .33 each fixed update.
+# Caps assume normal 1:1 speed and 60 rendered frames/s: 30 s to dock, 60 s to finish.
+# Frame caps are not wall-clock guarantees; captures retain ordinary simulation time.
+until drinking_docked_animation_uses > 0 within 1800
+capture aardvark-drinking-water-dish
+until drinking_first_finishes == 1 within 3600
+expect drinking_first_source_id == @water-placed.drinking_source_id
+expect drinking_source_id == @water-placed
+expect drinking_first_quantity_before == 100
+expect drinking_first_quantity_after == 60   # independently authored terminal f_FoodLevel -40
+expect drinking_first_thirst_before < 1000
+expect drinking_first_thirst_after == 1000   # thirst -100 restores clamped wellness
+expect drinking_first_thirst_adjustments == 1
+expect drinking_first_thirst_adjustment == 1000
+expect drinking_first_docked == 1
+expect drinking_first_identity_matches == 1
+expect drinking_first_applications == 1
+capture water-dish-drinking-completed
+wait 60                         # no duplicate terminal effects after this execution finishes
+expect drinking_first_finishes == 1
+expect drinking_first_applications == 1
+expect drinking_source_id == @water-placed
+expect drinking_first_thirst_adjustments == 1
+expect simulation_paused == 0
+
+# The same animal can eat after its independently attributed drinking execution.
+click "Animal Food Tab"
+wheel-to-catalogue "hollowlog_insects"
+select-catalogue "hollowlog_insects" in "Food Typelist"   # aardvarks eat insects
+move 1300 290
+until placement_valid_previews == 1
+click 1300 290
+until food_placed_objects == 2
+until food_owned_habitat_objects == 2
+expect construction_tool_active == 1
+expect placement_previews == 1   # food placement repeats, unlike animal adoption
+expect simulation_paused == 0
+key ESCAPE                      # leave repeat placement
+until placement_previews == 0
+expect simulation_paused == 0
+expect-hidden "In Game Options"
+snapshot food-placed
+until animals_targeting_food > 0 within 36000
+capture animal-eating
+until food_left < @food-placed within 36000
+capture food-eaten
+
+# Guests use the path alongside this same occupied habitat.
+until guests_viewing_from_paths > 0 within 36000
+capture guest-viewing-animal
+
+# Remove the consumed feeder before hiring. A keeper must supply the next feed task.
+key CTRL+Z
+until food_placed_objects == 1
+snapshot before-hire
+click "staff"
+select-catalogue "keeper"
+move 900 340                    # outside the gated side, away from the opening radius
+until placement_valid_previews == 1
+click 900 340
+until staff > @before-hire
+until placement_previews == 0
+expect keepers_inside_staff_gate_habitats == 0
+capture keeper-outside-habitat
+# Natural hunger raises t_FeedAnimal; its authored task uses ordinary navigation.
+# Natural hunger resumes after the earlier meal; no need value is overwritten.
+until keeper_feed_claims > 0 within 36000
+until keeper_closed_gate_routes > @before-hire within 36000
+capture keeper-planned-gate-entry
+until open_staff_gate_clips > 0 within 36000
+expect contained_animals == 1
+capture keeper-opening-gate
+until keeper_gate_crossings > @before-hire within 36000
+expect keepers_inside_staff_gate_habitats == 1
+expect contained_animals == 1
+capture keeper-entered-habitat
+until staff_gate_reclosures > @before-hire within 36000
+until open_habitat_staff_gates == 0 within 36000
+until closed_staff_gate_clips == @before-hire.habitat_staff_gates
+expect contained_animals == 1
+expect simulation_paused == 0
+capture staff-gates-reclosed
+# An ordinarily adopted animal close to the gate must not become its opener.
+click "animals"
+click "Male button"
+select-catalogue "aardvark" in "Animal Typelist"
+move 1025 340
+until placement_valid_previews == 1
+click 1025 340
+until contained_animals == 2
+expect animals == 2
+expect male_animals == 1
+until placement_previews == 0
+wait 30                         # five authored polling intervals at normal 60 Hz
+until ineligible_only_closed_staff_gates > 0
+expect open_habitat_staff_gates == 0
+expect simulation_paused == 0
+capture animal-at-closed-staff-gate
+
+
+
+key ESCAPE
+until visible "In Game Options"
+move "TextButton Return Hover"
+until visible "TextButton Return To MainMenu"
+click "TextButton Return To MainMenu"
+# The save prompt in confirm.xml outlives the menu that opened it.
+until visible "return_mainmenu"
+expect-hidden "In Game Options"
+capture return-to-main-menu-prompt
+# Escape presses this prompt's own Cancel, not another confirm.xml dialog's.
+key ESCAPE
+until hidden "return_mainmenu"
+expect-hidden "In Game Options"
+expect phase == 4
+key ESCAPE
+until visible "In Game Options"
+move "TextButton Return Hover"
+until visible "TextButton Return To MainMenu"
+click "TextButton Return To MainMenu"
+until visible "return_mainmenu"
+click "no_button"               # return without saving
+phase main-menu
+until visible "Main Menu Layout"
+expect-visible "Logo"
+until visible "Freeform Button"
+expect-visible "Challenge Button"
+expect-visible "Campaign Game Button"
+expect map_selected == 0
+move "Freeform Button"
+expect ui_over_ui == 1
+capture returned-to-main-menu
+key F1
+wait 120
+expect-hidden "ztzoopedia"
+expect zoopedia_visible_title_owners == 0
+expect-visible "Freeform Button"
+expect-visible "Logo"
+capture returned-menu-f1-inactive

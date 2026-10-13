@@ -1,9 +1,9 @@
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, prelude::*};
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::account_transaction_types::Account;
 use crate::plugins::economy::account_transaction_types::TransactionCompleted;
 use crate::plugins::economy::account_transaction_types::TransactionKind;

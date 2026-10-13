@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::document::*;
 
-use crate::assets::localization::{
+use openzt2_game_assets::localization::{
     localization_asset_types::LocalizationAsset,
     localization_precedence_index::LocalizationPrecedenceIndex,
 };

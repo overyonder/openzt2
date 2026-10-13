@@ -21,7 +21,7 @@ use bevy_inspector_egui::{
     quick::{AssetInspectorPlugin, StateInspectorPlugin, WorldInspectorPlugin},
 };
 
-use crate::application_lifecycle::GamePhase;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use developer_diagnostics_view_types::DeveloperDiagnosticsViewState;
 

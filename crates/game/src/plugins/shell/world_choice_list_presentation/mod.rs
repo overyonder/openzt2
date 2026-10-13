@@ -1,11 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use crate::plugins::ui::authored_toggle_selection_transitions::UiAuthoredToggleGroupSelectionPolicy;
@@ -21,6 +16,11 @@ use crate::plugins::ui::authored_ui_pointer_activation::UiPreviousPointerPressTi
 use crate::plugins::ui::authored_ui_selection_state::UiSelected;
 use crate::plugins::ui::projection::authored_document_projection::authored_first_toggle_list_row_index;
 use crate::plugins::ui::projection::authored_document_projection::insert_authored_text_prototype;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     campaign_selection_list_presentation::replace_text_in_list_row_and_descendants,

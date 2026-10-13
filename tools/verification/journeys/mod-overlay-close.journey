@@ -1,0 +1,54 @@
+# The Mods control opens the populated panel; Close preserves archive state (#45).
+# Captures need independent review of the labels and usable menu controls.
+start main-menu
+until visible "Open Mods"
+expect-hidden "mod manager"
+expect mod_archive_reload_in_progress == 0
+expect-hidden "mod reload input blocker"
+click "Open Mods"
+until visible "mod manager"
+until mod_manager_visible_archive_labels >= 1 within 120
+snapshot mod-open
+expect mod_manager_archive_rows == @mod-open.mod_archive_count
+capture mods-open
+click "Close Mods"
+until hidden "mod manager"
+until visible "Open Mods"
+expect mod_manager_visible_archive_labels == 0
+expect mod_archive_reload_in_progress == 0
+expect-hidden "mod reload input blocker"
+capture mods-closed
+click "Open Mods"
+until visible "mod manager"
+until mod_manager_visible_archive_labels >= 1 within 120
+expect mod_archive_state_0 == @mod-open
+expect mod_archive_state_1 == @mod-open
+expect mod_archive_state_2 == @mod-open
+expect mod_archive_state_3 == @mod-open
+click "Close Mods"
+until hidden "mod manager"
+click "Freeform Button"
+phase map-selection
+until visible "Map List"
+until rows "Map List" >= 1
+expect-hidden "mod manager"
+expect-hidden "Open Mods"
+expect-hidden "mod reload input blocker"
+click "Cancel Map"
+phase main-menu
+until visible "Freeform Button"
+until visible "Open Mods"
+expect-hidden "mod manager"
+expect mod_archive_reload_in_progress == 0
+expect-hidden "mod reload input blocker"
+click "Open Mods"
+until visible "mod manager"
+until mod_manager_visible_archive_labels >= 1 within 120
+expect mod_archive_state_0 == @mod-open
+expect mod_archive_state_1 == @mod-open
+expect mod_archive_state_2 == @mod-open
+expect mod_archive_state_3 == @mod-open
+capture mods-after-main-menu-return
+click "Close Mods"
+until hidden "mod manager"
+expect-visible "Freeform Button"

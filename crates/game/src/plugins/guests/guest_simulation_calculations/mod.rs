@@ -115,14 +115,22 @@ pub(crate) fn inclusive_u32(low: u32, high: u32, random: u32) -> u32 {
     low.saturating_add(random % width.max(1))
 }
 
+/// The authored `LeaveZoo` task (`leaveZoo="true"`) applies once the guest's
+/// `f_departurePoints`, spent by idle and satisfied tasks, run out.
 pub(crate) fn should_leave(
+    departure_points_q16: i32,
     satisfaction: u16,
     hunger: u16,
     thirst: u16,
     energy: u16,
     restroom: u16,
 ) -> bool {
-    satisfaction == 0 || hunger == 0 || thirst == 0 || energy == 0 || restroom == 0
+    departure_points_q16 <= 0
+        || satisfaction == 0
+        || hunger == 0
+        || thirst == 0
+        || energy == 0
+        || restroom == 0
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

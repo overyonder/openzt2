@@ -2,11 +2,14 @@
 
 mod animal_animation_locomotion;
 mod animal_navigation_policy;
+#[cfg(test)]
+mod animal_terrain_slope_tests;
 mod avian_navigation_agent_driving;
 mod changed_destination_route_planning;
 mod contact_steering_projection;
 mod direct_docking_request_execution;
 mod direct_locomotion_execution;
+mod fence_navigation_policy;
 mod kinematic_navigation_agent_motion_integration;
 mod local_steering_calculation;
 pub mod locomotion_types;
@@ -31,8 +34,13 @@ use locomotion_types::{
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::FixedGameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
+
+/// Projects animal walk clips onto navigation agents. Behaviors that start an
+/// animal's own clip run before it, so a stop never replaces that clip.
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) struct AnimalAnimationNavigationProjection;
 
 pub struct LocomotionPlugin;
 
@@ -56,7 +64,8 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    animal_animation_locomotion::project_animal_animation_motion_to_navigation,
+                    animal_animation_locomotion::project_animal_animation_motion_to_navigation
+                        .in_set(AnimalAnimationNavigationProjection),
                     terrain_edit_navigation_refresh::
                         refresh_navigation_graph_and_invalidate_routes_after_terrain_edits,
                     navigation_agent_initialization::
@@ -96,6 +105,7 @@ impl Plugin for LocomotionPlugin {
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
                 )
+                    .after(crate::plugins::topology::gate_operation_types::GateOperationSet)
                     .in_set(FixedGameSet::Act),
             )
             .add_systems(

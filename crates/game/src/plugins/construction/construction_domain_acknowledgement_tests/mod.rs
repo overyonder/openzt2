@@ -30,12 +30,14 @@ fn applying_initial_commit_progress_with_domain_statuses(
         topology: statuses[1],
         placement: statuses[2],
         shows: DomainAckStatus::NotExpected,
+        aquatic: DomainAckStatus::NotExpected,
     }
 }
 
 fn construction_acknowledgement_test_application() -> App {
     let mut application = App::new();
     application
+        .add_message::<crate::plugins::aquatic::tank_floor_edit_types::TankFloorEditAcknowledged>()
         .add_message::<TerrainEditAcknowledged>()
         .add_message::<TopologyEditAcknowledged>()
         .add_message::<ObjectPlacementEditApplicationAcknowledged>()

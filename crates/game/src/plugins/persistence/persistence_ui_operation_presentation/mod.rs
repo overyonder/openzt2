@@ -1,18 +1,23 @@
 //! Persistence-operation wait presentation, save-then-load continuation and
 //! closing the save dialog once its save completes.
 
+#[cfg(test)]
+mod tests;
+
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{
     action::presentation::UiPresentationAction, document::UiDocumentRole,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::{
     authored_ui_node_projection_components::UiDocumentRoot,
     authored_ui_presentation_action_application::RequestUiPresentationAction,
     cursor::SetWaitCursor, save_dialog_cancellation::SaveDialogCancellationRequests,
+    ui_document_asset_load_failure::UiDocumentAssetLoadFailed,
     ui_document_lifecycle_contracts::ShowUiRole,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_role_asset_path_selection::select_bevy_asset_path_for_canonical_ui_document_role;
 
 use super::{
     persistence_failure_types::{
@@ -61,6 +66,7 @@ pub(super) fn project_outstanding_world_snapshot_operations_onto_ui_wait_cursor(
 pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     mut commands: Commands,
     mut cancellations: SaveDialogCancellationRequests,
+    mut failed_ui_documents: MessageReader<UiDocumentAssetLoadFailed>,
     mut saved_world_snapshot_messages: MessageReader<WorldSnapshotSavedToSlot>,
     mut world_snapshot_persistence_failures: MessageReader<WorldSnapshotPersistenceFailed>,
     pending_load_slot_catalogue_owners: Query<
@@ -69,9 +75,16 @@ pub(super) fn continue_to_load_slot_catalogue_after_world_snapshot_save(
     >,
     mut show_ui_document_requests: MessageWriter<ShowUiRole>,
 ) {
-    // The continuation waits on the save dialog's owner, so cancelling that
-    // dialog abandons it.
-    let cancelled_owners = cancellations.read_cancelled_lifecycle_owners();
+    // A cold receiver cannot emit Cancel. Its failed Save projection abandons
+    // the same owner's continuation, including a coincident save completion.
+    let mut cancelled_owners = cancellations.read_cancelled_lifecycle_owners();
+    cancelled_owners.extend(failed_ui_documents.read().filter_map(|failure| {
+        select_bevy_asset_path_for_canonical_ui_document_role(UiDocumentRole::SaveGame)
+            .is_some_and(|path| {
+                failure.document.path() == Some(&bevy::asset::AssetPath::parse(&path))
+            })
+            .then_some(failure.owner)
+    }));
     for owner in &pending_load_slot_catalogue_owners {
         if cancelled_owners.contains(&owner) {
             commands

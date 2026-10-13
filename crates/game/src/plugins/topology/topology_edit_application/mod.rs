@@ -1,8 +1,8 @@
 use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_transaction_types::EditApplication;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
@@ -444,17 +444,9 @@ pub(super) fn apply_committed_topology_edit(
                             commands.entity(entity).insert(prefab);
                         }
                         if gate.is_some() {
-                            let policy = &fence.gate_policy;
-                            commands.entity(entity).insert((
-                                GateMechanism {
-                                    prefab: AssetId(policy.prefab.0),
-                                    open_animation: AssetId(policy.open_animation.0),
-                                    close_animation: AssetId(policy.close_animation.0),
-                                    trigger_distance_cm: policy.trigger_distance_cm,
-                                    auto_close_ticks: policy.auto_close_ticks,
-                                },
-                                GateAutoClose(0),
-                            ));
+                            commands
+                                .entity(entity)
+                                .insert((GateMechanism::default(), GateAutoClose(0)));
                         }
                     }
                     index.edges.insert(

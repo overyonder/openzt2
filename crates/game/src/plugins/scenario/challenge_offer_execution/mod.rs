@@ -1,12 +1,12 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::world_spawn::persistent_id_types::PersistentIdAllocator;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     challenge_offer_types::{
@@ -46,7 +46,10 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
             error!(path = %request.source_path, "Lua challenge offer has no UTF-8 scenario stem");
             continue;
         };
-        let source_id = AssetId::from_key(stem);
+        // Archive paths are case-insensitive and scenarios are keyed by their
+        // lowercase stem; scripts name `BelugaPhoto.xml` and `mantaray.xml`
+        // alike.
+        let source_id = AssetId::from_key(&stem.to_ascii_lowercase());
         let Some(record) = scenarios.scenario(source_id) else {
             error!(path = %request.source_path, "Lua challenge offer references an unloaded scenario");
             continue;
@@ -94,6 +97,7 @@ pub(super) fn create_challenge_offers_requested_by_scenario_scripts(
                 state: ScenarioChallengeOfferState::Offered,
             },
         ));
+        info!(path = %request.source_path, tick = clock.tick, "challenge offered");
         break;
     }
 }

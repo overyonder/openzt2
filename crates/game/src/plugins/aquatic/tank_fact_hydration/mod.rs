@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::aquatic_simulation_types::{
     Tank, TankCapacity, TankFiltration, TankGeometry, TankPopulation, TankSurfaceHydrated,
@@ -10,31 +10,26 @@ use super::aquatic_simulation_types::{
 pub(super) fn hydrate_tank_capacity_population_and_filtration_facts(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    tanks: Query<
+    mut tanks: Query<
         (
             Entity,
             &Tank,
             Has<TankCapacity>,
             Has<TankPopulation>,
-            Has<TankFiltration>,
+            Option<&mut TankFiltration>,
         ),
-        (
-            With<Tank>,
-            Or<(
-                Added<Tank>,
-                Without<TankCapacity>,
-                Without<TankPopulation>,
-                Without<TankFiltration>,
-            )>,
-        ),
+        With<Tank>,
     >,
     mut commands: Commands,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    for (entity, tank, has_capacity, has_population, has_filtration) in &tanks {
-        let Some(definition) = definitions.find_tank(tank.definition) else {
+    let definitions = active_definitions.get(&definitions);
+    for (entity, tank, has_capacity, has_population, filtration) in &mut tanks {
+        let Some(definition) = definitions.and_then(|view| view.find_tank(tank.definition)) else {
+            // Filtration is derived from the current definition, not saved live state.
+            // Missing definitions must not leave a previous tank's rate active.
+            if filtration.is_some() {
+                commands.entity(entity).remove::<TankFiltration>();
+            }
             continue;
         };
         let mut entity_commands = commands.entity(entity);
@@ -44,10 +39,13 @@ pub(super) fn hydrate_tank_capacity_population_and_filtration_facts(
         if !has_population {
             entity_commands.insert(TankPopulation::default());
         }
-        if !has_filtration {
-            entity_commands.insert(TankFiltration {
-                litres_per_zoo_day: definition.filtration_per_day,
-            });
+        let authored_filtration = TankFiltration {
+            litres_per_zoo_day: definition.filtration_per_day,
+        };
+        if let Some(mut filtration) = filtration {
+            filtration.set_if_neq(authored_filtration);
+        } else {
+            entity_commands.insert(authored_filtration);
         }
     }
 }

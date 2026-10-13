@@ -6,12 +6,10 @@ use openzt2_game_data::{
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
 };
 
-use crate::{
-    assets::localization::{
-        localization_asset_types::LocalizationAsset,
-        localization_precedence_index::LocalizationPrecedenceIndex,
-    },
-    plugins::ui::authored_ui_text_content_binding::UiTextBinding,
+use crate::plugins::ui::authored_ui_text_content_binding::UiTextBinding;
+use openzt2_game_assets::localization::{
+    localization_asset_types::LocalizationAsset,
+    localization_precedence_index::LocalizationPrecedenceIndex,
 };
 
 use super::donation_payment_types::DonationCategoryTotals;

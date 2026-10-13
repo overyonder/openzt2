@@ -1,4 +1,6 @@
-use super::graphics_settings_types::{GraphicsSettings, GraphicsSettingsRejectionReason};
+use openzt2_game_assets::graphics_settings_types::{
+    GraphicsSettings, GraphicsSettingsRejectionReason,
+};
 
 pub(super) fn validate_proposed_graphics_settings(
     proposed_graphics_settings: GraphicsSettings,

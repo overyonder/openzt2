@@ -117,6 +117,8 @@ pub(in super::super) fn apply_completed_persistence_slot_filesystem_tasks(
                             session_mode: None,
                             baseline_world_load_requested: false,
                             baseline_world_load_completed: false,
+                            baseline_world_root: None,
+                            maintenance_prefabs: Vec::new(),
                         });
                 }
                 Err(failure_reason) => {

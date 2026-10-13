@@ -1,0 +1,97 @@
+# diagnostic: a natural visit long enough for gift desire; run alone with --budget 1800
+# A guest who reaches a gift cart queues, pays once and wears the zoo hat it
+# bought, held on its head node in its head inventory (#114).
+# Placement must be checked against the entrance path in the capture.
+#
+# Guests start with no gift desire (guest.xml: gift Value 0, adjust 0, trigger
+# 50). Only amusement completions raise it, about 10 to 15 each, and an
+# amusement task needs amusement at its trigger of 30. Amusement starts at
+# 10-20 and rises 0.2 per need tick of 0-6 s, about 4 a minute. A young guest
+# on a bouncy ride (amusement -10, gift +10, no task delay) reaches gift 50
+# after roughly 12-15 minutes; adults' kiosks (amusement -100, gift 15, 300-500 s
+# delays) take longer. The default 300 s suite cannot cover that, so this
+# journey is a diagnostic.
+start freeform-map
+until guests > 0 within 4800          # guests first arrive about 3100 frames after a map loads
+until guests_visiting > 0 within 9000 # they appear at the map edge and walk to the gate to pay
+click "construction"
+click "Building Tab"
+until rows "Building Typelist" >= 1
+snapshot gift-before-wheel
+move "Building Typelist"
+wheel 100                       # return to the beginning if the shared map retained a scroll offset
+until catalogue_scroll_x == 0
+snapshot gift-list-start
+wheel-to-catalogue "giftcart_df"
+until catalogue_gift_unclipped == 1 within 120
+expect catalogue_scroll_x > @gift-list-start
+expect catalogue_first_unclipped_row > @gift-list-start
+expect camera_x_m == @gift-before-wheel
+expect camera_z_m == @gift-before-wheel
+expect camera_height_m == @gift-before-wheel
+expect camera_pitch_deg == @gift-before-wheel
+expect camera_fov_deg == @gift-before-wheel
+snapshot before-gift-placement
+select-catalogue "giftcart_df"
+expect selected_catalogue_entry_available == 1
+move 933 239                    # beside the entrance path east of the gate, within inSight 40 of the entrance
+until placement_valid_previews == 1
+click 933 239
+until placed_objects > @entered-map
+expect construction_commit_failures == @before-gift-placement
+expect construction_payments == @before-gift-placement+1
+key ESCAPE                      # leave repeat placement
+until placement_previews == 0
+expect placed_gift_carts > @before-gift-placement
+# Guests walk only on paths, so join the stand's dock side to the entrance
+# path: a straight asphalt path from the road (about 1.5 m beside the stand)
+# past its far side. Placement must be checked in the capture.
+snapshot before-path
+click "Path Tab"
+select-catalogue "asphalt"
+move 815 210                    # on the entrance road east of the gate
+click 815 210
+move 939 294                    # beyond the stand, along its dock side
+until placement_valid_previews == 1 within 120
+click 939 294
+until paths > @before-path
+expect construction_commit_failures == @before-gift-placement
+key ESCAPE                      # drop the follow-on path preview
+until placement_previews == 0
+# A bouncy ride beside the branch gives young guests the amusement that
+# raises gift desire.
+snapshot before-ride
+click "Scenery Tab"
+select-catalogue "Lion_df"
+expect selected_catalogue_entry_available == 1
+move 880 335                    # below the branch, opposite the cart
+until placement_valid_previews == 1 within 120
+click 880 335
+until placed_objects > @before-ride
+expect construction_commit_failures == @before-gift-placement
+key ESCAPE                      # leave repeat placement
+until placement_previews == 0
+capture gift-cart-placed
+expect simulation_paused == 0
+snapshot cart-open
+until guests_wanting_gifts > 0 within 72000    # about 20 minutes of play
+until guest_purchases > @before-gift-placement within 36000
+capture gift-purchase-paid
+expect guest_purchase_cents > @before-gift-placement
+expect guest_repeat_purchases == @before-gift-placement
+expect cash_cents > @cart-open
+until guest_held_items > @before-gift-placement within 600
+capture gift-hat-worn            # inspect the hat on the buyer's head
+wait 600                        # the same purchase must not be paid for again
+expect guest_repeat_purchases == @before-gift-placement
+
+# Undo the ride, path and facility after observing delivery; leave the shared map without them.
+key CTRL+Z                      # the ride
+until placed_objects == @before-ride
+key CTRL+Z                      # the path
+until paths == @entered-map
+key CTRL+Z                      # the facility
+until placed_objects == @entered-map
+expect construction_commit_failures == @before-gift-placement
+
+restore freeform-map

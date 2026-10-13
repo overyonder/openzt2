@@ -1,4 +1,5 @@
 mod calculations;
+mod habitat_suitability;
 mod systems;
 pub(crate) mod types;
 
@@ -7,9 +8,10 @@ use types::*;
 use bevy::prelude::*;
 
 use crate::{
-    application_lifecycle::GamePhase, application_schedule::FixedGameSet,
+    application_schedule::FixedGameSet,
     plugins::simulation_time::simulation_control_application::simulation_is_running,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(crate) struct AnimalWelfarePlugin;
 
@@ -73,7 +75,7 @@ impl Plugin for AnimalWelfarePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    systems::assess_habitat_suitability,
+                    habitat_suitability::assess_habitat_suitability,
                     systems::derive_animal_welfare,
                 )
                     .chain()

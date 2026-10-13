@@ -48,8 +48,8 @@ use construction_transaction_types::{
     PrepareConstruction, PrepareDeletion,
 };
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::GameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 /// Installs the generic edit lifecycle. Domain plugins retain ownership of the
 /// typed terrain, topology, and placement operations attached to transactions.
@@ -77,6 +77,25 @@ pub(crate) struct FixedConstructionTransactionMaterializationSet;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) struct FixedConstructionPreparedDomainEditMaterializationSet;
 
+/// Orders the player-transaction steps after the simulation step. They run in
+/// game whether or not the simulation is paused.
+fn configure_fixed_construction_sets(app: &mut App) {
+    app.configure_sets(
+        FixedUpdate,
+        (
+            FixedConstructionSet::Prepare,
+            FixedConstructionSet::RequestEconomy,
+            FixedConstructionSet::SettleEconomy,
+            FixedConstructionSet::CompleteEconomy,
+            FixedConstructionSet::Apply,
+            FixedConstructionSet::Cleanup,
+        )
+            .chain()
+            .after(crate::application_schedule::FixedGameSet::Cleanup)
+            .run_if(in_state(GamePhase::InGame)),
+    );
+}
+
 impl Plugin for ConstructionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<ConstructionTool>()
@@ -93,21 +112,9 @@ impl Plugin for ConstructionPlugin {
             .add_message::<ApplyConstructionTransaction>()
             .add_message::<ConstructionTransactionApplied>()
             .add_message::<ConstructionCommitFailed>()
-            .add_message::<ConstructionCommitted>()
-            .configure_sets(
-                FixedUpdate,
-                (
-                    FixedConstructionSet::Prepare,
-                    FixedConstructionSet::RequestEconomy,
-                    FixedConstructionSet::SettleEconomy,
-                    FixedConstructionSet::CompleteEconomy,
-                    FixedConstructionSet::Apply,
-                    FixedConstructionSet::Cleanup,
-                )
-                    .chain()
-                    .after(crate::application_schedule::FixedGameSet::Cleanup)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
+            .add_message::<ConstructionCommitted>();
+        configure_fixed_construction_sets(app);
+        app
             .add_systems(
                 Update,
                 (

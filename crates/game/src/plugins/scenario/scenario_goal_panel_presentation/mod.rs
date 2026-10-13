@@ -7,19 +7,20 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use crate::plugins::ui::authored_ui_text_content_binding::UiTextBinding;
 use crate::plugins::ui::scenario_objective_status_visual_classification::UiScenarioObjectiveStatusVisualClassification;
+use crate::plugins::world_spawn::persistent_id_types::PersistentId;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     scenario_objective_types::{
         ScenarioObjective, ScenarioObjectiveAuthoredVisibility, ScenarioObjectiveStatus,
     },
-    scenario_session_types::{ActiveScenarioSession, SelectedScenarioDocument},
     scenario_ui_types::{
         ScenarioGoalListProjection, ScenarioGoalRowProjection, ScenarioObjectiveCategoryFilter,
         ScenarioObjectiveStatusFilter,
@@ -57,37 +58,27 @@ impl ScenarioObjectiveStatusFilter {
     }
 }
 
-/// Sizes authored goal panels from the active scenario objective range.
+/// Sizes authored goal panels from the world's live objectives: the campaign
+/// scenario's and those of every challenge, in the order they were created.
+/// The original goal panel lists the rules of every scenario its manager holds.
 pub(super) fn set_authored_scenario_goal_panel_row_counts(
     mut commands: Commands,
-    source: Option<Res<SelectedScenarioDocument>>,
-    scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
-    active: Query<&ActiveScenarioSession>,
+    objectives: Query<(Entity, &PersistentId), With<ScenarioObjective>>,
     mut lists: Query<(
         Entity,
         &UiListPolicy,
         &UiDocumentOwner,
-        Option<&mut ScenarioGoalListProjection>,
+        Option<&ScenarioGoalListProjection>,
     )>,
     category_filters: Query<&ScenarioObjectiveCategoryFilter>,
     mut row_counts: MessageWriter<SetUiListRowCount>,
 ) {
-    let active_scenario_and_objective_count = source
-        .as_deref()
-        .and_then(|source| scenarios.get(&source.0))
-        .and_then(|asset| {
-            active
-                .single()
-                .ok()
-                .and_then(|active| asset.document.find_scenario_record(active.definition))
-                .map(|scenario| {
-                    (
-                        AssetId(scenario.id.0),
-                        u16::try_from(scenario.objectives.len()).unwrap_or(u16::MAX),
-                    )
-                })
-        });
-
+    let mut ordered = objectives.iter().collect::<Vec<_>>();
+    ordered.sort_unstable_by_key(|(_, id)| id.0);
+    let projected = ordered
+        .into_iter()
+        .map(|(entity, _)| entity)
+        .collect::<Vec<_>>();
     for (entity, policy, owner, current_projection) in &mut lists {
         if policy.source != UiWidgetLiveCollectionSource::ScenarioObjectives {
             continue;
@@ -99,24 +90,15 @@ pub(super) fn set_authored_scenario_goal_panel_row_counts(
                     "overview",
                 )));
         }
-        let (scenario, projected_rows) =
-            active_scenario_and_objective_count.unwrap_or((AssetId::default(), 0));
-        let projection_changed = current_projection
-            .as_ref()
-            .is_none_or(|current_projection| {
-                current_projection.scenario != scenario
-                    || current_projection.projected_rows != projected_rows
-            });
-        if !projection_changed {
+        if current_projection.is_some_and(|current| current.objectives == projected) {
             continue;
         }
         commands.entity(entity).insert(ScenarioGoalListProjection {
-            scenario,
-            projected_rows,
+            objectives: projected.clone(),
         });
         row_counts.write(SetUiListRowCount {
             list: entity,
-            count: projected_rows,
+            count: u16::try_from(projected.len()).unwrap_or(u16::MAX),
         });
     }
 }
@@ -125,11 +107,11 @@ pub(super) fn set_authored_scenario_goal_panel_row_counts(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
     mut commands: Commands,
-    source: Option<Res<SelectedScenarioDocument>>,
-    scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
+    scenarios: Res<WorldScenarios>,
+    scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     lists: Query<&ScenarioGoalListProjection>,
     rows: Query<(Entity, &UiListRow, Option<&ScenarioGoalRowProjection>)>,
-    objectives: Query<(Entity, &ScenarioObjective, &ScenarioObjectiveStatus)>,
+    objectives: Query<(&ScenarioObjective, &ScenarioObjectiveStatus)>,
     parents: Query<&ChildOf>,
     texts: Query<(Entity, Option<&UiTextBinding>), With<Text>>,
     mut status_nodes: Query<
@@ -137,30 +119,28 @@ pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
             Entity,
             &UiScenarioObjectiveStatusVisualClassification,
             &mut Visibility,
+            &mut Node,
         ),
         Without<UiListRow>,
     >,
 ) {
-    let Some(asset) = source
-        .as_deref()
-        .and_then(|source| scenarios.get(&source.0))
-    else {
+    let Some(scenarios) = scenarios.get(&scenario_assets) else {
         return;
     };
     for (row_entity, row, current_projection) in &rows {
         let Ok(list) = lists.get(row.list) else {
             continue;
         };
-        let Some(scenario) = asset.document.find_scenario_record(list.scenario) else {
+        let Some(&objective_entity) = list.objectives.get(usize::from(row.index)) else {
             continue;
         };
-        let record_index = u32::from(row.index);
-        let Some(record) = scenario.objectives.get(record_index as usize) else {
+        let Ok((objective, status)) = objectives.get(objective_entity) else {
             continue;
         };
-        let Some((objective_entity, _, status)) = objectives.iter().find(|(_, objective, _)| {
-            objective.scenario == list.scenario && objective.record_index == record_index
-        }) else {
+        let Some(record) = scenarios
+            .scenario(objective.scenario)
+            .and_then(|scenario| scenario.objectives.get(objective.record_index as usize))
+        else {
             continue;
         };
         let projection = ScenarioGoalRowProjection {
@@ -180,24 +160,33 @@ pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
                 commands.entity(entity).insert(text_binding.clone());
             }
         }
-        for (entity, visual, mut visibility) in &mut status_nodes {
+        for (entity, visual, mut visibility, mut node) in &mut status_nodes {
             if !entity_has_ancestor(entity, row_entity, &parents) {
                 continue;
             }
             let expected_status = ScenarioObjectiveStatusFilter::from(&visual.0);
-            *visibility = if expected_status.includes_objective_status(*status) {
+            visibility.set_if_neq(if expected_status.includes_objective_status(*status) {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
-            };
+            });
+            // Each status list box is an icon column and a label authored
+            // `x="30" walign="max"`: the label fills the rest of the row and
+            // wraps at that width, so its measured height is its drawn height.
+            let columns = vec![RepeatedGridTrack::auto(1), RepeatedGridTrack::fr(1, 1.0)];
+            if node.grid_template_columns != columns || node.justify_items != JustifyItems::Stretch
+            {
+                node.grid_template_columns = columns;
+                node.justify_items = JustifyItems::Stretch;
+            }
         }
     }
 }
 
 /// Applies objective category and status filters without copying objective data.
 pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
-    source: Option<Res<SelectedScenarioDocument>>,
-    scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
+    scenarios: Res<WorldScenarios>,
+    scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     status_filters: Query<&ScenarioObjectiveStatusFilter>,
     category_filters: Query<&ScenarioObjectiveCategoryFilter>,
     lists: Query<(&ScenarioGoalListProjection, &UiDocumentOwner)>,
@@ -212,10 +201,7 @@ pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
         &ScenarioObjectiveAuthoredVisibility,
     )>,
 ) {
-    let scenario_document = source
-        .as_deref()
-        .and_then(|source| scenarios.get(&source.0))
-        .map(|asset| &asset.document);
+    let scenarios = scenarios.get(&scenario_assets);
     for (row, projection, mut visibility) in &mut rows {
         let Ok((_, owner)) = lists.get(row.list) else {
             continue;
@@ -227,11 +213,9 @@ pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
         };
         let category_matches = category_filter.is_none_or(|filter| {
             filter == AssetId::default()
-                || scenario_document
-                    .and_then(|scenario_document| {
-                        scenario_document
-                            .find_scenario_objective(objective.scenario, objective.record_index)
-                    })
+                || scenarios
+                    .and_then(|scenarios| scenarios.scenario(objective.scenario))
+                    .and_then(|scenario| scenario.objectives.get(objective.record_index as usize))
                     .is_some_and(|record| record.category.0 == filter.0)
         });
         *visibility = if authored_visible.0

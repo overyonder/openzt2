@@ -13,8 +13,8 @@ mod fossil_sonar_scoring;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use self::{
     fossil_collection_and_assembly_types::{

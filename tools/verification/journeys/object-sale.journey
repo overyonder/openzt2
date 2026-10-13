@@ -1,0 +1,103 @@
+# Selling a tree asks first, then removes it and refunds the quote once (#59).
+# The Challenge map has a budget, so the refund shows in cash. Inspect each
+# dialog capture for the object name and the refund amount.
+start challenge-map
+snapshot journey-before
+expect unlimited_cash == 0
+# Freeze ordinary income/upkeep while checking exact sale and undo amounts.
+# Pausing now also holds back the zoo's first challenge offer, which waits for
+# four simulated seconds; catalogue-research accepts it.
+expect-hidden "instant challenge layout"
+key P
+until simulation_paused == 1
+click 930 425                   # tree beside the entrance path, as in selection-panels
+until visible "Tree Info"       # the info panel document is projected on first use
+expect selected == 1
+expect selected_object_identity_instances == 1
+expect-text "Entity Name Label" "Himalayan Pine Tree"
+expect object_sale_payments == @journey-before
+expect-hidden "delete_object_confirmation"
+snapshot tree-selected
+capture tree-selected
+click "Sell"
+until visible "delete_object_confirmation"   # the confirmation document loads on first use
+expect-visible "Sell Item Label"
+expect selected_sale_quote_cents >= 0
+expect selected_sale_quote_cents == 2400
+expect-text "Sell Item Label" "Would you like to sell Himalayan Pine Tree?"
+expect-text "Sell Item Refund" "Refund: $24"
+# Text extraction is evidence, not final pixel acceptance. Inspect the named
+# dialog captures for readable question/name/refund and possible occlusion.
+expect sale_question_visible_text_owners == 1
+expect sale_question_glyphs_within_viewport_and_clip == 1
+expect sale_refund_visible_text_owners == 1
+expect sale_refund_glyphs_within_viewport_and_clip == 1
+expect placed_objects == @tree-selected
+expect cash_cents_without_guest_income == @tree-selected
+capture tree-sale-dialog
+click "cancel"
+until hidden "delete_object_confirmation"
+expect selected == 1
+expect-visible "Tree Info"
+expect placed_objects == @tree-selected
+expect cash_cents_without_guest_income == @tree-selected
+expect object_sale_payments == @tree-selected
+expect selected_object_id_low == @tree-selected
+expect selected_object_id_high == @tree-selected
+expect selected_object_identity_instances == 1
+expect construction_payments == @tree-selected
+expect fences == @tree-selected
+expect paths == @tree-selected
+# Escape presses this dialog's own Cancel, not another confirm.xml dialog's.
+click "Sell"
+until visible "delete_object_confirmation"
+expect-text "Sell Item Label" "Would you like to sell Himalayan Pine Tree?"
+expect-text "Sell Item Refund" "Refund: $24"
+key ESCAPE
+until hidden "delete_object_confirmation"
+expect selected == 1
+expect placed_objects == @tree-selected
+expect cash_cents_without_guest_income == @tree-selected
+expect object_sale_payments == @tree-selected
+expect selected_object_id_low == @tree-selected
+expect selected_object_id_high == @tree-selected
+expect selected_object_identity_instances == 1
+expect construction_payments == @tree-selected
+expect fences == @tree-selected
+expect paths == @tree-selected
+click "Sell"
+until visible "delete_object_confirmation"
+expect-text "Sell Item Label" "Would you like to sell Himalayan Pine Tree?"
+expect-text "Sell Item Refund" "Refund: $24"
+expect selected_object_id_low == @tree-selected
+expect selected_object_id_high == @tree-selected
+expect selected_object_identity_instances == 1
+snapshot tree-quoted
+click "delete_object"
+until hidden "delete_object_confirmation"
+until placed_objects < @tree-quoted
+expect construction_commit_failures == @journey-before
+expect cash_cents == @tree-quoted.cash_cents_after_selling_selected
+expect object_sale_payments == @journey-before+1
+expect correct_object_sale_payments == @journey-before+1
+expect fences == @tree-selected
+expect paths == @tree-selected
+snapshot tree-sold
+capture tree-sold
+wait 180                        # the sold tree and its refund must stay as they are
+expect placed_objects == @tree-sold
+expect cash_cents_without_guest_income == @tree-sold
+expect object_sale_payments == @journey-before+1
+expect correct_object_sale_payments == @journey-before+1
+
+# Reverse the sale through normal input; restore the next journey's tree and budget.
+key CTRL+Z
+until placed_objects == @entered-map
+until cash_cents_without_guest_income == @tree-selected
+expect fences == @entered-map
+expect paths == @entered-map
+capture tree-restored
+
+key P
+until simulation_paused == 0
+restore challenge-map

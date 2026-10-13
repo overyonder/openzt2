@@ -4,13 +4,13 @@ use bevy::prelude::*;
 use mlua::{Function, Lua, Value};
 use openzt2_game_data::world_scenario::ScenarioScriptBinding;
 
-use crate::assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
-use crate::assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::lua_script_module_execution::{
     execute_lua_script_module_once_per_virtual_machine,
     install_lua_script_dependency_loading_functions,
 };
+use openzt2_game_assets::lua_script::lua_script_archive_path_index::LuaScriptArchivePathIndex;
+use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     scenario_lua_game_api::{
@@ -21,6 +21,7 @@ use super::{
         ScenarioLuaQueryFacts, ScenarioLuaScriptResult, ScenarioLuaVirtualMachine,
         ScenarioLuaVirtualMachineContexts,
     },
+    scenario_objective_types::ScenarioObjectiveStatus,
     scenario_session_types::SelectedScenarioDocument,
 };
 
@@ -129,62 +130,80 @@ impl ScenarioLuaVirtualMachine {
         let requested_economy_operations = RefCell::new(Vec::new());
         let requested_award_point_adjustments = RefCell::new(Vec::new());
         let requested_challenge_offer_source_paths = RefCell::new(Vec::new());
+        let shown_rules = RefCell::new(Vec::new());
+        let available_content = RefCell::new(Vec::new());
         let requested_challenge_panel = RefCell::new(None);
+        let current_photo_challenge_set = RefCell::new(None);
         let loaded_lua_script_asset_identifiers = RefCell::new(std::mem::take(
             &mut self.loaded_lua_script_asset_identifiers,
         ));
         let active_lua_script_source_path_stack = RefCell::new(Vec::new());
         let execution_result = self.lua_virtual_machine.scope(|lua_scope| {
-            install_lua_script_dependency_loading_functions(
-                &self.lua_virtual_machine,
-                lua_scope,
-                lua_script_assets,
-                lua_script_path_index,
-                &loaded_lua_script_asset_identifiers,
-                &active_lua_script_source_path_stack,
-            )?;
-            execute_lua_script_module_once_per_virtual_machine(
-                &self.lua_virtual_machine,
-                lua_script_source_path,
-                lua_script_asset_handle,
-                lua_script_assets,
-                &loaded_lua_script_asset_identifiers,
-                &active_lua_script_source_path_stack,
-            )?;
-            install_scenario_game_query_and_command_functions(
-                &self.lua_virtual_machine,
-                lua_scope,
-                scenario_lua_query_facts,
-                &requested_economy_operations,
-                &requested_award_point_adjustments,
-                &requested_challenge_offer_source_paths,
-                scenario_script_binding.scenario,
-                &requested_challenge_panel,
-            )?;
-            let scenario_lua_function: Function = self
-                .lua_virtual_machine
-                .globals()
-                .get(scenario_script_binding.entry.as_str())?;
-            // Each native rule owns the argument table shared by its Evaluate,
-            // Success and Failure calls. Authored scripts store fields such as
-            // `data.accept` here across ticks; calling with nil loses that state.
-            let globals = self.lua_virtual_machine.globals();
-            let arguments = globals
-                .get::<Option<mlua::Table>>("__openzt2_rule_arguments")?
-                .unwrap_or(self.lua_virtual_machine.create_table()?);
-            globals.set("__openzt2_rule_arguments", arguments.clone())?;
-            let key = self
-                .lua_virtual_machine
-                .create_string(scenario_script_binding.objective.0)?;
-            let argument = arguments
-                .get::<Option<mlua::Table>>(key.clone())?
-                .unwrap_or(self.lua_virtual_machine.create_table()?);
-            arguments.set(key, argument.clone())?;
-            let condition_status = convert_lua_rule_result_to_objective_status(
-                scenario_lua_function.call::<Value>(argument)?,
-            );
+            let call = (|| {
+                install_lua_script_dependency_loading_functions(
+                    &self.lua_virtual_machine,
+                    lua_scope,
+                    lua_script_assets,
+                    lua_script_path_index,
+                    &loaded_lua_script_asset_identifiers,
+                    &active_lua_script_source_path_stack,
+                )?;
+                execute_lua_script_module_once_per_virtual_machine(
+                    &self.lua_virtual_machine,
+                    lua_script_source_path,
+                    lua_script_asset_handle,
+                    lua_script_assets,
+                    &loaded_lua_script_asset_identifiers,
+                    &active_lua_script_source_path_stack,
+                )?;
+                install_scenario_game_query_and_command_functions(
+                    &self.lua_virtual_machine,
+                    lua_scope,
+                    scenario_lua_query_facts,
+                    &requested_economy_operations,
+                    &requested_award_point_adjustments,
+                    &requested_challenge_offer_source_paths,
+                    scenario_script_binding.scenario,
+                    &shown_rules,
+                    &available_content,
+                    &requested_challenge_panel,
+                    &current_photo_challenge_set,
+                )?;
+                let scenario_lua_function: Function = self
+                    .lua_virtual_machine
+                    .globals()
+                    .get(scenario_script_binding.entry.as_str())?;
+                // Each native rule owns the argument table shared by its Evaluate,
+                // Success and Failure calls. Authored scripts store fields such as
+                // `data.accept` here across ticks; calling with nil loses that state.
+                let globals = self.lua_virtual_machine.globals();
+                let arguments = globals
+                    .get::<Option<mlua::Table>>("__openzt2_rule_arguments")?
+                    .unwrap_or(self.lua_virtual_machine.create_table()?);
+                globals.set("__openzt2_rule_arguments", arguments.clone())?;
+                let key = self
+                    .lua_virtual_machine
+                    .create_string(scenario_script_binding.objective.0)?;
+                let argument = arguments
+                    .get::<Option<mlua::Table>>(key.clone())?
+                    .unwrap_or(self.lua_virtual_machine.create_table()?);
+                arguments.set(key, argument.clone())?;
+                Ok(convert_lua_rule_result_to_objective_status(
+                    scenario_lua_function.call::<Value>(argument)?,
+                ))
+            })();
+            // Native calls act as they are made. An error raised later in the
+            // same call ends the script without undoing the calls before it.
+            let (condition_status, failure) = match call {
+                Ok(condition_status) => (condition_status, None),
+                Err(failure) => (ScenarioObjectiveStatus::Active, Some(failure)),
+            };
             Ok(ScenarioLuaScriptResult {
+                failure,
+                current_photo_challenge_set: current_photo_challenge_set.borrow_mut().take(),
+                available_content: available_content.borrow_mut().drain(..).collect(),
                 condition_status,
+                shown_rules: shown_rules.borrow_mut().drain(..).collect(),
                 challenge_panel: requested_challenge_panel.borrow_mut().take(),
                 economy_operations: requested_economy_operations
                     .borrow_mut()

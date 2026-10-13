@@ -3,10 +3,10 @@ use openzt2_game_data::{
     behavior::action_record::BehaviorAction, world_definitions::staff_management::StaffRoleKind,
 };
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use crate::plugins::behavior_task_execution_types::find_current_behavior_task_action;
 use crate::plugins::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -19,7 +19,6 @@ use crate::plugins::locomotion::locomotion_types::NavigationFailed;
 use crate::plugins::locomotion::locomotion_types::NavigationRequestSequence;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::staff::staff_employment_types::StaffRole;
-use crate::plugins::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
@@ -51,7 +50,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
     >,
     entity_global_transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
-    authored_attachment_transforms: Query<(&PrefabAuthoredAttachmentIdentifier, &GlobalTransform)>,
+    authored_attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
     mut navigation_requests: MessageWriter<NavigateTo>,
 ) {
     for (actor, mut behavior_task, staff_role, navigation_agent) in &mut behavior_tasks {
@@ -256,6 +255,7 @@ mod tests {
             action: 0,
             repetitions: 0,
             next_action_tick: 1,
+            object: None,
             interaction_slot: None,
             stack: Default::default(),
         }

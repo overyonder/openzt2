@@ -4,10 +4,8 @@ use bevy::{
 };
 use openzt2_game_data::audio::{AudioUsage, VARIANT_LOOPED};
 
-use crate::{
-    assets::audio::audio_asset_types::{AudioAsset, AudioAssets},
-    plugins::settings::audio_settings_types::AudioSettings,
-};
+use crate::plugins::settings::audio_settings_types::AudioSettings;
+use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 
 use super::{
     audio_cue_resolution::resolve_weighted_audio_cue_variant,

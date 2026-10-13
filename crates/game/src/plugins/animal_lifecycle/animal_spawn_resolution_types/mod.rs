@@ -10,16 +10,16 @@ use super::types::{
 
 /// Complete typed facts selected from one species and variant for a live spawn.
 #[derive(Clone, Copy)]
-pub(super) struct ResolvedAnimalSpawnComponents {
-    pub(super) sex: Sex,
-    pub(super) life_stage: LifeStage,
-    pub(super) variant: AssetId,
-    pub(super) definition: AssetId,
-    pub(super) life_stage_start_ticks: AuthoredAnimalLifeStageStartTicks,
-    pub(super) reproduction: ReproductionTraits,
-    pub(super) waste: AnimalWasteCycle,
-    pub(super) presentation_model: SelectedAnimalPresentationModel,
-    pub(super) scale: f32,
-    pub(super) species_flags: SpeciesFlags,
-    pub(super) variant_flags: SpeciesVariantFlags,
+pub(crate) struct ResolvedAnimalSpawnComponents {
+    pub(crate) sex: Sex,
+    pub(crate) life_stage: LifeStage,
+    pub(crate) variant: AssetId,
+    pub(crate) definition: AssetId,
+    pub(crate) life_stage_start_ticks: AuthoredAnimalLifeStageStartTicks,
+    pub(crate) reproduction: ReproductionTraits,
+    pub(crate) waste: AnimalWasteCycle,
+    pub(crate) presentation_model: SelectedAnimalPresentationModel,
+    pub(crate) scale: f32,
+    pub(crate) species_flags: SpeciesFlags,
+    pub(crate) variant_flags: SpeciesVariantFlags,
 }

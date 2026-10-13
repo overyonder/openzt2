@@ -311,7 +311,7 @@ pub(super) fn present_slider_values(
     )>,
     tracks: Query<(&ComputedNode, &UiGlobalTransform)>,
     scroll_owners: Query<&ComputedNode>,
-    parents: Query<&ChildOf>,
+    children: Query<&Children>,
     mut thumbs: Query<(
         Entity,
         &UiNodeId,
@@ -329,20 +329,15 @@ pub(super) fn present_slider_values(
         };
         let ratio = value_ratio(value.0, minimum.0, maximum.0);
         let axis = effective_axis(policy.axis, track.size());
-        let Some((_, _, thumb_transform, mut thumb_node, mut transform)) =
-            thumbs.iter_mut().find(|(candidate, id, _, _, _)| {
-                if id.id != presentation.thumb {
-                    return false;
-                }
-                let mut entity = *candidate;
-                while let Ok(parent) = parents.get(entity) {
-                    entity = parent.parent();
-                    if entity == slider {
-                        return true;
-                    }
-                }
-                false
-            })
+        // Search only this slider's own subtree for its thumb.
+        let Some(thumb) = children.iter_descendants(slider).find(|candidate| {
+            thumbs
+                .get(*candidate)
+                .is_ok_and(|(_, id, _, _, _)| id.id == presentation.thumb)
+        }) else {
+            continue;
+        };
+        let Ok((_, _, thumb_transform, mut thumb_node, mut transform)) = thumbs.get_mut(thumb)
         else {
             continue;
         };
@@ -422,23 +417,19 @@ fn translation_pixels(translation: Val) -> f32 {
 /// Formats the slider value using the authored width, precision and percent suffix.
 pub(super) fn present_slider_value_labels(
     sliders: Query<(Entity, &UiSliderValuePresentation, &UiValue)>,
-    parents: Query<&ChildOf>,
+    children: Query<&Children>,
     mut labels: Query<(Entity, &UiNodeId, &mut Text)>,
 ) {
     for (slider, presentation, value) in &sliders {
-        let Some((_, _, mut text)) = labels.iter_mut().find(|(candidate, id, _)| {
-            if id.id != presentation.label {
-                return false;
-            }
-            let mut entity = *candidate;
-            while let Ok(parent) = parents.get(entity) {
-                entity = parent.parent();
-                if entity == slider {
-                    return true;
-                }
-            }
-            false
+        // Search only this slider's own subtree for its label.
+        let Some(label) = children.iter_descendants(slider).find(|candidate| {
+            labels
+                .get(*candidate)
+                .is_ok_and(|(_, id, _)| id.id == presentation.label)
         }) else {
+            continue;
+        };
+        let Ok((_, _, mut text)) = labels.get_mut(label) else {
             continue;
         };
         let number = if presentation.decimal_places == 0 {

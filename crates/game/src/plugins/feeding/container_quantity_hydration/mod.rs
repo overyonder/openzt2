@@ -6,8 +6,8 @@ mod tests;
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::world_objects::WorldObjectContainerContent, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
 
 use super::container_quantity::{DrinkContainer, FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16};

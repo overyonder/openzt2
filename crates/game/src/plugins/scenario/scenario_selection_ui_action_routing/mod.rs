@@ -1,15 +1,15 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::scenarios::UiScenarioAction;
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::shell::shell_navigation_request_types::ChooseWorld;
 use crate::plugins::shell::shell_navigation_request_types::StartSelectedWorld;
 use crate::plugins::shell::shell_selection_types::ShellSelection;
 use crate::plugins::shell::shell_selection_types::WorldChoice;
 use crate::plugins::ui::authored_ui_node_projection_components::UiValue;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::scenario_ui_types::{
     AuthoredScenarioUiActionDocumentQueries, ScenarioShellMessageWriters,

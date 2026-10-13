@@ -1,0 +1,28 @@
+# Splash and main-menu F1 scope (#44). Gameplay continues in the shared map.
+# Review the named captures for readable title/body pixels, not just glyph counts.
+start boot
+phase splash
+until settled
+capture splash
+click "splashbutton0"
+phase main-menu
+until settled
+key F1
+wait 120                       # allow an inappropriate shortcut document to open
+expect-hidden "ztzoopedia"
+expect zoopedia_visible_title_owners == 0
+expect-visible "Freeform Button"
+expect-visible "Logo"
+move "Freeform Button"
+expect ui_over_ui == 1
+capture menu-f1-inactive
+
+# Definition errors are checked over the entire session log.
+expect-log-absent "more than one distinct guest service container"           # 176
+expect-log-absent "unsupported audio document root"                            # 177
+expect-log-absent "has no resolved model scene"                                # 178
+expect-log-absent "has no input component"                                     # 179
+expect-log-absent "camera has no perspective component"                        # 179
+expect-log-absent "elephanthuge"                                               # 180
+expect-log-absent "requires unsupported attachment transform policy"           # 181
+expect-log-absent "Failed to load asset"

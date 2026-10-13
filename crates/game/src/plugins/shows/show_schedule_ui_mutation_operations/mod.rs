@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::world_spawn::persistent_id_assignment::AssignPersistentId;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 

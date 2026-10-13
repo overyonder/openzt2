@@ -42,6 +42,13 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
                     BehaviorAnimationClipAction {
                         animation_clip_asset_key: "Stand_2StandItem".into(),
                         looping: false,
+                        physical_object: None,
+                        play_duration_seconds: None,
+                        interrupts_current_animation: false,
+                        interruptible: false,
+                        ground_fit: None,
+                        blend_duration_seconds: None,
+                        playback_speed: None,
                     },
                 )]),
             }]),
@@ -56,6 +63,7 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
         action: 0,
         repetitions: 0,
         next_action_tick: 0,
+        object: None,
         interaction_slot: None,
         stack: Default::default(),
     };

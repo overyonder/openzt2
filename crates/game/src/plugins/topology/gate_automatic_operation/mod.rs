@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use crate::plugins::locomotion::locomotion_types::SpatialGrid;
 
 use super::gate_operation_types::{Gate, GateAutoClose, GateMechanism, SetGateState};
+use super::{gate_actor_type_queries::GateActorTypeQueries, topology_graph_types::FenceEdge};
 
 pub(super) fn advance_gate_automatic_close_countdowns(
     mut gates: Query<(Entity, &Gate, &mut GateAutoClose)>,
@@ -22,14 +23,18 @@ pub(super) fn advance_gate_automatic_close_countdowns(
     }
 }
 
-/// Requests that gates stay open while an agent is inside their trigger radius.
+/// Polls eligible authored actor types, opening at the inner radius and closing
+/// only after those actors have left the outer radius.
 pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
+    time: Res<Time<Fixed>>,
     spatial_grid: Res<SpatialGrid>,
+    actor_types: GateActorTypeQueries,
     agent_transforms: Query<&GlobalTransform>,
     mut gates: Query<(
         Entity,
         &Gate,
-        &GateMechanism,
+        &mut GateMechanism,
+        &FenceEdge,
         &GlobalTransform,
         Option<&mut GateAutoClose>,
     )>,
@@ -53,13 +58,39 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
         return;
     }
 
-    for (gate_entity, gate, mechanism, transform, automatic_close) in &mut gates {
-        if gate.locked || mechanism.trigger_distance_cm == 0 {
+    let Some(definitions) = actor_types.definitions() else {
+        return;
+    };
+    for (gate_entity, gate, mut mechanism, edge, transform, automatic_close) in &mut gates {
+        let Some(definition) = definitions.find_fence(edge.definition) else {
             continue;
+        };
+        let policy = &definition.gate_policy;
+        if gate.locked || policy.trigger_distance_cm == 0 {
+            continue;
+        }
+        if policy.poll_interval_ns != 0 {
+            let interval = std::time::Duration::from_nanos(policy.poll_interval_ns);
+            mechanism.elapsed_poll_time = mechanism.elapsed_poll_time.saturating_add(time.delta());
+            if mechanism.elapsed_poll_time < interval {
+                continue;
+            }
+            // Fixed ticks can span several polls, but one observation of live
+            // positions is sufficient. Retain the sub-interval remainder.
+            mechanism.elapsed_poll_time = std::time::Duration::from_nanos(
+                u64::try_from(
+                    mechanism.elapsed_poll_time.as_nanos() % u128::from(policy.poll_interval_ns),
+                )
+                .expect("poll remainder fits authored interval"),
+            );
         }
         let position = transform.translation();
         let center = Vec2::new(position.x, position.z);
-        let radius = f32::from(mechanism.trigger_distance_cm) * 0.01;
+        let radius = f32::from(if gate.open && policy.close_distance_cm != 0 {
+            policy.close_distance_cm
+        } else {
+            policy.trigger_distance_cm
+        }) * 0.01;
         let radius_squared = radius * radius;
         let minimum = ((center - Vec2::splat(radius) - spatial_grid.origin)
             / spatial_grid.cell_size_m)
@@ -80,6 +111,11 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
                 let cell = u32::try_from(y).expect("clamped grid row") * spatial_grid.width
                     + u32::try_from(x).expect("clamped grid column");
                 spatial_grid.range(cell).iter().any(|agent| {
+                    if policy.open_for_entity_type.is_some_and(|required_type| {
+                        !actor_types.actor_types(*agent).contains(&required_type)
+                    }) {
+                        return false;
+                    }
                     agent_transforms.get(*agent).is_ok_and(|agent_transform| {
                         let agent_position = agent_transform.translation();
                         Vec2::new(agent_position.x, agent_position.z).distance_squared(center)
@@ -89,11 +125,17 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
             })
         });
         if !occupied {
+            if gate.open && policy.close_distance_cm != 0 {
+                requests.write(SetGateState {
+                    gate: gate_entity,
+                    open: false,
+                });
+            }
             continue;
         }
         if gate.open {
             if let Some(mut automatic_close) = automatic_close {
-                automatic_close.0 = mechanism.auto_close_ticks;
+                automatic_close.0 = policy.auto_close_ticks;
             }
         } else {
             requests.write(SetGateState {

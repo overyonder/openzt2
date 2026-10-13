@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 /// A biome detail parented to its terrain chunk.
 #[derive(Component, Debug, Clone)]

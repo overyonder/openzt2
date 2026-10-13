@@ -4,8 +4,8 @@ use openzt2_game_data::world_definitions::facilities_and_maintenance::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::economy::service_types::ServiceCompleted;
 use crate::plugins::simulation_time::simulation_clock_types::ZooDayAdvanced;
 use crate::plugins::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -29,13 +29,15 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
+    // An unavailable higher-precedence document must not initialize from an
+    // older policy. Unresolved objects retry when the asset set is available.
+    if world_definitions.has_pending_assets() {
+        return;
+    }
     for (world_object_entity, definition_id) in &unresolved_world_objects {
         let Some(maintenance_definition) =
             world_definitions.find_maintenance_by_object(definition_id.0)
         else {
-            commands
-                .entity(world_object_entity)
-                .insert(AuthoredMaintenanceFactsResolutionMarker);
             continue;
         };
         let initial_condition =
@@ -43,16 +45,19 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
         if maintenance_definition.waste_capacity_units == 0 {
             commands
                 .entity(world_object_entity)
-                .insert((initial_condition, AuthoredMaintenanceFactsResolutionMarker));
+                .insert_if_new(initial_condition)
+                .insert(AuthoredMaintenanceFactsResolutionMarker);
         } else {
-            commands.entity(world_object_entity).insert((
-                initial_condition,
-                FacilityContainedWaste {
-                    contained_waste_units: 0,
-                    contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
-                },
-                AuthoredMaintenanceFactsResolutionMarker,
-            ));
+            commands
+                .entity(world_object_entity)
+                .insert_if_new((
+                    initial_condition,
+                    FacilityContainedWaste {
+                        contained_waste_units: 0,
+                        contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
+                    },
+                ))
+                .insert(AuthoredMaintenanceFactsResolutionMarker);
         }
     }
 }
@@ -68,8 +73,14 @@ pub(super) fn deteriorate_maintainable_world_objects_after_zoo_days_advance(
     mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
+        // A later policy cannot establish the rate for days it did not govern.
+        advanced_zoo_days.clear();
         return;
     };
+    if world_definitions.has_pending_assets() {
+        advanced_zoo_days.clear();
+        return;
+    }
     for advanced_zoo_day in advanced_zoo_days.read() {
         let elapsed_zoo_days = advanced_zoo_day
             .current_day
@@ -83,13 +94,13 @@ pub(super) fn deteriorate_maintainable_world_objects_after_zoo_days_advance(
             else {
                 continue;
             };
-            let Some(condition_loss_permille) =
+            let condition_loss_permille =
                 u32::from(maintenance_definition.deterioration_per_zoo_day_permille)
-                    .checked_mul(elapsed_zoo_days)
-                    .and_then(|condition_loss| u16::try_from(condition_loss.min(1_000)).ok())
-            else {
+                    .saturating_mul(elapsed_zoo_days)
+                    .min(1_000) as u16;
+            if condition_loss_permille == 0 || maintainable_object_condition.0 == 0 {
                 continue;
-            };
+            }
             let previous_condition = *maintainable_object_condition;
             maintainable_object_condition.0 = maintainable_object_condition
                 .0

@@ -88,7 +88,7 @@ pub(in crate::plugins::ui) fn interact_with_globe(
                 return None;
             }
             let model = models.get(prefab.handle.as_ref()?)?;
-            crate::assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
+            openzt2_game_assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
                 model,
                 &gltf_meshes,
                 &meshes,

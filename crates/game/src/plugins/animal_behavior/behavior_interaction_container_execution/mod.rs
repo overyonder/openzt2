@@ -3,10 +3,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::types::SpeciesHandle;
 use crate::plugins::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use crate::plugins::behavior_task_execution_types::find_current_behavior_task_action;
@@ -32,7 +32,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
-    attachment_transforms: Query<(&crate::plugins::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier, &GlobalTransform)>,
+    attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
     mut actors: Query<(
         Entity,
         &mut BehaviorTaskExecutionState,
@@ -151,6 +151,8 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     continue;
                 }
                 task.interaction_slot = Some(slot_index);
+                debug!(?actor, ?target, slot_index, entrance = ?slot.entrance_behavior_set,
+                    already_docked = occupancy.is_docked(target, actor), "entered interaction container slot");
                 // Native entry completes immediately for an already docked
                 // member; replaying its entrance can restart a completed use.
                 if occupancy.is_docked(target, actor) {
@@ -190,6 +192,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
         let Some((document, declaration)) = behavior_declarations
             .find_behavior_set_location(requested_behavior_set, subject_type_identifiers)
         else {
+            debug!(?actor, set = ?requested_behavior_set, "behavior set has no declaration for this subject");
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };

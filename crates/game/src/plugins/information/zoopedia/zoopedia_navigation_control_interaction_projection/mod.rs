@@ -1,15 +1,13 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::information::UiInformationAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_ui_action_projection_components::UiInformationActions,
-        authored_ui_focus_state::UiFocusable,
-        authored_ui_interaction_enabled_state::UiInteractionEnabled,
-        authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
-    },
+use crate::plugins::ui::{
+    authored_ui_action_projection_components::UiInformationActions,
+    authored_ui_focus_state::UiFocusable,
+    authored_ui_interaction_enabled_state::UiInteractionEnabled,
+    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use crate::plugins::information::zoopedia::zoopedia_navigation_types::ZoopediaHistory;
 

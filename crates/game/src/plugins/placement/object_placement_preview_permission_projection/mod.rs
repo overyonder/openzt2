@@ -1,27 +1,37 @@
-use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
-use bevy::{gltf::Gltf, prelude::*};
+use avian3d::prelude::{RayHitData, SpatialQuery, SpatialQueryFilter};
+use bevy::{ecs::system::SystemParam, gltf::Gltf, prelude::*};
 use openzt2_game_data::world_definitions::object_placement::{
     FootprintCellFlags, PlacementConstraints,
 };
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_interaction_types::ConstructionPreview;
 use crate::plugins::economy::zoo_cash_types::UnlimitedZooCash;
 use crate::plugins::economy::zoo_cash_types::ZooCash;
 use crate::plugins::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use crate::plugins::progression::unlock_types::UnlockedCatalogueDefinitionSet;
+use crate::plugins::terrain::{
+    terrain_chunk_types::{TerrainChunk, TerrainIndex},
+    terrain_collision_rebuilding_types::TerrainChunkCollisionSurface,
+    terrain_world_sampling::{terrain_cell_indices, terrain_chunk_at},
+};
 use crate::plugins::topology::topology_graph_types::EdgeKey;
 use crate::plugins::topology::topology_graph_types::TopologyIndex;
 use crate::plugins::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use crate::plugins::world_spawn::selected_world_identity::SelectedWorldIdentity;
-use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use crate::plugins::world_spawn::world_membership_types::{WorldMember, WorldRoot};
 
 use super::{
     object_placement_definition_queries::{
         authored_object_entrance_definitions, object_placeable_definition_is_unlocked,
         resolve_object_placeable_definition, select_authored_footprint_for_eighth_turns,
+    },
+    object_placement_headroom_diagnostic_types::{
+        ObjectPlacementBlockingHeadroomRay, ObjectPlacementHeadroomChunkObservation,
+        ObjectPlacementHeadroomDiagnosticState, ObjectPlacementHeadroomObservation,
+        ObjectPlacementTerrainExemptionObservation,
     },
     object_placement_validation::{
         calculate_authored_object_placement_eighth_turns,
@@ -30,6 +40,152 @@ use super::{
     ObjectPlacementPrefabSource, ObjectPlacementPreviewPermissionFacts,
     PlacedObjectRelocationSource,
 };
+
+#[derive(SystemParam)]
+pub(super) struct ObjectPlacementHeadroomQueries<'w, 's> {
+    spatial_query: SpatialQuery<'w, 's>,
+    terrain_index: Res<'w, TerrainIndex>,
+    chunks: Query<'w, 's, (&'static TerrainChunk, &'static WorldMember)>,
+    surfaces: Query<'w, 's, &'static ChildOf, With<TerrainChunkCollisionSurface>>,
+    observed_owners: Query<
+        'w,
+        's,
+        (
+            Option<&'static TerrainChunk>,
+            Option<&'static WorldMember>,
+            Option<&'static ChildOf>,
+            Has<TerrainChunkCollisionSurface>,
+        ),
+    >,
+}
+
+impl ObjectPlacementHeadroomQueries<'_, '_> {
+    /// Whether `candidate` is another chunk of the indexed chunk's world whose
+    /// shared edge row holds `cell`; flattening writes that row in both chunks.
+    fn flattens_neighbouring_edge(&self, indexed: Entity, candidate: Entity, cell: Vec2) -> bool {
+        let (Ok((indexed, indexed_member)), Ok((candidate, candidate_member))) =
+            (self.chunks.get(indexed), self.chunks.get(candidate))
+        else {
+            return false;
+        };
+        candidate_member.root == indexed_member.root
+            && candidate.coord != indexed.coord
+            && candidate.side >= 2
+            && terrain_cell_indices(candidate, cell).is_some()
+    }
+
+    fn cast_occupied_cell_headroom_ray(
+        &self,
+        origin: Vec3,
+        clearance_m: f32,
+        preview: Entity,
+        relocation: Option<Entity>,
+        flattening_world: Option<Entity>,
+        mut observation: Option<&mut ObjectPlacementTerrainExemptionObservation>,
+    ) -> Option<RayHitData> {
+        let cell = Vec2::new(origin.x, origin.z);
+        let flattened_chunk = flattening_world.and_then(|world| {
+            let indexed = terrain_chunk_at(&self.terrain_index, cell);
+            if let Some(record) = observation.as_deref_mut() {
+                record.indexed_entity = indexed;
+                record.lookup_stage = "index unavailable";
+            }
+            let entity = indexed?;
+            if let Some(record) = observation.as_deref_mut() {
+                record.lookup_stage = "indexed chunk or world member unavailable";
+            }
+            let (chunk, member) = self.chunks.get(entity).ok()?;
+            if let Some(record) = observation.as_deref_mut() {
+                record.indexed_chunk = Some(ObjectPlacementHeadroomChunkObservation {
+                    coord: chunk.coord,
+                    origin: chunk.origin,
+                    spacing_m: chunk.spacing_m,
+                    side: chunk.side,
+                    world: Some(member.root),
+                });
+                record.lookup_stage = "world mismatch";
+            }
+            if member.root != world {
+                return None;
+            }
+            if let Some(record) = observation.as_deref_mut() {
+                record.lookup_stage = "invalid chunk side";
+            }
+            if chunk.side < 2 {
+                return None;
+            }
+            let indices = terrain_cell_indices(chunk, cell);
+            if let Some(record) = observation.as_deref_mut() {
+                record.cell = indices;
+                record.lookup_stage = if indices.is_some() {
+                    "eligible indexed chunk"
+                } else {
+                    "cell unavailable"
+                };
+            }
+            indices.map(|_| entity)
+        });
+        let hit = self.spatial_query.cast_ray_predicate(
+            origin,
+            Dir3::Y,
+            clearance_m,
+            true,
+            &SpatialQueryFilter::DEFAULT,
+            &|hit| {
+                hit != preview
+                    && Some(hit) != relocation
+                    // Flattening replaces all four samples of this occupied
+                    // terrain cell in every chunk that stores them, including a
+                    // neighbour's shared edge row. Each such heightfield will lie
+                    // at placement height, below this unchanged upward ray.
+                    && !flattened_chunk.is_some_and(|indexed| {
+                        self.surfaces.get(hit).is_ok_and(|parent| {
+                            parent.parent() == indexed
+                                || self.flattens_neighbouring_edge(indexed, parent.parent(), cell)
+                        })
+                    })
+            },
+        );
+        // Inspect only the returned blocker, in this same system invocation.
+        // Predicate lookups above are retained; no second ray or terrain scan.
+        if let (Some(record), Some(hit)) = (observation, hit) {
+            record.flattened_chunk = flattened_chunk;
+            self.observe_blocking_surface_owner(hit.entity, record);
+        }
+        hit
+    }
+
+    fn observe_blocking_surface_owner(
+        &self,
+        hit: Entity,
+        record: &mut ObjectPlacementTerrainExemptionObservation,
+    ) {
+        let Ok((_, _, parent, marked)) = self.observed_owners.get(hit) else {
+            return;
+        };
+        record.hit_marked = Some(marked);
+        record.hit_parent = parent.map(ChildOf::parent);
+        record.parent_matches_indexed = record
+            .hit_parent
+            .zip(record.indexed_entity)
+            .map(|(parent, indexed)| parent == indexed);
+        let Some(parent) = record.hit_parent else {
+            return;
+        };
+        let Ok((chunk, member, _, _)) = self.observed_owners.get(parent) else {
+            return;
+        };
+        record.parent_available = true;
+        record.parent_world = member.map(|member| member.root);
+        record.parent_chunk = chunk.map(|chunk| ObjectPlacementHeadroomChunkObservation {
+            coord: chunk.coord,
+            origin: chunk.origin,
+            spacing_m: chunk.spacing_m,
+            side: chunk.side,
+            world: record.parent_world,
+        });
+    }
+}
 
 pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     cash: Res<ZooCash>,
@@ -43,17 +199,19 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         With<WorldRoot>,
     >,
     topology: Res<TopologyIndex>,
-    spatial_query: SpatialQuery,
+    headroom: ObjectPlacementHeadroomQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
+    mut diagnostics: Option<ResMut<ObjectPlacementHeadroomDiagnosticState>>,
     mut previews: Query<(
         Entity,
         &ConstructionPreview,
         &mut ObjectPlacementPreviewPermissionFacts,
         &ObjectPlacementPrefabSource,
         Option<&PlacedObjectRelocationSource>,
+        Option<&WorldMember>,
     )>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
@@ -64,7 +222,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         .map_or((None, None), |(selection, availability)| {
             (Some(selection.mode), availability.map(Ref::into_inner))
         });
-    for (entity, preview, mut permission, prefab_source, relocation) in &mut previews {
+    for (entity, preview, mut permission, prefab_source, relocation, member) in &mut previews {
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -122,6 +280,16 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             has_path && has_wall
         });
         let clearance_m = definition.minimum_headroom_metres;
+        // The terrain transaction stores centimetres in i16. Outside its
+        // representable range, no terrain removal may be assumed.
+        let height_cm = preview.transform.translation.y * 100.0;
+        let flattening_world = constraints
+            .contains_all(PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT)
+            .then_some(member)
+            .flatten()
+            .filter(|_| (f32::from(i16::MIN)..=f32::from(i16::MAX)).contains(&height_cm))
+            .map(|member| member.root);
+        let mut blocking_ray = None;
         let headroom_valid = clearance_m <= f32::EPSILON
             || pose.is_some_and(|(origin, turns)| {
                 select_authored_footprint_for_eighth_turns(definition, turns)
@@ -130,23 +298,58 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                     .all(|cell| {
                         let local =
                             IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
-                        let cell = (origin
-                            + rotate_object_placement_cell_by_quarter_turns(local, turns / 2))
-                        .as_vec2();
-                        spatial_query
-                            .cast_ray_predicate(
-                                Vec3::new(cell.x, preview.transform.translation.y + 0.01, cell.y),
-                                Dir3::Y,
-                                clearance_m,
-                                true,
-                                &SpatialQueryFilter::DEFAULT,
-                                &|hit| {
-                                    hit != entity && relocation.is_none_or(|source| hit != source.0)
-                                },
-                            )
-                            .is_none()
+                        let world_cell = origin
+                            + rotate_object_placement_cell_by_quarter_turns(local, turns / 2);
+                        let cell = world_cell.as_vec2();
+                        let ray_origin =
+                            Vec3::new(cell.x, preview.transform.translation.y + 0.01, cell.y);
+                        let mut exemption = diagnostics
+                            .as_ref()
+                            .map(|_| ObjectPlacementTerrainExemptionObservation::default());
+                        let hit = headroom.cast_occupied_cell_headroom_ray(
+                            ray_origin,
+                            clearance_m,
+                            entity,
+                            relocation.map(|source| source.0),
+                            flattening_world,
+                            exemption.as_mut(),
+                        );
+                        if let Some(exemption) = exemption {
+                            blocking_ray = hit.map(|hit| ObjectPlacementBlockingHeadroomRay {
+                                local_cell: local,
+                                world_cell,
+                                origin: ray_origin,
+                                hit,
+                                exemption,
+                            });
+                        }
+                        hit.is_none()
                     })
             });
+        if let Some(diagnostics) = diagnostics.as_mut() {
+            diagnostics.pending = Some(ObjectPlacementHeadroomObservation {
+                preview: entity,
+                definition: preview.definition,
+                transform: preview.transform,
+                pose,
+                pivot_cm: pose.map(|(_, turns)| {
+                    if turns & 1 == 0 {
+                        definition.pivot_cm
+                    } else {
+                        definition.diagonal_pivot_cm
+                    }
+                }),
+                clearance_m,
+                headroom_valid,
+                flatten_requested: constraints
+                    .contains_all(PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT),
+                preview_world: member.map(|member| member.root),
+                flatten_height_representable: (f32::from(i16::MIN)..=f32::from(i16::MAX))
+                    .contains(&height_cm),
+                flattening_world,
+                blocking_ray,
+            });
+        }
         let next = ObjectPlacementPreviewPermissionFacts {
             unlocked: object_placeable_definition_is_unlocked(
                 catalogue,
@@ -167,3 +370,6 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

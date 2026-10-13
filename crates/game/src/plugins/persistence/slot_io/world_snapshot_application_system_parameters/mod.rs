@@ -1,9 +1,9 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::{
     aquatic::aquatic_simulation_types::Tank,
     economy::{
@@ -26,6 +26,7 @@ use crate::plugins::{
     },
     world_spawn::{
         persistent_id_types::PersistentId, world_hydration_completion::WorldLoadFinished,
+        world_membership_types::DefinitionId,
         world_load_failure::WorldLoadFailed, world_load_request_acceptance::BeginWorldLoad,
         world_unloading::UnloadWorld,
     },
@@ -50,11 +51,24 @@ pub(in crate::plugins::persistence) struct WorldSnapshotApplicationMessages<'w, 
 
 #[derive(SystemParam)]
 pub(in crate::plugins::persistence) struct WorldSnapshotApplicationState<'w, 's> {
+    pub(super) photo_baseline:
+        super::photo_snapshot_baseline_readiness::PhotoSnapshotBaselineReadiness<'w, 's>,
+    pub(super) baseline_waste: Query<
+        'w,
+        's,
+        Entity,
+        With<crate::plugins::maintenance::maintenance_types::AnimalHabitatWaste>,
+    >,
+    pub(super) prefabs: Res<'w, Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
+    pub(super) asset_server: Res<'w, AssetServer>,
+    pub(super) baseline_animals:
+        Query<'w, 's, Entity, With<crate::plugins::animal_lifecycle::types::Animal>>,
     pub(super) species_assets: Res<'w, Assets<SpeciesAsset>>,
     pub(super) active_species: Res<'w, SpeciesAssets>,
     pub(super) world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     pub(super) active_world_definitions: Res<'w, WorldDefinitions>,
     pub(super) entities_with_persistent_identifiers: Query<'w, 's, (Entity, &'static PersistentId)>,
+    pub(super) entities_with_definition_identifiers: Query<'w, 's, (Entity, &'static DefinitionId)>,
     pub(super) transport_entities_with_persistent_identifiers: Query<
         'w,
         's,

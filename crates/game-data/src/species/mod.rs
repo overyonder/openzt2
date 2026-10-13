@@ -17,16 +17,23 @@ pub struct SpeciesDocument {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SpeciesVariantBinding {
     pub species: AssetId,
+    /// Exact effective `s_Species` when it differs from the species-root value.
+    /// Absence inherits `Species::authored_species_name`.
+    #[serde(default)]
+    pub authored_species_name_override: Option<String>,
     pub variant: SpeciesVariant,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Species {
     pub id: AssetId,
+    /// Exact authored `s_Species`, preserving case and punctuation.
+    pub authored_species_name: String,
     pub name_key: AssetId,
     pub taxonomy_key: AssetId,
     pub world_definition: AssetId,
     pub needs: Vec<SpeciesNeed>,
+    pub habitat_space: Option<SpeciesHabitatSpace>,
     pub adult_mass_kg: [f32; 2],
     pub stage_start_days: [f64; 4],
     pub lifespan_days: [f64; 2],
@@ -38,9 +45,47 @@ pub struct Species {
     pub waste_definition: AssetId,
     pub waste_interval_days: f64,
     pub waste_units: u16,
+    /// Object a keeper puts down to feed this animal (`s_KeeperEatType`).
+    #[serde(default)]
+    pub keeper_food_definition: Option<AssetId>,
+    /// Object a keeper puts down to water this animal (`s_KeeperDrinkType`).
+    #[serde(default)]
+    pub keeper_drink_definition: Option<AssetId>,
     pub conservation: ConservationStatus,
     pub flags: SpeciesFlags,
     pub adoption_offer: AnimalAdoptionOfferDefinition,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SpeciesHabitatSpace {
+    pub initial_square_metres: NonNegativeSquareMetres,
+    pub additional_square_metres: NonNegativeSquareMetres,
+}
+
+/// An area in square metres that is finite and not negative.
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, PartialOrd, Serialize)]
+#[serde(try_from = "f32", into = "f32")]
+pub struct NonNegativeSquareMetres(f32);
+
+impl NonNegativeSquareMetres {
+    #[must_use]
+    pub fn from_finite_non_negative(square_metres: f32) -> Option<Self> {
+        (square_metres.is_finite() && square_metres >= 0.0).then_some(Self(square_metres))
+    }
+}
+
+impl TryFrom<f32> for NonNegativeSquareMetres {
+    type Error = &'static str;
+
+    fn try_from(square_metres: f32) -> Result<Self, Self::Error> {
+        Self::from_finite_non_negative(square_metres).ok_or("area must be finite and not negative")
+    }
+}
+
+impl From<NonNegativeSquareMetres> for f32 {
+    fn from(area: NonNegativeSquareMetres) -> Self {
+        area.0
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -68,6 +113,10 @@ pub enum ConservationStatus {
 pub struct SpeciesFlags(u32);
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "fast pathing and the three authored swimming permissions are independent collision policies"
+)]
 pub struct AnimalNavigationCollisionPolicy {
     pub radius_m: f32,
     pub height_m: f32,

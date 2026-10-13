@@ -4,8 +4,8 @@ use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::catalogue_and_progression::research_and_unlock_definition_types::UnlockRequirement;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
 

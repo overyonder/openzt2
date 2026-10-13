@@ -96,7 +96,8 @@ pub(super) fn apply_photo_and_challenge_progress_snapshot_records_to_live_world(
         let (_, mut photo_challenge_progress) = photo_challenges_with_mutable_progress
             .iter_mut()
             .find(|(photo_challenge, _)| {
-                photo_challenge.row == photo_challenge_progress_snapshot_record.challenge_row_index
+                photo_challenge.id
+                    == photo_challenge_progress_snapshot_record.challenge_definition_identifier
             })
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
 

@@ -3,7 +3,6 @@
 use super::authored_model_material_pass_projection::{
     EffectPassMaterialRenderView, EffectPassMaterialRenderViewProjection, PerDrawEffectPassMaterial,
 };
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use crate::plugins::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use bevy::{
     camera::visibility::RenderLayers,
@@ -12,6 +11,7 @@ use bevy::{
     platform::collections::HashSet,
     prelude::*,
 };
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 #[derive(SystemParam)]
 pub(super) struct MaterialRenderViewInvalidation<'w, 's> {

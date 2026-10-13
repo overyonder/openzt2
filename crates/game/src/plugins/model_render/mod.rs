@@ -5,11 +5,12 @@ pub(crate) mod authored_model_material_pass_projection;
 mod gltf_model_scene_instantiation;
 mod material_render_view_invalidation;
 mod model_scene_visibility_and_shadow_projection;
+mod placed_object_relocation_model_presentation;
 mod prefab_ambient_light_projection;
 mod prefab_fixed_function_world_lighting_projection;
 mod prefab_model_billboard_orientation;
 mod prefab_model_level_of_detail_projection;
-mod prefab_model_tint_projection;
+pub(crate) mod prefab_model_tint_projection;
 mod prefab_render_layer_camera_matching;
 mod prefab_texture_replacement_projection;
 
@@ -31,7 +32,10 @@ use gltf_model_scene_instantiation::{
     complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
     instantiate_visible_gltf_model_scenes, request_hidden_prefab_model_asset_release,
 };
-use model_scene_visibility_and_shadow_projection::project_model_scene_visibility_and_shadow_policy;
+use model_scene_visibility_and_shadow_projection::{
+    invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
+    project_model_scene_visibility_and_shadow_policy,
+};
 use prefab_ambient_light_projection::project_prefab_ambient_light_contributions;
 use prefab_fixed_function_world_lighting_projection::{
     project_prefab_fixed_function_world_lighting_policies, update_fixed_function_world_light_buffer,
@@ -48,10 +52,13 @@ impl Plugin for ModelRenderPlugin {
         app.add_plugins(ExtractInstancesPlugin::<
             AuthoredEffectTechniquePassSubmissionOrder,
         >::extract_visible());
+        app.add_observer(
+            invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
+        );
         app.add_systems(
             PostUpdate,
             (
-                invalidate_authored_model_material_pass_projection,
+                invalidate_authored_model_material_pass_projection.before(project_authored_model_material_passes),
                 project_prefab_model_level_of_detail_visibility
                     .after(TransformSystems::Propagate)
                     .before(VisibilitySystems::VisibilityPropagate),
@@ -63,7 +70,8 @@ impl Plugin for ModelRenderPlugin {
                     .chain()
                     .after(instantiate_visible_gltf_model_scenes),
                 project_model_scene_visibility_and_shadow_policy
-                    .after(instantiate_visible_gltf_model_scenes),
+                    .after(request_hidden_prefab_model_asset_release)
+                    .before(VisibilitySystems::CheckVisibility),
                 project_authored_model_material_passes
                     .after(project_model_scene_visibility_and_shadow_policy),
                 update_per_draw_effect_transform_semantics
@@ -73,6 +81,9 @@ impl Plugin for ModelRenderPlugin {
                     .after(project_prefab_fixed_function_world_lighting_policies),
                 project_effect_pass_material_instances_for_additional_render_views
                     .after(project_authored_model_material_passes),
+                placed_object_relocation_model_presentation::project_placed_object_relocation_model_presentation
+                    .after(project_effect_pass_material_instances_for_additional_render_views)
+                    .before(VisibilitySystems::CheckVisibility),
                 project_prefab_ambient_light_contributions,
                 update_fixed_function_world_light_buffer
                     .after(project_prefab_ambient_light_contributions)

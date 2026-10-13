@@ -1,11 +1,9 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::construction::construction_interaction_types::{
-        CancelConstruction, ConstructionPreview,
-    },
+use crate::plugins::construction::construction_interaction_types::{
+    CancelConstruction, ConstructionPreview,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     terrain_brush_interaction_state::{ActiveTerrainBrush, TerrainBrushDab},

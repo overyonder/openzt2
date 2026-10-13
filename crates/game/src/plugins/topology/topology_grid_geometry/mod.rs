@@ -4,6 +4,17 @@ use crate::plugins::construction::construction_interaction_types::PlacementFailu
 
 use super::topology_graph_types::TopologyGrid;
 
+/// Include touching endpoints so diagonal navigation cannot slip between
+/// adjacent fence segments. Collinear segments still require overlapping bounds.
+pub(crate) fn horizontal_world_segments_intersect(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    if a.min(b).cmpgt(c.max(d)).any() || c.min(d).cmpgt(a.max(b)).any() {
+        return false;
+    }
+    let ab = b - a;
+    let cd = d - c;
+    ab.perp_dot(c - a) * ab.perp_dot(d - a) <= 0.0 && cd.perp_dot(a - c) * cd.perp_dot(b - c) <= 0.0
+}
+
 pub(crate) fn calculate_adjacent_topology_grid_cells_between_endpoints(
     from: IVec3,
     to: IVec3,

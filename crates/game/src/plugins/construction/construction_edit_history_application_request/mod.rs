@@ -81,6 +81,8 @@ pub(super) fn begin_requested_construction_edit_history_application(
                         construction_domain_status_after_rejected_redo_payment(progress.topology);
                     progress.placement =
                         construction_domain_status_after_rejected_redo_payment(progress.placement);
+                    progress.aquatic =
+                        construction_domain_status_after_rejected_redo_payment(progress.aquatic);
                     progress.shows =
                         construction_domain_status_after_rejected_redo_payment(progress.shows);
                     progress.phase = EditCommitPhase::Complete;

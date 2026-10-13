@@ -6,9 +6,9 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use crate::plugins::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
@@ -163,7 +163,7 @@ pub(super) fn apply_prepared_object_placement_edits(
 fn preflight_prepared_object_placement_mutations(
     request: &ApplyPreparedObjectPlacementEditRequest,
     edit: &PreparedObjectPlacementEdit,
-    catalogue: crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
     placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
@@ -329,7 +329,7 @@ fn apply_prepared_object_placement_mutation(
     commands: &mut Commands,
     request: &ApplyPreparedObjectPlacementEditRequest,
     edit: &mut PreparedObjectPlacementMutation,
-    catalogue: crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,

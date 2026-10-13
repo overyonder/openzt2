@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 
-use crate::plugins::settings::graphics_settings_types::{
-    GraphicsSettings, ThreeLevelGraphicsDetail,
-};
+use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 
 use super::super::camera_runtime_state_types::{CameraMode, CameraTuning, OverheadRig, ZooCamera};
 

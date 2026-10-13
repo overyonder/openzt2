@@ -3,13 +3,11 @@ use bevy::{
     ui_render::UiAntiAlias,
 };
 
-use crate::{
-    application_lifecycle::GamePhase,
-    plugins::ui::{
-        ui_document_asset_load_failure::UiDocumentAssetLoadFailed,
-        ui_document_lifecycle_contracts::UiRoleRequests,
-    },
+use crate::plugins::ui::{
+    ui_document_asset_load_failure::UiDocumentAssetLoadFailed,
+    ui_document_lifecycle_contracts::UiRoleRequests,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use super::{

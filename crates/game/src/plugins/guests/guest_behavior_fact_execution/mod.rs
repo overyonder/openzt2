@@ -6,21 +6,19 @@ use openzt2_game_data::behavior::{
     action_record::BehaviorAction,
 };
 
-use crate::{
-    assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-    plugins::{
-        animal_behavior::{
-            behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity,
-            behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-        },
-        behavior_task_execution_types::{
-            advance_behavior_task_to_next_action, find_current_behavior_task_action,
-            BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
-        },
-        economy::price_effect::BehaviorPriceEffectContext,
-        simulation_time::simulation_clock_types::ZooClock,
+use crate::plugins::{
+    animal_behavior::{
+        behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity,
+        behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
     },
+    behavior_task_execution_types::{
+        advance_behavior_task_to_next_action, find_current_behavior_task_action,
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    },
+    economy::price_effect::BehaviorPriceEffectContext,
+    simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
@@ -50,6 +48,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
             &mut GuestEnergy,
             &mut GuestRestroom,
             &mut GuestSocial,
+            &mut GuestAmusement,
             &mut GuestDeparturePoints,
         ),
         With<Guest>,
@@ -81,6 +80,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         | BehaviorFact::Rest
                         | BehaviorFact::Bathroom
                         | BehaviorFact::Social
+                        | BehaviorFact::Amusement
                         | BehaviorFact::DeparturePoints
                         | BehaviorFact::Happiness
                         | BehaviorFact::AteFavoriteFood
@@ -164,6 +164,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 mut rest,
                 mut bathroom,
                 mut social,
+                mut amusement,
                 mut departure_points,
             )) = needs.get_mut(subject)
             else {
@@ -203,6 +204,10 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 }
                 BehaviorFact::Social => {
                     let need = &mut *social;
+                    (&mut need.value, &mut need.residual_q16)
+                }
+                BehaviorFact::Amusement => {
+                    let need = &mut *amusement;
                     (&mut need.value, &mut need.residual_q16)
                 }
                 _ => unreachable!("validated behavior fact"),

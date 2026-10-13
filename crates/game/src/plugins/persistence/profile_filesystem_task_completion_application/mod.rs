@@ -2,14 +2,12 @@ use bevy::{
     prelude::*,
     tasks::{block_on, poll_once},
 };
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 
 use crate::plugins::{
     input::input_types::GameActionInputBindings,
     progression::profile_challenge_types::ProfileChallengeCompletionCounts,
-    settings::{
-        audio_settings_types::AudioSettings, display_settings_types::DisplaySettings,
-        graphics_settings_types::GraphicsSettings,
-    },
+    settings::{audio_settings_types::AudioSettings, display_settings_types::DisplaySettings},
 };
 
 use super::{

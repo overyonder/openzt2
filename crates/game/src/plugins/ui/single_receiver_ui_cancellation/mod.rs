@@ -1,7 +1,7 @@
 //! One cancel request dismisses one authored activity, for keyboard Escape and
-//! controller cancel alike, independently of focus.
+//! controller cancel alike, without requiring a focused cancel button.
 
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{ecs::system::SystemParam, input_focus::InputFocus, prelude::*, text::EditableText};
 use openzt2_game_data::ui_document::action::{
     animal_shows::UiShowAction,
     construction::UiConstructionAction,
@@ -22,16 +22,16 @@ use super::{
     authored_ui_activation_contracts::UiNodeActivated,
     authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
 };
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::input::input_types::{ActionRequest, ActionSource, GameAction},
-};
+use crate::plugins::input::input_types::{ActionRequest, ActionSource, GameAction};
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(SystemParam)]
 pub(super) struct UiCancellationReceivers<'w, 's> {
     context: ActiveAuthoredUiContext<'w, 's>,
     capture: Res<'w, AuthoredModalInputCapture>,
     overhead_mode: Res<'w, OverheadModeInputCapture>,
+    input_focus: Res<'w, InputFocus>,
+    text_edits: Query<'w, 's, (), With<EditableText>>,
     documents: Res<'w, Assets<UiDocumentAsset>>,
     roots: Query<'w, 's, &'static UiDocumentRoot>,
     owners: Query<'w, 's, &'static UiDocumentOwner>,
@@ -90,19 +90,38 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
             .get(entity)
             .ok()
             .map(|owner| context.document_scope(owner.0)),
-        // Without a modal or focus, the topmost panel with an Escape binding
-        // is dismissed; the zoo view's own binding sits beneath every panel.
+        // A visible edit is focusable even while nobody is typing. Only actual
+        // text input focus captures keyboard Escape for its document. Otherwise
+        // choose an eligible authored receiver, including the zoo view beneath
+        // an inspection panel whose name edit has no Escape binding.
+        None if source == ActionSource::KeyboardMouse => ui
+            .input_focus
+            .get()
+            .filter(|focused| {
+                ui.text_edits.contains(*focused) && context.visible_and_enabled(*focused)
+            })
+            .and_then(|focused| owners.get(focused).ok())
+            .map(|owner| context.document_scope(owner.0))
+            .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
+        // Controllers retain their active document and inferred cancel button.
         None => context
             .active_scope()
             .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
     };
+    let handled_by_hotkey = scope.is_some_and(|scope| {
+        activate_cancel_hotkey_receiver(&ui, scope, modal, source, &mut activated)
+    });
+    info!(
+        target: "openzt2_ui",
+        ?source, ?modal, ?scope, handled_by_hotkey,
+        "routed authored UI cancellation"
+    );
+    if handled_by_hotkey {
+        return;
+    }
     let Some(scope) = scope else {
         return;
     };
-
-    if activate_cancel_hotkey_receiver(&ui, scope, modal, source, &mut activated) {
-        return;
-    }
     // The keyboard follows authored Escape bindings only. Controllers have no
     // Escape key, so they may also infer a dialog's cancel button.
     if source == ActionSource::KeyboardMouse {

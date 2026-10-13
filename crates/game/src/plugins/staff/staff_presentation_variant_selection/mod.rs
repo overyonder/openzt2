@@ -9,8 +9,8 @@ use openzt2_game_data::world_definitions::staff_management::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::animation_playback::model_joint_attachment_binding::PendingModelJointAttachment;
 use crate::plugins::world_spawn::{
     prefab_presentation_types::PrefabPresentation,
@@ -50,6 +50,28 @@ pub(crate) fn staff_presentation_variant<'a>(
         .presentation_variants
         .get((mix(persistent_id) % count.max(1)) as usize)?;
     Some((variant, definitions.scene(variant.prefab)?))
+}
+
+/// The staff role a world definition names, either directly or by its object.
+pub(crate) fn staff_role_for_definition<'a>(
+    definitions: WorldDefinitionsView<'a>,
+    definition: AssetId,
+) -> Option<&'a StaffRoleDefinition> {
+    definitions
+        .find_staff(definition)
+        .or_else(|| definitions.find_staff_by_object(definition))
+}
+
+/// The body scene an employee spawns with: the drawn look's body, or the
+/// role object's prefab when the role has no drawable look.
+pub(crate) fn staff_body_prefab(
+    role: &StaffRoleDefinition,
+    persistent_id: u64,
+    definitions: WorldDefinitionsView<'_>,
+) -> Option<Handle<ScenePrefabAsset>> {
+    staff_presentation_variant(role, persistent_id, definitions)
+        .map(|(_, prefab)| prefab)
+        .or_else(|| definitions.scene(definitions.find_object(role.object)?.prefab))
 }
 
 /// One weighted group index per replacement set.

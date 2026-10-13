@@ -5,9 +5,11 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
+use crate::plugins::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
+use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use crate::plugins::progression::adoption_and_content_availability_types::ScenarioContentAvailability;
 use crate::plugins::progression::catalogue_entry_availability::{catalogue_entry_is_available, catalogue_entry_can_be_researched};
 use crate::plugins::progression::unlock_types::UnlockedCatalogueDefinitionSet;
@@ -108,32 +110,28 @@ pub(in crate::plugins::information) fn choose_catalogue_entry_from_activated_typ
                 .find(|entry| AssetId(entry.definition.0) == catalogue_row.definition)
                 .is_some_and(|entry| matches!(&entry.category, CatalogueCategory::Animals))
         });
-        if selected_entry_is_animal {
-            let sex = std::iter::successors(Some(activation.node), |entity| {
-                parent_entities.get(*entity).ok().map(ChildOf::parent)
-            })
-            .find_map(|entity| {
-                selected_genders
-                    .get(entity)
-                    .ok()
-                    .or_else(|| {
-                        document_owners
-                            .get(entity)
-                            .ok()
-                            .and_then(|owner| selected_genders.get(owner.0).ok())
-                    })
-                    .map(|gender| gender.0)
-            });
-            adoption_placement_requests.write(BeginAnimalAdoptionPlacement {
-                species: catalogue_row.definition,
-                sex,
-                offer_slot_index: None,
-            });
-        } else {
-            purchase_choices.write(PurchaseChoice {
-                definition: catalogue_row.definition,
-            });
-        }
+        let sex = std::iter::successors(Some(activation.node), |entity| {
+            parent_entities.get(*entity).ok().map(ChildOf::parent)
+        })
+        .find_map(|entity| {
+            selected_genders
+                .get(entity)
+                .ok()
+                .or_else(|| {
+                    document_owners
+                        .get(entity)
+                        .ok()
+                        .and_then(|owner| selected_genders.get(owner.0).ok())
+                })
+                .map(|gender| gender.0)
+        });
+        request_catalogue_choice_through_its_placement_owner(
+            catalogue_row.definition,
+            selected_entry_is_animal,
+            sex,
+            &mut purchase_choices,
+            &mut adoption_placement_requests,
+        );
     }
 }
 
@@ -143,7 +141,7 @@ mod tests {
     use openzt2_game_data::AssetId;
 
     use super::*;
-    use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+    use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
     use crate::plugins::progression::unlock_types::UnlockedCatalogueDefinitionSet;
     use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
         CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
@@ -157,6 +155,7 @@ mod tests {
             .init_resource::<UnlockedCatalogueDefinitionSet>()
             .add_message::<UiNodeActivated>()
             .add_message::<PurchaseChoice>()
+            .add_message::<BeginAnimalAdoptionPlacement>()
             .add_systems(Update, choose_catalogue_entry_from_activated_type_list);
 
         let document = WorldDefinitionDocument {
@@ -258,12 +257,11 @@ mod tests {
         let first = AssetId([1; 16]);
         let second = AssetId([2; 16]);
         let mut app = loaded_catalogue_app(&[first, second]);
-        app.add_message::<BeginAnimalAdoptionPlacement>()
-            .add_systems(
-                Update,
-                choose_catalogue_entry_from_activated_type_list_row
-                    .before(choose_catalogue_entry_from_activated_type_list),
-            );
+        app.add_systems(
+            Update,
+            choose_catalogue_entry_from_activated_type_list_row
+                .before(choose_catalogue_entry_from_activated_type_list),
+        );
         let mut create_list = || {
             app.world_mut()
                 .spawn(UiTypeListPolicy {
@@ -346,6 +344,9 @@ pub(in crate::plugins::information) fn choose_catalogue_entry_from_activated_typ
         With<WorldRoot>,
     >,
     mut purchase_choices: MessageWriter<PurchaseChoice>,
+    document_owners: Query<&UiDocumentOwner>,
+    selected_genders: Query<&AnimalCatalogueGender>,
+    mut adoption_placement_requests: MessageWriter<BeginAnimalAdoptionPlacement>,
 ) {
     // Consume the row stream completely before making the precedence decision.
     // Otherwise a short-circuiting reader could leave a later row event behind.
@@ -398,8 +399,35 @@ pub(in crate::plugins::information) fn choose_catalogue_entry_from_activated_typ
             .insert(RememberedCatalogueEntry(AssetId(
                 catalogue_entry.definition.0,
             )));
-        purchase_choices.write(PurchaseChoice {
-            definition: AssetId(catalogue_entry.definition.0),
+        let sex = document_owners
+            .get(activation.node)
+            .ok()
+            .and_then(|owner| selected_genders.get(owner.0).ok())
+            .map(|gender| gender.0);
+        request_catalogue_choice_through_its_placement_owner(
+            AssetId(catalogue_entry.definition.0),
+            catalogue_entry.category == CatalogueCategory::Animals,
+            sex,
+            &mut purchase_choices,
+            &mut adoption_placement_requests,
+        );
+    }
+}
+
+fn request_catalogue_choice_through_its_placement_owner(
+    definition: AssetId,
+    is_animal: bool,
+    sex: Option<openzt2_game_data::species::Sex>,
+    purchase_choices: &mut MessageWriter<PurchaseChoice>,
+    adoption_placement_requests: &mut MessageWriter<BeginAnimalAdoptionPlacement>,
+) {
+    if is_animal {
+        adoption_placement_requests.write(BeginAnimalAdoptionPlacement {
+            species: definition,
+            sex,
+            offer_slot_index: None,
         });
+    } else {
+        purchase_choices.write(PurchaseChoice { definition });
     }
 }

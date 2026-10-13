@@ -1,4 +1,3 @@
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use bevy::{
     core_pipeline::core_3d::Transparent3d,
     ecs::{entity::EntityHashMap, query::QueryItem},
@@ -8,6 +7,7 @@ use bevy::{
         render_phase::{PhaseItem, ViewSortedRenderPhases},
     },
 };
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 /// Bevy owns draw preparation and submission. This component supplies only the
 /// authored ordering constraint between passes of the same invocation.

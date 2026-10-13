@@ -36,8 +36,13 @@ impl ScenarioChallengeSelectionRandomNumberGenerator {
     }
 }
 
+/// The zoo tick of this world's next challenge-manager evaluation.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ScenarioChallengeLuaValidationDay(pub u32);
+pub(crate) struct ScenarioChallengeManagerNextEvaluationTick(pub u64);
+
+/// This world has had its one chance at an instant challenge.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ScenarioInstantChallengeDecided;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RespondToScenarioChallengeRequest {
@@ -70,14 +75,32 @@ pub(crate) enum ScenarioChallengeAcceptanceRejectionReason {
     Ineligible,
 }
 
+/// The authored modal in `ui/layout/challenge.xml` that offers a challenge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ScenarioChallengePanelSurface {
+    /// `challenge layout`, opened by `showchallengepanel`.
+    Offer,
+    /// `instant challenge layout`, opened by `showinstantchallengepanel`.
+    InstantOffer,
+}
+
 /// Native UI operations emitted while a challenge's authored Lua runs.
 #[derive(Message, Debug, Clone, Copy)]
 pub(super) struct ScenarioChallengePanelRequest {
     pub(super) scenario: AssetId,
-    pub(super) show: bool,
+    /// The offer surface the script showed, if it showed one.
+    pub(super) show: Option<ScenarioChallengePanelSurface>,
+    /// Key set on `challenge text` or `instant challenge text`.
     pub(super) text: Option<AssetId>,
+    /// Key set on `instant challenge description text`.
+    pub(super) description: Option<AssetId>,
 }
 
-/// The localization key currently displayed by this offer's authored dialog.
+/// The localization key currently displayed as this offer's challenge text.
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct ScenarioChallengePanelText(pub(super) AssetId);
+
+/// The localization key currently displayed as this offer's instant-challenge
+/// description.
+#[derive(Component, Debug, Clone, Copy)]
+pub(super) struct ScenarioChallengePanelDescription(pub(super) AssetId);

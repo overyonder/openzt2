@@ -1,11 +1,12 @@
 use bevy::prelude::*;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
+use crate::plugins::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use crate::plugins::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use crate::plugins::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -21,6 +22,10 @@ pub(super) struct AnimalPresentationAttached;
 
 #[derive(Component)]
 pub(crate) struct AnimalPresentationOwner(pub(crate) Entity);
+
+/// The animal's presentation prefab while it loads.
+#[derive(Component)]
+pub(super) struct AnimalPresentationPrefabDemand(Handle<ScenePrefabAsset>);
 
 /// Reuse the authored prefab projection used by placement previews. A raw model
 /// omits binder transforms and material overrides, including the fur effect.
@@ -38,6 +43,7 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
             &SelectedAnimalPresentationModel,
             &AnimalVariant,
             &DefinitionId,
+            Option<&AnimalPresentationPrefabDemand>,
         ),
         (With<Animal>, Without<AnimalPresentationAttached>),
     >,
@@ -48,7 +54,7 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (animal_entity, appearance, selected_variant, definition) in &animals {
+    for (animal_entity, appearance, selected_variant, definition, demand) in &animals {
         let Some(variant) = species_index.find_variant(selected_variant.0) else {
             continue;
         };
@@ -58,10 +64,20 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
         else {
             continue;
         };
-        let Some(prefab_handle) = catalogue.scene(object.prefab) else {
+        let Some(prefab_handle) = demand
+            .map(|demand| demand.0.clone())
+            .or_else(|| catalogue.scene(object.prefab))
+        else {
             continue;
         };
         let Some(prefab) = prefabs.get(&prefab_handle) else {
+            // Definitions return a fresh handle per lookup. Dropping it while
+            // the prefab loads releases the load, so keep it until it lands.
+            if demand.is_none() {
+                commands
+                    .entity(animal_entity)
+                    .insert(AnimalPresentationPrefabDemand(prefab_handle));
+            }
             continue;
         };
         let Some(animation_set_handle) =
@@ -97,7 +113,8 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
         }
         commands
             .entity(animal_entity)
-            .insert(AnimalPresentationAttached);
+            .insert(AnimalPresentationAttached)
+            .remove::<AnimalPresentationPrefabDemand>();
     }
 }
 
@@ -140,5 +157,21 @@ pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_at
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
         });
+    }
+}
+
+/// Model animation attachment names the model's direct parent as its gameplay
+/// owner, which for an animal is its prefab root. Behaviors address the
+/// animal itself, so its clip requests and completions must follow the animal.
+pub(super) fn project_animal_animation_owners(
+    mut controllers: Query<
+        (&AnimalPresentationOwner, &mut AnimationPresentationOwner),
+        Changed<AnimationPresentationOwner>,
+    >,
+) {
+    for (animal, mut owner) in &mut controllers {
+        if owner.gameplay_entity != animal.0 {
+            owner.gameplay_entity = animal.0;
+        }
     }
 }

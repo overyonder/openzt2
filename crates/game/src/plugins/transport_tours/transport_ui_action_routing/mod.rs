@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::transportation::UiTransportAction;
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::information::catalogue_types::PurchaseChoice;
 use crate::plugins::information::entity_selection_types::SelectedEntity;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -86,6 +86,9 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
     pending_deletions: Query<&TransportPathDeletionPending>,
     mut open_circuit_requests: MessageWriter<OpenCircuitRequest>,
     mut vehicle_generation_requests: MessageWriter<GenerateTransportVehicleForCircuitRequest>,
+    mut deletions: MessageWriter<
+        crate::plugins::construction::construction_interaction_types::DeleteEntity,
+    >,
 ) {
     for activation in activations.read() {
         let Ok((range, owner)) = action_nodes.get(activation.node) else {
@@ -156,8 +159,8 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
                 }
                 UiTransportAction::ResolvePendingTransportPathDeletion { deletion_confirmed } => {
                     if let Ok(pending) = pending_deletions.get(owner.0) {
-                        if *deletion_confirmed {
-                            commands.entity(pending.target).despawn();
+                        if *deletion_confirmed && selected_entity.0 == Some(pending.target) {
+                            deletions.write(crate::plugins::construction::construction_interaction_types::DeleteEntity(pending.target));
                         }
                         commands
                             .entity(owner.0)

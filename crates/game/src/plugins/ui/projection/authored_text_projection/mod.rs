@@ -8,7 +8,7 @@ pub(super) fn apply_authored_text_record_to_bevy_text_and_layout(
     commands: &mut Commands,
     entity: Entity,
     text: &UiTextRecord,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     wraps_text: bool,
@@ -16,7 +16,9 @@ pub(super) fn apply_authored_text_record_to_bevy_text_and_layout(
     let minimum_height = text.minimum_height;
     let auto_size = text.auto_size;
     if !wraps_text {
-        commands.entity(entity).insert(UiSingleLineTextAlignment);
+        commands
+            .entity(entity)
+            .insert(UiSingleLineTextAlignment::default());
     }
     let literal = (!text.value.is_empty()).then_some(text.value.as_str());
     let localization_key = AssetId(text.localization_key.0);

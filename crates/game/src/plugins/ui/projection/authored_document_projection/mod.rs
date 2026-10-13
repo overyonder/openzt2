@@ -26,7 +26,6 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use crate::plugins::ui::animation::{NotifyOnUiAnimationComplete, UiShowHideAnimation};
 use crate::plugins::ui::authored_grid_layout_projection::{
     authored_grid_record_owns_child_layout, authored_unbounded_grid_packing_direction,
@@ -54,6 +53,7 @@ use crate::plugins::ui::authored_ui_pointer_activation::{
     UiPreviousPointerInteraction, UiPreviousPointerPressTimeSeconds,
 };
 use crate::plugins::ui::authored_ui_presentation_action_application::UiExclusiveHoverPresentation;
+use crate::plugins::ui::authored_ui_visual_types::UiVisualBackgroundSlotOwner;
 use crate::plugins::ui::cursor::UiCursorStyle;
 use crate::plugins::ui::scrollbar_value_and_scroll_position_synchronization::UiScrollDecoration;
 use crate::plugins::ui::slider::UiSliderAxis;
@@ -63,12 +63,13 @@ use crate::plugins::ui::{
     authored_ui_node_projection_components::UiNodeId,
     ui_document_lifecycle_contracts::ShowUiDocument,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(crate) fn project_document(
     commands: &mut Commands,
     request: &ShowUiDocument,
     document: &UiDocumentAsset,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     image_selection_index: Option<usize>,
@@ -86,6 +87,7 @@ pub(crate) fn project_document(
     });
     let mut entities = Vec::with_capacity(data.nodes.len());
     let mut root = None;
+    let mut authored_root_surface = None;
     let mut default_focus = None;
     let top_level = !matches!(&data.role, UiDocumentRole::Fragment);
 
@@ -135,6 +137,26 @@ pub(crate) fn project_document(
         // remain relative because their owning list/grid supplies layout.
         if index == 0 {
             if top_level {
+                if data.role == UiDocumentRole::EntityInfo {
+                    // This source root is a panel region, not a full canvas.
+                    // Keep it beneath the canvas so its origin scales with its
+                    // children and its max-aligned descendants use its extent.
+                    authored_root_surface = Some(
+                        commands
+                            .spawn((
+                                Name::new("authored entity information region"),
+                                std::mem::take(&mut node),
+                                Pickable::IGNORE,
+                                UiDocumentOwner(document_root),
+                                ChildOf(entity),
+                            ))
+                            .id(),
+                    );
+                    // The canvas begins at its owner's origin. Auto offsets
+                    // would centre it before the canvas transform centres it again.
+                    node.left = px(0.0);
+                    node.top = px(0.0);
+                }
                 node.position_type = PositionType::Absolute;
                 node.flex_shrink = 0.0;
             } else {
@@ -325,7 +347,11 @@ pub(crate) fn project_document(
                     }
                 });
         } else {
-            let parent = entities[record.parent as usize];
+            let parent = if record.parent == 0 {
+                authored_root_surface.unwrap_or(entities[0])
+            } else {
+                entities[record.parent as usize]
+            };
             commands.entity(parent).add_child(entity);
         }
 
@@ -418,6 +444,30 @@ pub(crate) fn project_document(
         );
     }
 
+    for (index, record) in data.nodes.iter().enumerate() {
+        if !matches!(record.widget, UiWidgetRecord::TextEdit { .. }) {
+            continue;
+        }
+        for &child in &record.children {
+            let child = child as usize;
+            if !data.nodes[child].name.eq_ignore_ascii_case("edit_back") {
+                continue;
+            }
+            let mut background_nodes = Vec::new();
+            if collect_authored_decorative_editor_background_nodes(
+                data,
+                child,
+                &mut background_nodes,
+            ) {
+                for background in background_nodes {
+                    commands
+                        .entity(entities[background])
+                        .insert(UiVisualBackgroundSlotOwner(entities[index]));
+                }
+            }
+        }
+    }
+
     for record in &data.nodes {
         if !matches!(&record.widget, UiWidgetRecord::TreeElement { .. }) {
             continue;
@@ -440,6 +490,46 @@ pub(crate) fn project_document(
     root.expect("validated UI document has a root")
 }
 
+/// The inherited edit_back branch contains layout and static skin pieces.
+/// Reject a branch with text, bindings or behavior rather than moving a real
+/// foreground control into the editor's background slot.
+fn collect_authored_decorative_editor_background_nodes(
+    data: &UiDocument,
+    index: usize,
+    output: &mut Vec<usize>,
+) -> bool {
+    let Some(node) = data.nodes.get(index) else {
+        return false;
+    };
+    if !matches!(node.kind, UiNodeKind::Container | UiNodeKind::Image)
+        || !match &node.widget {
+            UiWidgetRecord::Plain | UiWidgetRecord::Grid(_) => true,
+            UiWidgetRecord::Text(text) => {
+                text.value.is_empty()
+                    && text.localization_key == AssetId::default()
+                    && text.format == AssetId::default()
+            }
+            _ => false,
+        }
+        || !node.text.is_empty()
+        || node.style.text_key != AssetId::default()
+        || node.text_format != AssetId::default()
+        || !node.bindings.is_empty()
+        || !node.actions.is_empty()
+        || !node.hotkeys.is_empty()
+        || !node.field_definitions.is_empty()
+        || !node.finance_categories.is_empty()
+        || node.flags.0 & UiNodeFlags::FOCUSABLE.0 != 0
+        || node.visuals.iter().any(|visual| visual.affects_text_color)
+    {
+        return false;
+    }
+    output.push(index);
+    node.children.iter().all(|&child| {
+        collect_authored_decorative_editor_background_nodes(data, child as usize, output)
+    })
+}
+
 /// Reuse one authored node's presentation for a runtime-populated row.
 ///
 /// The source document remains the owner of geometry, typography, and visual
@@ -451,7 +541,7 @@ pub(crate) fn insert_authored_text_prototype(
     document_root: Entity,
     document: &UiDocumentAsset,
     prototype_index: u32,
-    localization: crate::assets::localization::loaded_localization_queries::LoadedLocalizationView<
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
     text: String,

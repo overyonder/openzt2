@@ -5,14 +5,14 @@ use std::time::{Duration, Instant};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::application_lifecycle::GamePhase;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::world_spawn::world_hydration_completion::WorldLoadFinished;
 use crate::plugins::world_spawn::world_load_failure::WorldLoadFailed;
 use crate::plugins::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 pub(crate) struct VerificationMapLoadPlugin {
     pub(crate) map_index: usize,
@@ -93,6 +93,7 @@ fn verify_selected_map_load(
         verification.selected = Some((map.id, Instant::now()));
         phase.set(GamePhase::Loading);
         requests.write(BeginWorldLoad {
+            operation: None,
             scenario: map.id,
             mode: WorldSessionMode::Freeform,
             profile: AssetId::default(),

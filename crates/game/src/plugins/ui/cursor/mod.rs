@@ -7,10 +7,6 @@ use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::ui_document::gameplay_pointer_presentation::UiGameplayInteractionCursorDefinition;
 use openzt2_game_data::AssetId;
 
-use crate::assets::{
-    texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset,
-    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-};
 use crate::plugins::{
     construction::{
         construction_interaction_types::{ConstructionPreview, PlacementValidity},
@@ -18,6 +14,10 @@ use crate::plugins::{
     },
     placement::placement_preview_types::{PlacementRotationRequest, RelocatingPlacedObject},
     terrain::terrain_brush_types::TerrainBrushKind,
+};
+use openzt2_game_assets::{
+    texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset,
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 
 use super::authored_globe_presentation_types::{UiGlobeDrag, UiGlobePresentation};
@@ -76,7 +76,7 @@ pub(super) fn apply_wait_cursor_requests(
 /// Projects the depth-resolved authored cursor directly onto Bevy's primary
 /// window. The image handle remains owned by the loaded UI document.
 pub(super) fn present_cursor(
-    phase: Res<State<crate::application_lifecycle::GamePhase>>,
+    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     wait: Res<WaitCursor>,
     capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
@@ -86,7 +86,7 @@ pub(super) fn present_cursor(
 ) {
     let scale_factor = window.1.scale_factor();
     let next = if wait.0
-        || *phase.get() == crate::application_lifecycle::GamePhase::Loading
+        || *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::Loading
         || !sources.pending_documents.is_empty()
     {
         CursorIcon::System(SystemCursorIcon::Wait)

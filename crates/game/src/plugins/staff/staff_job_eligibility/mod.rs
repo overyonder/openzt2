@@ -13,7 +13,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::behavior::behavior_asset_types::{
+use openzt2_game_assets::behavior::behavior_asset_types::{
     BehaviorDeclarationIndexView, BehaviorDocumentAsset,
 };
 

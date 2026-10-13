@@ -832,6 +832,10 @@ fn evaluates_negated_dynamic_state_parameters() -> Result<(), D3d9EffectProcessi
 }
 
 #[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "swizzling and copying must preserve the supplied float values exactly"
+)]
 fn retained_matrix_expression_preserves_swizzle_and_isolates_evaluation_inputs(
 ) -> Result<(), D3d9EffectProcessingError> {
     // Algorithm semantics and composition across the native compiler/evaluator:
@@ -925,15 +929,21 @@ fn dynamic_float_integer_round_trip_is_not_emitted_as_an_identity() {
         b"float density; technique T { pass P { FogDensity = (float)(int)density; } }",
         &mut NoIncludes,
     );
-    let error = result.expect_err("a value-changing dynamic cast must not compile as identity");
-    assert!(matches!(
-        error,
-        D3d9EffectProcessingError::Vkd3dShaderEffectCompilationFailed(message)
-            if message.contains("Value-changing numeric FX2 expression casts are not supported")
-    ));
+    assert!(
+        matches!(
+            &result,
+            Err(D3d9EffectProcessingError::Vkd3dShaderEffectCompilationFailed(message))
+                if message.contains("Value-changing numeric FX2 expression casts are not supported")
+        ),
+        "expected an unsupported value-changing cast diagnostic, got {result:?}"
+    );
 }
 
 #[test]
+#[allow(
+    clippy::float_cmp,
+    reason = "matrix packing must preserve exact integer-valued components and zero padding"
+)]
 fn direct_matrix_states_pack_logical_rows_in_initial_and_retained_evaluation(
 ) -> Result<(), D3d9EffectProcessingError> {
     // Algorithm semantics across the foreign compiler/evaluator: twelve logical
@@ -1034,6 +1044,10 @@ fn direct_matrix_states_pack_logical_rows_in_initial_and_retained_evaluation(
 }
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one foreign-boundary fixture keeps both matrix majorities, defaults, assignments and register-boundary oracles together"
+)]
 fn struct_matrix_members_preserve_logical_rows_and_following_field_registers(
 ) -> Result<(), D3d9EffectProcessingError> {
     // Foreign compiler/data agreement and packing semantics: the declaration

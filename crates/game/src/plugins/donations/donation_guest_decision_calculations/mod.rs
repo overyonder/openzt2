@@ -1,6 +1,7 @@
 use bevy::prelude::Entity;
 
 use crate::plugins::economy::money_types::Money;
+use crate::plugins::guests::guest_simulation_types::Viewing;
 
 use super::{
     donation_guest_decision_types::{DonationCandidate, DonationObservation, DonationProgress},
@@ -36,7 +37,7 @@ pub(super) fn create_donation_candidate_from_observation(
     DonationCandidate {
         navigation_request_id,
         acceptor,
-        subject: observation.subject,
+        subject: observation.viewing.subject,
         amount,
     }
 }
@@ -54,11 +55,11 @@ pub(super) fn begin_donation_progress_from_candidate(
 }
 
 pub(super) fn create_donation_observation_from_authored_opportunity(
-    subject: Entity,
+    viewing: Viewing,
     opportunity: DonationOpportunity,
 ) -> DonationObservation {
     DonationObservation {
-        subject,
+        viewing,
         amount: opportunity.amount,
         minimum_satisfaction_permille: opportunity.minimum_satisfaction_permille,
         chance_permyriad: opportunity.chance_permyriad,

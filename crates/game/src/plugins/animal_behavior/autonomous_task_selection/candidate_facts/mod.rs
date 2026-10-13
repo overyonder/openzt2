@@ -10,6 +10,7 @@ use crate::plugins::{
         NeedTriggerState, PrivacyNeed, RestNeed, SocialNeed, StimulationNeed, Thirst, MAX_NEED_Q16,
         Q16_ONE,
     },
+    habitat::habitat_types::HabitatMember,
     locomotion::locomotion_types::{LocomotionMode, Velocity},
     world_spawn::world_membership_types::WorldMember,
 };
@@ -22,7 +23,7 @@ use openzt2_game_data::{
 
 #[derive(QueryData)]
 pub(in crate::plugins::animal_behavior) struct AnimalCandidateFacts {
-    species: &'static SpeciesHandle,
+    pub(in crate::plugins::animal_behavior) species: &'static SpeciesHandle,
     variant: &'static AnimalVariant,
     life_stage: &'static AnimalLifeStage,
     sex: &'static AnimalSex,
@@ -46,14 +47,19 @@ pub(in crate::plugins::animal_behavior) struct AnimalCandidateFacts {
     rampaging: Has<Rampaging>,
     frozen: Has<Frozen>,
     velocity: Option<&'static Velocity>,
+    habitat: Option<&'static HabitatMember>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
-    pub(super) fn variant_id(&self) -> AssetId {
+    pub(in crate::plugins::animal_behavior) fn variant_id(&self) -> AssetId {
         self.variant.0
     }
 
-    pub(super) fn matches_type(&self, required: AssetId, authored_types: &[AssetId]) -> bool {
+    pub(in crate::plugins::animal_behavior) fn matches_type(
+        &self,
+        required: AssetId,
+        authored_types: &[AssetId],
+    ) -> bool {
         // Live state takes precedence over the variant's authored initial flags.
         for (name, fact) in [
             ("b_adult", BehaviorEntityStateEligibilityFact::Adult),
@@ -92,6 +98,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Dead => false, // Caller excludes Dead actors.
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
+            BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
             _ => return None,
         })
     }

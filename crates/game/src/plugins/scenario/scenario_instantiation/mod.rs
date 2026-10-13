@@ -4,8 +4,6 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::simulation_time::deterministic_random_stream::ZooSeed;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
@@ -14,6 +12,8 @@ use crate::plugins::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use crate::plugins::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     campaign_progress_types::ScenarioCampaignCompletionProgress,

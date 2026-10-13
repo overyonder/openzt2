@@ -21,6 +21,10 @@ pub(super) fn select_construction_tool(
     mut selections: MessageReader<SelectConstructionTool>,
     mut tool: ResMut<ConstructionTool>,
     previews: Query<Entity, With<ConstructionPreview>>,
+    relocating: Query<
+        &crate::plugins::placement::placed_object_types::PlacedObjectDefinitionReference,
+        With<crate::plugins::placement::placement_preview_types::RelocatingPlacedObject>,
+    >,
     mut cancel: MessageWriter<CancelConstruction>,
 ) {
     for selection in selections.read() {
@@ -30,7 +34,11 @@ pub(super) fn select_construction_tool(
             continue;
         }
         if *tool != selection.0 {
-            if !previews.is_empty() {
+            if !previews.is_empty()
+                || relocating
+                    .iter()
+                    .any(|object| selection.0 != ConstructionTool::Place(object.definition))
+            {
                 cancel.write(CancelConstruction);
             }
             *tool = selection.0;
@@ -64,7 +72,10 @@ pub(super) fn route_construction_actions(
         }
         match request.action {
             GameAction::Confirm => {
-                if matches!(*tool, ConstructionTool::Terrain(_)) {
+                if matches!(
+                    *tool,
+                    ConstructionTool::Terrain(_) | ConstructionTool::TankEdit
+                ) {
                     continue;
                 }
                 if let Ok(preview) = previews.single() {

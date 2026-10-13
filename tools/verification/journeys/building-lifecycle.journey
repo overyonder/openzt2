@@ -1,0 +1,229 @@
+# Place, inspect, move and sell one building (#59, #60, #117).
+# Cancellation preserves its identity; the completed lifecycle restores object counts.
+start freeform-map
+snapshot journey-before
+click "construction"
+click "Building Tab"
+select-catalogue StageEntertainer
+move 1150 300
+until placement_visible_previews == 1
+until placement_valid_previews == 1
+click 1150 300
+until placed_objects > @entered-map
+key ESCAPE
+until placement_previews == 0
+expect selected_catalogue_entry_available == 1
+expect-visible "Buy Info Panel"
+key ESCAPE
+until hidden "Buy Info Panel"
+expect selected_catalogue_entry_available == 0
+expect selected == 0
+expect-hidden "In Game Options"
+expect simulation_paused == @entered-map
+click 1150 300
+until visible "Building Info"
+expect selected == 1
+expect-hidden "in game sort button"
+until hidden "Buy Info Panel"
+until building_panel_frame_within_viewport == 1
+until building_value_fields_within_frame == 4
+until building_readable_upkeep_matches_owner == 1
+capture building-selected
+click "close"
+until hidden "Building Info"
+expect selected == 0
+click 1150 300
+until visible "Building Info"
+until building_panel_frame_within_viewport == 1
+until building_value_fields_within_frame == 4
+until building_readable_upkeep_matches_owner == 1
+expect-hidden "Buy Info Panel"
+expect-hidden "in game sort button"
+snapshot building-before-escape
+key ESCAPE
+until hidden "Building Info"
+expect selected == 0
+expect-hidden "In Game Options"
+expect simulation_paused == @building-before-escape
+expect placed_objects == @building-before-escape
+click 1150 300
+until visible "Building Info"
+until building_panel_frame_within_viewport == 1
+until building_value_fields_within_frame == 4
+until building_readable_upkeep_matches_owner == 1
+expect-hidden "Buy Info Panel"
+# A purchase selection replaces inspection; closing it restores inspect mode.
+select-catalogue "bathroomsmall_df" in "Building Typelist"
+select-catalogue "StageEntertainer" in "Building Typelist"
+until hidden "Building Info"
+until visible "Buy Info Panel"
+expect selected == 0
+expect selected_catalogue_entry_available == 1
+click "close"
+until hidden "Buy Info Panel"
+until placement_previews == 0
+expect-hidden "Building Info"
+expect selected_catalogue_entry_available == 0
+click 1150 300
+until visible "Building Info"
+expect-text "Entity Name Label" "Entertainer Stage"
+until selected_object_visible_meshes > 0
+expect selected_object_loaded_models > 0
+expect selected_object_identity_instances == 1
+expect selected_object_completed_relocations == 0
+snapshot relocation-source
+capture relocation-source
+
+click "PickUp"
+move 1050 360                   # separate the old position and cursor preview
+until selected_object_relocation_previews == 1
+until placement_valid_previews == 1
+until relocation_distance_squared_m > 0
+until relocation_preview_visible_meshes > 0
+until selected_object_visible_meshes == 0
+expect selected_object_relocating == 1
+expect selected_object_loaded_models == @relocation-source
+expect selected_object_x_m == @relocation-source
+expect selected_object_z_m == @relocation-source
+expect placed_objects == @relocation-source
+expect cash_cents_without_guest_income == @relocation-source
+expect construction_payments == @relocation-source
+expect simulation_paused == @relocation-source
+capture relocation-moving
+wait 30                         # a held source must not reappear or settle
+expect selected_object_visible_meshes == 0
+expect construction_payments == @relocation-source
+key ESCAPE
+until placement_previews == 0
+click 1150 300
+until visible "Building Info"
+until selected_object_visible_meshes > 0
+expect selected_object_relocating == 0
+expect selected_object_identity_instances == 1
+expect selected_object_id_low == @relocation-source
+expect selected_object_id_high == @relocation-source
+expect selected_object_x_m == @relocation-source
+expect selected_object_z_m == @relocation-source
+expect selected_object_loaded_models == @relocation-source
+expect placed_objects == @relocation-source
+expect cash_cents_without_guest_income == @relocation-source
+expect construction_payments == @relocation-source
+expect selected_object_completed_relocations == 0
+wait 30
+expect selected_object_visible_meshes > 0
+expect selected_object_x_m == @relocation-source
+expect selected_object_z_m == @relocation-source
+expect placed_objects == @relocation-source
+expect cash_cents_without_guest_income == @relocation-source
+expect construction_payments == @relocation-source
+
+click "PickUp"
+move 1050 360
+until selected_object_relocation_previews == 1
+until placement_valid_previews == 1
+until relocation_distance_squared_m > 0
+until relocation_preview_visible_meshes > 0
+until selected_object_visible_meshes == 0
+snapshot relocation-destination
+click 1050 360
+until selected_object_completed_relocations == 1
+key ESCAPE                     # cancel any ordinary repeat preview, not the move
+until placement_previews == 0
+click 1050 360
+until visible "Building Info"
+expect-text "Entity Name Label" "Entertainer Stage"
+until selected_object_visible_meshes > 0
+expect selected_object_relocating == 0
+expect selected_object_identity_instances == 1
+expect selected_object_id_low == @relocation-source
+expect selected_object_id_high == @relocation-source
+expect selected_object_x_m == @relocation-destination.relocation_destination_x_m
+expect selected_object_z_m == @relocation-destination.relocation_destination_z_m
+expect selected_object_loaded_models > 0
+expect placed_objects == @relocation-source
+expect cash_cents_without_guest_income == @relocation-source
+expect construction_payments == @relocation-source
+expect construction_commit_failures == @journey-before
+expect selected_object_completed_relocations == 1
+capture relocation-committed
+wait 180                        # no delayed duplicate model, movement or settlement
+expect placement_previews == 0
+expect selected_object_visible_meshes > 0
+expect selected_object_completed_relocations == 1
+expect placed_objects == @relocation-source
+expect cash_cents_without_guest_income == @relocation-source
+expect construction_payments == @relocation-source
+
+# Finish the lifecycle by selling the moved object.
+expect selected == 1
+expect selected_object_identity_instances == 1
+expect-text "Entity Name Label" "Entertainer Stage"
+expect object_sale_payments == @journey-before
+snapshot building-selected
+click "Sell"
+until visible "delete_object_confirmation"   # the confirmation document loads on first use
+expect selected_sale_quote_cents == 24000    # authored $300 price, 80% destroy credit
+expect-text "Sell Item Label" "Would you like to sell Entertainer Stage?"
+expect-text "Sell Item Refund" "Refund: $240"
+# Text extraction is evidence, not final pixel acceptance. Inspect the named
+# dialog captures for readable question/name/refund and possible occlusion.
+expect sale_question_visible_text_owners == 1
+expect sale_question_glyphs_within_viewport_and_clip == 1
+expect sale_refund_visible_text_owners == 1
+expect sale_refund_glyphs_within_viewport_and_clip == 1
+expect placed_objects == @building-selected
+expect construction_payments == @building-selected
+capture building-sale-dialog
+click "cancel"
+until hidden "delete_object_confirmation"
+expect selected == 1
+expect-visible "Building Info"
+expect placed_objects == @building-selected
+expect construction_payments == @building-selected
+expect object_sale_payments == @building-selected
+expect cash_cents_without_guest_income == @building-selected
+expect selected_object_id_low == @building-selected
+expect selected_object_id_high == @building-selected
+expect selected_object_identity_instances == 1
+expect fences == @building-selected
+expect paths == @building-selected
+click "Sell"
+until visible "delete_object_confirmation"
+expect-text "Sell Item Label" "Would you like to sell Entertainer Stage?"
+expect-text "Sell Item Refund" "Refund: $240"
+key ESCAPE
+until hidden "delete_object_confirmation"
+expect selected == 1
+expect placed_objects == @building-selected
+expect construction_payments == @building-selected
+expect object_sale_payments == @building-selected
+expect cash_cents_without_guest_income == @building-selected
+expect selected_object_id_low == @building-selected
+expect selected_object_id_high == @building-selected
+expect selected_object_identity_instances == 1
+expect fences == @building-selected
+expect paths == @building-selected
+click "Sell"
+until visible "delete_object_confirmation"
+expect-text "Sell Item Label" "Would you like to sell Entertainer Stage?"
+expect-text "Sell Item Refund" "Refund: $240"
+expect selected_object_id_low == @building-selected
+expect selected_object_id_high == @building-selected
+expect selected_object_identity_instances == 1
+click "delete_object"
+until hidden "delete_object_confirmation"
+until placed_objects < @building-selected
+expect construction_commit_failures == @journey-before
+expect placed_objects == @entered-map
+expect fences == @building-selected.fences
+expect paths == @building-selected.paths
+expect object_sale_payments == @journey-before+1
+expect correct_object_sale_payments == @journey-before+1
+snapshot building-sold
+capture building-sold
+wait 180                        # the sold building must stay sold
+expect placed_objects == @building-sold
+expect object_sale_payments == @journey-before+1
+expect correct_object_sale_payments == @journey-before+1
+
+restore freeform-map

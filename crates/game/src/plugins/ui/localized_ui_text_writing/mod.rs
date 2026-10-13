@@ -3,7 +3,7 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::assets::localization::loaded_localization_queries::LoadedLocalizationView;
+use openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView;
 
 pub(crate) fn localized_ui_text<'a>(
     localization: LoadedLocalizationView<'a>,

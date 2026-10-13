@@ -40,7 +40,7 @@ pub struct ImmersiveModePolicy {
     /// Number of presented frames for which Photo mode keeps the most recent
     /// capture visible in its authored preview surface.
     pub last_captured_photo_preview_frame_count: u16,
-    /// Frustum-scale delta per wheel event authored by ZTPhotoMode.
+    /// Frustum-scale delta per wheel event authored by `ZTPhotoMode`.
     #[serde(default)]
     pub photo_zoom_step: f32,
 }

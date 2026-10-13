@@ -14,13 +14,16 @@ use crate::plugins::{
     ui::picking::UiPointerCapture,
     world_spawn::{world_membership_types::WorldMember, world_membership_types::WorldRoot},
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
     terrain_brush_interaction_state::{ActiveTerrainBrush, PendingTerrainBrushCommit},
     terrain_brush_types::{
         TerrainBrushFalloff, TerrainBrushKind, TerrainBrushPreview, TerrainStroke,
     },
+    terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
     terrain_edit_types::{TerrainEditPreparationRejected, TerrainEditPrepared},
+    terrain_world_sampling::{sample_terrain, terrain_chunk_at},
 };
 
 /// Tracks the brush preview and pointer stroke. Held dabs are applied live;
@@ -35,6 +38,9 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     ui_capture: Res<UiPointerCapture>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
+    index: Res<TerrainIndex>,
+    assets: Res<Assets<TerrainAsset>>,
+    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut previews: Query<
         (
             Entity,
@@ -116,7 +122,6 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     brush.center = cursor.world.xz();
     brush.radius_m = radius_m;
     brush.strength_per_s = strength_per_s;
-    brush.kind = kind;
     brush.falloff = falloff;
     brush.paint_trees = paint_trees;
     brush.paint_foliage = paint_foliage;
@@ -125,10 +130,45 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     preview.transform.translation = cursor.world;
     transform.translation = cursor.world;
 
-    let began = primary_pointer.just_pressed && !ui_capture.over_ui;
+    let began = primary_pointer.just_pressed && !ui_capture.over_ui && cursor.over_terrain;
+    let kind = match (active, kind) {
+        (Some(active), _) => active.kind,
+        (
+            None,
+            TerrainBrushKind::Flatten {
+                height_cm: offset_cm,
+            },
+        ) if began => {
+            let Some(chunk_entity) = terrain_chunk_at(&index, cursor.world.xz()) else {
+                return;
+            };
+            let Ok((chunk, edited)) = chunks.get(chunk_entity) else {
+                return;
+            };
+            let Some(asset) = assets.get(&chunk.asset) else {
+                return;
+            };
+            let Some(point) = sample_terrain(chunk, asset, edited, cursor.world.xz()) else {
+                return;
+            };
+            if !point.height_m.is_finite() {
+                return;
+            }
+            // Flatten, cliff and ditch configure an offset from the press height.
+            // Retain the resulting target while later dabs change the terrain.
+            TerrainBrushKind::Flatten {
+                height_cm: (point.height_m * 100.0 + f32::from(offset_cm))
+                    .round()
+                    .clamp(f32::from(i16::MIN), f32::from(i16::MAX))
+                    as i16,
+            }
+        }
+        (None, kind) => kind,
+    };
+    brush.kind = kind;
     let is_active = active.is_some() || began;
     if began {
-        commands.entity(entity).insert(ActiveTerrainBrush);
+        commands.entity(entity).insert(ActiveTerrainBrush { kind });
     }
     if is_active && primary_pointer.pressed {
         let seconds = time.delta_secs();

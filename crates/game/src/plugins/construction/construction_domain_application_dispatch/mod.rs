@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 
 use crate::plugins::{
+    aquatic::tank_floor_edit_types::{CommitTankFloorEdit, TankFloorEdit},
     placement::placement_transaction_types::{
         ApplyPreparedObjectPlacementEditRequest, PreparedObjectPlacementEdit,
     },
@@ -20,6 +21,7 @@ use super::construction_transaction_types::{
 pub(crate) fn dispatch_authorized_construction_application_to_participating_domains(
     mut authorized_applications: MessageReader<EditApplicationAuthorized>,
     mut construction_transactions: Query<(
+        Option<&TankFloorEdit>,
         Option<&TerrainEdit>,
         Option<&TopologyEdit>,
         Option<&PreparedObjectPlacementEdit>,
@@ -27,6 +29,7 @@ pub(crate) fn dispatch_authorized_construction_application_to_participating_doma
         Option<&PreparedTransportTrackConstructionEdit>,
         &mut EditCommitProgress,
     )>,
+    mut tank_requests: MessageWriter<CommitTankFloorEdit>,
     mut terrain_application_requests: MessageWriter<CommitTerrainEdit>,
     mut topology_application_requests: MessageWriter<CommitTopologyEdit>,
     mut object_placement_application_requests: MessageWriter<
@@ -39,6 +42,7 @@ pub(crate) fn dispatch_authorized_construction_application_to_participating_doma
 ) {
     for authorized_application in authorized_applications.read() {
         let Ok((
+            tank_edit,
             terrain_edit,
             topology_edit,
             placement_edit,
@@ -53,6 +57,12 @@ pub(crate) fn dispatch_authorized_construction_application_to_participating_doma
             || progress.application != authorized_application.application
         {
             continue;
+        }
+        if tank_edit.is_some() && progress.aquatic == DomainAckStatus::Pending {
+            tank_requests.write(CommitTankFloorEdit {
+                transaction: authorized_application.transaction,
+                application: authorized_application.application,
+            });
         }
         if terrain_edit.is_some() && progress.terrain == DomainAckStatus::Pending {
             terrain_application_requests.write(CommitTerrainEdit {

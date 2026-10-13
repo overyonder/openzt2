@@ -12,7 +12,9 @@ pub(crate) struct TerrainBrushDab {
 }
 
 #[derive(Component, Debug, Clone, Copy)]
-pub(super) struct ActiveTerrainBrush;
+pub(super) struct ActiveTerrainBrush {
+    pub(super) kind: super::terrain_brush_types::TerrainBrushKind,
+}
 
 #[derive(Component, Debug, Clone, Copy)]
 pub(super) struct PendingTerrainBrushCommit;

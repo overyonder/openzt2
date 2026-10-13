@@ -64,6 +64,7 @@ fn claimed_task_waits_for_its_asset_and_does_not_restart_after_terminal_executio
         name: "keeper:fill".into(),
         priority: None,
         reservation_tag: None,
+        sensor_tag: None,
         task_delay_seconds: None,
         subjects: vec![],
         targets: vec![],
@@ -241,6 +242,8 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
     let mut app = App::new();
     app.add_message::<BehaviorTaskFailed>()
         .add_message::<BehaviorTaskFinished>()
+        .add_message::<super::super::staff_lifecycle_messages::StaffJobCompleted>()
+        .add_message::<CancelStaffJobRequest>()
         .add_systems(
             Update,
             (
@@ -305,6 +308,8 @@ fn replaced_assignment_ignores_previous_execution_success_and_failure() {
 fn successful_container_refill_releases_worker_and_preserves_controller_request() {
     let mut app = App::new();
     app.add_message::<BehaviorTaskFinished>()
+        .add_message::<super::super::staff_lifecycle_messages::StaffJobCompleted>()
+        .add_message::<CancelStaffJobRequest>()
         .add_systems(Update, settle_staff_jobs_after_authored_behavior_finishes);
     let worker = app.world_mut().spawn(Staff).id();
     let target = app.world_mut().spawn_empty().id();

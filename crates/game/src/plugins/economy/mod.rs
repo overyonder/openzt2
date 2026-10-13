@@ -12,6 +12,7 @@ pub(crate) mod finance_table_ui;
 mod guest_admission_payment;
 pub(crate) mod guest_admission_types;
 mod guest_admission_ui;
+mod keeper_refill_settlement;
 pub(crate) mod money_types;
 mod monthly_finance_recording;
 pub(crate) mod monthly_finance_types;
@@ -32,9 +33,9 @@ mod zoo_cash_ui;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use crate::plugins::construction::FixedConstructionSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use self::{
     account_transaction_types::{TransactionCompleted, TransactionRejected, TransactionRequest},
@@ -68,6 +69,7 @@ impl Plugin for EconomyPlugin {
                     guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions,
                     zoo_cash_ui::request_cash_grant_transactions_from_authored_ui_actions,
                     facility_economy_ui::route_selected_facility_economy_ui_actions,
+                    crate::plugins::transport_tours::transport_track_sale::refresh_selected_transport_sale_quote,
                 )
                     .chain(),
             )
@@ -76,6 +78,12 @@ impl Plugin for EconomyPlugin {
                 (
                     zoo_cash_ui::project_zoo_cash_balance_into_authored_ui_text,
                     guest_admission_ui::project_zoo_admission_price_into_authored_ui_text,
+                    guest_admission_ui::project_zoo_admissions_state_into_authored_toggle_selection
+                        .in_set(crate::plugins::ui::UiSet::DomainProjection)
+                        .after(guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions),
+                    guest_admission_ui::project_zoo_admissions_status_into_authored_ui_text
+                        .after(guest_admission_ui::apply_zoo_admission_policy_changes_from_authored_ui_actions)
+                        .after(crate::plugins::ui::UiSet::Commands),
                     finance_table_ui::request_authored_finance_table_row_counts,
                     finance_table_ui::request_authored_finance_report_list_row_counts_and_bind_world_subjects,
                     finance_table_ui::project_monthly_finance_values_into_authored_table_rows,
@@ -152,7 +160,10 @@ impl Plugin for EconomyPlugin {
             )
             .add_systems(
                 OnExit(GamePhase::InGame),
-                zoo_cash_policy::clear_unlimited_cash_policy_after_leaving_game,
+                (
+                    zoo_cash_policy::clear_unlimited_cash_policy_after_leaving_game,
+                    monthly_finance_recording::clear_finance_history_after_leaving_game,
+                ),
             );
     }
 }

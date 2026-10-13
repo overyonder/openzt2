@@ -2,6 +2,7 @@
 mod created;
 mod detach;
 mod events;
+mod holder;
 mod presentation;
 #[cfg(test)]
 mod tests;
@@ -10,10 +11,10 @@ use super::{
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
     interaction_container_occupancy::InteractionContainerOccupancy,
 };
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::scene_prefab::ScenePrefabAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use crate::plugins::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use crate::plugins::behavior_task_execution_types::advance_behavior_task_to_next_action;
@@ -21,8 +22,10 @@ use crate::plugins::behavior_task_execution_types::find_current_behavior_task_ac
 use crate::plugins::behavior_task_execution_types::BehaviorTaskExecutionState;
 use crate::plugins::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use crate::plugins::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use crate::plugins::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::world_spawn::persistent_id_types::PersistentIdAllocator;
+use crate::plugins::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use crate::plugins::world_spawn::prefab_transform_conversion::transform_from_authored;
 use crate::plugins::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
@@ -93,9 +96,11 @@ struct AttachmentAssets<'w> {
 }
 
 pub(super) fn register_object_attachment_execution(app: &mut App) {
-    use crate::{application_lifecycle::GamePhase, application_schedule::FixedGameSet};
+    use crate::application_schedule::FixedGameSet;
+    use openzt2_game_assets::application_lifecycle::GamePhase;
     app.add_systems(FixedUpdate, (
         start_or_finish_object_attachment,
+        detach_held_objects_for_current_actions,
         detach::apply_delivered_detach_after_object_admission,
         created::hydrate_detach_created_objects,
         detach::release_objects_from_destroyed_holders,
@@ -144,6 +149,14 @@ fn start_or_finish_object_attachment(
     >,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: Query<&GlobalTransform>,
+    children: Query<&Children>,
+    attachment_nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
+    target_definitions: Query<&DefinitionId>,
+    waiting_clips: Query<(), With<PendingBehaviorAnimationClipCompletion>>,
+    animated: Query<
+        &crate::plugins::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
+        With<crate::plugins::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
+    >,
 ) {
     for actor in &obsolete {
         commands.entity(actor).remove::<PendingObjectAttachment>();
@@ -166,22 +179,94 @@ fn start_or_finish_object_attachment(
         else {
             continue;
         };
-        let Some(holder) = definitions.find_object(actor_definition.0) else {
+        if action.attaches_target_held_prop() {
+            if waiting_clips.contains(actor) {
+                continue;
+            }
+            let held_prop = task
+                .target()
+                .and_then(|target| target_definitions.get(target).ok())
+                .and_then(|target| definitions.find_object(target.0))
+                .and_then(|target| target.container_quantity)
+                .map(|quantity| quantity.held_prop);
+            match held_prop {
+                // The target holds no prop: only the authored clip plays,
+                // and the animation owner finishes the step.
+                Some(None) => {
+                    let Some(animation) = &action.animation else {
+                        advance_behavior_task_to_next_action(&mut task, clock.tick);
+                        continue;
+                    };
+                    let request = requests.write(AnimationClipPlaybackRequest {
+                        animation_subject_entity: actor,
+                        animation_clip_asset_key: animation.clone(),
+                        blend_duration_milliseconds: 0,
+                        playback_speed_permille: 1000,
+                        playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                    });
+                    commands
+                        .entity(actor)
+                        .insert(PendingBehaviorAnimationClipCompletion {
+                            execution_id: task.execution_id,
+                            request_id: request.id,
+                            origin: task.create_return_frame_after_action(task.action),
+                            stack_depth: task.stack.len(),
+                            target: task.target,
+                            random_choice: None,
+                        });
+                    task.next_action_tick = clock.tick.saturating_add(1);
+                }
+                Some(Some(prop)) => {
+                    // Placing a held prop at the target's node is not mapped yet.
+                    warn!(?actor, ?prop, target_node = ?action.target_node,
+                        "held prop attachment from a target container is not implemented");
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                }
+                None => {
+                    if assets.definitions.is_complete() {
+                        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    }
+                }
+            }
+            continue;
+        }
+        let Some(holder) = holder::AttachmentHolder::find(&definitions, actor_definition.0) else {
             continue;
         };
-        let Some(slot) = holder.interaction_slots.iter().position(|slot| {
-            !slot.is_queue && slot.reservation_tag == action.container && slot.capacity != 0
-        }) else {
+        let Some((slot, place)) = holder
+            .place_for(action.container)
+            .and_then(|slot| Some((slot, holder.place(slot)?)))
+        else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let Some(object) = definitions.find_object(action.entity) else {
+        // `object` names the item the task uses, one the actor already holds,
+        // such as the burger a guest takes from inventory to eat.
+        let held_item = if action.entity == AssetId::from_key("object") {
+            let Some(item) = task.object.filter(|item| {
+                occupancy
+                    .container_for_member(*item)
+                    .is_some_and(|(holder, _)| holder == actor)
+            }) else {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                continue;
+            };
+            Some(item)
+        } else {
+            None
+        };
+        let Some(object) = held_item
+            .map_or(Some(action.entity), |item| {
+                objects.get(item).ok().map(|(_, id, _)| id.0)
+            })
+            .and_then(|id| definitions.find_object(id))
+        else {
             if assets.definitions.is_complete() {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             }
             continue;
         };
-        let presentation = if object.prefab == AssetId::default() {
+        let presentation = if held_item.is_some() || object.prefab == AssetId::default() {
             None
         } else {
             let Some(prefab_handle) = pending
@@ -215,7 +300,13 @@ fn start_or_finish_object_attachment(
             Some((prefab_handle, prefab))
         };
         let prefab_handle = presentation.as_ref().map(|(handle, _)| handle.clone());
-        if let Some(animation) = &action.animation {
+        // A holder without animated presentation, such as a food stand's
+        // static model, cannot play the authored clip: the item attaches at
+        // once and its detach rule applies as the clip's end would.
+        let plays_clip = action.animation.is_some()
+            && animated.iter().any(|owner| owner.gameplay_entity == actor);
+        let detach_at_once = action.animation.is_some() && !plays_clip;
+        if let Some(animation) = action.animation.as_ref().filter(|_| plays_clip) {
             if pending.is_none_or(|pending| pending.request_id.is_none()) {
                 let request = requests.write(AnimationClipPlaybackRequest {
                     animation_subject_entity: actor,
@@ -234,12 +325,87 @@ fn start_or_finish_object_attachment(
                 continue;
             }
         }
-        let joint = pending.and_then(|pending| pending.joint).unwrap_or(actor);
+        // A named subject node holds the item, as a guest's head holds a hat.
+        let joint = match action.subject_node.as_deref() {
+            Some(name) => {
+                let identifier = AssetId::from_key(&name.to_ascii_lowercase());
+                let Some(node) = children
+                    .iter_descendants_depth_first::<Children>(actor)
+                    .find(|node| {
+                        attachment_nodes
+                            .get(*node)
+                            .is_ok_and(|attachment| attachment.0 == identifier)
+                    })
+                else {
+                    warn!(?actor, node = name, "attachment subject node is absent");
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                };
+                node
+            }
+            None => pending.and_then(|pending| pending.joint).unwrap_or(actor),
+        };
         let Ok(joint_transform) = transforms.get(joint) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let capacity = holder.interaction_slots[slot].capacity;
+        let capacity = place.capacity;
+        if let Some(item) = held_item {
+            if occupancy.actor_slot(actor, item) != Some(slot) {
+                if occupancy.occupied_places(actor, slot) >= usize::from(capacity)
+                    && !detach::detach_slot_objects(
+                        actor,
+                        slot,
+                        &definitions,
+                        &objects,
+                        &transforms,
+                        &mut ids,
+                        &mut occupancy,
+                        &mut commands,
+                    )
+                {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                }
+                if !occupancy.admit(actor, item, slot, capacity) {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                }
+            }
+            let scale = Transform::from_scale(Vec3::splat(object.prefab_scale));
+            let relative_transform = definitions
+                .scene(object.prefab)
+                .and_then(|handle| assets.prefabs.get(&handle))
+                .map_or(scale, |prefab| {
+                    scale.mul_transform(transform_from_authored(
+                        &prefab.canonical_scene_prefab_document().entities[0].transform,
+                    ))
+                });
+            commands.entity(item).insert((
+                ContainedObject {
+                    holder_definition: actor_definition.0,
+                    detach_rule: action.detach_rule,
+                    joint: Some(joint),
+                    relative_transform,
+                    attachment_request: pending.and_then(|pending| {
+                        pending
+                            .request_id
+                            .map(|request| (request, pending.execution_id))
+                    }),
+                },
+                if place.hides_contents {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                },
+            ));
+            if detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment) {
+                commands.entity(item).insert(DeliveredAttachmentDetach);
+            }
+            commands.entity(actor).remove::<PendingObjectAttachment>();
+            advance_behavior_task_to_next_action(&mut task, clock.tick);
+            continue;
+        }
         if occupancy.occupied_places(actor, slot) >= usize::from(capacity)
             && !detach::detach_slot_objects(
                 actor,
@@ -314,16 +480,87 @@ fn start_or_finish_object_attachment(
                         .map(|request| (request, pending.execution_id))
                 }),
             },
-            if holder.interaction_slots[slot].hides_contents {
+            if place.hides_contents {
                 Visibility::Hidden
             } else {
                 Visibility::Inherited
             },
         ));
-        if pending.is_some_and(|pending| pending.detach_after_attachment) {
+        if detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment) {
             commands.entity(item).insert(DeliveredAttachmentDetach);
         }
         commands.entity(actor).remove::<PendingObjectAttachment>();
+        advance_behavior_task_to_next_action(&mut task, clock.tick);
+    }
+}
+
+/// Applies an authored detach rule to a held item, such as the trash left
+/// once a guest has eaten.
+fn detach_held_objects_for_current_actions(
+    mut commands: Commands,
+    assets: AttachmentAssets,
+    clock: Res<ZooClock>,
+    mut occupancy: ResMut<InteractionContainerOccupancy>,
+    mut ids: ResMut<PersistentIdAllocator>,
+    mut actors: Query<
+        (Entity, &mut BehaviorTaskExecutionState),
+        Without<PendingBehaviorTaskFailure>,
+    >,
+    objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
+    transforms: Query<&GlobalTransform>,
+) {
+    let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
+        return;
+    };
+    for (actor, mut task) in &mut actors {
+        if task.next_action_tick > clock.tick {
+            continue;
+        }
+        let Some(BehaviorAction::DetachObject(action)) = assets
+            .documents
+            .get(&task.document)
+            .and_then(|document| find_current_behavior_task_action(document, &task))
+        else {
+            continue;
+        };
+        let item = if action.entity == AssetId::from_key("object") {
+            task.object
+        } else {
+            occupancy.members_of_container(actor).find(|item| {
+                objects.get(*item).is_ok_and(|(_, id, _)| {
+                    id.0 == action.entity
+                        || definitions.find_object(id.0).is_some_and(|object| {
+                            object.behavior_type_identifiers.contains(&action.entity)
+                        })
+                })
+            })
+        };
+        let Some(item) = item.filter(|item| {
+            occupancy
+                .container_for_member(*item)
+                .is_some_and(|(holder, _)| holder == actor)
+        }) else {
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            continue;
+        };
+        if !detach::detach_object(
+            actor,
+            item,
+            Some(action.detach_rule),
+            &definitions,
+            &objects,
+            &transforms,
+            &mut ids,
+            &mut occupancy,
+            &mut commands,
+        ) {
+            warn!(
+                ?actor,
+                "authored detach rule has no supported runtime destination"
+            );
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            continue;
+        }
         advance_behavior_task_to_next_action(&mut task, clock.tick);
     }
 }

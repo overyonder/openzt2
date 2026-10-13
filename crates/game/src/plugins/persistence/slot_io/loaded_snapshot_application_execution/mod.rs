@@ -1,12 +1,12 @@
 use bevy::prelude::{Commands, Entity, MessageWriter, NextState, Query, Res, ResMut, With};
 
-use crate::{
-    application_lifecycle::GamePhase,
-    plugins::world_spawn::{
-        persistent_id_types::PersistentIdAllocator, world_load_request_acceptance::BeginWorldLoad,
-        world_membership_types::WorldRoot, world_unloading::UnloadWorld,
-    },
+use crate::plugins::world_spawn::{
+    persistent_id_types::PersistentIdAllocator,
+    world_load_request_acceptance::{BeginWorldLoad, WorldLoadOperationOwner},
+    world_membership_types::WorldRoot,
+    world_unloading::UnloadWorld,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use super::super::{
     persistence_failure_types::{
@@ -34,8 +34,9 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
     mut pending_snapshot_application: Query<(Entity, &mut PendingSnapshotApplication)>,
     profile_options: Res<ProfileOptions>,
     world_roots: Query<Entity, With<WorldRoot>>,
+    replacement_worlds: Query<(Entity, &WorldLoadOperationOwner), With<WorldRoot>>,
     mut next_game_phase: ResMut<NextState<GamePhase>>,
-    mut persistent_identifier_allocator: ResMut<PersistentIdAllocator>,
+    mut persistent_identifier_allocator: Option<ResMut<PersistentIdAllocator>>,
     mut snapshot_scratch_storage: ResMut<ReusableWorldSnapshotByteBuffer>,
     world_snapshot_application_messages: WorldSnapshotApplicationMessages,
     live_world_snapshot_application_state: WorldSnapshotApplicationState,
@@ -57,7 +58,17 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         return;
     };
     if pending_snapshot_application.baseline_world_load_requested {
+        if pending_snapshot_application.baseline_world_root.is_none() {
+            pending_snapshot_application.baseline_world_root =
+                replacement_worlds.iter().find_map(|(root, owner)| {
+                    (owner.0 == pending_snapshot_application_entity).then_some(root)
+                });
+        }
         if !snapshot_scratch_storage.contains_validated_snapshot_container {
+            if let Some(root) = pending_snapshot_application.baseline_world_root {
+                world_unload_requests.write(UnloadWorld(root));
+            }
+            next_game_phase.set(GamePhase::MapSelection);
             discard_pending_snapshot_application_after_load_failure(
                 &mut commands,
                 pending_snapshot_application_entity,
@@ -69,9 +80,16 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
             return;
         }
         if !pending_snapshot_application.baseline_world_load_completed {
-            if completed_world_loads.read().next().is_some() {
-                pending_snapshot_application.baseline_world_load_completed = true;
-            } else if failed_world_loads.read().next().is_some() {
+            let baseline_failed = failed_world_loads.read().any(|result| {
+                result.operation == Some(pending_snapshot_application_entity)
+                    && Some(result.scenario)
+                        == pending_snapshot_application.scenario_definition_identifier
+                    && pending_snapshot_application
+                        .baseline_world_root
+                        .is_none_or(|root| result.root == Some(root))
+            });
+            if baseline_failed {
+                next_game_phase.set(GamePhase::MapSelection);
                 discard_pending_snapshot_application_after_load_failure(
                     &mut commands,
                     pending_snapshot_application_entity,
@@ -80,32 +98,58 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     &mut snapshot_scratch_storage,
                     &mut persistence_failures,
                 );
+            } else {
+                for result in completed_world_loads.read() {
+                    if result.operation == Some(pending_snapshot_application_entity)
+                        && Some(result.scenario)
+                            == pending_snapshot_application.scenario_definition_identifier
+                        && Some(result.root) == pending_snapshot_application.baseline_world_root
+                    {
+                        pending_snapshot_application.baseline_world_load_completed = true;
+                    }
+                }
             }
             return;
         }
-        let snapshot_application_result =
-            decode_validate_and_apply_snapshot_to_loaded_baseline_world(
-                &mut commands,
-                &snapshot_scratch_storage.snapshot_container_bytes,
-                profile_options.profile_identifier,
-                &world_roots,
-                &mut persistent_identifier_allocator,
-                live_world_snapshot_application_state,
-                &mut progression_snapshot_application_parameters,
-                &mut simulation_time_snapshot_application_resources,
-                &mut show_platform_upgrade_restore_requests,
-            );
+        let Some(root) = pending_snapshot_application.baseline_world_root else {
+            return;
+        };
+        let snapshot_application_result = match persistent_identifier_allocator.as_mut() {
+            Some(persistent_identifier_allocator)
+                if world_roots.get(root).is_ok()
+                    && persistent_identifier_allocator.owns_world(root) =>
+            {
+                decode_validate_and_apply_snapshot_to_loaded_baseline_world(
+                    &mut commands,
+                    &snapshot_scratch_storage.snapshot_container_bytes,
+                    profile_options.profile_identifier,
+                    root,
+                    persistent_identifier_allocator,
+                    live_world_snapshot_application_state,
+                    &mut progression_snapshot_application_parameters,
+                    &mut simulation_time_snapshot_application_resources,
+                    &mut show_platform_upgrade_restore_requests,
+                    &mut pending_snapshot_application.maintenance_prefabs,
+                )
+            }
+            _ => Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference),
+        };
         match snapshot_application_result {
-            Ok(()) => {
+            Ok(false) => {}
+            Ok(true) => {
+                next_game_phase.set(GamePhase::InGame);
                 commands
                     .entity(pending_snapshot_application_entity)
                     .despawn();
+                commands.entity(root).remove::<WorldLoadOperationOwner>();
                 completed_snapshot_loads.write(WorldSnapshotLoadedFromSlot {
                     save_slot_identifier: pending_snapshot_application.save_slot_identifier,
                 });
                 snapshot_scratch_storage.clear_logical_contents();
             }
             Err(persistence_failure) => {
+                world_unload_requests.write(UnloadWorld(root));
+                next_game_phase.set(GamePhase::MapSelection);
                 discard_pending_snapshot_application_after_load_failure(
                     &mut commands,
                     pending_snapshot_application_entity,
@@ -125,7 +169,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         if !world_roots.is_empty() {
             return;
         }
+        // A later operation must not consume an earlier load's retained messages.
+        completed_world_loads.clear();
+        failed_world_loads.clear();
         begin_world_load_requests.write(BeginWorldLoad {
+            operation: Some(pending_snapshot_application_entity),
             scenario,
             mode,
             profile: profile_options.profile_identifier,

@@ -56,6 +56,7 @@ pub(crate) struct EditCommitProgress {
     pub(crate) topology: DomainAckStatus,
     pub(crate) placement: DomainAckStatus,
     pub(crate) shows: DomainAckStatus,
+    pub(crate) aquatic: DomainAckStatus,
 }
 
 impl EditCommitProgress {
@@ -68,6 +69,7 @@ impl EditCommitProgress {
             topology: DomainAckStatus::NotExpected,
             placement: DomainAckStatus::NotExpected,
             shows: DomainAckStatus::NotExpected,
+            aquatic: DomainAckStatus::NotExpected,
         }
     }
 
@@ -76,12 +78,19 @@ impl EditCommitProgress {
             || self.topology != DomainAckStatus::NotExpected
             || self.placement != DomainAckStatus::NotExpected
             || self.shows != DomainAckStatus::NotExpected
+            || self.aquatic != DomainAckStatus::NotExpected
     }
 
     pub(crate) fn all_expected_are(&self, wanted: DomainAckStatus) -> bool {
-        [self.terrain, self.topology, self.placement, self.shows]
-            .into_iter()
-            .all(|status| status == DomainAckStatus::NotExpected || status == wanted)
+        [
+            self.terrain,
+            self.topology,
+            self.placement,
+            self.shows,
+            self.aquatic,
+        ]
+        .into_iter()
+        .all(|status| status == DomainAckStatus::NotExpected || status == wanted)
     }
 
     pub(crate) fn reset_expected_to_pending(&mut self) {
@@ -90,6 +99,7 @@ impl EditCommitProgress {
             &mut self.topology,
             &mut self.placement,
             &mut self.shows,
+            &mut self.aquatic,
         ] {
             if *status != DomainAckStatus::NotExpected {
                 *status = DomainAckStatus::Pending;
@@ -143,7 +153,7 @@ pub(crate) enum ConstructionCommitFailure {
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RollbackContext {
-    pub(super) failed_application: EditApplication,
+    pub(crate) failed_application: EditApplication,
     pub(super) failure: ConstructionCommitFailure,
 }
 

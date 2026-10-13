@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::{species::Sex, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory;
 use crate::plugins::animal_lifecycle::animal_adoption_contracts::AnimalCatalogueGender;
 use crate::plugins::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
@@ -35,6 +35,12 @@ pub(in crate::plugins::information) fn an_authored_adoption_catalogue_is_visible
 }
 
 /// Selects the authored purchase or limited-offer tab for the loaded game mode.
+///
+/// Only the selection and the losing tab's Off presentation apply here. The
+/// winning tab's On actions repress its gender set, which activates the type
+/// list and arms placement; the authored `animals` button runs them through
+/// its `Animal ToggleSet` repress when the player opens the panel. Entering
+/// or loading a world must not arm a placement tool by itself.
 pub(in crate::plugins::information) fn apply_authored_adoption_catalogue_tab_initialization(
     adoption_lists: Query<(Ref<UiTablePolicy>, &UiDocumentOwner)>,
     worlds: Query<Ref<SelectedWorldIdentity>, With<WorldRoot>>,
@@ -44,6 +50,7 @@ pub(in crate::plugins::information) fn apply_authored_adoption_catalogue_tab_ini
         &UiDocumentOwner,
         &mut Visibility,
         Option<&mut UiSelected>,
+        Option<&mut UiPreviousSelection>,
     )>,
     mut activations: MessageWriter<UiNodeActivated>,
 ) {
@@ -60,7 +67,9 @@ pub(in crate::plugins::information) fn apply_authored_adoption_catalogue_tab_ini
         {
             continue;
         }
-        for (entity, name, node_document_owner, mut visibility, selected) in &mut authored_nodes {
+        for (entity, name, node_document_owner, mut visibility, selected, previous_selection) in
+            &mut authored_nodes
+        {
             if node_document_owner.0 != list_document_owner.0 {
                 continue;
             }
@@ -79,15 +88,18 @@ pub(in crate::plugins::information) fn apply_authored_adoption_catalogue_tab_ini
             if let Some(mut selected) = selected {
                 selected.0 = active;
             }
-            activations.write(UiNodeActivated {
-                source: ActionSource::System,
-                node: entity,
-                trigger: if active {
-                    UiTrigger::On
-                } else {
-                    UiTrigger::Off
-                },
-            });
+            // This owner decides which transition runs; keep the generic
+            // selection-change dispatcher from replaying the winning tab's On.
+            if let Some(mut previous_selection) = previous_selection {
+                previous_selection.synchronize_with_non_authored_selection_change(active);
+            }
+            if !active {
+                activations.write(UiNodeActivated {
+                    source: ActionSource::System,
+                    node: entity,
+                    trigger: UiTrigger::Off,
+                });
+            }
         }
     }
 }

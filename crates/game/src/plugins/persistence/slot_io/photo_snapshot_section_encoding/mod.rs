@@ -44,7 +44,7 @@ pub(super) fn append_encoded_photo_snapshot_section(
     }
     for challenge in challenges {
         bytes.push(PHOTO_CHALLENGE_TAG);
-        bytes.extend_from_slice(&challenge.challenge_row_index.to_le_bytes());
+        bytes.extend_from_slice(&challenge.challenge_definition_identifier.0);
         bytes.extend_from_slice(
             &challenge
                 .completed_by_photo_persistent_identifier
@@ -164,25 +164,29 @@ pub(super) fn decode_and_validate_photo_snapshot_section(
             });
         } else if tag == PHOTO_CHALLENGE_TAG {
             let record = payload
-                .get(cursor..cursor.saturating_add(13))
+                .get(cursor..cursor.saturating_add(25))
                 .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
-            let row = u32::from_le_bytes(record[0..4].try_into().unwrap_or([0; 4]));
+            let challenge_definition_identifier = AssetId(
+                record[0..16]
+                    .try_into()
+                    .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?,
+            );
             let completed = PersistentId(u64::from_le_bytes(
-                record[4..12].try_into().unwrap_or([0; 8]),
+                record[16..24].try_into().unwrap_or([0; 8]),
             ));
-            let rating_stars = record[12];
-            cursor += 13;
+            let rating_stars = record[24];
+            cursor += 25;
             if rating_stars > 5
                 || challenges
                     .last()
                     .is_some_and(|prior: &PhotoChallengeProgressSnapshotRecord| {
-                        prior.challenge_row_index >= row
+                        prior.challenge_definition_identifier >= challenge_definition_identifier
                     })
             {
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
             challenges.push(PhotoChallengeProgressSnapshotRecord {
-                challenge_row_index: row,
+                challenge_definition_identifier,
                 completed_by_photo_persistent_identifier: (completed.0 != 0).then_some(completed),
                 rating_stars,
             });

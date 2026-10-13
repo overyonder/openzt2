@@ -1,12 +1,10 @@
 use bevy::prelude::*;
 
-use crate::{
-    assets::audio::audio_asset_types::{AudioAsset, AudioAssets},
-    plugins::{
-        aquatic::aquatic_simulation_types::TankGeometry,
-        terrain::terrain_water_presentation_types::NaturalWaterRegion,
-    },
+use crate::plugins::{
+    aquatic::aquatic_simulation_types::TankGeometry,
+    terrain::terrain_water_presentation_types::NaturalWaterRegion,
 };
+use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
 
 use super::audio_environment_types::AudioStage;
 

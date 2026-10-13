@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use crate::assets::{
+use openzt2_game_assets::{
     effect::{ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument},
     scene_prefab::ScenePrefabAsset,
 };

@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::overview_map_presentation::UiMapColorsRecord;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::terrain::terrain_chunk_types::EditedTerrainSamples;
 use crate::plugins::terrain::terrain_chunk_types::TerrainChunk;
 use crate::plugins::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;

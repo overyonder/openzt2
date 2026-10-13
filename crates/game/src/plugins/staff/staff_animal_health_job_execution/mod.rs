@@ -1,8 +1,8 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_health::types::AnimalCaptured;
 use crate::plugins::animal_health::types::CaptureAnimalRequest;
 use crate::plugins::animal_health::types::Disease;
@@ -13,7 +13,7 @@ use crate::plugins::animal_health::types::TreatmentRequest;
 use crate::plugins::animal_lifecycle::types::Animal;
 
 use super::{
-    staff_job_types::{JobClaim, JobProgress, StaffJob},
+    staff_job_types::{JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
     staff_lifecycle_messages::StaffJobCompleted,
 };
 
@@ -31,6 +31,7 @@ pub(in crate::plugins::staff) fn request_animal_health_effects_after_authored_st
         Without<AwaitingAnimalHealthEffect>,
     >,
     animals: Query<(Option<&Disease>, Option<&Escaped>, Option<&Tranquilized>), With<Animal>>,
+    behavior_tasks: Query<&StaffJobBehaviorTask>,
     mut treatment_requests: MessageWriter<TreatmentRequest>,
     mut capture_requests: MessageWriter<CaptureAnimalRequest>,
 ) {
@@ -39,6 +40,9 @@ pub(in crate::plugins::staff) fn request_animal_health_effects_after_authored_st
     };
     for (job_entity, job, _, claim) in &mut jobs {
         if !matches!(job.kind, StaffJobKind::Treat | StaffJobKind::Capture) {
+            continue;
+        }
+        if job.kind == StaffJobKind::Treat && job.token == Some(AssetId::from_key("t_cureanimal")) {
             continue;
         }
         let Ok((disease, escaped, tranquilized)) = animals.get(job.target) else {
@@ -63,9 +67,18 @@ pub(in crate::plugins::staff) fn request_animal_health_effects_after_authored_st
                     true
                 }),
             StaffJobKind::Capture if escaped.is_some() && tranquilized.is_some() => {
+                let Some(execution_id) = behavior_tasks
+                    .get(job_entity)
+                    .ok()
+                    .and_then(|behavior| behavior.execution_id)
+                else {
+                    continue;
+                };
                 capture_requests.write(CaptureAnimalRequest {
                     animal: job.target,
                     staff: claim.staff,
+                    job: job_entity,
+                    execution_id,
                 });
                 true
             }
@@ -90,13 +103,18 @@ pub(in crate::plugins::staff) fn complete_staff_jobs_after_animal_health_effects
         &mut AwaitingAnimalHealthEffect,
     )>,
     animals: Query<(Option<&Treatment>, Option<&Tranquilized>), With<Animal>>,
+    behavior_tasks: Query<&StaffJobBehaviorTask>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
 ) {
     for captured_animal in captured_animals.read() {
         for (job_entity, job, claim, _) in &mut jobs {
             if job.kind == StaffJobKind::Capture
+                && job_entity == captured_animal.job
                 && job.target == captured_animal.animal
                 && claim.staff == captured_animal.staff
+                && behavior_tasks.get(job_entity).is_ok_and(|behavior| {
+                    behavior.execution_id == Some(captured_animal.execution_id)
+                })
             {
                 completed_jobs.write(StaffJobCompleted {
                     staff: claim.staff,

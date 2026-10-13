@@ -8,10 +8,10 @@ use bevy::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use crate::plugins::topology::topology_edit_types::TopologyChanged;
 use crate::plugins::topology::topology_graph_types::EdgeKey;
@@ -29,18 +29,48 @@ use super::{
 };
 
 #[derive(Resource, Default)]
-pub(super) struct GroundPathSurfaceImageDependencies {
+pub(crate) struct GroundPathSurfaceImageDependencies {
     images: HashMap<AssetId, Handle<Image>>,
     used_by_projected_paths: HashSet<AssetId>,
     definition_assets_containing_ground_path_surfaces:
         HashSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
 }
 
+impl GroundPathSurfaceImageDependencies {
+    pub(crate) fn projected_images(
+        &self,
+    ) -> impl Iterator<Item = (AssetId, Option<&Handle<Image>>)> {
+        self.used_by_projected_paths
+            .iter()
+            .map(|identifier| (*identifier, self.images.get(identifier)))
+    }
+
+    pub(crate) fn missing_projected_images<'a>(
+        &'a self,
+        images: &'a Assets<Image>,
+    ) -> impl Iterator<Item = (AssetId, Option<&'a Handle<Image>>)> + 'a {
+        self.used_by_projected_paths
+            .iter()
+            .filter_map(move |identifier| {
+                let handle = self.images.get(identifier);
+                handle
+                    .is_none_or(|handle| images.get(handle).is_none())
+                    .then_some((*identifier, handle))
+            })
+    }
+}
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct GroundPathSurfaceProjectionRevision(u64);
+pub(crate) struct GroundPathSurfaceProjectionRevision(u64);
+
+impl GroundPathSurfaceProjectionRevision {
+    pub(crate) fn matches_render_revision(&self, revision: &TerrainRenderRevision) -> bool {
+        self.0 == revision.0
+    }
+}
 
 #[derive(Component)]
-pub(super) struct GroundPathSurfaceProjectionDirty;
+pub(crate) struct GroundPathSurfaceProjectionDirty;
 
 #[derive(Clone, Copy)]
 struct GroundPathSurfaceOverlay {

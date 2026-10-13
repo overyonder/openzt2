@@ -3,13 +3,11 @@ use openzt2_game_data::ui_document::action::information::{
     InformationGraphSeries, InformationGraphType,
 };
 
-use crate::{
-    assets::localization::loaded_localization_queries::LoadedLocalizationView,
-    plugins::{
-        economy::monthly_finance_types::{FinanceMetric, MonthlyFinance, MonthlyFinanceHistory},
-        progression::fame_history_types::FameHistory,
-    },
+use crate::plugins::{
+    economy::monthly_finance_types::{FinanceMetric, MonthlyFinance, MonthlyFinanceHistory},
+    progression::fame_history_types::FameHistory,
 };
+use openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView;
 
 use super::{
     graph_generated_geometry::{

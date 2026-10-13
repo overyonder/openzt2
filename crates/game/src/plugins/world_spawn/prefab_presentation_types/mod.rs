@@ -3,7 +3,7 @@
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::assets::{
+use openzt2_game_assets::{
     material::material_asset_types::MaterialAsset, scene_prefab::ScenePrefabAsset,
 };
 
@@ -19,7 +19,7 @@ impl PrefabPresentation {
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct PrefabPresentationHydrated;
+pub(crate) struct PrefabPresentationHydrated;
 
 /// Direct model handle for one authored renderable.
 #[derive(Component, Debug, Clone)]
@@ -54,3 +54,7 @@ pub(crate) struct PrefabShadowPolicy {
     pub(crate) receives: bool,
     pub(crate) visible_in_reflections: bool,
 }
+
+/// Instance-owned clothing substitutions, retained when model scenes are rebuilt.
+#[derive(Component, Debug, Clone, Default)]
+pub(crate) struct PrefabClothingTextures(pub(crate) Vec<(AssetId, Handle<Image>)>);

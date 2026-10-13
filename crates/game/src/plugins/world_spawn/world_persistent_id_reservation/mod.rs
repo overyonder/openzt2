@@ -3,7 +3,7 @@ use bevy::{
     prelude::{warn, Assets, Entity, Local, Query, Res, ResMut},
 };
 
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     persistent_id_types::{PersistentId, PersistentIdAllocator},

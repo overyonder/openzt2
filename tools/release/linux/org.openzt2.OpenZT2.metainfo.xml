@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.openzt2.OpenZT2</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>OpenZT2</name>
+  <summary>Build and manage a zoo</summary>
+  <description>
+    <p>OpenZT2 is an early development build of a zoo simulation game.
+    It requires your own Zoo Tycoon 2 archives; no original game content
+    is included. Gameplay remains incomplete.</p>
+  </description>
+  <launchable type="desktop-id">org.openzt2.OpenZT2.desktop</launchable>
+  <url type="homepage">https://github.com/overyonder/openzt2</url>
+  <url type="bugtracker">https://github.com/overyonder/openzt2/issues</url>
+  <provides><binary>openzt2</binary></provides>
+  <content_rating type="oars-1.1"/>
+</component>

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use bevy::prelude::*;
 
-use crate::assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::lua_script::lua_script_asset_loading::LuaScriptAsset;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::scenario_lua_types::ScenarioLuaVirtualMachineContexts;
 

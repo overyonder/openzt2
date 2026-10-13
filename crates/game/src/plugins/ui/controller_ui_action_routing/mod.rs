@@ -6,11 +6,9 @@ use super::{
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
     authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
 };
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::input::input_types::{ActionRequest, ActionSource, GameAction},
-};
+use crate::plugins::input::input_types::{ActionRequest, ActionSource, GameAction};
 use bevy::prelude::*;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_data::ui_document::action::{construction::UiConstructionAction, UiTrigger};
 
 pub(super) fn route_controller_authored_actions(

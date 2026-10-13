@@ -1,0 +1,119 @@
+# changes-world: run after reversible journeys in this map mode
+# Accept the new zoo's instant challenge and inspect its goal, then research a
+# locked item (#68, #63). Freeform has no research (its mode config has no
+# ZTResearchMgr), so this runs a Challenge map.
+# Small Toy Ball (ball) needs no fame, costs $200 and takes 45 seconds to research.
+# Pursuit Ball instead requires 40% fame and costs $600 on this map.
+start challenge-map
+expect simulation_paused == 0
+# A new Challenge zoo offers its instant challenge one challenge-manager interval
+# (four simulated seconds) after it starts. object-sale pauses before then, so
+# the offer opens here. Inspect the capture for the welcome and challenge text.
+until visible "instant challenge layout" within 600
+expect-visible "instant challenge description text"
+expect-visible "instant challenge text"
+expect-visible "accept"
+expect-visible "decline"
+expect-hidden "challenge layout"
+# Which instant challenge is drawn varies; review its text in the capture.
+until text "instant challenge description text" "Welcome to challenge mode! When you successfully complete a challenge, you earn cash or other rewards. However, if you fail a challenge, there may be negative consequences for your zoo, such as money penalties or a decline in guest attendance. All challenges are optional, so if you're not interested in one, just decline it."
+# Both paragraphs must be drawn whole inside their boxes: unwrapped text
+# running past the panel edge leaves glyphs outside the clip.
+until drawn_instant_challenge_descriptions == 1
+until drawn_instant_challenge_texts == 1
+capture instant-challenge-offered
+click "accept"
+until hidden "instant challenge layout"
+until simulation_paused == 0
+until shown_scenario_objectives == 1 within 240   # BFS_SHOWRULE shows the accepted rule
+click "scenariogoals"
+until visible "goals layout"
+# challengegoals.xml shows the photo tab in Challenge mode. Instant challenges
+# list their goal under Primary Goals or Photo Challenges by type, so exactly
+# one of the two tabs shows one row with text; review both captures.
+expect-visible "photo challenges tab"
+click "primary goals tab"
+until settled
+expect drawn_scenario_goal_texts <= 1
+snapshot primary-goals
+capture challenge-goals-primary
+click "photo challenges tab"
+until settled
+expect drawn_scenario_goal_texts <= 1
+expect drawn_scenario_goal_texts != @primary-goals
+capture challenge-goals-photo
+key ESCAPE
+until hidden "goals layout"
+
+click "animals"
+click "Animal Enrichment Tab"
+until rows "Enrichment Typelist" >= 1
+until catalogue_enrichment_list_ready == 1 within 120
+snapshot research-before-wheel
+wheel-to-catalogue "ball" in "Enrichment Typelist"
+until catalogue_enrichment_ball_unclipped == 1 within 120
+expect camera_x_m == @research-before-wheel
+expect camera_z_m == @research-before-wheel
+expect camera_height_m == @research-before-wheel
+expect camera_pitch_deg == @research-before-wheel
+expect camera_fov_deg == @research-before-wheel
+select-catalogue "ball" in "Enrichment Typelist"  # eligible for research, but not yet available to place
+until catalogue_selected_is_ball == 1
+until catalogue_selected_visible_rows == 1
+until catalogue_enrichment_selected_ball_visible_rows == 1
+until visible "start research button"   # the research panel projects after the selection settles
+expect-visible "Buy Info Panel"
+expect-visible "research bump"
+until text "Entity Name Label" "Small Toy Ball"
+until text "Cost Display" "$200"
+expect selected_catalogue_entry_available == 0
+expect selected_catalogue_research_cost_cents == 20000
+expect research_payments == 0
+expect research_projects == 0
+expect placement_previews == 0
+capture research-offered
+# Research is a purchase, so it must start while the simulation is paused.
+key P
+until simulation_paused == 1
+snapshot before-research
+click "start research button"
+until research_payments == 1
+expect research_payment_cents == @before-research.selected_catalogue_research_cost_cents
+expect research_pending_payments == 0
+expect research_projects == 1
+expect cash_cents < @before-research
+expect selected_catalogue_research_progress_basis_points == 0
+capture research-started-while-paused
+# A second press on the started toggle must not charge again. The started
+# toggle is disabled, so it is pressed by position.
+click 1256 673                  # start research beaker above the Buy Info Panel
+wait 120                        # a second press must not charge again
+expect research_payments == 1
+expect research_projects == 1
+key P
+until simulation_paused == 0
+until selected_catalogue_research_progress_basis_points > 0 within 1200
+expect selected_catalogue_entry_available == 0
+capture research-in-progress
+until research_projects == 0 within 4800
+expect research_payments == 1
+expect selected_catalogue_entry_available == 1
+expect catalogue_selected_is_ball == 1
+expect catalogue_enrichment_selected_ball_visible_rows == 1
+expect-hidden "research bump"
+capture research-completed
+select-catalogue "ball" in "Enrichment Typelist"
+until catalogue_selected_visible_rows == 1
+until catalogue_enrichment_selected_ball_visible_rows == 1
+until text "Entity Name Label" "Small Toy Ball"
+until text "Cost Display" "$250"
+move 800 450
+until placement_visible_previews == 1
+expect placement_previews == 1
+expect catalogue_matching_placement_previews == 1
+capture researched-item-buyable
+key ESCAPE
+until placement_previews == 0
+
+# Discard this scenario's world through the game; no state is overwritten.
+return-to-menu

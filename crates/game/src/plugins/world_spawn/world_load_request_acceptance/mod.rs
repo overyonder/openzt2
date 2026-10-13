@@ -1,17 +1,17 @@
 use std::collections::BTreeMap;
 
 use bevy::prelude::{
-    info, warn, AssetServer, Assets, Commands, Handle, Local, MessageReader, MessageWriter, Name,
-    Query, Res, ResMut, With,
+    info, warn, AssetServer, Assets, Commands, Entity, Handle, Local, MessageReader, MessageWriter,
+    Name, Query, Res, ResMut, With,
 };
 use openzt2_game_data::AssetId;
 
-use crate::asset_source::AssetArchives;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::asset_source::AssetArchives;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use crate::plugins::economy::guest_admission_types::AdmissionPrice;
 use crate::plugins::economy::guest_admission_types::ZooAdmissionsOpen;
 use crate::plugins::economy::money_types::Money;
@@ -32,11 +32,15 @@ use super::{
 
 #[derive(bevy::prelude::Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BeginWorldLoad {
+    pub(crate) operation: Option<Entity>,
     pub(crate) scenario: AssetId,
     pub(crate) mode: crate::game_session_types::WorldSessionMode,
     pub(crate) profile: AssetId,
     pub(crate) starting_cash_cents: Option<i64>,
 }
+
+#[derive(bevy::prelude::Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WorldLoadOperationOwner(pub(crate) Entity);
 
 pub(super) fn accept_queued_world_load_after_required_assets_resolve(
     mut commands: Commands,
@@ -56,6 +60,7 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
 ) {
     for request in requests.read() {
         if queued.is_none() {
+            demanded_starts.clear();
             performance.begin(request.scenario, &archives);
         }
         queued.get_or_insert(*request);
@@ -110,13 +115,26 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
         request.scenario,
     )
     else {
-        if demanded_starts.values().any(|handle| {
+        let failed_start = demanded_starts.values().any(|handle| {
             matches!(
                 asset_server.load_state(handle.id()),
                 bevy::asset::LoadState::Failed(_)
             )
-        }) {
+        });
+        let pending_start = demanded_starts.values().any(|handle| {
+            !scenarios.contains(handle.id())
+                && !matches!(
+                    asset_server.load_state(handle.id()),
+                    bevy::asset::LoadState::Failed(_)
+                )
+        });
+        if failed_start
+            || (!active_scenarios.has_pending_document_loads(&asset_server, &scenarios)
+                && !pending_start)
+        {
             failed.write(WorldLoadFailed {
+                operation: request.operation,
+                root: None,
                 scenario: request.scenario,
                 reason: WorldLoadFailure::MissingScenario,
             });
@@ -132,9 +150,15 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
     };
     let Some(start_record) = start_document.document.find_starting_zoo(start) else {
         failed.write(WorldLoadFailed {
+            operation: request.operation,
+            root: None,
             scenario: request.scenario,
             reason: WorldLoadFailure::MissingScenario,
         });
+        *queued = None;
+        demanded_starts.clear();
+        drop(_performance_timer);
+        performance.finish_and_report(&archives, "failed");
         return;
     };
     let zoo_name = &start_record.name;
@@ -143,9 +167,15 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
         .and_then(|document| document.terrain_path(terrain))
     else {
         failed.write(WorldLoadFailed {
+            operation: request.operation,
+            root: None,
             scenario: request.scenario,
             reason: WorldLoadFailure::MissingDependency(terrain),
         });
+        *queued = None;
+        demanded_starts.clear();
+        drop(_performance_timer);
+        performance.finish_and_report(&archives, "failed");
         return;
     };
     let terrain_handle = asset_server.load::<TerrainAsset>(terrain_path.to_owned());
@@ -166,6 +196,11 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
             SelectedWorldTerrainAssetHandle(terrain_handle),
         ))
         .id();
+    if let Some(operation) = request.operation {
+        commands
+            .entity(root)
+            .insert(WorldLoadOperationOwner(operation));
+    }
     commands.insert_resource(PersistentIdAllocator::new(root));
     info!(?root, scenario = ?request.scenario, "accepted world load and installed its persistent-id allocator");
     commands.insert_resource(ZooCash(Money(
@@ -208,6 +243,7 @@ pub(super) fn accept_queued_world_load_after_required_assets_resolve(
             record_count,
         ));
     *queued = None;
+    demanded_starts.clear();
 }
 
 fn locate_selected_starting_zoo(

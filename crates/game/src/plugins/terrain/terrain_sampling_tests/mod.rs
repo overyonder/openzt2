@@ -1,6 +1,37 @@
 use bevy::prelude::*;
 
-use super::{terrain_chunk_types::TerrainIndex, terrain_world_sampling::terrain_chunk_at};
+use super::{
+    terrain_chunk_types::TerrainIndex,
+    terrain_world_sampling::{minimum_terrain_triangle_normal_y, terrain_chunk_at},
+};
+
+#[test]
+fn triangle_slope_bound_matches_mesh_faces_instead_of_averaging_them() {
+    // The two saddle normals cancel horizontally, making their average flat.
+    let corners = [
+        Vec3::new(0.0, 0.0, 0.0),
+        Vec3::new(1.0, 2.0, 0.0),
+        Vec3::new(0.0, 2.0, 1.0),
+        Vec3::new(1.0, 0.0, 1.0),
+    ];
+    for (alternate, faces) in [
+        (false, [[0, 2, 3], [0, 3, 1]]),
+        (true, [[0, 2, 1], [1, 2, 3]]),
+    ] {
+        let normals = faces.map(|[a, b, c]| {
+            (corners[b] - corners[a])
+                .cross(corners[c] - corners[a])
+                .normalize()
+        });
+        assert!((normals[0] + normals[1])
+            .normalize()
+            .abs_diff_eq(Vec3::Y, 1.0e-6));
+        let bound = minimum_terrain_triangle_normal_y(corners.map(|point| point.y), 1.0, alternate)
+            .unwrap();
+        assert!((bound - normals[0].y.min(normals[1].y)).abs() < 1.0e-6);
+        assert!(bound < 0.5);
+    }
+}
 
 #[test]
 fn terrain_chunk_lookup_uses_floor_for_negative_world_coordinates() {

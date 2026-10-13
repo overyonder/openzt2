@@ -2,14 +2,31 @@ use bevy::{
     camera::visibility::RenderLayers,
     light::{NotShadowCaster, NotShadowReceiver},
     prelude::*,
+    world_serialization::WorldInstanceReady,
 };
 
-use crate::plugins::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
+use crate::plugins::world_spawn::prefab_presentation_types::{PrefabModel, PrefabShadowPolicy};
 
 use super::ModelExpanded;
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Component)]
 pub(super) struct ModelSceneVisibilityAndShadowPolicyProjected;
+
+pub(super) fn invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    models: Query<(), With<PrefabModel>>,
+) {
+    if models.contains(ready.event_target()) {
+        // A rebuilt instance replaces the meshes beneath the surviving model.
+        commands
+            .entity(ready.event_target())
+            .remove::<ModelSceneVisibilityAndShadowPolicyProjected>();
+    }
+}
 
 pub(super) fn project_model_scene_visibility_and_shadow_policy(
     mut commands: Commands,

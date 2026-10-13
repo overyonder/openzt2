@@ -1,30 +1,33 @@
 //! Runs authored behavior scripts using the existing Lua loader and module owner.
 
-use crate::{
-    assets::{
-        behavior::behavior_asset_types::BehaviorDocumentAsset,
-        lua_script::{
-            lua_script_archive_path_index::LuaScriptArchivePathIndex,
-            lua_script_asset_loading::LuaScriptAsset,
-        },
+use super::behavior_clothing_delivery::{
+    script_context::ClothingScriptContext,
+    state::{ClothingScriptTexture, PendingClothingDelivery},
+};
+use crate::plugins::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use crate::plugins::{
+    behavior_task_execution_types::{
+        advance_behavior_task_to_next_action, find_current_behavior_task_action,
+        BehaviorTaskExecutionState,
     },
-    plugins::{
-        behavior_task_execution_types::{
-            advance_behavior_task_to_next_action, find_current_behavior_task_action,
-            BehaviorTaskExecutionState,
-        },
-        lua_script_module_execution::{
-            execute_lua_script_module_once_per_virtual_machine,
-            install_lua_script_dependency_loading_functions,
-        },
-        simulation_time::simulation_clock_types::ZooClock,
-        world_spawn::physical_presentation_state::{
-            PhysicalPresentationOperation, PhysicalPresentationRequest,
-        },
+    lua_script_module_execution::{
+        execute_lua_script_module_once_per_virtual_machine,
+        install_lua_script_dependency_loading_functions,
+    },
+    simulation_time::simulation_clock_types::ZooClock,
+    world_spawn::physical_presentation_state::{
+        PhysicalPresentationOperation, PhysicalPresentationRequest,
     },
 };
 use bevy::prelude::*;
 use mlua::{AnyUserData, Function, Lua, Table};
+use openzt2_game_assets::{
+    behavior::behavior_asset_types::BehaviorDocumentAsset,
+    lua_script::{
+        lua_script_archive_path_index::LuaScriptArchivePathIndex,
+        lua_script_asset_loading::LuaScriptAsset,
+    },
+};
 use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 use std::{
     cell::RefCell,
@@ -65,7 +68,14 @@ pub(super) fn execute_authored_behavior_script_actions(
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
     clock: Res<ZooClock>,
-    mut actors: Query<(Entity, &mut BehaviorTaskExecutionState)>,
+    clothing: ClothingScriptContext,
+    mut actors: Query<
+        (Entity, &mut BehaviorTaskExecutionState),
+        (
+            Without<PendingBehaviorTaskFailure>,
+            Without<PendingClothingDelivery>,
+        ),
+    >,
     entities: Query<()>,
     mut presentation_requests: MessageWriter<PhysicalPresentationRequest>,
 ) {
@@ -102,6 +112,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                 });
         let path_stack = RefCell::new(Vec::new());
         let output = RefCell::new(Vec::new());
+        let textures = RefCell::new(Vec::new());
         let result = vm.lua.scope(|scope| -> mlua::Result<Option<String>> {
             install_lua_script_dependency_loading_functions(
                 &vm.lua,
@@ -154,6 +165,38 @@ pub(super) fn execute_authored_behavior_script_actions(
                             },
                         )?,
                     )?;
+                    table.set(
+                        "BFG_GET_ATTR_STRING",
+                        scope.create_function(|_, (subject, name): (Table, String)| {
+                            let reference: AnyUserData = subject.get("entity")?;
+                            let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
+                            clothing.attribute(entity, &name).ok_or_else(|| {
+                                mlua::Error::runtime(format!("missing clothing attribute {name}"))
+                            })
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_SET_TEXTURE",
+                        scope.create_function(|_, (subject, texture): (Table, Table)| {
+                            let reference: AnyUserData = subject.get("entity")?;
+                            let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
+                            let physical_object: String = texture.get("physObj")?;
+                            let layer: String = texture.get("layer")?;
+                            if entity != actor
+                                || !physical_object.eq_ignore_ascii_case("mainObj")
+                                || !layer.eq_ignore_ascii_case("decal0")
+                            {
+                                return Err(mlua::Error::runtime(
+                                    "unsupported clothing texture recipient",
+                                ));
+                            }
+                            textures.borrow_mut().push(ClothingScriptTexture {
+                                material: texture.get("material")?,
+                                image: texture.get("image")?,
+                            });
+                            Ok(())
+                        })?,
+                    )?;
                     table.set("entity", reference)?;
                     Ok(Some(table))
                 })?,
@@ -203,7 +246,20 @@ pub(super) fn execute_authored_behavior_script_actions(
         }
         match result {
             Ok(Some(result)) if result != "error" && result != "failure" => {
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                let textures = textures.into_inner();
+                if textures.is_empty() {
+                    advance_behavior_task_to_next_action(&mut task, clock.tick);
+                } else {
+                    match clothing.prepare(&task, textures) {
+                        Ok(delivery) => {
+                            commands.entity(actor).insert(delivery);
+                        }
+                        Err(error) => {
+                            warn!(?actor, ?error, "clothing script delivery failed");
+                            super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                        }
+                    }
+                }
             }
             result => {
                 warn!(

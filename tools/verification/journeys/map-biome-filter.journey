@@ -1,0 +1,74 @@
+start main-menu
+click "Freeform Button"
+phase map-selection
+until settled
+capture globe
+# Stock expansion catalogue. Selection events once fed back into the filter (#85),
+# so each filtered list must still hold a moment after it appears.
+phase map-selection
+until rows "Map List" > 13 within 900
+wait 30                         # the list must stay unfiltered
+expect-rows "Map List" > 13
+click "alpine"
+until rows "Map List" == 7
+wait 30                         # the filter must stay applied
+expect-rows "Map List" == 7
+expect-text "Map Biome" "Alpine"
+capture alpine-filter
+click "benthic"
+until rows "Map List" == 3
+wait 30                         # the filter must stay applied
+expect-rows "Map List" == 3
+expect-text "Map Biome" "Benthic"
+capture benthic-filter
+click "alpine"
+until rows "Map List" == 7
+wait 30                         # the filter must stay applied
+expect-rows "Map List" == 7
+expect-text "Map Biome" "Alpine"
+click "all locations"
+until rows "Map List" > 13
+wait 30                         # the list must stay unfiltered
+expect-rows "Map List" > 13
+move "Location List"
+wheel -20
+wait 60                         # the scrolled list must stop before a row in it is clicked
+click "xpack2"
+until rows "Map List" == 13
+wait 30                         # the filter must stay applied
+expect-rows "Map List" == 13
+capture expansion-filter
+move "Location List"
+wheel 20
+wait 60                         # the scrolled list must stop before a row in it is clicked
+click "benthic"
+until rows "Map List" == 3
+wait 30                         # the filter must stay applied
+expect-rows "Map List" == 3
+expect-text "Map Biome" "Benthic"
+# Launch the filtered Alpine fixture later, after the remaining shell checks.
+click "alpine"
+until rows "Map List" == 7
+expect-text "Map Biome" "Alpine"
+key F1
+wait 120
+expect-hidden "ztzoopedia"
+expect zoopedia_visible_title_owners == 0
+expect-visible "Play Map"
+capture map-selection-f1-inactive
+click "Cancel Map"
+phase main-menu
+click "Challenge Button"
+phase map-selection
+until rows "Map List" > 13 within 900
+click "benthic"
+until rows "Map List" == 3
+wait 30
+expect-rows "Map List" == 3
+expect-text "Map Biome" "Benthic"
+capture challenge-benthic-filter
+click "alpine"
+until rows "Map List" == 7
+expect-text "Map Biome" "Alpine"
+click "Cancel Map"
+phase main-menu

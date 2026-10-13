@@ -3,7 +3,7 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::topology::topology_graph_types::{PathTile, TopologyGrid, TopologyIndex};
 
 // Path tiles that only share an edge with a footprint cell do not collide.

@@ -1,34 +1,43 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::staff::staff_job_types::StaffJob;
 use crate::plugins::staff::staff_lifecycle_messages::StaffJobCancelled;
 use crate::plugins::staff::staff_lifecycle_messages::StaffJobRequest;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
 
 use super::maintenance_types::{
-    AnimalHabitatWaste, AnimalHabitatWasteCleaningStaffJobKindMarker, FacilityContainedWaste,
-    LooseLitterSweepingStaffJobKindMarker, LooseLitterWaste, MaintainableObjectConditionPermille,
-    MaintenanceRepairStaffJobKindMarker, WasteContainerEmptyingStaffJobKindMarker,
+    AnimalHabitatWaste, FacilityContainedWaste, LooseLitterSweepingStaffJobKindMarker,
+    LooseLitterWaste, MaintainableObjectConditionPermille, MaintenanceRepairStaffJobKindMarker,
+    WasteContainerEmptyingStaffJobKindMarker,
 };
 
 pub(super) fn request_staff_repairs_for_damaged_maintainable_objects(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    changed_maintainable_objects: Query<
-        (Entity, &DefinitionId, &MaintainableObjectConditionPermille),
-        Changed<MaintainableObjectConditionPermille>,
-    >,
+    maintainable_objects: Query<(
+        Entity,
+        &DefinitionId,
+        Ref<MaintainableObjectConditionPermille>,
+    )>,
     mut staff_job_requests: MessageWriter<StaffJobRequest>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
+    if world_definitions.has_pending_assets() {
+        return;
+    }
+    let policy_changed =
+        world_definition_assets.is_changed() || active_world_definitions.is_changed();
     for (maintainable_object_entity, definition_id, maintainable_object_condition) in
-        &changed_maintainable_objects
+        &maintainable_objects
     {
+        if !policy_changed && !maintainable_object_condition.is_changed() {
+            continue;
+        }
         let Some(maintenance_definition) =
             world_definitions.find_maintenance_by_object(definition_id.0)
         else {
@@ -186,9 +195,6 @@ pub(super) fn classify_spawned_staff_jobs_by_maintenance_work_kind(
             StaffJobKind::SweepLitter => commands
                 .entity(staff_job_entity)
                 .insert(LooseLitterSweepingStaffJobKindMarker),
-            StaffJobKind::CleanHabitat => commands
-                .entity(staff_job_entity)
-                .insert(AnimalHabitatWasteCleaningStaffJobKindMarker),
             _ => continue,
         };
     }

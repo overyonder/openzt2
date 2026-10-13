@@ -2,11 +2,6 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::localization::localization_asset_types::LocalizationAsset;
-use crate::assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::plugins::persistence::profile_types::ProfileIndex;
 use crate::plugins::ui::authored_ui_focus_state::UiFocusable;
 use crate::plugins::ui::authored_ui_image_content_binding::UiImageBinding;
@@ -16,6 +11,11 @@ use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use crate::plugins::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use crate::plugins::ui::authored_ui_selection_state::UiSelected;
 use crate::plugins::ui::authored_ui_text_content_binding::UiTextBinding;
+use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
+use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::shell_selection_types::{ShellSelection, WorldChoice, WorldChoiceView};
 use crate::plugins::ui::authored_ui_action_projection_components::UiShellActions;

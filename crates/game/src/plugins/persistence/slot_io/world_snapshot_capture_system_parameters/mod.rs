@@ -1,9 +1,9 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::assets::species::species_asset_types::SpeciesAsset;
-use crate::assets::species::species_asset_types::SpeciesAssets;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
+use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::{
     animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     aquatic::aquatic_simulation_types::{Tank, TankGeometry, WaterQuality},
@@ -49,6 +49,10 @@ use super::super::{
 
 #[derive(SystemParam)]
 pub(in crate::plugins::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
+    pub(super) habitat_waste:
+        super::maintenance_snapshot_capture::HabitatWasteSnapshotEntities<'w, 's>,
+    pub(super) animals: super::animal_snapshot_capture::AnimalSnapshotEntities<'w, 's>,
+    pub(super) staff: super::staff_snapshot_capture::StaffSnapshotEntities<'w, 's>,
     pub(super) species_assets: Res<'w, Assets<SpeciesAsset>>,
     pub(super) active_species: Res<'w, SpeciesAssets>,
     pub(super) world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
@@ -64,7 +68,7 @@ pub(in crate::plugins::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
         ),
     >,
     pub(super) animal_adoption_offer_inventories:
-        Query<'w, 's, &'static AnimalAdoptionOfferInventory, With<WorldRoot>>,
+        Query<'w, 's, Option<&'static AnimalAdoptionOfferInventory>, With<WorldRoot>>,
     pub(super) tanks_with_snapshot_state: Query<
         'w,
         's,

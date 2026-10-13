@@ -26,7 +26,7 @@ pub(super) fn project_controller_pointer(
     mut events: MessageWriter<PointerInput>,
     mut pressed: Local<[bool; 2]>,
     mut previous_controller: Local<Option<Entity>>,
-    phase: Res<State<crate::application_lifecycle::GamePhase>>,
+    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
     capture: Res<crate::plugins::ui::picking::UiPointerCapture>,
     modal_input: Res<crate::plugins::ui::active_authored_ui_context::AuthoredModalInputCapture>,
 ) {
@@ -73,7 +73,8 @@ pub(super) fn project_controller_pointer(
             window.physical_height().saturating_sub(1) as f32,
         ) / scale,
     );
-    let ui_navigation = *phase.get() != crate::application_lifecycle::GamePhase::InGame
+    let ui_navigation = *phase.get()
+        != openzt2_game_assets::application_lifecycle::GamePhase::InGame
         || capture.over_ui
         || modal_input.0.is_some();
     let next = controller.map_or([false; 2], |(_, gamepad)| {

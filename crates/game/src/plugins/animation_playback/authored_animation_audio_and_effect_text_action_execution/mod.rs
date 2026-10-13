@@ -1,11 +1,9 @@
 use bevy::{audio::AudioSource, prelude::*};
 
-use crate::{
-    assets::effect::{
-        ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
-        StopParticleEffectsAttachedToEntity,
-    },
-    plugins::audio::audio_playback_message_types::PlayAudioClip,
+use crate::plugins::audio::audio_playback_message_types::PlayAudioClip;
+use openzt2_game_assets::effect::{
+    ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
+    StopParticleEffectsAttachedToEntity,
 };
 
 use super::authored_animation_text_action_execution_context::AuthoredAnimationAudioAndEffectTextActionExecutionContext;

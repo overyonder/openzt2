@@ -1,11 +1,11 @@
 use bevy::{gltf::Gltf, prelude::*};
 
-use crate::{
-    assets::animation::animation_set_asset_types::{AnimationClipRecord, AnimationSetAsset},
-    plugins::{
-        animation_playback::animation_playback_controller_types::AnimationPlaybackController,
-        model_render::ModelExpanded, world_spawn::prefab_presentation_types::PrefabModel,
-    },
+use crate::plugins::{
+    animation_playback::animation_playback_controller_types::AnimationPlaybackController,
+    model_render::ModelExpanded, world_spawn::prefab_presentation_types::PrefabModel,
+};
+use openzt2_game_assets::animation::animation_set_asset_types::{
+    AnimationClipRecord, AnimationSetAsset,
 };
 
 use super::model_animation_asset_binding_types::{

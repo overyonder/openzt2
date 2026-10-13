@@ -1,12 +1,13 @@
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
 
-use crate::{
-    assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-    plugins::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
+use crate::plugins::terrain::terrain_chunk_types::{
+    EditedTerrainSamples, TerrainChunk, TerrainIndex,
 };
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 use super::{
+    fence_navigation_policy::FenceNavigationPolicy,
     locomotion_types::{
         Arrived, Destination, DirectLocomotion, Docking, LocomotionMode, NavAgent, Route, Steering,
         Velocity,
@@ -18,6 +19,7 @@ use super::{
 pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     time: Res<Time<Fixed>>,
+    fences: FenceNavigationPolicy,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
@@ -57,7 +59,17 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             .0
             .clamp_length_max(navigation_agent.max_speed_mps);
         let previous_translation = local_transform.translation;
-        local_transform.translation += local_velocity.0 * fixed_delta_seconds;
+        let next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;
+        if fences.gate_blocks_movement(
+            navigation_agent_entity,
+            navigation_agent.capabilities,
+            previous_translation,
+            next_translation,
+        ) {
+            local_velocity.0 = Vec3::ZERO;
+        } else {
+            local_transform.translation = next_translation;
+        }
 
         let locomotion_mode = locomotion_mode.copied().unwrap_or_default();
         if locomotion_mode != LocomotionMode::Flight {

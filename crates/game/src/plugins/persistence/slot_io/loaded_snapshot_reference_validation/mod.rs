@@ -25,6 +25,15 @@ use super::{
 };
 
 pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identifiers(
+    animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
+    baseline_animals: &Query<Entity, With<crate::plugins::animal_lifecycle::types::Animal>>,
+    habitat_waste_records: &[super::maintenance_snapshot_types::HabitatWasteSnapshotRecord],
+    baseline_waste: &Query<
+        Entity,
+        With<crate::plugins::maintenance::maintenance_types::AnimalHabitatWaste>,
+    >,
+    staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
+    baseline_staff: &[Entity],
     tank_snapshot_records: &[TankSnapshotRecord],
     economy_snapshot_records: &EconomySnapshotRecords,
     progression_snapshot_records: &ProgressionSnapshotRecords,
@@ -51,8 +60,35 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     )>,
     progression_snapshot_application_parameters: &ProgressionSnapshotApplicationParameters,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
+    // Animal rows replace the baseline population. Other baseline identities must not collide.
+    let animal_identifiers_are_available = animal_snapshot_records.iter().all(|record| {
+        entities_with_persistent_identifiers
+            .iter()
+            .all(|(entity, id)| {
+                id.0 != record.persistent_identifier || baseline_animals.contains(entity)
+            })
+    });
+    let waste_identifiers_are_available = habitat_waste_records.iter().all(|record| {
+        entities_with_persistent_identifiers
+            .iter()
+            .all(|(entity, id)| {
+                id.0 != record.persistent_identifier || baseline_waste.contains(entity)
+            })
+    });
+    let staff_identifiers_are_available = staff_snapshot_records.iter().all(|record| {
+        entities_with_persistent_identifiers
+            .iter()
+            .all(|(entity, id)| {
+                id.0 != record.persistent_identifier || baseline_staff.contains(&entity)
+            })
+    });
     let existing_persistent_identifiers = entities_with_persistent_identifiers
         .iter()
+        .filter(|(entity, _)| {
+            !baseline_animals.contains(*entity)
+                && !baseline_waste.contains(*entity)
+                && !baseline_staff.contains(entity)
+        })
         .map(|(_, persistent_identifier)| *persistent_identifier)
         .collect::<Vec<_>>();
     let persistent_identifier_exists = |persistent_identifier: PersistentId| {
@@ -95,7 +131,12 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                     && record.performance_records.iter().all(|performance_record| {
                         persistent_identifier_exists(
                             performance_record.performer_persistent_identifier,
-                        )
+                        ) || animal_snapshot_records
+                            .binary_search_by_key(
+                                &performance_record.performer_persistent_identifier.0,
+                                |record| record.persistent_identifier,
+                            )
+                            .is_ok()
                     })
             })
         && show_snapshot_records
@@ -107,7 +148,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
             .all(|record| {
                 photo_challenges_with_mutable_progress
                     .iter_mut()
-                    .any(|(challenge, _)| challenge.row == record.challenge_row_index)
+                    .any(|(challenge, _)| challenge.id == record.challenge_definition_identifier)
             });
 
     let photo_persistent_identifiers = photo_snapshot_records
@@ -205,6 +246,21 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                         .contains_persistent_identifier(*persistent_identifier)
                 }),
         )
+        .chain(
+            animal_snapshot_records
+                .iter()
+                .map(|record| PersistentId(record.persistent_identifier)),
+        )
+        .chain(
+            habitat_waste_records
+                .iter()
+                .map(|record| PersistentId(record.persistent_identifier)),
+        )
+        .chain(
+            staff_snapshot_records
+                .iter()
+                .map(|record| PersistentId(record.persistent_identifier)),
+        )
         .collect::<Vec<_>>();
     imported_persistent_identifiers
         .sort_unstable_by_key(|persistent_identifier| persistent_identifier.0);
@@ -218,7 +274,10 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                     || imported_persistent_identifiers[index - 1] != *persistent_identifier)
         });
 
-    if every_required_existing_entity_is_present
+    if animal_identifiers_are_available
+        && waste_identifiers_are_available
+        && staff_identifiers_are_available
+        && every_required_existing_entity_is_present
         && every_photo_challenge_completion_refers_to_a_saved_photo
         && every_transport_member_and_vehicle_refers_to_a_saved_circuit
         && every_imported_persistent_identifier_is_valid_and_unique

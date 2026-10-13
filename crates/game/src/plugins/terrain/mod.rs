@@ -20,14 +20,14 @@ pub(crate) mod terrain_chunk_presentation_types;
 mod terrain_chunk_render_refresh;
 pub(crate) mod terrain_chunk_types;
 mod terrain_collision_rebuilding;
-mod terrain_collision_rebuilding_types;
+pub(crate) mod terrain_collision_rebuilding_types;
 mod terrain_edit_application;
 pub mod terrain_edit_data_types;
 mod terrain_edit_preparation;
 mod terrain_edit_rectangle_operations;
 pub(crate) mod terrain_edit_types;
 pub(crate) mod terrain_fitted_surface_mesh_construction;
-mod terrain_ground_path_surface_projection;
+pub(crate) mod terrain_ground_path_surface_projection;
 mod terrain_live_brush_application;
 pub(crate) mod terrain_navigation_cell_queries;
 pub mod terrain_navigation_change_types;
@@ -95,12 +95,12 @@ use terrain_water_surface_projection::project_changed_terrain_water_surfaces_and
 use terrain_waterfall_projection::advance_authored_terrain_waterfall_decal_detail_texture_coordinates;
 use water_regions::{project_natural_water_regions, rebuild_edited_water_regions};
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
 use crate::plugins::construction::{
     FixedConstructionPreparedDomainEditMaterializationSet, FixedConstructionSet,
     FixedConstructionTransactionMaterializationSet,
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 /// Registers terrain-owned state and messages. Root integration owns placement in
 /// the shared schedules and render sub-app.
@@ -206,6 +206,10 @@ fn reset_terrain_index(mut index: ResMut<TerrainIndex>) {
     *index = default();
 }
 
+#[cfg(test)]
+mod edited_water_eligibility_tests;
+#[cfg(test)]
+mod terrain_brush_stroke_tests;
 #[cfg(test)]
 mod terrain_brush_weight_tests;
 #[cfg(test)]

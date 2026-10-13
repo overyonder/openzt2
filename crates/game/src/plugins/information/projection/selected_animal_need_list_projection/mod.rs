@@ -3,24 +3,22 @@ use openzt2_game_data::{
     species::NeedKind, ui_document::widget_live_collection::UiWidgetLiveCollectionSource,
 };
 
-use crate::{
-    assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets},
-    plugins::{
-        animal_lifecycle::types::{Animal, SpeciesHandle},
-        animal_welfare::types::{
-            EnvironmentNeed, ExerciseNeed, Hunger, HygieneNeed, PrivacyNeed, RestNeed, SocialNeed,
-            StimulationNeed, Thirst, MAX_NEED_Q16, Q16_ONE,
+use crate::plugins::{
+    animal_lifecycle::types::{Animal, SpeciesHandle},
+    animal_welfare::types::{
+        EnvironmentNeed, ExerciseNeed, Hunger, HygieneNeed, PrivacyNeed, RestNeed, SocialNeed,
+        StimulationNeed, Thirst, MAX_NEED_Q16, Q16_ONE,
+    },
+    ui::{
+        authored_multi_icon_presentation::UiMultiIconPolicy,
+        authored_reusable_list_and_table_runtime_types::{
+            SetUiListRowCount, UiListPolicy, UiListRow,
         },
-        ui::{
-            authored_multi_icon_presentation::UiMultiIconPolicy,
-            authored_reusable_list_and_table_runtime_types::{
-                SetUiListRowCount, UiListPolicy, UiListRow,
-            },
-            authored_ui_node_projection_components::{UiDocumentOwner, UiValue},
-            authored_ui_visual_types::UiVisualLayer,
-        },
+        authored_ui_node_projection_components::{UiDocumentOwner, UiValue},
+        authored_ui_visual_types::UiVisualLayer,
     },
 };
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 
 use super::super::entity_selection_types::InfoPanel;
 

@@ -5,12 +5,12 @@ use bevy::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use crate::plugins::model_render::authored_model_material_pass_projection::PRIMARY_EFFECT_PASS_RENDER_VIEW_LAYER;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use crate::plugins::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use crate::plugins::terrain::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
 use crate::plugins::world_spawn::selected_world_identity::SelectedWorldIdentity;

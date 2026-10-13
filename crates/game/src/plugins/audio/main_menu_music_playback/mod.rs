@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::{
+use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    assets::audio::audio_asset_types::{AudioAsset, AudioAssets},
+    audio::audio_asset_types::{AudioAsset, AudioAssets},
 };
 
 use super::audio_playback_message_types::{PlayAudioCue, StopAudioCue};

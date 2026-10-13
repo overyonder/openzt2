@@ -5,13 +5,12 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 use openzt2_game_data::AssetId;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use crate::plugins::animal_lifecycle::types::Animal;
 use crate::plugins::animal_lifecycle::types::SpeciesHandle;
-use crate::plugins::animal_welfare::types::AnimalWelfare;
 use crate::plugins::economy::facility_economy_types::ServiceFacility;
 use crate::plugins::economy::service_types::ServiceRequest;
 use crate::plugins::information::entity_selection_types::Inspectable;
@@ -24,14 +23,18 @@ use crate::plugins::locomotion::locomotion_types::SpatialGrid;
 use crate::plugins::maintenance::maintenance_types::AnimalHabitatWaste;
 use crate::plugins::maintenance::maintenance_types::LooseLitterWaste;
 use crate::plugins::simulation_time::deterministic_random_stream::DeterministicRng;
+use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::terrain::terrain_world_sampling::sample_terrain;
 use crate::plugins::terrain::terrain_world_sampling::terrain_chunk_at;
+use crate::plugins::transport_tours::transport_rider_types::{TransportRider, WaitingForTransport};
+use crate::plugins::transport_tours::transport_topology_types::TransportStation;
 use crate::plugins::world_spawn::persistent_id_types::PersistentId;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
 use super::guest_simulation_calculations::reached_action;
 use super::guest_simulation_calculations::ReachedAction;
 use super::guest_simulation_types::Guest;
+use super::guest_simulation_types::GuestAmusement;
 use super::guest_simulation_types::GuestArchetype;
 use super::guest_simulation_types::GuestDessert;
 use super::guest_simulation_types::GuestDestination;
@@ -88,6 +91,7 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
             &GuestEnergy,
             &GuestRestroom,
             &GuestSocial,
+            &GuestAmusement,
             &GuestFavouriteAnimal,
             &mut GuestRng,
             &GuestPhase,
@@ -98,6 +102,8 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
             Without<ServiceReservation>,
             Without<BehaviorTaskExecutionState>,
             Without<Viewing>,
+            Without<WaitingForTransport>,
+            Without<TransportRider>,
         ),
     >,
     inspectables: Query<(
@@ -106,6 +112,7 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
         &Inspectable,
         Option<&ServiceFacility>,
     )>,
+    transport_stations: Query<&TransportStation>,
     viewing_areas: Query<(Entity, &GlobalTransform, &Inspectable), With<ViewingOpportunity>>,
     animals: Query<(&GlobalTransform, &Visibility, &SpeciesHandle), With<Animal>>,
     mut commands: Commands,
@@ -126,6 +133,7 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
         energy,
         restroom,
         social,
+        amusement,
         favourite,
         mut rng,
         phase,
@@ -163,6 +171,7 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
                 energy,
                 restroom,
                 social,
+                amusement,
             );
             let pressure = 1_000_u16.saturating_sub(need);
             let threshold = weight
@@ -233,13 +242,37 @@ pub(in crate::plugins::guests) fn choose_guest_destination(
                         {
                             continue;
                         }
+                        let destination = if purpose == GuestVisitPurpose::Tour {
+                            let Ok(station) = transport_stations.get(entity) else {
+                                continue;
+                            };
+                            let Some(station_definition) = asset.find_station(station.definition)
+                            else {
+                                continue;
+                            };
+                            let Some(entry) = station_definition
+                                .passenger_entry_offsets_cm
+                                .into_iter()
+                                .map(|[x, z]| Vec3::new(f32::from(x), 0.0, f32::from(z)) * 0.01)
+                                .map(|offset| transform.transform_point(offset))
+                                .min_by(|left, right| {
+                                    left.distance_squared(origin)
+                                        .total_cmp(&right.distance_squared(origin))
+                                })
+                            else {
+                                continue;
+                            };
+                            entry
+                        } else {
+                            transform.translation()
+                        };
                         let candidate_weight = u64::from(base as u16)
                             * u64::from(pressure.saturating_sub(threshold).saturating_add(1));
                         total_weight = total_weight.saturating_add(candidate_weight);
                         if total_weight != 0
                             && u64::from(rng.0.next_u32()) % total_weight < candidate_weight
                         {
-                            selected = Some((entity, transform.translation(), purpose));
+                            selected = Some((entity, destination, purpose));
                             viewing_target = None;
                         }
                     }
@@ -496,6 +529,7 @@ pub(in crate::plugins::guests) fn cancel_failed_guest_destinations(
     mut guests: Query<&mut GuestNavigationRequest, With<Guest>>,
     arriving_guests: Query<(&GuestPhase, &WorldMember, &NavAgent), With<Guest>>,
     entrances: Query<(&PersistentId, &WorldMember, &ZooEntrance)>,
+    mut reported_entrance_failures: Local<bevy::ecs::entity::EntityHashSet>,
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut navigate: MessageWriter<NavigateTo>,
     mut commands: Commands,
@@ -524,6 +558,11 @@ pub(in crate::plugins::guests) fn cancel_failed_guest_destinations(
             };
             // Visiting guests can choose another activity after a failed route.
             // Arriving guests must reach the gate before admission unlocks that path.
+            if reported_entrance_failures.insert(failure.entity) {
+                warn!(guest = ?failure.entity, reason = ?failure.reason,
+                    entrance = ?entrance.inside,
+                    "arriving guest has no route to the entrance; retrying");
+            }
             let request_id = navigation_request_sequence.next();
             request.0 = Some(request_id);
             navigate.write(NavigateTo {
@@ -538,6 +577,7 @@ pub(in crate::plugins::guests) fn cancel_failed_guest_destinations(
 
 pub(crate) fn begin_viewing(
     mut arrived: MessageReader<Arrived>,
+    mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<
         (
             Entity,
@@ -551,13 +591,27 @@ pub(crate) fn begin_viewing(
     targets: Query<(&Visibility, Option<&ServiceFacility>), With<Inspectable>>,
     mut commands: Commands,
     mut services: MessageWriter<ServiceRequest>,
+    clock: Res<ZooClock>,
 ) {
+    // Both results may be queued before this consumer runs. Failure must win
+    // before an arrival can hand off a service and discard its request identity.
+    let failed_requests: bevy::platform::collections::HashSet<_> = failures
+        .read()
+        .map(|failure| (failure.entity, failure.request_id))
+        .collect();
     for arrival in arrived.read() {
+        if failed_requests.contains(&(arrival.entity, arrival.request_id)) {
+            continue;
+        }
         let Ok((guest, destination, phase, mut request, viewing_target)) =
             guests.get_mut(arrival.entity)
         else {
             continue;
         };
+        // Transport owns Tour arrival, queueing and its eventual fare.
+        if destination.purpose == GuestVisitPurpose::Tour {
+            continue;
+        }
         if *phase != GuestPhase::Visiting
             || request.0 != Some(arrival.request_id)
             || arrival
@@ -586,7 +640,8 @@ pub(crate) fn begin_viewing(
                 let subject = viewing_target.map_or(destination.entity, |target| target.subject);
                 commands.entity(guest).insert(Viewing {
                     subject,
-                    elapsed_ticks: 0,
+                    area: Some(destination.entity),
+                    started_tick: clock.tick,
                 });
                 commands.entity(guest).remove::<GuestViewingTarget>();
             }
@@ -617,34 +672,26 @@ pub(in crate::plugins::guests) fn advance_viewing(
     active_definitions: Res<WorldDefinitions>,
     spatial_query: SpatialQuery,
     parents: Query<&ChildOf>,
-    mut viewers: Query<
+    viewers: Query<
         (
             Entity,
             &GlobalTransform,
             &GuestArchetype,
             &GuestDestination,
-            &mut Viewing,
+            &Viewing,
         ),
         With<Guest>,
     >,
     viewing_areas: Query<&Visibility, With<ViewingOpportunity>>,
-    animals: Query<
-        (
-            &GlobalTransform,
-            &SpeciesHandle,
-            &AnimalWelfare,
-            &Visibility,
-        ),
-        With<Animal>,
-    >,
+    animals: Query<(&GlobalTransform, &Visibility), With<Animal>>,
     mut commands: Commands,
-    mut reactions: MessageWriter<GuestReaction>,
+    clock: Res<ZooClock>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (guest, transform, archetype, destination, mut viewing) in &mut viewers {
-        let Ok((subject_transform, _, _, subject_visibility)) = animals.get(viewing.subject) else {
+    for (guest, transform, archetype, destination, viewing) in &viewers {
+        let Ok((subject_transform, subject_visibility)) = animals.get(viewing.subject) else {
             commands
                 .entity(guest)
                 .remove::<(Viewing, GuestDestination, GuestViewingTarget)>();
@@ -679,18 +726,12 @@ pub(in crate::plugins::guests) fn advance_viewing(
                 .remove::<(Viewing, GuestDestination, GuestViewingTarget)>();
             continue;
         }
-        viewing.elapsed_ticks = viewing.elapsed_ticks.saturating_add(1);
-        if viewing.elapsed_ticks < u64::from(definition.patience_ticks.max(1)) {
+        // Patience only abandons this observation. Authored event delivery owns
+        // viewing rewards; elapsed time cannot stand in for received events.
+        if clock.tick.saturating_sub(viewing.started_tick)
+            < u64::from(definition.patience_ticks.max(1))
+        {
             continue;
-        }
-        if let Some(reaction) = find_reaction(definition, GuestMemoryKind::AnimalView) {
-            reactions.write(GuestReaction {
-                guest,
-                subject: viewing.subject,
-                kind: GuestMemoryKind::AnimalView,
-                satisfaction_delta_permille: reaction.satisfaction_delta,
-                education_delta_permille: reaction.education_delta,
-            });
         }
         commands
             .entity(guest)
@@ -727,6 +768,7 @@ pub(in crate::plugins::guests) fn react_to_visible_litter(
                 continue;
             };
             reactions.write(GuestReaction {
+                view_event: None,
                 guest: *guest,
                 subject,
                 kind: GuestMemoryKind::Litter,

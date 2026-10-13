@@ -5,35 +5,32 @@ use openzt2_game_data::{
     AssetId,
 };
 
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        species::species_asset_types::{SpeciesAsset, SpeciesAssets},
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+use crate::plugins::{
+    animal_health::types::{Dead, Rampaging},
+    animal_lifecycle::types::{
+        Adoptable, Animal, CratingRestricted, ReleaseRestricted, SpeciesHandle,
     },
-    plugins::{
-        animal_health::types::{Dead, Rampaging},
-        animal_lifecycle::types::{
-            Adoptable, Animal, CratingRestricted, ReleaseRestricted, SpeciesHandle,
-        },
-        ui::{
-            authored_multi_icon_presentation::UiMultiIconPolicy,
-            authored_ui_focus_state::UiFocusable,
-            authored_ui_interaction_enabled_binding::UiEnabledBinding,
-            authored_ui_interaction_enabled_state::UiInteractionEnabled,
-            authored_ui_node_projection_components::UiDocumentOwner,
-            authored_ui_node_projection_components::UiDocumentRoot,
-            authored_ui_node_projection_components::UiNodeId,
-            authored_ui_node_projection_components::UiValue,
-            authored_ui_node_projection_components::UiValueBinding,
-            authored_ui_node_projection_components::UiVisibleBinding,
-            authored_ui_text_content_binding::UiTextBinding,
-        },
-        world_spawn::world_entity_crating::WorldEntityIsCrated,
+    ui::{
+        authored_multi_icon_presentation::UiMultiIconPolicy, authored_ui_focus_state::UiFocusable,
+        authored_ui_interaction_enabled_binding::UiEnabledBinding,
+        authored_ui_interaction_enabled_state::UiInteractionEnabled,
+        authored_ui_node_projection_components::UiDocumentOwner,
+        authored_ui_node_projection_components::UiDocumentRoot,
+        authored_ui_node_projection_components::UiNodeId,
+        authored_ui_node_projection_components::UiValue,
+        authored_ui_node_projection_components::UiValueBinding,
+        authored_ui_node_projection_components::UiVisibleBinding,
+        authored_ui_text_content_binding::UiTextBinding,
     },
+    world_spawn::world_entity_crating::WorldEntityIsCrated,
+};
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
+    },
+    species::species_asset_types::{SpeciesAsset, SpeciesAssets},
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 
 use super::super::entity_selection_types::InfoPanel;

@@ -14,6 +14,7 @@ pub mod retained_transform_evaluation;
 
 /// Compiles and evaluates an Effects document through vkd3d-shader and
 /// `MojoShader`'s dependency-owned FX2 evaluator.
+///
 /// Assignments match FX semantics first, then exact variable names.
 /// Parameter-dependent fixed transforms retain their compiled native expression
 /// for later evaluation with independent inputs.

@@ -29,8 +29,8 @@ mod world_selection_presentation_types;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::GameSet;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use shell_navigation_request_types::{
     ChooseWorld, ExitApplication, NavigateShellBack, ReturnToMainMenu, SelectWorldSessionMode,
     ShowDownloads, ShowOptions, ShowSavedGames, SplashFinished, StartSelectedWorld,
@@ -129,6 +129,7 @@ impl Plugin for ShellPlugin {
                         project_selected_world_facts_into_authored_map_selection_controls,
                 )
                     .chain()
+                    .after(shell_ui_action_routing::route_authored_shell_ui_actions_to_navigation_requests)
                     .in_set(crate::plugins::ui::UiSet::Routing)
                     .run_if(in_state(GamePhase::MapSelection)),
             )

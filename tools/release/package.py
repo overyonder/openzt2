@@ -188,7 +188,9 @@ def package(target=None):
         shutil.copy2(WORKSPACE / "README.md", readme / "README")
         shutil.copytree(licenses, readme / "licenses")
         artifact = output / f"{name}.deb"
-        run("dpkg-deb", "--root-owner-group", "--build", str(root), str(artifact))
+        run("bash", str(WORKSPACE / "tools/release/linux/package.sh"),
+            str(root), str(output), version)
+        return
     else:
         raise RuntimeError(f"Unsupported platform: {system}")
     with artifact.open("rb") as stream:

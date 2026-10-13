@@ -4,17 +4,18 @@ use openzt2_game_data::ui_document::{
 };
 use openzt2_game_data::AssetId;
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use crate::assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
-use crate::assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use crate::game_session_types::WorldSessionMode;
 use crate::plugins::ui::authored_globe_presentation_types::UiGlobeBiomeModel;
 use crate::plugins::ui::authored_globe_presentation_types::UiGlobeMarkerVisual;
 use crate::plugins::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use crate::plugins::ui::authored_ui_action_projection_components::UiShellActions;
+use crate::plugins::ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use crate::plugins::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use crate::plugins::ui::authored_ui_selection_state::UiSelected;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
+use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::{
     shell_selection_types::{ShellSelection, WorldChoice, WorldChoiceView},
@@ -29,11 +30,16 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<(&UiDocumentRoot, &ChildOf)>,
     mut action_nodes: Query<
-        (&UiShellActions, &UiDocumentOwner, &mut UiSelected),
+        (
+            &UiShellActions,
+            &UiDocumentOwner,
+            &mut UiSelected,
+            Option<&mut UiPreviousSelection>,
+        ),
         Without<WorldChoiceView>,
     >,
 ) {
-    for (actions, document_owner, mut selected) in &mut action_nodes {
+    for (actions, document_owner, mut selected, previous) in &mut action_nodes {
         let Some((document, filter)) =
             roots.get(document_owner.0).ok().and_then(|(root, owner)| {
                 documents
@@ -70,6 +76,10 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
         if let Some(matches_selected_filter) = matches_selected_filter {
             if selected.0 != matches_selected_filter {
                 selected.0 = matches_selected_filter;
+            }
+            // Reflecting shell state must not replay the toggle's authored on/off actions.
+            if let Some(mut previous) = previous {
+                previous.synchronize_with_non_authored_selection_change(matches_selected_filter);
             }
         }
     }

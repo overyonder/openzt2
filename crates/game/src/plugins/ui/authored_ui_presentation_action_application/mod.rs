@@ -4,24 +4,24 @@ use openzt2_game_data::ui_document::action::presentation::{
 };
 use openzt2_game_data::ui_document::action::UiTrigger;
 
-use crate::{
-    assets::{
-        localization::{
-            localization_asset_types::LocalizationAsset,
-            localization_precedence_index::LocalizationPrecedenceIndex,
-        },
-        ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
+use crate::plugins::audio::audio_playback_message_types::PlayAudioClip;
+use openzt2_game_assets::{
+    localization::{
+        localization_asset_types::LocalizationAsset,
+        localization_precedence_index::LocalizationPrecedenceIndex,
     },
-    plugins::audio::audio_playback_message_types::PlayAudioClip,
+    ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 
 use super::authored_ui_visual_types::UiSourceRect;
 use super::{
     animation::UiShowHideAnimation,
     authored_modal_presentation::UiAuthoredModalPresentation,
+    authored_reusable_list_and_table_runtime_types::UiTypeListPolicy,
     authored_timed_action_sequence::UiAuthoredTimedActionSequencePlayback,
     authored_tooltip_presentation::{UiLongTooltipKey, UiShortTooltipKey},
     authored_tree_expansion_and_row_indentation::UiAuthoredTreeExpansion,
+    authored_ui_change_activation_dispatch::UiPreviousSelection,
     authored_ui_focus_navigation_and_activation::choose_wrapped_authored_ui_focus_candidate,
     authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable},
     authored_ui_integer_range_components::{UiMaximum, UiMinimum},
@@ -34,7 +34,6 @@ use super::{
     cursor::UiCursorStyle,
     localized_countdown_presentation::UiLocalizedCountdownPresentation,
     slider::{UiSliderAxis, UiSliderPolicy},
-    ui_document_lifecycle_contracts::ShowUiRole,
 };
 use crate::plugins::ui::authored_ui_action_projection_components::UiPresentationActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -129,6 +128,8 @@ pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
     >,
     emote_presentations:
         Query<'w, 's, &'static mut Visibility, (With<EmotePresentation>, Without<UiNodeId>)>,
+    visibilities: Query<'w, 's, &'static InheritedVisibility>,
+    type_list_selections: Query<'w, 's, &'static mut UiPreviousSelection, With<UiTypeListPolicy>>,
 }
 
 /// Applies authored presentation actions to their projected Bevy-tree,
@@ -146,7 +147,10 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
     children: Query<&Children>,
     queries: UiPresentationActionApplicationQueries,
     mut enable_changes: MessageWriter<SetAuthoredUiNodeInteractionEnabled>,
-    mut show_roles: MessageWriter<ShowUiRole>,
+    mut show_roles: ResMut<super::ui_document_lifecycle_contracts::UiRoleRequests>,
+    control: Option<
+        Res<crate::plugins::simulation_time::simulation_control_types::SimulationControl>,
+    >,
     mut sounds: MessageWriter<PlayAudioClip>,
 ) {
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
@@ -164,6 +168,8 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
         mut localized_countdown_presentations,
         mut authored_timed_action_sequence_playbacks,
         mut emote_presentations,
+        visibilities,
+        mut type_list_selections,
     } = queries;
     let mut pending_actions = Vec::new();
     for activation in activations.read() {
@@ -220,10 +226,13 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
             );
             match &record.action {
                 UiPresentationAction::ShowDocumentRole { document_role } => {
-                    show_roles.write(ShowUiRole {
-                        role: *document_role,
-                        owner: lifecycle_owner.parent(),
-                    });
+                    show_roles.request_preserving_temporary_pause(
+                        *document_role,
+                        lifecycle_owner.parent(),
+                        control
+                            .as_deref()
+                            .is_some_and(|control| control.temporary_ui_pause_is_held()),
+                    );
                 }
                 UiPresentationAction::SetDocumentNodeVisible {
                     document_role,
@@ -236,17 +245,25 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
                         *document_role,
                         openzt2_game_data::AssetId(target_node.0),
                         *visible,
+                        control
+                            .as_deref()
+                            .is_some_and(|control| control.temporary_ui_pause_is_held()),
                     );
                     if *visible {
-                        show_roles.write(ShowUiRole {
-                            role: *document_role,
-                            owner: lifecycle_owner.parent(),
-                        });
+                        show_roles.request(*document_role, lifecycle_owner.parent());
                     }
                 }
                 UiPresentationAction::HideDocumentRole { document_role } => {
                     let document_role = *document_role;
                     let lifecycle_owner = lifecycle_owner.parent();
+                    show_roles.cancel(lifecycle_owner, Some(document_role));
+                    commands.queue(move |world: &mut World| {
+                        super::projection::cancel_pending_ui_role_projection(
+                            world,
+                            lifecycle_owner,
+                            document_role,
+                        );
+                    });
                     for (candidate, root, parent) in &roots {
                         if parent.parent() != lifecycle_owner {
                             continue;
@@ -271,9 +288,21 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
                 }
                 UiPresentationAction::ActivateTargetNodeWithPress { target_node } => {
                     let target_node = openzt2_game_data::AssetId(target_node.0);
-                    if let Some((entity, ..)) = nodes.iter_mut().find(|(_, id, owner, ..)| {
-                        owner.0 == source_owner.0 && id.id == target_node
-                    }) {
+                    // Authored names repeat across sibling dialogs, such as each
+                    // confirmation's "cancel". Press the one the player can see.
+                    let mut targets = nodes
+                        .iter()
+                        .filter(|(_, id, owner, ..)| {
+                            owner.0 == source_owner.0 && id.id == target_node
+                        })
+                        .map(|(entity, ..)| entity)
+                        .collect::<Vec<_>>();
+                    targets.sort_by_key(|entity| {
+                        !visibilities
+                            .get(*entity)
+                            .is_ok_and(|visibility| visibility.get())
+                    });
+                    if let Some(entity) = targets.first().copied() {
                         let source = activation.source;
                         commands.queue(move |world: &mut World| {
                             world.write_message(UiNodeActivated {
@@ -368,6 +397,24 @@ pub(in crate::plugins::ui) fn apply_authored_ui_presentation_actions_to_projecte
                         {
                             if let Some(mut selected) = selected {
                                 selected.0 = *active;
+                            }
+                            if let Some(mut previous) = type_list_selections
+                                .get_mut(entity)
+                                .ok()
+                                .filter(|_| *active)
+                            {
+                                // A TypeList activation restores its remembered child even
+                                // when its own selection boolean was already on. Consume
+                                // the selection echo so this authored request runs once.
+                                previous.synchronize_with_non_authored_selection_change(true);
+                                let source = activation.source;
+                                commands.queue(move |world: &mut World| {
+                                    world.write_message(UiNodeActivated {
+                                        source,
+                                        node: entity,
+                                        trigger: UiTrigger::On,
+                                    });
+                                });
                             }
                         }
                     }

@@ -4,7 +4,6 @@ use super::authored_globe_presentation_types::UiGlobePrefab;
 use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
 use super::authored_globe_presentation_types::UiGlobeRenderScene;
 use super::authored_globe_presentation_types::UiGlobeSceneOwner;
-use crate::assets::scene_prefab::ScenePrefabAsset;
 use crate::plugins::shell::shell_selection_types::WorldChoiceView;
 use crate::plugins::ui::authored_globe_presentation_types::UiGlobeBiomeAsset;
 use crate::plugins::ui::authored_globe_presentation_types::UiGlobeBiomeModel;
@@ -17,6 +16,7 @@ use crate::plugins::world_spawn::prefab_presentation_render_tree::spawn_prefab_r
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::ClearColorConfig;
 use bevy::prelude::*;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 const GLOBE_RENDER_LAYER: usize = 31;
 

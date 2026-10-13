@@ -3,10 +3,10 @@ use openzt2_game_data::world_definitions::camera_definitions::{
     CameraProjectionKind, CameraTuningDefinition,
 };
 
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use crate::plugins::settings::graphics_settings_types::GraphicsSettings;
-use crate::plugins::settings::graphics_settings_types::ThreeLevelGraphicsDetail;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail;
 use crate::plugins::world_spawn::world_membership_types::WorldMember;
 use crate::plugins::world_spawn::world_membership_types::WorldRoot;
 use crate::plugins::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;

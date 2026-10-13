@@ -4,19 +4,17 @@ use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
 
-use crate::{
-    assets::scene_prefab::ScenePrefabAsset,
-    plugins::{
-        construction::construction_tool_and_placement_policy_types::ConstructionTool,
-        habitat::habitat_types::HabitatLocatable,
-        world_spawn::{
-            persistent_id_types::PersistentId,
-            prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
-            prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance,
-            world_membership_types::WorldMember,
-        },
+use crate::plugins::{
+    construction::construction_tool_and_placement_policy_types::ConstructionTool,
+    habitat::habitat_types::HabitatLocatable,
+    world_spawn::{
+        persistent_id_types::PersistentId,
+        prefab_model_readiness::first_missing_prefab_collider_model_asset_id,
+        prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance,
+        world_membership_types::WorldMember,
     },
 };
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 use super::{
     object_placement_definition_queries::{
@@ -45,7 +43,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     commands: &mut Commands,
     transaction: Entity,
     edit: &mut PreparedObjectPlacementMutation,
-    catalogue: crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     root: Option<Entity>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,

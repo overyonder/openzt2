@@ -124,6 +124,10 @@ pub struct TerrainUnits {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "ground cover, water surface, path exclusion and height links preserve independent authored terrain flags"
+)]
 pub struct TerrainSample {
     pub height_relative_to_base_metres: f32,
     pub biome_index: u8,

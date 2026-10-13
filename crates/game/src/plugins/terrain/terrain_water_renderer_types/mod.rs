@@ -1,7 +1,7 @@
 use super::terrain_water_geometric_wave_shader_state::NativeTerrainWaterGeometricWaveShaderState;
-use crate::assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use crate::assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use bevy::prelude::*;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
 pub(crate) const TERRAIN_WATER_RENDER_LAYER: usize = 3;
 pub(super) const WATER_BUMP_COMBINATION_RENDER_LAYER: usize = 4;

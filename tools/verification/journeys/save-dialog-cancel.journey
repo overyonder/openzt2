@@ -1,0 +1,369 @@
+# Save cancellation and reopening through the in-game hotkeys (#40).
+# Inspect profile files before/after: cancelled names must never create a save.
+start freeform-map
+expect simulation_paused == 0
+expect pending_load_after_save == 0
+snapshot before-save-cancellation
+# First projection must preserve the confirmation's hold for the whole transfer.
+key F6
+until visible "save current game"
+until simulation_paused == 1 within 120
+click "save_button"
+until visible "Save Game Shell"
+until hidden "save current game"
+until pending_load_after_save == 1 within 120
+expect simulation_paused == 1
+expect save_pause_transfer_requests == 1
+expect save_pause_transfer_cold_requests == 1
+expect save_pause_transfer_completions == 1
+expect save_pause_receiver_hold_acquired == 1
+expect save_pause_transfer_pending == 0
+expect save_pause_transfer_observed_frames >= 1
+expect save_pause_transfer_pending_frames >= 1
+expect save_pause_transfer_unpaused_frames == 0
+expect save_pause_transfer_advanced_ticks == 0
+capture cold-load-save-receiver
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+until pending_load_after_save == 0 within 120
+until simulation_paused == @before-save-cancellation within 120
+wait 120
+expect simulation_paused == @before-save-cancellation
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+key F5
+until visible "Save Game Shell"
+until simulation_paused == 1 within 120
+expect-visible "SaveName"
+expect-visible "TextButton Cancel"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Cancelled Save"
+until text "SaveName" "Cancelled Save" within 120
+capture save-cancel-draft
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+until simulation_paused == @before-save-cancellation within 120
+wait 30
+expect simulation_paused == @before-save-cancellation
+key F5
+until visible "Save Game Shell"
+expect-visible "Save Game Button"
+key ESCAPE
+until hidden "Save Game Shell"
+until simulation_paused == @before-save-cancellation within 120
+wait 30
+expect simulation_paused == @before-save-cancellation
+# Release text focus through the authored prompt before ordinary P input.
+# Each accepted toggle changes the requested state while effective pause holds.
+expect simulation_pause_toggle_requests == 0
+key F5
+until visible "Save Game Shell"
+click "SaveName"
+click "SavePrompt"
+expect simulation_requested_paused == 0
+key P
+until simulation_requested_paused == 1 within 120
+expect simulation_pause_toggle_requests == 1
+expect simulation_paused == 1
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+wait 30
+expect simulation_paused == 1
+key P
+until simulation_paused == 0 within 120
+expect simulation_pause_toggle_requests == 2
+key F5
+until visible "Save Game Shell"
+click "SaveName"
+click "SavePrompt"
+key P
+until simulation_requested_paused == 1 within 120
+expect simulation_pause_toggle_requests == 3
+expect simulation_paused == 1
+key P
+until simulation_requested_paused == 0 within 120
+expect simulation_pause_toggle_requests == 4
+expect simulation_paused == 1
+key ESCAPE
+until hidden "Save Game Shell"
+wait 30
+expect simulation_paused == 0
+# F6 offers to save before loading; cancelling the save abandons that request.
+# The authored overhead F6 has no dirty-world predicate.
+key F6
+until visible "save current game"
+until simulation_paused == 1 within 120
+expect-visible "save_button"
+expect-visible "no_button"
+expect pending_load_after_save == 0
+click "save_button"
+until visible "Save Game Shell"
+until hidden "save current game"
+until pending_load_after_save == 1 within 120
+expect simulation_paused == 1
+expect-hidden "Load Game Shell"
+click "SaveName"
+key END
+key BACKSPACE 40
+type "Cancelled Load Save"
+until text "SaveName" "Cancelled Load Save" within 120
+capture load-save-cancel-draft
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+until pending_load_after_save == 0 within 120
+until simulation_paused == @before-save-cancellation within 120
+wait 120                        # the abandoned load must not open afterwards
+expect simulation_paused == @before-save-cancellation
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+# Repeat the same save-before-load choice, cancelling its Save dialog with Escape.
+key F6
+until visible "save current game"
+click "save_button"
+until visible "Save Game Shell"
+until hidden "save current game"
+until pending_load_after_save == 1 within 120
+expect simulation_paused == 1
+click "SaveName"
+key ESCAPE
+until hidden "Save Game Shell"
+until pending_load_after_save == 0 within 120
+until simulation_paused == @before-save-cancellation within 120
+wait 120
+expect simulation_paused == @before-save-cancellation
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+expect pending_load_after_save == 0
+# The options overlay transfers to Save, which outlives the closing options.
+key ESCAPE
+until visible "In Game Options"
+until simulation_paused == 1 within 120
+move "TextButton Save Hover"
+until visible "TextButton Save"
+click "TextButton Save"
+until visible "Save Game Shell"
+until hidden "In Game Options"
+expect simulation_paused == 1
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+until simulation_paused == @before-save-cancellation within 120
+wait 120
+expect simulation_paused == @before-save-cancellation
+expect-hidden "Load Game Shell"
+expect pending_load_after_save == 0
+# Repeat all four cancellation paths after an ordinary player pause.
+key P
+until simulation_paused == 1 within 120
+snapshot before-paused-save-cancellation
+key F5
+until visible "Save Game Shell"
+click "SaveName"
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+wait 120
+expect simulation_paused == @before-paused-save-cancellation
+expect pending_load_after_save == 0
+expect-hidden "Load Game Shell"
+key F5
+until visible "Save Game Shell"
+key ESCAPE
+until hidden "Save Game Shell"
+wait 120
+expect simulation_paused == @before-paused-save-cancellation
+key F6
+until visible "save current game"
+expect simulation_paused == @before-paused-save-cancellation
+click "save_button"
+until visible "Save Game Shell"
+until hidden "save current game"
+until pending_load_after_save == 1 within 120
+expect simulation_paused == @before-paused-save-cancellation
+click "SaveName"
+click "TextButton Cancel"
+until hidden "Save Game Shell"
+until pending_load_after_save == 0 within 120
+wait 120
+expect simulation_paused == @before-paused-save-cancellation
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+key F6
+until visible "save current game"
+click "save_button"
+until visible "Save Game Shell"
+until hidden "save current game"
+until pending_load_after_save == 1 within 120
+expect simulation_paused == @before-paused-save-cancellation
+click "SaveName"
+key ESCAPE
+until hidden "Save Game Shell"
+until pending_load_after_save == 0 within 120
+wait 120
+expect simulation_paused == @before-paused-save-cancellation
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+key ESCAPE
+until visible "In Game Options"
+move "TextButton Save Hover"
+until visible "TextButton Save"
+click "TextButton Save"
+until visible "Save Game Shell"
+until hidden "In Game Options"
+expect simulation_paused == @before-paused-save-cancellation
+key ESCAPE
+until hidden "Save Game Shell"
+wait 120
+expect simulation_paused == @before-paused-save-cancellation
+expect pending_load_after_save == 0
+expect-hidden "Load Game Shell"
+expect-hidden "save current game"
+expect world_snapshot_save_requests == @before-save-cancellation
+expect world_snapshot_load_requests == @before-save-cancellation
+expect world_snapshot_save_completions == @before-save-cancellation
+expect world_snapshot_load_completions == @before-save-cancellation
+expect phase == @entered-map
+expect save_pause_transfer_unpaused_frames == 0
+expect save_pause_transfer_advanced_ticks == 0
+key P
+until simulation_paused == @before-save-cancellation within 120
+
+# Check controller and options cancellation in the same map.
+open-game-options
+key ESCAPE
+until hidden "In Game Options"
+until placement_previews == 0
+until construction_tool_active == 0
+# East cancels the in-game modal without leaking to its gameplay binding.
+# This shares the map and menu lifecycle rather than loading a map for the device.
+gamepad-connect
+until controller_connected_devices == 1 within 60
+expect simulation_paused == 0
+until steady camera_x_m 20 within 120
+until steady camera_z_m 20 within 120
+until steady camera_height_m 20 within 120
+snapshot controller-running-world
+key ESCAPE
+until visible "In Game Options"
+expect simulation_paused == 1
+gamepad-button EAST
+until hidden "In Game Options"
+until simulation_paused == 0
+wait 60
+expect phase == @controller-running-world
+expect selected == @controller-running-world
+expect construction_tool_active == @controller-running-world
+expect placement_previews == @controller-running-world
+expect camera_x_m == @controller-running-world
+expect camera_z_m == @controller-running-world
+expect camera_height_m == @controller-running-world
+expect controller_confirm_requests == 0
+expect controller_cancel_requests == 1
+expect controller_ui_press_activations == 1
+expect controller_primary_pointer_requests == 0
+expect controller_other_requests == 0
+expect controller_held_buttons == 0
+expect controller_primary_pointer_held == 0
+expect-hidden "In Game Options"
+capture controller-in-game-cancelled
+gamepad-disconnect
+until controller_connected_devices == 0 within 60
+expect controller_held_buttons == 0
+expect controller_active_device == 0
+expect controller_primary_pointer_held == 0
+
+# Keyboard and pointer navigation below must still work after disconnection.
+expect simulation_paused == 0
+# Start from the plain zoo view, where Escape opens the options.
+key ESCAPE
+until visible "In Game Options"
+expect simulation_paused == 1
+expect-visible "TextButton Cancel Hover"
+capture in-game-options-open
+# Cancel is revealed by its authored hover control before it can receive a click.
+move "TextButton Cancel Hover"
+until visible "TextButton Cancel"
+click "TextButton Cancel"
+until hidden "In Game Options"
+expect phase == @entered-map
+until simulation_paused == 0
+key ESCAPE
+until visible "In Game Options"
+expect simulation_paused == 1
+key ESCAPE
+until hidden "In Game Options"
+expect phase == @entered-map
+until simulation_paused == 0
+# Dismissing the overlay must preserve a pause that preceded opening it.
+key P
+until simulation_paused == 1
+key ESCAPE
+until visible "In Game Options"
+expect-visible "TextButton Cancel Hover"
+move "TextButton Cancel Hover"
+until visible "TextButton Cancel"
+click "TextButton Cancel"
+until hidden "In Game Options"
+wait 30                         # the overlay restores the earlier pause state as it closes
+expect phase == @entered-map
+expect simulation_paused == 1
+key ESCAPE
+until visible "In Game Options"
+key ESCAPE
+until hidden "In Game Options"
+wait 30                         # the overlay restores the earlier pause state as it closes
+expect phase == @entered-map
+expect simulation_paused == 1
+capture in-game-options-preserved-pause
+key P
+until simulation_paused == 0
+
+snapshot gameplay-before-zoopedia
+key F1
+until visible "ztzoopedia"
+until zoopedia_visible_title_glyphs > 0 within 120
+until zoopedia_visible_body_glyphs > 0 within 120
+expect zoopedia_visible_title_owners == 1
+expect-visible "entry name"
+until rows "TOC" >= 1
+capture gameplay-f1-zoopedia
+# The modal's own receiver retains Escape; another F1 must not open a second page.
+key F1
+wait 120
+expect zoopedia_visible_title_owners == 1
+key ESCAPE
+until hidden "ztzoopedia"
+until simulation_paused == @gameplay-before-zoopedia within 120
+expect zoopedia_visible_title_owners == 0
+expect-visible "MainGUI"
+# Reopen and dismiss with the authored visible control as well.
+key F1
+until visible "ztzoopedia"
+until zoopedia_visible_body_glyphs > 0 within 120
+click "return"
+until hidden "ztzoopedia"
+until simulation_paused == @gameplay-before-zoopedia within 120
+# An unrelated authored modal captures F1 before it can reach the HUD.
+key F6
+until visible "save current game"
+key F1
+wait 120
+expect-visible "save current game"
+expect-hidden "ztzoopedia"
+key ESCAPE
+until hidden "save current game"
+# Ordinary SaveName focus also keeps the shortcut out of the text editor.
+key F5
+until visible "Save Game Shell"
+click "SaveName"
+key F1
+wait 120
+expect-visible "Save Game Shell"
+expect-hidden "ztzoopedia"
+expect zoopedia_visible_title_owners == 0
+capture focused-save-name-f1-inactive
+key ESCAPE
+until hidden "Save Game Shell"
+until simulation_paused == @gameplay-before-zoopedia within 120
+
+restore freeform-map

@@ -29,6 +29,7 @@ fn paired_tasks() -> (App, Entity, Entity) {
         action: 3,
         repetitions: 0,
         next_action_tick: 0,
+        object: None,
         interaction_slot: Some(0),
         stack: Default::default(),
     };

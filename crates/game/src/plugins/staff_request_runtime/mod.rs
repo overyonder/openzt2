@@ -7,10 +7,10 @@ mod threshold_evaluation;
 use bevy::prelude::*;
 
 use crate::{
-    application_lifecycle::GamePhase,
     application_schedule::FixedGameSet,
     plugins::{feeding::ContainerQuantityHydration, staff::staff_job_request_creation},
 };
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 pub(crate) struct StaffRequestRuntimePlugin;
 

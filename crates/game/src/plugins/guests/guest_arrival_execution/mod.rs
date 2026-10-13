@@ -11,8 +11,8 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedDefinition;
 use openzt2_game_data::AssetId;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_lifecycle::types::SpeciesHandle;
 use crate::plugins::economy::facility_economy_types::Wallet;
 use crate::plugins::economy::guest_admission_types::AdmissionPrice;
@@ -20,6 +20,7 @@ use crate::plugins::economy::guest_admission_types::ZooAdmissionsOpen;
 use crate::plugins::economy::money_types::Money;
 use crate::plugins::information::entity_selection_types::Inspectable;
 use crate::plugins::locomotion::locomotion_types::NavAgent;
+use crate::plugins::locomotion::locomotion_types::SpatialGrid;
 use crate::plugins::locomotion::locomotion_types::NavFlags;
 use crate::plugins::locomotion::locomotion_types::NavigateTo;
 use crate::plugins::locomotion::locomotion_types::NavigationRequestSequence;
@@ -124,8 +125,10 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
             &'static PersistentId,
             &'static WorldMember,
             &'static ZooEntrance,
+            &'static GlobalTransform,
         ),
     >,
+    grid: Res<'w, SpatialGrid>,
     guests: Query<'w, 's, &'static WorldMember, With<Guest>>,
     animals: Query<'w, 's, &'static SpeciesHandle>,
     seen_species: Local<'s, ArrayVec<AssetId, 512>>,
@@ -148,6 +151,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         mut ids,
         roots,
         entrances,
+        grid,
         guests,
         animals,
         mut seen_species,
@@ -185,16 +189,20 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         });
         return;
     };
-    let Some((_, member, entrance)) = entrances
+    let Some((_, member, entrance, gate)) = entrances
         .iter()
-        .filter(|(_, member, _)| member.root == root)
-        .min_by_key(|(id, _, _)| id.0)
+        .filter(|(_, member, _, _)| member.root == root)
+        .min_by_key(|(id, _, _, _)| id.0)
     else {
         failed.write(GuestArrivalFailed {
             reason: GuestArrivalFailure::MissingEntrance,
         });
         return;
     };
+    // Arrival points are clamped to the navigation grid; wait until it exists.
+    if grid.width == 0 || grid.height == 0 {
+        return;
+    }
     if scheduled_due && forced_count == 0 && !policy.enabled {
         state.next_tick = clock.tick.saturating_add(1);
         return;
@@ -230,6 +238,17 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         0
     };
     let count = forced_count.saturating_add(scheduled_count);
+    if scheduled_due || forced_count != 0 {
+        debug!(
+            tick = clock.tick,
+            next_tick = state.next_tick,
+            forced_count,
+            scheduled_count,
+            population,
+            cap,
+            "guest arrival check"
+        );
+    }
 
     for _ in 0..count {
         let rarity = choose_guest_rarity(policy.rarity_thresholds, &mut state.rng);
@@ -239,16 +258,25 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         let guest_id = definition.id;
         if guest_need_rows(definition).is_none() {
             failed.write(GuestArrivalFailed {
-                reason: GuestArrivalFailure::InvalidDefinition(guest_id),
+                reason: GuestArrivalFailure::MissingNeedRows(guest_id),
             });
             continue;
         }
-        let Some(prefab) = definitions
-            .find_object(definition.object)
-            .and_then(|object| definitions.scene(object.prefab))
-        else {
+        let Some(object) = definitions.find_object(definition.object) else {
             failed.write(GuestArrivalFailed {
-                reason: GuestArrivalFailure::InvalidDefinition(guest_id),
+                reason: GuestArrivalFailure::MissingObject {
+                    guest: guest_id,
+                    object: definition.object,
+                },
+            });
+            continue;
+        };
+        let Some(prefab) = definitions.scene(object.prefab) else {
+            failed.write(GuestArrivalFailed {
+                reason: GuestArrivalFailure::MissingPrefabScene {
+                    guest: guest_id,
+                    prefab: object.prefab,
+                },
             });
             continue;
         };
@@ -265,9 +293,20 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         let cash_high = definition.starting_cash_cents[1];
         let cash_width = i64::from(cash_high) - i64::from(cash_low) + 1;
         let cash = i64::from(cash_low) + i64::from(state.rng.next_u32()) % cash_width.max(1);
-        let position = guest_arrival_position(policy, entrance.arrival, &mut state.rng);
+        let Some(position) = guest_arrival_position(
+            policy,
+            entrance.arrival,
+            gate.rotation(),
+            &grid,
+            &mut state.rng,
+        ) else {
+            break;
+        };
         let favourite = (!seen_species.is_empty())
             .then(|| seen_species[state.rng.next_u32() as usize % seen_species.len()]);
+        debug!(tick = clock.tick, guest = ?guest_id, ?position, entrance = ?entrance.inside,
+            distance_m = position.xz().distance(entrance.inside.xz()),
+            "guest spawned for arrival at its displaced entrance point");
         let request_id = navigation_request_sequence.next();
         let entity = commands
             .spawn((
@@ -368,7 +407,7 @@ pub(crate) fn initialize_spawned_guests(
                 residual_q16: 0,
             },
             GuestAmusement {
-                value: 1_000,
+                value: initial_needs[7],
                 residual_q16: 0,
             },
             definition

@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use crate::assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 
 /// A selected placed object being repositioned by the ordinary object-placement
 /// preview and transaction path. The marker retains only the source entity relationship.
@@ -78,10 +78,15 @@ pub(crate) struct ObjectPlacementPreviewMaterials {
     pub model_invalid: Color,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq)]
 pub(crate) struct ObjectPlacementPreviewVisualState {
     pub eighth_turns: u8,
     pub valid: bool,
+    pub footprint_translations: Vec<Vec3>,
+    pub decal_rotation: Quat,
+    pub footprint_material: Handle<StandardMaterial>,
+    pub grid_material: Handle<StandardMaterial>,
+    pub grid_radius: f32,
 }
 
 #[derive(Component, Debug, Clone)]

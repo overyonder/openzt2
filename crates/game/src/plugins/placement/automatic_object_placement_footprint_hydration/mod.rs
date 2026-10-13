@@ -2,19 +2,16 @@
 
 use bevy::{platform::collections::HashSet, prelude::*};
 
-use crate::{
-    assets::{
-        scene_prefab::ScenePrefabAsset,
-        world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
-        world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+use crate::plugins::{
+    construction::construction_interaction_types::ConstructionPreview,
+    world_spawn::{
+        prefab_source_asset_handle::PrefabSourceAssetHandle, world_membership_types::DefinitionId,
     },
-    plugins::{
-        construction::construction_interaction_types::ConstructionPreview,
-        world_spawn::{
-            prefab_source_asset_handle::PrefabSourceAssetHandle,
-            world_membership_types::DefinitionId,
-        },
-    },
+};
+use openzt2_game_assets::{
+    scene_prefab::ScenePrefabAsset,
+    world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 
 use super::ObjectPlacementPrefabSource;

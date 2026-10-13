@@ -1,6 +1,6 @@
 use bevy::{asset::UntypedAssetId, prelude::*};
 
-use crate::assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 /// Root and visibility choice for the main-menu mod controls.
 #[derive(Component, Default)]

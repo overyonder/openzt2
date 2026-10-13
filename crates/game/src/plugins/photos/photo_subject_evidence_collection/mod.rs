@@ -1,39 +1,37 @@
 use avian3d::prelude::{ColliderAabb, RigidBodyColliders, SpatialQuery, SpatialQueryFilter};
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::extinct_animals::fossil_collection_and_assembly_types::FossilSetAssembly;
 
-use crate::{
-    assets::animation::animation_set_asset_types::AnimationSetAsset,
-    plugins::{
-        animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy,
-        animal_health::types::{Disease, Vitality},
-        animal_lifecycle::types::{
-            AnimalLifeStage, AnimalVariant, EndangeredSpecies, Parents, SpeciesHandle,
-        },
-        animal_welfare::types::{
-            EnvironmentNeed, ExerciseNeed, HealthNeed, Hunger, HygieneNeed, PrivacyNeed, RestNeed,
-            SocialNeed, StimulationNeed, Thirst,
-        },
-        animation_graph::{
-            animation_graph_playback_state_types::AnimationGraphPlaybackState,
-            animation_presentation_relationship_types::AnimationPresentationOwner,
-        },
-        animation_playback::animation_playback_controller_types::AnimationPlaybackController,
-        aquatic::aquatic_simulation_types::AquaticAnimal,
-        behavior_task_execution_types::{BehaviorTaskExecutionPhase, BehaviorTaskExecutionState},
-        extinct_animals::extinct_animal_observable_fact_types::{
-            AuthoredSuperExtinctAnimal, FossilEducationProgress,
-        },
-        guests::guest_simulation_types::GuestArchetype,
-        habitat::habitat_types::{Containment, HabitatClimate, HabitatMember},
-        information::entity_selection_types::Inspectable,
-        world_spawn::world_membership_types::DefinitionId,
+use crate::plugins::{
+    animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy,
+    animal_health::types::{Disease, Vitality},
+    animal_lifecycle::types::{
+        AnimalLifeStage, AnimalVariant, EndangeredSpecies, Parents, SpeciesHandle,
     },
+    animal_welfare::types::{
+        EnvironmentNeed, ExerciseNeed, HealthNeed, Hunger, HygieneNeed, PrivacyNeed, RestNeed,
+        SocialNeed, StimulationNeed, Thirst,
+    },
+    animation_graph::{
+        animation_graph_playback_state_types::AnimationGraphPlaybackState,
+        animation_presentation_relationship_types::AnimationPresentationOwner,
+    },
+    animation_playback::animation_playback_controller_types::AnimationPlaybackController,
+    aquatic::aquatic_simulation_types::AquaticAnimal,
+    behavior_task_execution_types::{BehaviorTaskExecutionPhase, BehaviorTaskExecutionState},
+    extinct_animals::extinct_animal_observable_fact_types::{
+        AuthoredSuperExtinctAnimal, FossilEducationProgress,
+    },
+    guests::guest_simulation_types::GuestArchetype,
+    habitat::habitat_types::{Containment, HabitatClimate, HabitatMember},
+    information::entity_selection_types::Inspectable,
+    world_spawn::world_membership_types::DefinitionId,
 };
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 
 use super::photo_capture_types::{
     PendingPhotoCapture, PendingPhotoEvidence, PendingPhotoSemantics, PhotoEvidence,

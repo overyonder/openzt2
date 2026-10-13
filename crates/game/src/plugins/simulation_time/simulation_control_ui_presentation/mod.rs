@@ -1,15 +1,14 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::simulation_time::UiSimulationAction;
 
-use crate::{
-    assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
-    plugins::ui::{
-        authored_ui_layout_participation::UiAuthoredLayoutDisplay,
-        authored_ui_node_projection_components::UiDocumentOwner,
-        authored_ui_node_projection_components::UiDocumentRoot,
-        authored_ui_selection_state::UiSelected,
-    },
+use crate::plugins::ui::{
+    authored_ui_change_activation_dispatch::UiPreviousSelection,
+    authored_ui_layout_participation::UiAuthoredLayoutDisplay,
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_node_projection_components::UiDocumentRoot,
+    authored_ui_selection_state::UiSelected,
 };
+use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 use super::simulation_control_types::SimulationControl;
 use crate::plugins::ui::authored_ui_action_projection_components::UiSimulationActions;
@@ -24,9 +23,16 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
     simulation_control: Res<SimulationControl>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    mut simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner, &mut UiSelected)>,
+    mut simulation_action_nodes: Query<(
+        &UiSimulationActions,
+        &UiDocumentOwner,
+        &mut UiSelected,
+        Option<&mut UiPreviousSelection>,
+    )>,
 ) {
-    for (authored_action_range, document_owner, mut selected) in &mut simulation_action_nodes {
+    for (authored_action_range, document_owner, mut selected, previous) in
+        &mut simulation_action_nodes
+    {
         let Ok(document_root) = ui_document_roots.get(document_owner.0) else {
             continue;
         };
@@ -44,6 +50,9 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
             });
         if is_pause_toggle && selected.0 != simulation_control.paused {
             selected.0 = simulation_control.paused;
+            if let Some(mut previous) = previous {
+                previous.synchronize_with_non_authored_selection_change(selected.0);
+            }
         }
     }
 }

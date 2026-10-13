@@ -5,15 +5,15 @@ use super::{
         Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
     },
     behavior_transaction_state::{
-        BehaviorTransactionPayment, EconomyUsage, PendingBehaviorTransaction,
+        BehaviorTransactionPayment, EconomyUsage, KeeperRefillPayment, PendingBehaviorTransaction,
     },
     facility_economy_types::FacilityPriceIndex,
     money_types::Money,
     authored_transaction_amount::{authored_currency_to_money, evaluate_authored_transaction_amount},
 };
-use crate::assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use crate::assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use crate::assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use crate::plugins::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use crate::plugins::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use crate::plugins::behavior_task_execution_types::advance_behavior_task_to_next_action;
@@ -23,6 +23,7 @@ use crate::plugins::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use crate::plugins::guests::guest_simulation_types::GuestRng;
 use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
 use crate::plugins::world_spawn::world_membership_types::DefinitionId;
+use crate::plugins::staff::{staff_employment_types::Staff, staff_job_types::CurrentJob};
 use bevy::prelude::*;
 use openzt2_game_data::{
     behavior::action_record::BehaviorAction,
@@ -97,6 +98,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     >,
     mut random_streams: Query<(Option<&mut GuestRng>, Option<&mut BehaviorRandomStream>)>,
     mut payments: MessageWriter<TransactionRequest>,
+    staff_jobs: Query<&CurrentJob, With<Staff>>,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
         return;
@@ -175,6 +177,23 @@ pub(super) fn execute_authored_behavior_transaction_steps(
             );
             continue;
         };
+        let keeper_refill = (pending.transaction == AssetId::from_key("refill"))
+            .then(|| staff_jobs.get(actor).ok())
+            .flatten();
+        if keeper_refill.is_some()
+            && (transaction.kind != EconomyTransactionKind::Credit
+                || !transaction.track_on_parent
+                || transaction.next_transaction.is_some()
+                || amount <= 0.0)
+        {
+            fail_transaction(
+                actor,
+                transaction.name,
+                "unsupported keeper refill charge",
+                &mut commands,
+            );
+            continue;
+        }
         match transaction.kind {
             EconomyTransactionKind::Debit | EconomyTransactionKind::Credit => {
                 let reversed = amount.is_sign_negative();
@@ -188,6 +207,15 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                     continue;
                 };
                 if amount == Money::ZERO {
+                    if keeper_refill.is_some() {
+                        fail_transaction(
+                            actor,
+                            transaction.name,
+                            "keeper refill charge rounds to zero",
+                            &mut commands,
+                        );
+                        continue;
+                    }
                     finish_transaction_step(
                         actor,
                         &mut task,
@@ -205,17 +233,24 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                         transaction: transaction.name,
                     })
                     .id();
+                if let Some(current_job) = keeper_refill {
+                    commands.entity(operation).insert(KeeperRefillPayment {
+                        job: current_job.job,
+                        definition: object.id,
+                    });
+                }
                 let owner = if transaction.track_on_parent {
                     Account::Zoo
                 } else {
                     Account::External
                 };
-                let (debit, credit) =
-                    if (transaction.kind == EconomyTransactionKind::Debit) != reversed {
-                        (Account::Entity(actor), owner)
-                    } else {
-                        (owner, Account::Entity(actor))
-                    };
+                let (debit, credit) = if keeper_refill.is_some() {
+                    (Account::Zoo, Account::External)
+                } else if (transaction.kind == EconomyTransactionKind::Debit) != reversed {
+                    (Account::Entity(actor), owner)
+                } else {
+                    (owner, Account::Entity(actor))
+                };
                 payments.write(TransactionRequest {
                     operation,
                     debit,

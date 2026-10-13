@@ -5,10 +5,9 @@ use bevy::prelude::*;
 #[cfg(test)]
 mod tests;
 
-use crate::{
-    assets::behavior::behavior_asset_types::BehaviorDocumentAsset,
-    plugins::simulation_time::simulation_clock_types::ZooClock,
-};
+use crate::plugins::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_data::behavior::document::BehaviorTaskActionPhase;
 
 use crate::plugins::behavior_task_execution_types::{
     find_current_behavior_task_action, BehaviorTaskExecutionPhase, BehaviorTaskExecutionState,
@@ -82,26 +81,45 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
         if find_current_behavior_task_action(behavior_document_asset, &behavior_task).is_some() {
             continue;
         }
-        let unsupported_suffix = if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
+        let current_phase = if behavior_task.phase == BehaviorTaskExecutionPhase::Set {
             behavior_document_asset
                 .behavior_set_at_index(behavior_task.declaration)
-                .is_some_and(|set| set.actions.has_unsupported_suffix())
+                .map(|set| (set.name.as_str(), &set.actions))
         } else {
             behavior_document_asset
                 .behavior_task_at_index(behavior_task.declaration)
-                .is_some_and(|task| match behavior_task.phase {
-                    BehaviorTaskExecutionPhase::Execution => {
-                        task.execution.has_unsupported_suffix()
-                    }
-                    BehaviorTaskExecutionPhase::Completion => {
-                        task.completion.has_unsupported_suffix()
-                    }
-                    BehaviorTaskExecutionPhase::Failure => task.failure.has_unsupported_suffix(),
-                    BehaviorTaskExecutionPhase::Set => false,
+                .and_then(|task| {
+                    Some((
+                        task.name.as_str(),
+                        match behavior_task.phase {
+                            BehaviorTaskExecutionPhase::Execution => &task.execution,
+                            BehaviorTaskExecutionPhase::Completion => &task.completion,
+                            BehaviorTaskExecutionPhase::Failure => &task.failure,
+                            BehaviorTaskExecutionPhase::Set => return None,
+                        },
+                    ))
                 })
         };
-        if unsupported_suffix {
-            warn!(actor = ?actor_entity, program = ?behavior_task.program,
+        if let Some((
+            name,
+            BehaviorTaskActionPhase::SupportedPrefix {
+                first_unsupported_action,
+                ..
+            }
+            | BehaviorTaskActionPhase::Unsupported {
+                first_unsupported_action,
+            },
+        )) = current_phase
+        {
+            // Name the enclosing task too when the unsupported action is in a set.
+            let enclosing_task = behavior_task
+                .stack
+                .first()
+                .map(|frame| frame.program)
+                .unwrap_or(behavior_task.program);
+            warn!(actor = ?actor_entity, program = ?behavior_task.program, name,
+                phase = ?behavior_task.phase, action = first_unsupported_action,
+                ?enclosing_task,
                 "behavior reached an unsupported authored action; failing its task");
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                 actor_entity, &mut commands,

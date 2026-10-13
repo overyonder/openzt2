@@ -1,11 +1,13 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::{
+    GraphicsSettings, ReplaceGraphicsSettingsRequest,
+};
 
 use crate::plugins::{
     camera::camera_runtime_state_types::ZooCamera,
     settings::{
         display_settings_types::{DisplaySettings, ReplaceDisplaySettingsRequest},
-        graphics_settings_types::{GraphicsSettings, ReplaceGraphicsSettingsRequest},
         online_message_policy_types::OnlineMessagePolicy,
         options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
     },

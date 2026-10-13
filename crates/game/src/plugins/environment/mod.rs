@@ -21,8 +21,8 @@ mod world_environment_initialization;
 
 use bevy::prelude::*;
 
-use crate::application_lifecycle::GamePhase;
 use crate::application_schedule::{FixedGameSet, GameSet};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use self::weather_types::{
     SetWeather, WeatherChanged, WeatherRequestApplied, WeatherRequestRejected,
@@ -39,6 +39,7 @@ impl Plugin for EnvironmentPlugin {
             .add_systems(
                 Update,
                 world_environment_initialization::initialize_world_environment_from_loaded_scenario_and_definitions
+                    .after(crate::plugins::photos::photo_album_types::DefaultPhotoStorageInitializationSet)
                     .in_set(GameSet::Intent),
             )
             .add_systems(
@@ -92,7 +93,8 @@ impl Plugin for EnvironmentPlugin {
             )
             .add_systems(
                 OnExit(GamePhase::InGame),
-                world_environment_cleanup::remove_world_environment_entities_and_camera_fog_after_leaving_game,
+                world_environment_cleanup::remove_world_environment_entities_and_camera_fog_after_leaving_game
+                    .after(crate::plugins::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame),
             );
     }
 }

@@ -6,6 +6,10 @@ mod aquatic_suitability_projection;
 mod show_tank_eligibility_projection;
 mod tank_capacity_accounting;
 mod tank_fact_hydration;
+mod tank_floor_edit_execution;
+mod tank_floor_edit_interaction;
+pub(crate) mod tank_floor_edit_types;
+mod tank_floor_edit_validation;
 mod tank_geometry_projection;
 mod tank_normalized_fact_clamping;
 mod tank_water_quality_decay_calculation;
@@ -13,7 +17,16 @@ mod tank_water_quality_decay_execution;
 
 use bevy::prelude::*;
 
-use crate::application_schedule::FixedGameSet;
+use crate::application_schedule::{FixedGameSet, GameSet};
+use crate::plugins::construction::{
+    FixedConstructionPreparedDomainEditMaterializationSet, FixedConstructionSet,
+    FixedConstructionTransactionMaterializationSet,
+};
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use tank_floor_edit_types::{
+    CommitTankFloorEdit, TankFloorEditAcknowledged, TankFloorEditPreparationRejected,
+    TankFloorEditPrepared,
+};
 
 use aquatic_animal_requirement_hydration::hydrate_live_animals_from_authored_aquatic_requirements;
 use aquatic_home_invalidation::{
@@ -35,11 +48,34 @@ pub(crate) struct AquaticPlugin;
 
 impl Plugin for AquaticPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
+        app.add_message::<CommitTankFloorEdit>()
+            .add_message::<TankFloorEditAcknowledged>()
+            .add_message::<TankFloorEditPrepared>()
+            .add_message::<TankFloorEditPreparationRejected>()
+            .add_systems(
+                Update,
+                tank_floor_edit_interaction::update_tank_floor_gesture
+                    .after(GameSet::Intent)
+                    .before(GameSet::Ui)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                tank_floor_edit_execution::prepare_tank_floor_construction_edits
+                    .in_set(FixedConstructionSet::Prepare)
+                    .after(FixedConstructionTransactionMaterializationSet)
+                    .before(FixedConstructionPreparedDomainEditMaterializationSet),
+            )
+            .add_systems(
+                FixedUpdate,
+                tank_floor_edit_execution::apply_tank_floor_construction_edits
+                    .in_set(FixedConstructionSet::Apply)
+                    .after(crate::plugins::construction::construction_failure_rollback_dispatch::dispatch_construction_failure_rollback_to_changed_domains_once),
+            )
+            .add_systems(
             FixedUpdate,
             (
                 hydrate_live_animals_from_authored_aquatic_requirements,
-                hydrate_tank_capacity_population_and_filtration_facts,
                 hydrate_new_tank_surface_geometry_from_authored_offsets,
             )
                 .chain()
@@ -48,11 +84,12 @@ impl Plugin for AquaticPlugin {
         .add_systems(
             FixedUpdate,
             (
+                hydrate_tank_capacity_population_and_filtration_facts,
                 update_tank_capacity_from_changed_aquatic_animal_containment,
                 clamp_changed_normalized_tank_facts_to_permille_range,
+                decay_tank_water_quality_after_advanced_zoo_days,
                 project_changed_tank_facts_into_live_aquatic_animal_suitability,
                 project_changed_tank_depth_into_show_eligibility,
-                decay_tank_water_quality_after_advanced_zoo_days,
             )
                 .chain()
                 .in_set(FixedGameSet::Think),
@@ -75,3 +112,6 @@ mod aquatic_suitability_and_placement_calculation_tests;
 
 #[cfg(test)]
 mod tank_water_quality_decay_calculation_tests;
+
+#[cfg(test)]
+mod tank_floor_edit_tests;
