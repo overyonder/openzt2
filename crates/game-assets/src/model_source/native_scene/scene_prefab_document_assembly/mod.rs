@@ -228,6 +228,29 @@ impl ScenePrefabDocumentAssembler {
             },
         ));
     }
+    /// Placeable objects author only a footprint box and one bounding volume
+    /// around the whole model; neither is the shape agents should walk around.
+    /// They collide through a hull of their own low geometry instead.
+    pub(super) fn replace_colliders_with_footprint_collision_hull(
+        &mut self,
+        hull: Option<Vec<[f32; 3]>>,
+    ) -> Result<()> {
+        let Some(points_m) = hull else {
+            return Ok(());
+        };
+        self.colliders.clear();
+        if points_m.is_empty() {
+            return Ok(());
+        }
+        let entity = self.entity(
+            "footprint_collision_hull",
+            None,
+            super::scene_transform_and_collider_math::identity_prefab_transform(),
+            false,
+        )?;
+        self.collider(entity, PrefabColliderSource::ConvexHull { points_m });
+        Ok(())
+    }
     pub(super) fn rotation_cycle(&mut self, entity: u32, rotation_cycle: PrefabRotationCycle) {
         self.rotation_cycles.push((entity, rotation_cycle));
     }

@@ -14,7 +14,9 @@ pub(crate) fn first_missing_prefab_collider_model_asset_id(
         .flat_map(|entity| &entity.colliders)
         .filter_map(|collider| match &collider.source {
             PrefabColliderSource::Model { model, .. } => Some(AssetId(model.0)),
-            PrefabColliderSource::Box { .. } | PrefabColliderSource::Capsule { .. } => None,
+            PrefabColliderSource::Box { .. }
+            | PrefabColliderSource::Capsule { .. }
+            | PrefabColliderSource::ConvexHull { .. } => None,
         })
         .find(|model| {
             prefab

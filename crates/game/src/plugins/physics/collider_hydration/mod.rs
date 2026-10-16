@@ -81,6 +81,9 @@ pub(crate) fn hydrate_scene_prefab_colliders_into_avian_physics(
                     radius_m,
                     half_height_m,
                 } => Some(Collider::capsule(*radius_m, *half_height_m * 2.0)),
+                PrefabColliderSource::ConvexHull { points_m } => {
+                    Collider::convex_hull(points_m.iter().copied().map(Vec3::from_array).collect())
+                }
                 PrefabColliderSource::Model { model, index } => {
                     let model = prefab
                         .loaded_model_asset_handle(*model)

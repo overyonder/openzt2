@@ -138,7 +138,8 @@ fn register_scene_prefab_model_dependencies_and_retain_only_collider_models(
                 Some(*model)
             }
             openzt2_game_data::scene_prefab::PrefabColliderSource::Box { .. }
-            | openzt2_game_data::scene_prefab::PrefabColliderSource::Capsule { .. } => None,
+            | openzt2_game_data::scene_prefab::PrefabColliderSource::Capsule { .. }
+            | openzt2_game_data::scene_prefab::PrefabColliderSource::ConvexHull { .. } => None,
         })
         .collect::<std::collections::BTreeSet<_>>();
     let mut model_paths = Vec::new();
