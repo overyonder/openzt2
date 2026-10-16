@@ -29,6 +29,8 @@ mod world_selection_presentation_types;
 
 use bevy::prelude::*;
 
+pub(crate) use loading_screen_presentation::loading_screen_is_ready;
+
 use crate::application_schedule::GameSet;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use shell_navigation_request_types::{

@@ -24,7 +24,7 @@ use openzt2_game_assets::{
 };
 
 #[derive(Component)]
-pub(super) struct LoadingScreen;
+pub(crate) struct LoadingScreen;
 
 pub(super) fn show_authored_loading_screen(
     mut commands: Commands,
@@ -43,6 +43,19 @@ pub(super) fn close_authored_loading_screen(
     for screen in &screens {
         commands.entity(screen).despawn();
     }
+}
+
+/// World hydration stalls frames for seconds once cached assets let it run at
+/// full speed, so the loading screen must be drawable before it starts.
+pub(crate) fn loading_screen_is_ready(
+    asset_server: Res<AssetServer>,
+    screens: Query<(), With<LoadingScreen>>,
+    roots: Query<(&ChildOf, &UiDocumentRoot)>,
+) -> bool {
+    roots.iter().any(|(parent, root)| {
+        screens.contains(parent.parent())
+            && asset_server.is_loaded_with_dependencies(&root.document)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]

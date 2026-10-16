@@ -13,7 +13,7 @@ pub(crate) struct TerrainRenderChunk;
 pub(crate) struct TerrainSurfaceImage(pub Handle<Image>);
 
 #[derive(Component, Debug, Clone, Copy, Default)]
-pub(super) struct TerrainChunkRejected;
+pub(crate) struct TerrainChunkRejected;
 
 /// Last edit revision applied to the mesh and blend image.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

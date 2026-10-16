@@ -97,15 +97,19 @@ impl Plugin for WorldSpawnPlugin {
                 Update,
                 (
                     accept_queued_world_load_after_required_assets_resolve,
-                    crate::plugins::simulation_time::simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world,
-                    hydrate_selected_terrain_chunks_world_bounds_and_topology_grid,
-                    reserve_all_imported_world_persistent_ids,
-                    hydrate_all_starting_fence_nodes_and_edges_into_topology_once,
-                    hydrate_all_starting_paths_into_topology_once,
-                    hydrate_bounded_world_prefab_record_batch,
-                    apply_all_authored_world_spawn_values_once,
-                    complete_or_fail_finished_world_hydration
-                        .in_set(world_load_completion_marker::WorldLoadCompletionSet),
+                    (
+                        crate::plugins::simulation_time::simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world,
+                        hydrate_selected_terrain_chunks_world_bounds_and_topology_grid,
+                        reserve_all_imported_world_persistent_ids,
+                        hydrate_all_starting_fence_nodes_and_edges_into_topology_once,
+                        hydrate_all_starting_paths_into_topology_once,
+                        hydrate_bounded_world_prefab_record_batch,
+                        apply_all_authored_world_spawn_values_once,
+                        complete_or_fail_finished_world_hydration
+                            .in_set(world_load_completion_marker::WorldLoadCompletionSet),
+                    )
+                    .chain()
+                    .run_if(crate::plugins::shell::loading_screen_is_ready),
                 )
                     .chain()
                     .in_set(GameSet::Intent)

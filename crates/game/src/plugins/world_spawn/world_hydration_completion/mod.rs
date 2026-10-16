@@ -1,6 +1,10 @@
 use bevy::prelude::*;
 
 use crate::plugins::simulation_time::simulation_time_world_lifecycle::remove_world_simulation_time_resources;
+use crate::plugins::terrain::{
+    terrain_chunk_presentation_types::{TerrainChunkRejected, TerrainRenderChunk},
+    terrain_chunk_types::TerrainChunk,
+};
 use openzt2_game_assets::asset_source::AssetArchives;
 
 use super::{
@@ -29,6 +33,14 @@ pub(super) fn complete_or_fail_finished_world_hydration(
     pending: Query<(Entity, &WorldHydration, Option<&WorldLoadOperationOwner>)>,
     allocator: Option<Res<PersistentIdAllocator>>,
     members: Query<(Entity, &WorldMember)>,
+    unprojected_terrain: Query<
+        (),
+        (
+            With<TerrainChunk>,
+            Without<TerrainRenderChunk>,
+            Without<TerrainChunkRejected>,
+        ),
+    >,
     mut finished: MessageWriter<WorldLoadFinished>,
     mut failed: MessageWriter<WorldLoadFailed>,
 ) {
@@ -65,7 +77,8 @@ pub(super) fn complete_or_fail_finished_world_hydration(
         });
         drop(performance_timer);
         performance.finish_and_report(&archives, "failed");
-    } else if pending.is_complete() {
+    } else if pending.is_complete() && unprojected_terrain.is_empty() {
+        // Surface composition stalls frames for seconds; keep it behind the loading screen.
         commands.entity(root).insert(WorldLoadCompleted);
         finished.write(WorldLoadFinished {
             operation: operation.map(|owner| owner.0),

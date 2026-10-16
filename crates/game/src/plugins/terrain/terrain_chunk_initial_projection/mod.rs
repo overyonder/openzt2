@@ -1,6 +1,7 @@
 use std::collections::hash_map::Entry;
 
 use bevy::{
+    asset::UntypedAssetId,
     camera::visibility::RenderLayers,
     gltf::{Gltf, GltfMesh},
     prelude::*,
@@ -32,6 +33,7 @@ pub(super) struct AdditionalAuthoredTerrainEffectPass;
 
 pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     gltfs: Res<Assets<Gltf>>,
     gltf_meshes: Res<Assets<GltfMesh>>,
@@ -49,13 +51,23 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     // run on the compute pool, and their results apply in that same order.
     let mut projectable = Vec::new();
     for (entity, chunk) in &chunks {
+        // World loading waits for every chunk to project or be rejected, so a
+        // failed load must reject instead of waiting forever.
+        let mut wait_or_reject = |id: UntypedAssetId| {
+            if asset_server.load_state(id).is_failed() {
+                commands.entity(entity).insert(TerrainChunkRejected);
+            }
+        };
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
+            wait_or_reject(chunk.asset.id().untyped());
             continue;
         };
         let Some(model) = gltfs.get(asset.lowered_terrain_model()) else {
+            wait_or_reject(asset.lowered_terrain_model().id().untyped());
             continue;
         };
         let Some(terrain_material) = authored_materials.get(asset.terrain_effect_material()) else {
+            wait_or_reject(asset.terrain_effect_material().id().untyped());
             continue;
         };
         let Some(terrain_effect_passes) = terrain_material
@@ -273,5 +285,50 @@ pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
                     .expect("the authored terrain effect pass index fits u16"),
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::asset::AssetPlugin;
+
+    use super::*;
+
+    #[test]
+    fn chunk_with_failed_terrain_asset_is_rejected_instead_of_waiting() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<TerrainAsset>()
+            .init_asset::<Gltf>()
+            .init_asset::<GltfMesh>()
+            .init_asset::<Image>()
+            .init_asset::<MaterialAsset>()
+            .init_asset::<EffectPassMaterial>()
+            .init_resource::<GraphicsSettings>()
+            .init_resource::<TerrainIndex>()
+            .add_systems(Update, validate_index_and_project_loaded_terrain_chunks);
+        let asset = app
+            .world()
+            .resource::<AssetServer>()
+            .load::<TerrainAsset>("missing.no-terrain-loader");
+        let chunk = app
+            .world_mut()
+            .spawn(TerrainChunk {
+                source_coord: IVec2::ZERO,
+                coord: IVec2::new(0, -1),
+                asset,
+                origin: Vec2::ZERO,
+                spacing_m: 1.0,
+                side: 2,
+            })
+            .id();
+        for _ in 0..100 {
+            app.update();
+            if app.world().get::<TerrainChunkRejected>(chunk).is_some() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        panic!("a chunk whose terrain asset failed to load was never rejected");
     }
 }
