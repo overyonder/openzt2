@@ -20,7 +20,7 @@ use super::{
     exit_confirmation_presentation::ExitConfirmationPending,
     in_game_options_overlay_lifecycle::InGameOptionsOverlay,
     post_save_navigation::{ExitApplicationAfterSave, ReturnToMainMenuAfterSave},
-    shell_navigation_request_types::ReturnToMainMenu,
+    shell_navigation_request_types::{ExitApplication, ReturnToMainMenu},
 };
 use crate::plugins::ui::authored_ui_action_projection_components::UiShellActions;
 use crate::plugins::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -43,7 +43,10 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
     roots: Query<&UiDocumentRoot>,
     parents: Query<&ChildOf>,
     pending: Query<(), With<ExitConfirmationPending>>,
-    mut return_to_main_menu: MessageWriter<ReturnToMainMenu>,
+    (mut return_to_main_menu, mut exit_application): (
+        MessageWriter<ReturnToMainMenu>,
+        MessageWriter<ExitApplication>,
+    ),
     mut screenshots: MessageWriter<CaptureScreenshotRequest>,
     mut show: MessageWriter<ShowUiRole>,
     simulation: Option<Res<SimulationControl>>,
@@ -82,6 +85,9 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                 }
                 UiShellAction::ReturnToMainMenu => {
                     return_to_main_menu.write(ReturnToMainMenu);
+                }
+                UiShellAction::ExitApplication => {
+                    exit_application.write(ExitApplication);
                 }
                 UiShellAction::ShowExitConfirmationDialog => {
                     let confirmation = commands
@@ -167,8 +173,7 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                 | UiShellAction::ShowSavedGames
                 | UiShellAction::FilterWorldChoicesToLocation { .. }
                 | UiShellAction::FilterWorldChoicesToExpansionPack { .. }
-                | UiShellAction::ShowSecondaryGlobeBiome { .. }
-                | UiShellAction::ExitApplication => {}
+                | UiShellAction::ShowSecondaryGlobeBiome { .. } => {}
             }
         }
     }

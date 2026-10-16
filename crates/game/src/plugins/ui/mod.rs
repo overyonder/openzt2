@@ -172,8 +172,6 @@ impl Plugin for GameUiPlugin {
                         .after(projection::project_ui_documents),
                     projection::reconcile_ui_list_rows,
                     authored_ui_canvas_scaling_and_clipping::scale_authored_ui_canvas_to_primary_window,
-                    authored_ui_text_layout_presentation::align_authored_single_line_text_from_measured_glyph_run
-                        .after(projection::project_ui_documents),
                 )
                     .in_set(UiSet::Projection),
             )
@@ -348,6 +346,10 @@ impl Plugin for GameUiPlugin {
                     authored_ui_canvas_scaling_and_clipping::project_authored_scaled_canvas_clip_rectangles
                         .after(authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels),
                     authored_globe_camera_framing::update_globe_camera_viewports
+                        .after(bevy::ui::UiSystems::PostLayout),
+                    // Measured in the same frame as Bevy's text layout, so a
+                    // newly revealed label is never drawn with a stale offset.
+                    authored_ui_text_layout_presentation::align_authored_single_line_text_from_measured_glyph_run
                         .after(bevy::ui::UiSystems::PostLayout),
                 ),
             )

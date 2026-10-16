@@ -21,6 +21,17 @@ phase in-game
 expect-campaign-world Tutorial3 tutorialscen3
 capture campaign-map-started
 
+# Game Options' Exit Game opens its save/exit confirmation; cancel keeps playing.
+key ESCAPE
+until visible "In Game Options" within 300
+move "TextButton Exit Hover"
+until visible "TextButton Exit" within 120
+click "TextButton Exit"
+until visible "Exit Game layout" within 300
+capture exit-game-dialog
+click "cancel"
+until hidden "Exit Game layout" within 120
+
 # Return to the start screen after checking the distinct tutorial world.
 return-to-menu
 until visible "Campaign Game Button"
