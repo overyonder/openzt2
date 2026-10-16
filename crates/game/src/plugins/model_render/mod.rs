@@ -16,12 +16,14 @@ mod prefab_texture_replacement_projection;
 
 use bevy::{
     camera::visibility::VisibilitySystems,
+    pbr::check_entities_needing_specialization,
     prelude::*,
     render::{extract_instances::ExtractInstancesPlugin, Render, RenderApp, RenderSystems},
     transform::TransformSystems,
 };
 
 use authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 use authored_model_material_pass_projection::{
     invalidate_authored_model_material_pass_projection, project_authored_model_material_passes,
@@ -105,7 +107,12 @@ impl Plugin for ModelRenderPlugin {
                 project_prefab_texture_replacements_onto_effect_pass_materials
                     .after(project_authored_model_material_passes)
                     .before(project_prefab_fixed_function_world_lighting_policies),
-            ),
+            )
+                // Bevy only notices a material swap in this system. When it
+                // ran first, extraction saw the new EffectPassMaterial while
+                // the entity still sat in the opaque StandardMaterial bin.
+                .before(check_entities_needing_specialization::<StandardMaterial>)
+                .before(check_entities_needing_specialization::<EffectPassMaterial>),
         );
         app.sub_app_mut(RenderApp)
             .add_systems(Render,
