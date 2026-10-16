@@ -19,6 +19,7 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
         time_limit_ticks: 0,
         flags: ScenarioRecordFlags::default(),
         ui_modifications: vec![],
+        objective_groups: vec![],
         objectives: rules
             .iter()
             .enumerate()

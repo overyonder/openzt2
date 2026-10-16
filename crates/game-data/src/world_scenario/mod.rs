@@ -242,12 +242,22 @@ pub struct ScenarioDefinitionRecord {
     pub name_key: AssetId,
     pub description_key: AssetId,
     pub objectives: Vec<ScenarioObjectiveRecord>,
+    #[serde(default)]
+    pub objective_groups: Vec<ScenarioObjectiveGroupRecord>,
     pub time_limit_ticks: u64,
     pub flags: ScenarioRecordFlags,
     /// Authored `ZTScenarioMgr/uimods`: interface nodes this scenario shows
     /// or hides while it runs.
     #[serde(default)]
     pub ui_modifications: Vec<ScenarioUiModification>,
+}
+
+/// Authored groups retain their direct children, including nested groups.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ScenarioObjectiveGroupRecord {
+    pub id: AssetId,
+    pub members: Vec<AssetId>,
+    pub all_success: bool,
 }
 
 /// One authored `uimods/mod`: the named interface node's visibility under

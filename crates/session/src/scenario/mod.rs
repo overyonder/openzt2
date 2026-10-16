@@ -6,6 +6,7 @@ pub mod challenge_offer_types;
 mod profile_scenario_variable_application;
 mod scenario_goal_and_challenge_ui_action_routing;
 mod scenario_goal_panel_presentation;
+mod scenario_group_completion;
 mod scenario_instantiation;
 mod scenario_lua_command_publication;
 mod scenario_lua_entity_commands;

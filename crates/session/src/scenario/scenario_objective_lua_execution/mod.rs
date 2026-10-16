@@ -172,7 +172,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
     fact_sources: ScenarioLuaQueryFactSources,
     spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
-    objectives: Query<&ScenarioObjective>,
+    objectives: Query<(&ScenarioObjective, &ScenarioObjectiveStatus)>,
     mut changed: MessageReader<ScenarioObjectiveStatusChanged>,
     mut outputs: (
         MessageWriter<openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyCommand>,
@@ -199,8 +199,11 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     };
     let mut queries = fact_sources.borrow_scenario_lua_query_facts();
     queries.spawn_animal = Some(&spawn_animal);
-    for event in changed.read() {
-        let Ok(objective) = objectives.get(event.objective) else {
+    let events = changed.read().copied().collect::<Vec<_>>();
+    let mut invocations = Vec::new();
+    let mut affected_scenarios = std::collections::BTreeMap::new();
+    for event in &events {
+        let Ok((objective, _)) = objectives.get(event.objective) else {
             continue;
         };
         let phase = match event.status {
@@ -214,20 +217,80 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         let Some(asset) = scenario_assets.get(handle) else {
             continue;
         };
-        let source = SelectedScenarioDocument(handle.clone());
         let Some(record) = asset
             .document
             .find_scenario_objective(objective.scenario, objective.record_index)
         else {
             continue;
         };
+        invocations.push((event.objective, objective.scenario, record.id, phase));
+        affected_scenarios.insert(objective.scenario, event.objective);
+    }
+    for (scenario, source_entity) in affected_scenarios {
+        let Some(handle) = scenarios.handle_for_scenario(scenario) else {
+            continue;
+        };
+        let Some(asset) = scenario_assets.get(handle) else {
+            continue;
+        };
+        let Some(definition) = asset.document.find_scenario_record(scenario) else {
+            continue;
+        };
+        let mut after = std::collections::BTreeMap::new();
+        let mut before = std::collections::BTreeMap::new();
+        for (objective, status) in &objectives {
+            if objective.scenario != scenario {
+                continue;
+            }
+            let Some(record) = definition.objectives.get(objective.record_index as usize) else {
+                continue;
+            };
+            after.insert(record.id, *status);
+            before.insert(record.id, *status);
+        }
+        for event in &events {
+            let Ok((objective, _)) = objectives.get(event.objective) else {
+                continue;
+            };
+            if objective.scenario != scenario {
+                continue;
+            }
+            if let Some(record) = definition.objectives.get(objective.record_index as usize) {
+                before.insert(record.id, ScenarioObjectiveStatus::Active);
+            }
+        }
+        // Groups are in postorder, so each direct child group is resolved first.
+        for group in &definition.objective_groups {
+            let previous = super::scenario_group_completion::derive_group_status(group, &before);
+            let current = super::scenario_group_completion::derive_group_status(group, &after);
+            before.insert(group.id, previous);
+            after.insert(group.id, current);
+            if previous == current {
+                continue;
+            }
+            let phase = match current {
+                ScenarioObjectiveStatus::Satisfied => ScenarioScriptPhase::Success,
+                ScenarioObjectiveStatus::Failed => ScenarioScriptPhase::Failure,
+                _ => continue,
+            };
+            invocations.push((source_entity, scenario, group.id, phase));
+        }
+    }
+    for (source_entity, scenario, objective_id, phase) in invocations {
+        let Some(handle) = scenarios.handle_for_scenario(scenario) else {
+            continue;
+        };
+        let Some(asset) = scenario_assets.get(handle) else {
+            continue;
+        };
+        let source = SelectedScenarioDocument(handle.clone());
         for binding in asset
             .document
             .scenario_script_bindings
             .iter()
             .filter(|binding| {
                 (binding.scenario, binding.objective, binding.phase)
-                    == (objective.scenario, record.id, phase)
+                    == (scenario, objective_id, phase)
             })
         {
             match execute_loaded_scenario_lua_script_binding(
@@ -244,7 +307,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
                         error!(entry = %binding.entry, %error, "scenario Lua terminal call failed");
                     }
                     publish_commands_produced_by_scenario_lua_script(
-                        event.objective,
+                        source_entity,
                         result,
                         &mut outputs.0,
                         &mut outputs.1,

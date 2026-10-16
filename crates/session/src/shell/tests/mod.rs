@@ -329,6 +329,7 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
                     name_key: scenario,
                     description_key: scenario,
                     objectives: Vec::new(),
+                    objective_groups: Vec::new(),
                     time_limit_ticks: 0,
                     flags: default(),
                     ui_modifications: Vec::new(),

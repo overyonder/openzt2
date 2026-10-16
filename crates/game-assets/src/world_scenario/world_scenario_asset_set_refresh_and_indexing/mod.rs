@@ -262,6 +262,7 @@ mod tests {
                         name_key: record_id,
                         description_key: record_id,
                         objectives: vec![],
+                        objective_groups: vec![],
                         time_limit_ticks: 0,
                         flags: ScenarioRecordFlags::ALLOW_PAUSE,
                         ui_modifications: vec![],

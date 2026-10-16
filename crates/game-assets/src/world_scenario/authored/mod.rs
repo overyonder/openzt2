@@ -16,8 +16,9 @@ use openzt2_game_data::{
         CampaignScenarioRecord, PhotoChallengeMemberRecord, PhotoChallengeRule,
         PhotoChallengeScriptBinding, PhotoChallengeSetProgression, PhotoChallengeSetRecord,
         PhotoChallengeSetSelection, ScenarioCampaignRecord, ScenarioDefinitionRecord,
-        ScenarioObjectiveRecord, ScenarioRecordFlags, ScenarioScriptBinding, ScenarioScriptPhase,
-        WorldLocationRecord, WorldMapRecord, WorldMapSupportedGameModeFlags, WorldScenarioDocument,
+        ScenarioObjectiveGroupRecord, ScenarioObjectiveRecord, ScenarioRecordFlags,
+        ScenarioScriptBinding, ScenarioScriptPhase, WorldLocationRecord, WorldMapRecord,
+        WorldMapSupportedGameModeFlags, WorldScenarioDocument,
     },
     AssetId,
 };
@@ -92,6 +93,15 @@ pub(in crate::world_scenario) fn lower_documents(
                 );
                 if !rules.is_empty() {
                     let scenario = source_stem(&path)?;
+                    let mut objective_groups = Vec::new();
+                    collect_objective_groups(
+                        document,
+                        &document.root,
+                        &scenario,
+                        &rules,
+                        &mut objective_groups,
+                        &mut bindings,
+                    )?;
                     let mut objectives = Vec::with_capacity(rules.len());
                     for (index, rule) in rules.into_iter().enumerate() {
                         let objective = format!("{scenario}:rule:{index}");
@@ -182,6 +192,7 @@ pub(in crate::world_scenario) fn lower_documents(
                             .map(AssetId::from_key)
                             .unwrap_or_default(),
                         objectives,
+                        objective_groups,
                         time_limit_ticks: 0,
                         flags,
                         ui_modifications: lower_scenario_ui_modifications(&document.root),
@@ -192,6 +203,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         .find(|candidate| candidate.id == record.id)
                     {
                         existing.objectives = record.objectives;
+                        existing.objective_groups = record.objective_groups;
                         existing.flags = record.flags;
                         existing.ui_modifications = record.ui_modifications;
                         if existing.name_key == AssetId::default() {
@@ -319,6 +331,46 @@ fn lower_photo_challenges(
 struct RuleEntry<'a> {
     node: &'a OrderedSourceDocumentNode,
     prerequisite: Option<String>,
+}
+
+fn collect_objective_groups(
+    document: &OrderedSourceDocument,
+    node: &OrderedSourceDocumentNode,
+    scenario: &str,
+    rules: &[RuleEntry<'_>],
+    groups: &mut Vec<ScenarioObjectiveGroupRecord>,
+    bindings: &mut Vec<ScenarioScriptBinding>,
+) -> io::Result<Vec<AssetId>> {
+    if local(&node.name) == "BFScenarioRule" {
+        return Ok(rules
+            .iter()
+            .position(|rule| std::ptr::eq(rule.node, node))
+            .map(|index| vec![AssetId::from_key(&format!("{scenario}:rule:{index}"))])
+            .unwrap_or_default());
+    }
+    let mut members = Vec::new();
+    for child in node.element_children() {
+        members.extend(collect_objective_groups(
+            document, child, scenario, rules, groups, bindings,
+        )?);
+    }
+    if !matches!(local(&node.name), "BFScenarioGroup" | "ZTScenarioMgr") || members.is_empty() {
+        return Ok(members);
+    }
+    let key = format!("{scenario}:group:{}", groups.len());
+    let id = AssetId::from_key(&key);
+    for (name, phase) in [
+        ("success", ScenarioScriptPhase::Success),
+        ("failure", ScenarioScriptPhase::Failure),
+    ] {
+        collect_bindings(document, node, scenario, &key, name, phase, bindings)?;
+    }
+    groups.push(ScenarioObjectiveGroupRecord {
+        id,
+        members,
+        all_success: node.attribute("allsuccess").is_none_or(truthy),
+    });
+    Ok(vec![id])
 }
 fn collect_rules<'a>(
     nodes: &[&'a OrderedSourceDocumentNode],

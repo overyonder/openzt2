@@ -4,6 +4,38 @@ use crate::source_document::{
 };
 
 #[test]
+fn nested_group_completion_keeps_both_parallel_rules_and_its_callback() {
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("scenario/goals/startup.xml"),
+        br#"<ZTScenarioMgr><children><BFScenarioGroup name="startup" allsuccess="true"><children>
+          <BFScenarioGroup name="animals" allsuccess="true" chain="false">
+            <success><BFScenarioScriptAction script="startup.lua" entry="animalsready"/></success>
+            <children><BFScenarioRule name="habitat"/><BFScenarioRule name="food"/></children>
+          </BFScenarioGroup><BFScenarioRule name="stands"/>
+        </children></BFScenarioGroup></children></ZTScenarioMgr>"#,
+    )
+    .expect("valid scenario source");
+    let document = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
+    let scenario = &document.scenarios[0];
+    let animals = &scenario.objective_groups[0];
+    assert_eq!(
+        animals.members,
+        [scenario.objectives[0].id, scenario.objectives[1].id]
+    );
+    assert_eq!(
+        scenario.objective_groups[1].members,
+        [animals.id, scenario.objectives[2].id]
+    );
+    let callback = document
+        .scenario_script_bindings
+        .iter()
+        .find(|binding| binding.entry == "animalsready")
+        .unwrap();
+    assert_eq!(callback.objective, animals.id);
+    assert_eq!(callback.phase, ScenarioScriptPhase::Success);
+}
+
+#[test]
 fn scenario_briefing_and_objectives_use_canonical_localization_keys() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("scenario/goals/briefing.xml"),
