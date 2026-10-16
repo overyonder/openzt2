@@ -47,14 +47,14 @@ Use the default `dev` profile for routine gameplay changes and verification.
 It optimizes workspace code at level 1 and dependencies at level 3, with
 incremental compilation enabled and LTO disabled.
 
-Use `--profile profiling` for performance measurements. It inherits the
-shipping optimization settings and retains limited debug information.
+Use `--profile profiling` for performance measurements. It uses optimization
+level 3 with LTO disabled and retains limited debug information.
 
 | Setting | `dev` | `profiling` | `release` |
 | --- | --- | --- | --- |
 | Workspace optimization | 1 | 3 | 3 |
 | Dependency optimization | 3 | 3 | 3 |
-| LTO | Off | Thin | Thin |
+| LTO | Off | Off | Thin |
 | Codegen units | 256 | 1 | 1 |
 | Incremental compilation | On | Off | Off |
 | Debug information | Limited | Limited | None |

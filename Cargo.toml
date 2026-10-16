@@ -169,8 +169,9 @@ lto = "thin"
 strip = "symbols"
 
 [profile.profiling]
-# Match shipping optimization settings, retaining symbols for profiling.
+# Keep optimized code and profiling symbols without whole-program LTO.
 inherits = "release"
+lto = "off"
 debug = 1
 strip = "none"
 
