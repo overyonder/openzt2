@@ -82,16 +82,33 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
         }
     }
 
-    let node_entities = nodes
+    // Saved curbs are path presentation. Importing them as fences makes them
+    // compete with actual enclosure edges in the topology index.
+    let curb_type = AssetId::from_key("curb");
+    let fences = fences
         .iter()
-        .map(|node| {
+        .filter(|fence| {
+            resolve_starting_fence_definition(definitions, fence.definition)
+                .and_then(|(id, _)| definitions.find_fence(id))
+                .and_then(|fence| definitions.find_object(fence.object))
+                .is_none_or(|object| !object.behavior_type_identifiers.contains(&curb_type))
+        })
+        .collect::<Vec<_>>();
+    let used_nodes = fences
+        .iter()
+        .flat_map(|fence| [fence.a as usize, fence.b as usize])
+        .collect::<std::collections::BTreeSet<_>>();
+    let node_entities = used_nodes
+        .into_iter()
+        .map(|index| {
+            let node = &nodes[index];
             let position = Vec3::new(node.position_m[0], node.position_m[1], node.position_m[2]);
             let mut cell = grid.position_cell(position);
             // Starting fences are source ground topology. Authored Y records
             // the terrain sample beneath the segment; it is not an elevated
             // topology layer. Terrain fitting owns the rendered height.
             cell.z = 0;
-            commands
+            let entity = commands
                 .spawn((
                     Name::new("starting topology node"),
                     TopologyNode { cell },
@@ -99,9 +116,10 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
                     Transform::from_translation(grid.cell_translation(cell)),
                     WorldMember { root },
                 ))
-                .id()
+                .id();
+            (index, entity)
         })
-        .collect::<Vec<_>>();
+        .collect::<std::collections::BTreeMap<_, _>>();
 
     for fence in fences {
         let source_definition = AssetId(fence.definition.0);
@@ -109,8 +127,8 @@ pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
             .expect("validated authored starting-fence definition");
         let a_index = fence.a as usize;
         let b_index = fence.b as usize;
-        let a = node_entities[a_index];
-        let b = node_entities[b_index];
+        let a = node_entities[&a_index];
+        let b = node_entities[&b_index];
         let a_record = &nodes[a_index];
         let b_record = &nodes[b_index];
         let mut a_cell = grid.position_cell(Vec3::new(

@@ -84,6 +84,13 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     else {
         return;
     };
+    debug!(
+        ?changed_topology_bounds,
+        roots = world_roots.iter().count(),
+        nodes = topology_nodes.iter().count(),
+        fences = fence_edges.iter().count(),
+        "requested habitat rebuild"
+    );
     let Ok(world_root) = world_roots.single() else {
         return;
     };
@@ -93,17 +100,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     };
 
     let mut fence_segments = Vec::with_capacity(fence_edges.iter().len());
-    let curb_type = openzt2_game_data::AssetId::from_key("curb");
     for (fence_entity, fence_edge, gate) in &fence_edges {
-        // Path curbs share fence topology and can coincide with enclosure edges,
-        // but their passable borders do not define animal habitats.
-        if world_definitions
-            .find_fence(fence_edge.definition)
-            .and_then(|definition| world_definitions.find_object(definition.object))
-            .is_some_and(|object| object.behavior_type_identifiers.contains(&curb_type))
-        {
-            continue;
-        }
         let (Ok(first_node), Ok(second_node)) = (
             topology_nodes.get(fence_edge.a),
             topology_nodes.get(fence_edge.b),
@@ -153,6 +150,11 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         let derived_regions = derive_enclosed_habitat_regions_from_fence_segments(
             &fence_segments,
             rebuild_topology_bounds,
+        );
+        debug!(
+            segments = fence_segments.len(),
+            regions = derived_regions.len(),
+            "derived enclosed habitat regions"
         );
         let affected_topology_bounds = IRect::from_corners(
             rebuild_topology_bounds.min - IVec2::ONE,
@@ -235,6 +237,11 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             topology_cell_area_square_metres,
             derived_region.boundary_is_breached,
             &mut read_terrain_cell_fact,
+        );
+        debug!(
+            ?habitat_entity,
+            ?habitat_summary,
+            "derived habitat terrain summary"
         );
         let habitat_region = HabitatRegion {
             area_square_metres: topology_cell_area_square_metres
