@@ -224,7 +224,7 @@ impl Modifier for ConformToSphereModifier {
     let attraction_accel = {attraction_accel};
     let sticky_accel = attraction_accel * {sticky_factor};
     let conforming_accel = mix(sticky_accel, attraction_accel, shell_factor);
-    let conforming_delta_speed = (*effect_metadata).delta_time * conforming_accel;
+    let conforming_delta_speed = sim_params.delta_time * conforming_accel;
     // Final impulse clamped by the maximum acceleration speed
     {attr_vel} += sign(delta_speed) * min(abs(delta_speed), conforming_delta_speed) * origin_dir;
 "##
