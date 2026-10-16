@@ -153,6 +153,55 @@ fn docking_finishes_in_world_coordinates_under_a_transformed_parent() {
 }
 
 #[test]
+fn surface_docking_aligns_vertical_offsets_but_flight_requires_vertical_arrival() {
+    use bevy::prelude::*;
+    use openzt2_zoo_state::locomotion::locomotion_types::{
+        Arrived, Docking, LocomotionMode, NavigationFailed,
+    };
+
+    let mut app = App::new();
+    app.add_message::<Arrived>()
+        .add_message::<NavigationFailed>()
+        .add_systems(
+            Update,
+            crate::locomotion::spatial_index_and_docking_operations::complete_docking,
+        );
+    let target = app.world_mut().spawn(GlobalTransform::IDENTITY).id();
+    let point = Vec3::new(133.295, 12.66, -146.631);
+    for mode in [
+        LocomotionMode::Ground,
+        LocomotionMode::Swim,
+        LocomotionMode::Flight,
+    ] {
+        let actor = app
+            .world_mut()
+            .spawn((
+                Transform::from_xyz(133.459, 13.0, -147.288),
+                mode,
+                Docking {
+                    request_id: 1,
+                    target,
+                    point,
+                    forward: Vec3::Z,
+                    radius_m: 0.75,
+                },
+            ))
+            .id();
+        app.update();
+        if mode == LocomotionMode::Flight {
+            assert!(app.world().get::<Docking>(actor).is_some());
+        } else {
+            assert!(app.world().get::<Docking>(actor).is_none());
+            assert_eq!(
+                app.world().get::<Transform>(actor).unwrap().translation,
+                point
+            );
+        }
+        app.world_mut().despawn(actor);
+    }
+}
+
+#[test]
 fn cell_mapping_rejects_world_exterior() {
     let mut grid = SpatialGrid::default();
     assert!(grid.reserve_layout(Vec2::new(-10.0, -10.0), 5.0, 4, 4, 0));

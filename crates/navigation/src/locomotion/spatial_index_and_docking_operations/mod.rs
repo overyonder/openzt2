@@ -118,6 +118,7 @@ pub(super) fn complete_docking(
         Option<&ChildOf>,
         Option<&mut Route>,
         Option<&mut Steering>,
+        Option<&LocomotionMode>,
     )>,
     targets: Query<&GlobalTransform>,
     mut arrived: MessageWriter<Arrived>,
@@ -133,6 +134,7 @@ pub(super) fn complete_docking(
         parent,
         route,
         steering,
+        locomotion_mode,
     ) in &mut dockers
     {
         if targets.get(docking.target).is_err() {
@@ -153,11 +155,13 @@ pub(super) fn complete_docking(
             }
             None => GlobalTransform::IDENTITY,
         };
-        if parent_transform
-            .transform_point(transform.translation)
-            .distance_squared(docking.point)
-            > docking.radius_m * docking.radius_m
-        {
+        let mut offset = parent_transform.transform_point(transform.translation) - docking.point;
+        // Surface locomotion follows terrain height. Authored docking nodes may
+        // offset the actor root vertically; apply that alignment on arrival.
+        if locomotion_mode.copied().unwrap_or_default() != LocomotionMode::Flight {
+            offset.y = 0.0;
+        }
+        if offset.length_squared() > docking.radius_m * docking.radius_m {
             continue;
         }
         transform.translation = parent_transform
