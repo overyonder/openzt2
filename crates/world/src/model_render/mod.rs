@@ -107,7 +107,13 @@ impl Plugin for ModelRenderPlugin {
                 project_prefab_texture_replacements_onto_effect_pass_materials
                     .after(project_authored_model_material_passes)
                     .before(project_prefab_fixed_function_world_lighting_policies),
-            ),
+            )
+                // Material replacement must reach pipeline specialization in
+                // the same frame as render extraction sees the new binding.
+                .before(bevy::pbr::check_entities_needing_specialization::<StandardMaterial>)
+                .before(bevy::pbr::check_entities_needing_specialization::<
+                    openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
+                >),
         );
         app.sub_app_mut(RenderApp)
             .add_systems(Render,
