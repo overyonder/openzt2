@@ -88,6 +88,8 @@ impl SelectedUiSourceResolutionProfile {
                 // The main menu's Exit button opens this confirmation.
                 (UiDocumentRole::Modal, "exit_zoo".into()),
                 (UiDocumentRole::Modal, "return_mainmenu".into()),
+                // The in-game options' Exit Game button opens this one.
+                (UiDocumentRole::Modal, "Exit Game layout".into()),
                 (UiDocumentRole::Modal, "save current game".into()),
                 (UiDocumentRole::PurchaseCatalogue, "sort button".into()),
                 (UiDocumentRole::EntityInfo, "in game sort button".into()),

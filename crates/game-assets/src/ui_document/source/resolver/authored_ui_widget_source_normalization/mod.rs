@@ -134,7 +134,20 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
             child => child,
         })
         .collect::<Vec<_>>();
-    repaired.extend(hoisted);
+    // Hoisted layouts are aspect backgrounds: draw them beneath the authored
+    // children (such as the confirmation label) rather than over them.
+    let children_group = repaired.iter_mut().find_map(|child| match child {
+        OrderedSourceDocumentChild::Element(group) if group.name == "children" => Some(group),
+        _ => None,
+    });
+    match children_group {
+        Some(group) if !hoisted.is_empty() => {
+            hoisted.extend(group.children.items().iter().cloned());
+            group.children =
+                OrderedSourceDocumentChildren::from_ordered_source_document_child_items(hoisted);
+        }
+        _ => repaired.extend(hoisted),
+    }
     node.children =
         OrderedSourceDocumentChildren::from_ordered_source_document_child_items(repaired);
     normalize_authored_scenario_objective_collection(node);
