@@ -43,7 +43,12 @@ impl Plugin for HabitatPlugin {
             )
             .add_systems(
                 OnEnter(GamePhase::InGame),
-                crate::habitat::habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology,
+                (
+                    crate::habitat::habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology,
+                    crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                    crate::habitat::habitat_membership_and_containment::update_habitat_membership_after_locatable_entities_move,
+                    crate::habitat::habitat_membership_and_containment::update_containment_after_habitat_regions_change,
+                ).chain(),
             )
             .add_systems(OnExit(GamePhase::InGame), clear_habitat_index_after_leaving_game);
     }
