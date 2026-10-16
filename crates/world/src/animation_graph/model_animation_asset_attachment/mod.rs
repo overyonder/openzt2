@@ -34,6 +34,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         ),
     >,
 ) {
+    // Model owners can retire while loaded asset results await deferred application.
     for (prefab_model_entity, prefab_model, prefab_model_parent, pending_model_animation_assets) in
         &pending_prefab_models
     {
@@ -43,8 +44,8 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         let Some(_) = pending_model_animation_set_asset_handles.first() else {
             commands
                 .entity(prefab_model_entity)
-                .insert(ModelAnimationAttachmentResolved)
-                .remove::<PendingModelAnimationAssets>();
+                .try_insert(ModelAnimationAttachmentResolved)
+                .try_remove::<PendingModelAnimationAssets>();
             continue;
         };
         assert_eq!(
@@ -86,8 +87,8 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             None => {
                 commands
                     .entity(prefab_model_entity)
-                    .insert(ModelAnimationAttachmentResolved)
-                    .remove::<PendingModelAnimationAssets>();
+                    .try_insert(ModelAnimationAttachmentResolved)
+                    .try_remove::<PendingModelAnimationAssets>();
                 continue;
             }
         };
@@ -96,8 +97,8 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         {
             commands
                 .entity(prefab_model_entity)
-                .insert(ModelAnimationAttachmentResolved)
-                .remove::<PendingModelAnimationAssets>();
+                .try_insert(ModelAnimationAttachmentResolved)
+                .try_remove::<PendingModelAnimationAssets>();
             continue;
         }
         if initial_animation_set_asset
@@ -117,8 +118,8 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
                 if !animation_clip_asset_load_was_requested {
                     commands
                         .entity(prefab_model_entity)
-                        .insert(ModelAnimationAttachmentResolved)
-                        .remove::<PendingModelAnimationAssets>();
+                        .try_insert(ModelAnimationAttachmentResolved)
+                        .try_remove::<PendingModelAnimationAssets>();
                 }
             }
             continue;
@@ -132,7 +133,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             (!initial_animation_set_asset.animation_graph_nodes.is_empty())
                 .then(AnimationGraphPlaybackState::default);
         let mut prefab_model_commands = commands.entity(prefab_model_entity);
-        prefab_model_commands.insert((
+        prefab_model_commands.try_insert((
             ModelAnimationAttachmentResolved,
             AnimationPresentationOwner {
                 gameplay_entity: prefab_model_parent.map_or(prefab_model_entity, |parent| {
@@ -160,12 +161,12 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             },
         ));
         if animation_clip_targets_are_external_to_the_model_scene {
-            prefab_model_commands.insert(AnimationPlayer::default());
+            prefab_model_commands.try_insert(AnimationPlayer::default());
         }
         if let Some(animation_graph_playback_state) = initial_animation_graph_playback_state {
-            prefab_model_commands.insert(animation_graph_playback_state);
+            prefab_model_commands.try_insert(animation_graph_playback_state);
         }
-        prefab_model_commands.remove::<PendingModelAnimationAssets>();
+        prefab_model_commands.try_remove::<PendingModelAnimationAssets>();
     }
 }
 

@@ -29,6 +29,7 @@ pub(crate) fn resolve_loaded_gltf_animations_into_animation_set_assets(
         ),
     >,
 ) {
+    // Model owners can retire while loaded asset results await deferred application.
     for (prefab_model_entity, prefab_model) in &unresolved_prefab_models {
         let Some(model_handle) = prefab_model.handle.as_ref() else {
             continue;
@@ -39,7 +40,7 @@ pub(crate) fn resolve_loaded_gltf_animations_into_animation_set_assets(
         if loaded_gltf.animations.is_empty() {
             commands
                 .entity(prefab_model_entity)
-                .insert(ModelAnimationAttachmentResolved);
+                .try_insert(ModelAnimationAttachmentResolved);
             continue;
         }
         if loaded_gltf.animations.iter().any(|animation_clip_handle| {
@@ -57,7 +58,7 @@ pub(crate) fn resolve_loaded_gltf_animations_into_animation_set_assets(
             });
         commands
             .entity(prefab_model_entity)
-            .insert(PendingModelAnimationAssets {
+            .try_insert(PendingModelAnimationAssets {
                 pending_model_animation_set_asset_handles: vec![animation_set_asset_handle]
                     .into_boxed_slice(),
                 requested_initial_animation_clip_asset_key: None,
