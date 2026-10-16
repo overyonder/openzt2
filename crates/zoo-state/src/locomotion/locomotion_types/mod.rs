@@ -224,7 +224,6 @@ pub enum NavigationFailure {
     NoStartNode,
     NoRoute,
     TargetGone,
-    ContainmentBlocked,
 }
 
 /// The navigation index derived from the active terrain during world hydration

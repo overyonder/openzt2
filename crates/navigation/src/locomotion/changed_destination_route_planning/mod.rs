@@ -1,7 +1,6 @@
 use bevy::prelude::*;
 
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
-use openzt2_zoo_state::habitat::habitat_types::Containment;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
@@ -13,7 +12,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
@@ -35,7 +33,6 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
             &GlobalTransform,
             &Destination,
             Option<&LocomotionMode>,
-            Option<&Containment>,
             &mut Route,
         ),
         (Changed<Destination>, Without<DirectLocomotion>),
@@ -72,22 +69,9 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
         global_transform,
         destination,
         locomotion_mode,
-        containment,
         mut planned_route,
     ) in &mut navigation_agents_with_changed_destinations
     {
-        if containment.is_some_and(|containment| !containment.is_contained) {
-            planned_route.clear();
-            commands
-                .entity(navigation_agent_entity)
-                .remove::<Destination>();
-            navigation_failures.write(NavigationFailed {
-                entity: navigation_agent_entity,
-                request_id: destination.request_id,
-                reason: NavigationFailure::ContainmentBlocked,
-            });
-            continue;
-        }
         let route_planning_result = animal_policy
             .agent_with_authored_collision_limits(navigation_agent, animal_variant)
             .and_then(|(navigation_agent, maximum_ground_slope_radians)| {

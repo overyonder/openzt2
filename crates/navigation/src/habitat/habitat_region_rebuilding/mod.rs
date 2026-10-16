@@ -93,7 +93,17 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     };
 
     let mut fence_segments = Vec::with_capacity(fence_edges.iter().len());
+    let curb_type = openzt2_game_data::AssetId::from_key("curb");
     for (fence_entity, fence_edge, gate) in &fence_edges {
+        // Path curbs share fence topology and can coincide with enclosure edges,
+        // but their passable borders do not define animal habitats.
+        if world_definitions
+            .find_fence(fence_edge.definition)
+            .and_then(|definition| world_definitions.find_object(definition.object))
+            .is_some_and(|object| object.behavior_type_identifiers.contains(&curb_type))
+        {
+            continue;
+        }
         let (Ok(first_node), Ok(second_node)) = (
             topology_nodes.get(fence_edge.a),
             topology_nodes.get(fence_edge.b),
