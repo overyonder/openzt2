@@ -769,6 +769,39 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                     let target = nodes.iter_mut().find_map(|(entity, id, owner, ..)| {
                         (owner.0 == source_owner.0 && id.id == target_node).then_some(entity)
                     });
+                    if let Some(target) = target.filter(|target| toggle_groups.contains(*target)) {
+                        let members = children
+                            .get(target)
+                            .into_iter()
+                            .flat_map(|children| children.iter())
+                            .filter_map(|child| {
+                                let (_, _, _, _, _, _, selected, _) = nodes.get_mut(child).ok()?;
+                                let selected = selected?.0;
+                                focusables.get(child).ok().and_then(|(_, policy, _)| {
+                                    policy.enabled.then_some((child, selected))
+                                })
+                            })
+                            .collect::<Vec<_>>();
+                        if !members.is_empty() {
+                            let current = members.iter().position(|(_, selected)| *selected);
+                            let index = match (current, *focus_next) {
+                                (Some(index), true) => (index + 1) % members.len(),
+                                (Some(index), false) => (index + members.len() - 1) % members.len(),
+                                (None, true) => 0,
+                                (None, false) => members.len() - 1,
+                            };
+                            let node = members[index].0;
+                            let source = activation.source;
+                            commands.queue(move |world: &mut World| {
+                                world.write_message(UiNodeActivated {
+                                    source,
+                                    node,
+                                    trigger: UiTrigger::Press,
+                                });
+                            });
+                        }
+                        continue;
+                    }
                     let order = target
                         .and_then(|target| focusables.get(target).ok())
                         .map(|(_, focusable, _)| focusable.order);

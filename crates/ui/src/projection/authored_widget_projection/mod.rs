@@ -495,7 +495,8 @@ pub(super) fn project_widget(
                 .entity(entity)
                 .insert(UiAuthoredToggleGroupSelectionPolicy::new(*allow_repress));
             let source = *source;
-            if source != UiWidgetLiveCollectionSource::Unbound {
+            if source != UiWidgetLiveCollectionSource::Unbound || grid.rows < 0 || grid.columns < 0
+            {
                 apply_authored_list_scroll_axis_to_bevy_node_overflow(commands, entity, grid);
                 commands.entity(entity).insert((
                     UiListPolicy {
