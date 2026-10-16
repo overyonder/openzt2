@@ -72,14 +72,20 @@ fn save_value(
                 ) {
                     return Err(mlua::Error::runtime("unsupported scenario data key"));
                 }
-                entries.push((
-                    save_value(key, depth + 1, values, tables)?,
-                    save_value(value, depth + 1, values, tables)?,
-                ));
+                let saved_value =
+                    save_value(value, depth + 1, values, tables).map_err(|error| {
+                        mlua::Error::runtime(format!("scenario table entry {key:?}: {error}"))
+                    })?;
+                entries.push((save_value(key, depth + 1, values, tables)?, saved_value));
             }
             ScenarioLuaSavedValue::Table(entries)
         }
-        _ => return Err(mlua::Error::runtime("unsupported scenario data value")),
+        value => {
+            return Err(mlua::Error::runtime(format!(
+                "unsupported scenario data value of type {}",
+                value.type_name()
+            )));
+        }
     })
 }
 
@@ -97,10 +103,21 @@ pub(super) fn capture_runtime(
     {
         let (key, value) = entry?;
         let key = key.as_bytes().to_vec();
-        if standard.contains(&key) || matches!(value, Value::Function(_)) {
+        // Lunify spills registers into globals while translating Lua 5.0 loops.
+        // These are invocation scratch values, not authored scenario state.
+        if standard.contains(&key)
+            || key.starts_with(b"__%lunify%__temp")
+            || matches!(value, Value::Function(_))
+        {
             continue;
         }
-        globals.push((key, save_value(value, 0, &mut values, &mut tables)?));
+        let saved_value = save_value(value, 0, &mut values, &mut tables).map_err(|error| {
+            mlua::Error::runtime(format!(
+                "scenario global {}: {error}",
+                String::from_utf8_lossy(&key)
+            ))
+        })?;
+        globals.push((key, saved_value));
     }
     globals.sort_by(|left, right| left.0.cmp(&right.0));
     Ok(ScenarioLuaSavedState {
@@ -305,6 +322,16 @@ mod tests {
             .set("__openzt2_rule_arguments", arguments)
             .unwrap();
         lua.globals().set("releaseanimals", true).unwrap();
+        let converter_temporary = lua.create_table().unwrap();
+        converter_temporary
+            .set(
+                "BFG_GET_ENTITIES_DIRECT",
+                lua.create_function(|_, ()| Ok(())).unwrap(),
+            )
+            .unwrap();
+        lua.globals()
+            .set("__%lunify%__temp32_0", converter_temporary)
+            .unwrap();
         let evaluate: mlua::Function = lua.globals().get("evaluate").unwrap();
         let before: (i64, f64, i64, bool) = evaluate.call(data).unwrap();
         let context = ScenarioLuaVirtualMachine {
