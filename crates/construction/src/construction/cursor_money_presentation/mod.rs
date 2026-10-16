@@ -19,6 +19,9 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use crate::construction::cursor_money_types::CursorMoneyContainer;
 use crate::construction::cursor_money_types::CursorMoneyPreviewFragmentOwner;
 use crate::construction::cursor_money_types::CursorMoneySpendFragmentOwner;
+use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::{
+    AnimalPlacementOperation, AnimalSpeciesAwaitingHabitatPlacement,
+};
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
 
@@ -29,6 +32,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     preview_fragment_owners: Query<(), With<CursorMoneyPreviewFragmentOwner>>,
     mut spend_fragment_owners: Query<&mut CursorMoneySpendFragmentOwner>,
     previews: Query<&ConstructionPreview>,
+    animal_placements: Query<&AnimalSpeciesAwaitingHabitatPlacement>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -61,7 +65,12 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         return;
     };
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    let construction_preview_cost =
+    let construction_preview_cost = if animal_placements
+        .iter()
+        .any(|placement| matches!(placement.operation, AnimalPlacementOperation::Relocation(_)))
+    {
+        Some(Money(0))
+    } else {
         previews
             .single()
             .ok()
@@ -74,7 +83,8 @@ pub(super) fn project_cursor_money_text_position_and_animation(
                             preview.definition,
                         )
                     }),
-            });
+            })
+    };
     let current_pointer_screen_position = primary_window.cursor_position();
 
     for (

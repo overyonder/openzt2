@@ -26,7 +26,8 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
     animal_adoption_contracts::{
-        AdoptAnimal, AnimalSpeciesAwaitingHabitatPlacement, BeginAnimalAdoptionPlacement,
+        AdoptAnimal, AnimalPlacementOperation, AnimalSpeciesAwaitingHabitatPlacement,
+        BeginAnimalAdoptionPlacement, BeginAnimalRelocation,
     },
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
     animal_habitat_placement_validation::{
@@ -73,12 +74,52 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
             AnimalSpeciesAwaitingHabitatPlacement {
                 species: species.id,
                 variant,
-                sex,
-                offer_slot_index: request.offer_slot_index,
+                operation: AnimalPlacementOperation::Adoption {
+                    sex,
+                    offer_slot_index: request.offer_slot_index,
+                },
             },
             ObjectPlacementPreviewRequest(preview_definition),
         ));
         construction_tool_requests.write(SelectConstructionTool(ConstructionTool::Placement));
+    }
+}
+
+pub(super) fn begin_animal_relocation_on_construction_cursor(
+    mut commands: Commands,
+    mut requests: MessageReader<BeginAnimalRelocation>,
+    animals: Query<
+        (
+            &super::types::SpeciesHandle,
+            &super::types::AnimalVariant,
+            &openzt2_world_state::world_spawn::world_membership_types::DefinitionId,
+        ),
+        (
+            With<super::types::Adoptable>,
+            Without<super::types::CratingRestricted>,
+            Without<openzt2_zoo_state::animal_health::types::Dead>,
+            Without<openzt2_zoo_state::animal_health::types::Rampaging>,
+        ),
+    >,
+    cursors: Query<Entity, With<ConstructionCursor>>,
+    mut tools: MessageWriter<SelectConstructionTool>,
+) {
+    let Ok(cursor) = cursors.single() else {
+        return;
+    };
+    for request in requests.read() {
+        let Ok((species, variant, definition)) = animals.get(request.0) else {
+            continue;
+        };
+        commands.entity(cursor).insert((
+            AnimalSpeciesAwaitingHabitatPlacement {
+                species: species.species,
+                variant: Some(variant.0),
+                operation: AnimalPlacementOperation::Relocation(request.0),
+            },
+            ObjectPlacementPreviewRequest(definition.0),
+        ));
+        tools.write(SelectConstructionTool(ConstructionTool::Placement));
     }
 }
 
@@ -134,7 +175,11 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
             PlacementValidity::Invalid(PlacementFailure::OutsideMap)
         } else if hydrated_previews.get(preview_entity).is_err() {
             PlacementValidity::Pending
-        } else if adoption_policy.single().is_ok_and(|policy| !policy.enabled) {
+        } else if matches!(
+            animal_placement.operation,
+            AnimalPlacementOperation::Adoption { .. }
+        ) && adoption_policy.single().is_ok_and(|policy| !policy.enabled)
+        {
             PlacementValidity::Invalid(PlacementFailure::Locked)
         } else if habitat.is_none_or(|habitat| {
             habitats.get(habitat).is_err()
@@ -147,6 +192,13 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .is_err()
         }) {
             PlacementValidity::Invalid(PlacementFailure::InvalidHabitat)
+        } else if matches!(
+            animal_placement.operation,
+            AnimalPlacementOperation::Relocation(_)
+        ) {
+            PlacementValidity::Valid {
+                cost: openzt2_zoo_state::economy::money_types::Money(0),
+            }
         } else {
             let Some(mut adoption_cost) =
                 resolve_nonnegative_animal_adoption_cost(world_definitions, species)
@@ -188,6 +240,20 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     previews: Query<&ConstructionPreview>,
     mut adoption_requests: MessageWriter<AdoptAnimal>,
     mut construction_tool_requests: MessageWriter<SelectConstructionTool>,
+    mut animals: Query<
+        (
+            &mut Transform,
+            Option<&mut avian3d::prelude::Position>,
+            Option<&mut avian3d::prelude::Rotation>,
+            Has<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>,
+        ),
+        (
+            With<super::types::Animal>,
+            Without<super::types::CratingRestricted>,
+            Without<openzt2_zoo_state::animal_health::types::Dead>,
+            Without<openzt2_zoo_state::animal_health::types::Rampaging>,
+        ),
+    >,
 ) {
     if *construction_tool != ConstructionTool::Placement
         || !primary_pointer.just_pressed
@@ -215,14 +281,46 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     ) else {
         return;
     };
-    adoption_requests.write(AdoptAnimal {
-        species: animal_placement.species,
-        variant: animal_placement.variant,
-        sex: animal_placement.sex,
-        offer_slot_index: animal_placement.offer_slot_index,
-        habitat,
-        transform: valid_preview.transform,
-    });
+    match animal_placement.operation {
+        AnimalPlacementOperation::Adoption {
+            sex,
+            offer_slot_index,
+        } => {
+            adoption_requests.write(AdoptAnimal {
+                species: animal_placement.species,
+                variant: animal_placement.variant,
+                sex,
+                offer_slot_index,
+                habitat,
+                transform: valid_preview.transform,
+            });
+        }
+        AnimalPlacementOperation::Relocation(animal) => {
+            let Ok((mut transform, position, rotation, has_task)) = animals.get_mut(animal) else {
+                return;
+            };
+            transform.translation = valid_preview.transform.translation;
+            transform.rotation = valid_preview.transform.rotation;
+            if let Some(mut position) = position {
+                position.0 = transform.translation;
+            }
+            if let Some(mut rotation) = rotation {
+                rotation.0 = transform.rotation;
+            }
+            if has_task {
+                openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal, &mut commands);
+            }
+            commands
+                .entity(animal)
+                .remove::<(
+                    openzt2_zoo_state::locomotion::locomotion_types::Destination,
+                    openzt2_zoo_state::locomotion::locomotion_types::Docking,
+                )>()
+                .insert(openzt2_zoo_state::locomotion::locomotion_types::Velocity(
+                    Vec3::ZERO,
+                ));
+        }
+    }
     commands.entity(cursor_entity).remove::<(
         AnimalSpeciesAwaitingHabitatPlacement,
         ObjectPlacementPreviewRequest,

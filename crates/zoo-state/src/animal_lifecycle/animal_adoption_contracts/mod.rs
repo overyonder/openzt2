@@ -17,14 +17,25 @@ pub struct BeginAnimalAdoptionPlacement {
     pub offer_slot_index: Option<u16>,
 }
 
+#[derive(Message, Debug, Clone, Copy)]
+pub struct BeginAnimalRelocation(pub Entity);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnimalPlacementOperation {
+    Adoption {
+        sex: Option<Sex>,
+        offer_slot_index: Option<u16>,
+    },
+    Relocation(Entity),
+}
+
 /// Animal-specific state retained on the ordinary construction cursor while
 /// the player selects the habitat and world position for an adoption.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AnimalSpeciesAwaitingHabitatPlacement {
     pub species: AssetId,
     pub variant: Option<AssetId>,
-    pub sex: Option<Sex>,
-    pub offer_slot_index: Option<u16>,
+    pub operation: AnimalPlacementOperation,
 }
 
 #[derive(Message, Debug, Clone)]

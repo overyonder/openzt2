@@ -54,6 +54,7 @@ impl Plugin for AnimalLifecyclePlugin {
             .run_if(in_state(GamePhase::Loading)));
         app.add_message::<AdoptAnimal>()
             .add_message::<BeginAnimalAdoptionPlacement>()
+            .add_message::<animal_adoption_contracts::BeginAnimalRelocation>()
             .add_message::<AnimalAdopted>()
             .add_message::<DeclineCurrentAnimalAdoptionOffers>()
             .add_message::<PlaceAnimalForAdoption>()
@@ -77,6 +78,7 @@ impl Plugin for AnimalLifecyclePlugin {
                     ui_actions::consume_animal_ui_actions,
                     adoption_placement_execution::
                         begin_selected_species_adoption_placement_on_construction_cursor,
+                    adoption_placement_execution::begin_animal_relocation_on_construction_cursor,
                     adoption_placement_execution::
                         validate_selected_species_adoption_placement_preview,
                     adoption_placement_execution::

@@ -42,6 +42,11 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 
 #[derive(SystemParam)]
 pub(super) struct ConstructionUiIntents<'w, 's> {
+    animals: Query<'w, 's, (), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
+    animal_moves: MessageWriter<
+        'w,
+        openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation,
+    >,
     animal_crates: Query<
         'w,
         's,
@@ -118,6 +123,13 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::MoveSelected => {
+                    if let Some(animal) = selected.0.filter(|entity| {
+                        intents.animals.contains(*entity)
+                            && !intents.animal_crates.contains(*entity)
+                    }) {
+                        intents.animal_moves.write(openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation(animal));
+                        continue;
+                    }
                     if let Some((entity, placeable)) = selected.0.and_then(|entity| {
                         let entity = intents
                             .animal_crates
