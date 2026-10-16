@@ -10,6 +10,7 @@ pub(super) fn enter_game_or_return_to_map_selection_after_world_load_result(
     mut finished: MessageReader<WorldLoadFinished>,
     mut failed: MessageReader<WorldLoadFailed>,
     selection: Res<ShellSelection>,
+    worlds: Query<&openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
     snapshot_loads: Query<(), With<crate::persistence::slot_io::pending_snapshot_application_types::PendingSnapshotApplication>>,
     mut next_phase: ResMut<NextState<GamePhase>>,
 ) {
@@ -18,7 +19,9 @@ pub(super) fn enter_game_or_return_to_map_selection_after_world_load_result(
     for result in finished.read() {
         if result.operation.is_none()
             && snapshot_loads.is_empty()
-            && selection.scenario == Some(result.scenario)
+            // The selection screen may clear its selection during teardown.
+            // The completed world owns the accepted load by this point.
+            && worlds.get(result.root).is_ok_and(|world| world.scenario == result.scenario)
         {
             next_phase.set(GamePhase::InGame);
         }

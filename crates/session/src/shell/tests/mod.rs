@@ -33,6 +33,33 @@ fn id(byte: u8) -> AssetId {
     AssetId([byte; 16])
 }
 
+#[test]
+fn completed_world_enters_game_after_map_selection_is_cleared() {
+    use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
+    use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
+    use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+
+    let mut app = App::new();
+    app.add_plugins(StatesPlugin)
+        .insert_state(GamePhase::Loading)
+        .init_resource::<ShellSelection>()
+        .add_message::<WorldLoadFinished>()
+        .add_message::<WorldLoadFailed>()
+        .add_systems(Update, super::world_load_completion::enter_game_or_return_to_map_selection_after_world_load_result);
+    let root = app.world_mut().spawn(WorldRoot { scenario: id(2) }).id();
+    app.world_mut().write_message(WorldLoadFinished {
+        operation: None,
+        scenario: id(2),
+        root,
+    });
+    app.update();
+    app.update();
+    assert_eq!(
+        *app.world().resource::<State<GamePhase>>().get(),
+        GamePhase::InGame
+    );
+}
+
 fn routing_app(selection: ShellSelection, profile: Option<AssetId>) -> App {
     let mut app = App::new();
     app.add_plugins(StatesPlugin)
