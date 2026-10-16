@@ -10,6 +10,7 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
+use openzt2_world_state::application_schedule::GameSet;
 
 use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
@@ -32,14 +33,22 @@ impl Plugin for HabitatPlugin {
                 (
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
-                    crate::habitat::habitat_terrain_summary_refresh::request_habitat_summary_refreshes_after_terrain_changes,
                     crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
-                    crate::habitat::habitat_terrain_summary_refresh::refresh_terrain_derived_habitat_summaries,
                     crate::habitat::habitat_membership_and_containment::update_habitat_membership_after_locatable_entities_move,
                     crate::habitat::habitat_membership_and_containment::update_containment_after_habitat_regions_change,
                 )
                     .chain()
                     .in_set(FixedGameSet::Cleanup),
+            )
+            .add_systems(
+                Update,
+                (
+                    crate::habitat::habitat_terrain_summary_refresh::request_habitat_summary_refreshes_after_terrain_changes,
+                    crate::habitat::habitat_terrain_summary_refresh::refresh_terrain_derived_habitat_summaries,
+                )
+                    .chain()
+                    .in_set(GameSet::Presentation)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 OnEnter(GamePhase::InGame),
