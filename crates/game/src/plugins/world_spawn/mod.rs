@@ -142,6 +142,7 @@ impl Plugin for WorldSpawnPlugin {
                     physical_presentation_state::apply_physical_presentation_requests,
                     project_default_authored_world_object_presentation_attachments,
                     named_physical_presentation_projection::hydrate_required_named_physical_presentations,
+                    named_physical_presentation_projection::attach_named_presentations_to_model_nodes,
                     prefab_effect_trigger_hydration::hydrate_prefab_effect_triggers,
                     synchronize_zoo_entrance_anchor_after_transform_changes,
                 )

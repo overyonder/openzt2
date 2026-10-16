@@ -135,8 +135,12 @@ fn visit_netimmerse_scene_block(
         scale = constant_uniform_scale.map_or(scale, |value| [value; 3]);
     }
     let parent_key = parent.map(|parent| builder.entity_key(parent).to_owned());
-    let entity = builder.entity(
+    // Entity binders, signs and docks address authored nodes by name
+    // (`Link_Fire01`), so the authored attachment key is the node name while
+    // the stable key stays unique per block.
+    let entity = builder.entity_with_distinct_stable_and_authored_attachment_keys(
         &netimmerse_scene_entity_key(block_ref),
+        &object.object.name,
         parent_key.as_deref(),
         PrefabTransform {
             translation_m,

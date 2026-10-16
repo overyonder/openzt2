@@ -303,7 +303,10 @@ pub(super) fn bind_authored_placement_object(
             entity_scene_paths,
         )?
     } else {
-        Vec::new()
+        super::named_physical_presentation_source_lowering::lower_parented_named_physical_presentations(
+            record,
+            entity_scene_paths,
+        )?
     };
     let presentation_attachments = lower_authored_world_object_presentation_controller_states(
         record,
