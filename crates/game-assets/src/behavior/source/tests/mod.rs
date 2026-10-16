@@ -4,6 +4,28 @@ use crate::source_document::{
 };
 
 #[test]
+fn radial_docking_preserves_target_radius_arrival_radius_and_heading_tolerance() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/shelter.beh"),
+        br#"<BehaviorSets><Enter><behaviors><BFBehDockRadial subjectNode="Floor" targetRadius="3" rotError="180"/><BFBehDockRadial targetAnim="Stand_Idle" dockRadius="3" targetRadius="10"/></behaviors></Enter></BehaviorSets>"#,
+    ).unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::Dock(shelter), BehaviorAction::Dock(view)] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("both radial docks expected");
+    };
+    assert_eq!(shelter.radial_distance_m, Some(3.0));
+    assert_eq!(shelter.arrival_radius_m, None);
+    assert_eq!(shelter.rotation_tolerance_radians, std::f32::consts::PI);
+    assert_eq!(view.radial_distance_m, Some(10.0));
+    assert_eq!(view.arrival_radius_m, Some(3.0));
+}
+
+#[test]
 fn delayed_subject_tokens_preserve_activation_and_expiration_times() {
     use openzt2_game_data::behavior::action_record::BehaviorAction;
     use std::time::Duration;

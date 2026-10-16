@@ -216,9 +216,10 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                     continue;
                 };
                 radial_dock_point_and_forward_in_target_space(
-                    actor_transform.translation(),
+                    actor_transform,
                     target_transform,
                     radial_distance_m,
+                    docking_action.rotation_tolerance_radians,
                 )
             } else {
                 let interaction_slot_target_node_name = target_definition
@@ -315,7 +316,9 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             target,
             local_point,
             local_forward,
-            radius_m: navigation_agent.radius_m.max(0.05),
+            radius_m: docking_action
+                .arrival_radius_m
+                .unwrap_or(navigation_agent.radius_m.max(0.05)),
         });
         commands
             .entity(actor)
@@ -330,25 +333,38 @@ pub(super) fn start_current_supported_behavior_docking_actions(
 }
 
 fn radial_dock_point_and_forward_in_target_space(
-    actor_world_position: Vec3,
+    actor_transform: &GlobalTransform,
     target_transform: &GlobalTransform,
     radial_distance_m: f32,
+    rotation_tolerance_radians: f32,
 ) -> (Vec3, Vec3) {
     let target_affine = target_transform.affine();
     let target_world_position = target_transform.translation();
     // An actor already on the target origin approaches from the target's front.
     let target_world_forward = target_affine.transform_vector3(Vec3::Z);
-    let approach_direction = (actor_world_position - target_world_position)
+    let approach_direction = (actor_transform.translation() - target_world_position)
         .xz()
         .try_normalize()
         .or_else(|| target_world_forward.xz().try_normalize())
         .unwrap_or(Vec2::Y);
     let approach_direction = Vec3::new(approach_direction.x, 0.0, approach_direction.y);
+    let actor_forward = actor_transform
+        .affine()
+        .transform_vector3(Vec3::Z)
+        .xz()
+        .normalize_or_zero();
+    let facing = -approach_direction;
+    let heading_error = actor_forward.dot(facing.xz()).clamp(-1.0, 1.0).acos();
+    let forward = if actor_forward != Vec2::ZERO && heading_error <= rotation_tolerance_radians {
+        Vec3::new(actor_forward.x, 0.0, actor_forward.y)
+    } else {
+        facing
+    };
     let target_from_world = target_affine.inverse();
     (
         target_from_world
             .transform_point3(target_world_position + approach_direction * radial_distance_m),
-        target_from_world.transform_vector3(-approach_direction),
+        target_from_world.transform_vector3(forward),
     )
 }
 
@@ -402,8 +418,12 @@ mod tests {
             rotation: Quat::from_rotation_y(std::f32::consts::FRAC_PI_2),
             scale: Vec3::splat(3.0),
         });
-        let (point, forward) =
-            radial_dock_point_and_forward_in_target_space(Vec3::new(10.0, 0.0, 30.0), &target, 1.5);
+        let (point, forward) = radial_dock_point_and_forward_in_target_space(
+            &GlobalTransform::from_translation(Vec3::new(10.0, 0.0, 30.0)),
+            &target,
+            1.5,
+            0.0,
+        );
         assert!(target
             .transform_point(point)
             .abs_diff_eq(Vec3::new(10.0, 2.0, 21.5), 1.0e-5));
@@ -412,6 +432,19 @@ mod tests {
             .transform_vector3(forward)
             .normalize()
             .abs_diff_eq(Vec3::NEG_Z, 1.0e-5));
+    }
+
+    #[test]
+    fn radial_shelter_dock_accepts_an_opposite_heading() {
+        let actor = GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0));
+        let (point, forward) = radial_dock_point_and_forward_in_target_space(
+            &actor,
+            &GlobalTransform::IDENTITY,
+            3.0,
+            std::f32::consts::PI,
+        );
+        assert!(point.abs_diff_eq(Vec3::new(0.0, 0.0, 3.0), 1.0e-5));
+        assert!(forward.abs_diff_eq(Vec3::Z, 1.0e-5));
     }
 }
 

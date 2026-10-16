@@ -135,8 +135,9 @@ fn visit_netimmerse_scene_block(
         scale = constant_uniform_scale.map_or(scale, |value| [value; 3]);
     }
     let parent_key = parent.map(|parent| builder.entity_key(parent).to_owned());
-    let entity = builder.entity(
+    let entity = builder.entity_with_distinct_stable_and_authored_attachment_keys(
         &netimmerse_scene_entity_key(block_ref),
+        &object.object.name,
         parent_key.as_deref(),
         PrefabTransform {
             translation_m,

@@ -32,6 +32,41 @@ use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
+use std::sync::LazyLock;
+
+static LIVE_STATE_TYPES: LazyLock<[(AssetId, BehaviorEntityStateEligibilityFact); 9]> =
+    LazyLock::new(|| {
+        [
+            ("b_adult", BehaviorEntityStateEligibilityFact::Adult),
+            ("b_old", BehaviorEntityStateEligibilityFact::Old),
+            ("b_male", BehaviorEntityStateEligibilityFact::Male),
+            ("b_pregnant", BehaviorEntityStateEligibilityFact::Pregnant),
+            ("b_disease", BehaviorEntityStateEligibilityFact::Diseased),
+            ("b_rampage", BehaviorEntityStateEligibilityFact::Rampaging),
+            ("b_frozen", BehaviorEntityStateEligibilityFact::Frozen),
+            ("b_dead", BehaviorEntityStateEligibilityFact::Dead),
+            ("b_moving", BehaviorEntityStateEligibilityFact::Moving),
+        ]
+        .map(|(name, fact)| (AssetId::from_key(name), fact))
+    });
+static ANIMAL_TYPES: LazyLock<[AssetId; 2]> =
+    LazyLock::new(|| ["animal", "b_animal"].map(AssetId::from_key));
+static NEED_NAMES: LazyLock<[AssetId; 11]> = LazyLock::new(|| {
+    [
+        "hunger",
+        "thirst",
+        "rest",
+        "privacy",
+        "social",
+        "exercise",
+        "stimulation",
+        "environment",
+        "health",
+        "hygiene",
+        "bathroom",
+    ]
+    .map(AssetId::from_key)
+});
 
 #[derive(QueryData)]
 pub(crate) struct AnimalCandidateFacts {
@@ -71,29 +106,14 @@ impl AnimalCandidateFactsItem<'_, '_> {
 
     pub(crate) fn matches_type(&self, required: AssetId, authored_types: &[AssetId]) -> bool {
         // Live state takes precedence over the variant's authored initial flags.
-        for (name, fact) in [
-            ("b_adult", BehaviorEntityStateEligibilityFact::Adult),
-            ("b_old", BehaviorEntityStateEligibilityFact::Old),
-            ("b_male", BehaviorEntityStateEligibilityFact::Male),
-            ("b_pregnant", BehaviorEntityStateEligibilityFact::Pregnant),
-            ("b_disease", BehaviorEntityStateEligibilityFact::Diseased),
-            ("b_rampage", BehaviorEntityStateEligibilityFact::Rampaging),
-            ("b_frozen", BehaviorEntityStateEligibilityFact::Frozen),
-            ("b_dead", BehaviorEntityStateEligibilityFact::Dead),
-            ("b_moving", BehaviorEntityStateEligibilityFact::Moving),
-        ] {
-            if required == AssetId::from_key(name) {
+        for &(identifier, fact) in LIVE_STATE_TYPES.iter() {
+            if required == identifier {
                 return self.boolean_state(fact) == Some(true);
             }
         }
         authored_types.contains(&required)
-            || [
-                self.species.species,
-                self.variant.0,
-                AssetId::from_key("animal"),
-                AssetId::from_key("b_animal"),
-            ]
-            .contains(&required)
+            || [self.species.species, self.variant.0].contains(&required)
+            || ANIMAL_TYPES.contains(&required)
     }
 
     fn boolean_state(&self, state: BehaviorEntityStateEligibilityFact) -> Option<bool> {
@@ -116,27 +136,24 @@ impl AnimalCandidateFactsItem<'_, '_> {
     /// Canonical wellness uses 0..1000; authored BFAI values are deprivation 0..100.
     pub(super) fn source_need(&self, name: AssetId) -> Option<(i32, bool)> {
         let needs = [
-            ("hunger", self.hunger.0),
-            ("thirst", self.thirst.0),
-            ("rest", self.rest.0),
-            ("privacy", self.privacy.0),
-            ("social", self.social.0),
-            ("exercise", self.exercise.0),
-            ("stimulation", self.stimulation.0),
-            ("environment", self.environment.0),
-            ("health", self.health.0),
-            ("hygiene", self.hygiene.0),
-            ("bathroom", self.bathroom.0),
+            self.hunger.0,
+            self.thirst.0,
+            self.rest.0,
+            self.privacy.0,
+            self.social.0,
+            self.exercise.0,
+            self.stimulation.0,
+            self.environment.0,
+            self.health.0,
+            self.hygiene.0,
+            self.bathroom.0,
         ];
-        needs
-            .iter()
-            .enumerate()
-            .find_map(|(index, (key, wellness))| {
-                (AssetId::from_key(key) == name).then_some((
-                    (MAX_NEED_Q16 - (*wellness).clamp(0, MAX_NEED_Q16)) / 10,
-                    self.triggers.0 & (1 << index) != 0,
-                ))
-            })
+        NEED_NAMES.iter().enumerate().find_map(|(index, key)| {
+            (*key == name).then_some((
+                (MAX_NEED_Q16 - needs[index].clamp(0, MAX_NEED_Q16)) / 10,
+                self.triggers.0 & (1 << index) != 0,
+            ))
+        })
     }
 
     pub(super) fn satisfies(&self, fact: &BehaviorCandidateEligibilityFact) -> bool {
@@ -178,23 +195,20 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 }
             }
             BehaviorEligibilityFactInput::Welfare(need) => {
-                let name = match need {
-                    BehaviorWelfareEligibilityFact::Hunger => "hunger",
-                    BehaviorWelfareEligibilityFact::Bathroom => "bathroom",
-                    BehaviorWelfareEligibilityFact::Thirst => "thirst",
-                    BehaviorWelfareEligibilityFact::Rest => "rest",
-                    BehaviorWelfareEligibilityFact::Privacy => "privacy",
-                    BehaviorWelfareEligibilityFact::Social => "social",
-                    BehaviorWelfareEligibilityFact::Exercise => "exercise",
-                    BehaviorWelfareEligibilityFact::Stimulation => "stimulation",
-                    BehaviorWelfareEligibilityFact::Health => "health",
-                    BehaviorWelfareEligibilityFact::Hygiene => "hygiene",
+                let wellness = match need {
+                    BehaviorWelfareEligibilityFact::Hunger => self.hunger.0,
+                    BehaviorWelfareEligibilityFact::Bathroom => self.bathroom.0,
+                    BehaviorWelfareEligibilityFact::Thirst => self.thirst.0,
+                    BehaviorWelfareEligibilityFact::Rest => self.rest.0,
+                    BehaviorWelfareEligibilityFact::Privacy => self.privacy.0,
+                    BehaviorWelfareEligibilityFact::Social => self.social.0,
+                    BehaviorWelfareEligibilityFact::Exercise => self.exercise.0,
+                    BehaviorWelfareEligibilityFact::Stimulation => self.stimulation.0,
+                    BehaviorWelfareEligibilityFact::Health => self.health.0,
+                    BehaviorWelfareEligibilityFact::Hygiene => self.hygiene.0,
                     _ => return false,
                 };
-                let Some((value, _)) = self.source_need(AssetId::from_key(name)) else {
-                    return false;
-                };
-                value
+                (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10
             }
             _ => return false,
         };

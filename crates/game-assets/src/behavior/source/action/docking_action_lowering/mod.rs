@@ -58,9 +58,7 @@ pub(super) fn lower_docking_action_source_node(
         "BFBehDockRadial" => true,
         _ => return Ok(None),
     };
-    // Rotation tolerance, interpolation and target-node alignment have no
-    // mapped radial policy yet, so those docks stay unsupported. A radial
-    // subject node is aligned over the target like an ordinary dock's.
+    // Interpolation and target-node alignment remain unsupported for radial docks.
     if docking_action_source_node
         .attributes
         .iter()
@@ -68,7 +66,12 @@ pub(super) fn lower_docking_action_source_node(
             if radial {
                 !matches!(
                     attribute.name(),
-                    "dockRadius" | "targetAnim" | "locoSpeed" | "subjectNode"
+                    "dockRadius"
+                        | "targetRadius"
+                        | "rotError"
+                        | "targetAnim"
+                        | "locoSpeed"
+                        | "subjectNode"
                 )
             } else {
                 !matches!(
@@ -90,17 +93,28 @@ pub(super) fn lower_docking_action_source_node(
     let radial_distance_m = if radial {
         // Without a radius the actor docks on the target itself, as the
         // guest viewing tasks do on the path they view from.
-        let distance =
-            read_optional_float_attribute(docking_action_source_node, "dockRadius")?.unwrap_or(0.0);
+        let distance = read_optional_float_attribute(docking_action_source_node, "targetRadius")?
+            .unwrap_or(0.0);
         if !distance.is_finite() || distance < 0.0 {
             return Err(invalid_behavior_source_data(
-                "BFBehDockRadial has no valid dockRadius",
+                "BFBehDockRadial has no valid targetRadius",
             ));
         }
         Some(distance)
     } else {
         None
     };
+    let arrival_radius_m = read_optional_float_attribute(docking_action_source_node, "dockRadius")?;
+    if arrival_radius_m.is_some_and(|radius| !radius.is_finite() || radius <= 0.0) {
+        return Err(invalid_behavior_source_data("invalid dockRadius"));
+    }
+    let rotation_tolerance_degrees =
+        read_optional_float_attribute(docking_action_source_node, "rotError")?.unwrap_or(0.0);
+    if !rotation_tolerance_degrees.is_finite()
+        || !(0.0..=180.0).contains(&rotation_tolerance_degrees)
+    {
+        return Err(invalid_behavior_source_data("invalid rotError"));
+    }
     let locomotion_speed =
         read_optional_trimmed_string_attribute(docking_action_source_node, "locoSpeed")
             .map(
@@ -131,5 +145,7 @@ pub(super) fn lower_docking_action_source_node(
         locomotion_speed,
         redock: read_boolean_attribute_or_false(docking_action_source_node, "redock")?,
         radial_distance_m,
+        arrival_radius_m,
+        rotation_tolerance_radians: rotation_tolerance_degrees.to_radians(),
     })))
 }

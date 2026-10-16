@@ -187,7 +187,7 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         .add(ScenePrefabAsset::from_test_document(ScenePrefabDocument {
             entities: vec![
                 entity("root", [0.0, 0.5, 0.0], vec![1]),
-                entity("AdultDock", [0.0, 0.0, 1.0], vec![]),
+                entity("adultdock", [0.0, 0.0, 1.0], vec![]),
             ],
             automatic_placement_bounds_xz: None,
             rail_camera: None,

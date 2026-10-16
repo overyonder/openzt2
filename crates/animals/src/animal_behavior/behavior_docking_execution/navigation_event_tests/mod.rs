@@ -47,6 +47,8 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
                         locomotion_speed: None,
                         redock: false,
                         radial_distance_m: None,
+                        arrival_radius_m: None,
+                        rotation_tolerance_radians: 0.0,
                     })],
                 ),
             }]),

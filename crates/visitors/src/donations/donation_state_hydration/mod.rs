@@ -13,7 +13,7 @@ use super::donation_opportunity_types::{
     DonationAcceptor, DonationAcceptorFactsResolved, DonationUsePoint,
 };
 
-const DONATION_ACCEPTOR_DOCK_ATTACHMENT_NAME: &str = "AdultDock";
+const DONATION_ACCEPTOR_DOCK_ATTACHMENT_NAME: &str = "adultdock";
 
 /// Projects the source-owned acceptor flag and prefab-owned dock attachment
 /// onto each ordinary spawned world-object entity.
