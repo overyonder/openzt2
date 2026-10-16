@@ -61,6 +61,7 @@ fn policy_document() -> WorldDefinitionDocument {
             destruction: None,
         }],
         guests: vec![GuestDefinition {
+            donation: None,
             id,
             object: id,
             behavior_subject_type_identifiers: vec![],

@@ -34,7 +34,7 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) objects:
         Query<'w, 's, WorldObjectTargetFacts, (Without<Animal>, Without<WorldEntityIsCrated>)>,
     pub(super) indexed_objects: Query<'w, 's, (Entity, &'static DefinitionId), Without<Animal>>,
-    pub(super) added_objects: Query<'w, 's, (), (Added<DefinitionId>, Without<Animal>)>,
+    pub(super) changed_objects: Query<'w, 's, (), (Changed<DefinitionId>, Without<Animal>)>,
     pub(super) removed_objects: RemovedComponents<'w, 's, DefinitionId>,
     pub(super) index: Local<'s, WorldObjectTargetTypeIndex>,
     pub(super) candidates: Local<'s, Vec<Entity>>,
@@ -44,10 +44,10 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
 }
 
 impl WorldObjectTargetSources<'_, '_> {
-    /// Marks the type index stale when objects appeared or disappeared. Runs
+    /// Marks the type index stale when objects change type, appear or disappear. Runs
     /// every update so removals don't accumulate while no animal is idle.
     pub(super) fn note_object_changes(&mut self) {
-        if self.removed_objects.read().count() > 0 || !self.added_objects.is_empty() {
+        if self.removed_objects.read().count() > 0 || !self.changed_objects.is_empty() {
             self.index.mark_stale();
         }
     }

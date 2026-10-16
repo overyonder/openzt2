@@ -17,16 +17,17 @@ use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 pub(super) fn apply_selection_requests(
     mut requests: MessageReader<SelectionRequest>,
     inspectable: Query<(), With<Inspectable>>,
+    crates: Query<&openzt2_world_state::world_spawn::world_entity_crating::ContainedCratedAnimal>,
     mut selected: ResMut<SelectedEntity>,
     mut changed: MessageWriter<SelectionChanged>,
 ) {
     let mut requested = selected.0;
     for request in requests.read() {
-        if request
+        let subject = request
             .entity
-            .is_none_or(|entity| inspectable.get(entity).is_ok())
-        {
-            requested = request.entity;
+            .map(|entity| crates.get(entity).map_or(entity, |contained| contained.0));
+        if subject.is_none_or(|entity| inspectable.get(entity).is_ok()) {
+            requested = subject;
         }
     }
     set_selection(&mut selected, requested, &mut changed);

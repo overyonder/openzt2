@@ -37,6 +37,10 @@ use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatRegion};
+use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
+use openzt2_zoo_state::locomotion::locomotion_types::{ActiveTerrainDerivedNavigationGraph, NavAgent};
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -46,6 +50,8 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_zoo_state::animal_health::types::Dead;
 use bevy::asset::LoadState;
 use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
@@ -89,8 +95,14 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
             &'static GlobalTransform,
             Option<&'static HabitatMember>,
         ),
+        (Without<Dead>, Without<WorldEntityIsCrated>),
     >,
     actor_transforms: Query<'w, 's, &'static GlobalTransform>,
+    agents: Query<'w, 's, &'static NavAgent>,
+    navigation: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
+    habitats: Res<'w, HabitatIndex>,
+    regions: Query<'w, 's, &'static HabitatRegion>,
+    grid: Res<'w, TopologyGrid>,
 }
 
 #[derive(SystemParam)]
@@ -364,7 +376,7 @@ fn choose_behavior_target_placement_site(
             SiteChoice::Pending
         };
     }
-    let (Ok((recipient_world, recipient, _)), Ok(subject)) = (
+    let (Ok((recipient_world, recipient, habitat)), Ok(subject)) = (
         world.recipients.get(pending.recipient),
         world.actor_transforms.get(actor),
     ) else {
@@ -376,33 +388,53 @@ fn choose_behavior_target_placement_site(
     {
         return SiteChoice::Rejected;
     }
-    let position = recipient.translation().xz();
-    let Some(point) = sample_behavior_placement_terrain(world, position) else {
-        return SiteChoice::Rejected;
-    };
-    // Water placement needs the floating policy some dishes author.
-    if point.1 {
-        return SiteChoice::Rejected;
+    let mut candidates = Vec::new();
+    if let Some(member) = habitat {
+        let Ok(agent) = world.agents.get(actor) else {
+            return SiteChoice::Rejected;
+        };
+        let (Some(navigation), Ok(region)) = (
+            world.navigation.as_ref(),
+            world.regions.get(member.habitat_entity),
+        ) else {
+            return SiteChoice::Pending;
+        };
+        navigation.collect_dry_ground_candidates(
+            region,
+            *world.grid,
+            agent,
+            recipient.translation(),
+            &mut candidates,
+        );
     }
-    let toward_subject = (subject.translation().xz() - position)
-        .try_normalize()
-        .unwrap_or(Vec2::Y);
-    let step = authored_rotation_step_degrees(definition);
-    let yaw = (toward_subject.x.atan2(toward_subject.y).to_degrees() / step).round() * step;
-    let transform = Transform {
-        translation: Vec3::new(position.x, point.0, position.y),
-        rotation: Quat::from_rotation_y(yaw.to_radians()),
-        scale: Vec3::splat(object.prefab_scale),
-    };
-    let site = BehaviorTargetPlacementSite {
-        transform,
-        prefab: handle,
-    };
-    if site_is_still_valid(pending, &site, catalogue, world, creation, created) {
-        SiteChoice::Chosen(site)
-    } else {
-        SiteChoice::Rejected
+    // Preserve the recipient site when valid, then try dry shore nodes. The
+    // authored placement set still navigates to and docks at the chosen site.
+    for candidate in std::iter::once(recipient.translation()).chain(candidates) {
+        let position = candidate.xz();
+        let Some(point) = sample_behavior_placement_terrain(world, position) else {
+            continue;
+        };
+        if point.1 {
+            continue;
+        }
+        let toward_subject = (subject.translation().xz() - position)
+            .try_normalize()
+            .unwrap_or(Vec2::Y);
+        let step = authored_rotation_step_degrees(definition);
+        let yaw = (toward_subject.x.atan2(toward_subject.y).to_degrees() / step).round() * step;
+        let site = BehaviorTargetPlacementSite {
+            transform: Transform {
+                translation: Vec3::new(position.x, point.0, position.y),
+                rotation: Quat::from_rotation_y(yaw.to_radians()),
+                scale: Vec3::splat(object.prefab_scale),
+            },
+            prefab: handle.clone(),
+        };
+        if site_is_still_valid(pending, &site, catalogue, world, creation, created) {
+            return SiteChoice::Chosen(site);
+        }
     }
+    SiteChoice::Rejected
 }
 
 fn site_is_still_valid(
@@ -423,6 +455,17 @@ fn site_is_still_valid(
     if recipient_world.root != pending.root {
         return false;
     }
+    let expected_habitat = habitat.map(|member| member.habitat_entity);
+    if locate_habitat_at_world_position(
+        &world.habitats,
+        site.transform.translation.xz(),
+        *world.grid,
+    ) != expected_habitat
+        || !sample_behavior_placement_terrain(world, site.transform.translation.xz())
+            .is_some_and(|(_, water)| !water)
+    {
+        return false;
+    }
     let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, &site.transform)
     else {
         return false;
@@ -435,6 +478,11 @@ fn site_is_still_valid(
         select_authored_footprint_for_eighth_turns(definition, turns),
         &site.transform,
         |position| {
+            if locate_habitat_at_world_position(&world.habitats, position, *world.grid)
+                != expected_habitat
+            {
+                return None;
+            }
             let entity = terrain_chunk_at(&world.terrain_index, position)?;
             let (chunk, edited) = world.terrain_chunks.get(entity).ok()?;
             sample_terrain(
@@ -443,6 +491,7 @@ fn site_is_still_valid(
                 edited,
                 position,
             )
+            .filter(|point| point.water_height_m.is_none())
         },
         |cell| {
             paths_block(cell)

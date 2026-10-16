@@ -8,6 +8,9 @@ use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::Docking;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::Steering;
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    ContactSteering, DirectLocomotion, MotionProgress, NavAgent, SpatialCell, Velocity,
+};
 
 use super::types::{
     AnimalDied, Dead, DeathCause, Disease, Escaped, Frozen, Rampaging, RecoveringFromTranquilizer,
@@ -43,16 +46,37 @@ pub(super) fn finalize_disease_deaths_after_vitality_reaches_zero(
             continue;
         };
         let death_cause = DeathCause::Disease(disease.definition);
-        commands.entity(animal).insert(Dead {
-            cause: death_cause,
-            since_tick: clock.tick,
-        });
-        commands
-            .entity(animal)
-            .remove::<AnimalActivityStateRemovedAfterDeath>();
-        animal_died_messages.write(AnimalDied {
+        finalize_animal_death(
+            &mut commands,
+            &mut animal_died_messages,
             animal,
-            cause: death_cause,
-        });
+            death_cause,
+            clock.tick,
+        );
     }
+}
+
+pub(crate) fn finalize_animal_death(
+    commands: &mut Commands,
+    messages: &mut MessageWriter<AnimalDied>,
+    animal: Entity,
+    cause: DeathCause,
+    tick: u64,
+) {
+    commands
+        .entity(animal)
+        .insert(Dead {
+            cause,
+            since_tick: tick,
+        })
+        .remove::<AnimalActivityStateRemovedAfterDeath>();
+    commands.entity(animal).remove::<(
+        NavAgent,
+        DirectLocomotion,
+        ContactSteering,
+        SpatialCell,
+        MotionProgress,
+        Velocity,
+    )>();
+    messages.write(AnimalDied { animal, cause });
 }

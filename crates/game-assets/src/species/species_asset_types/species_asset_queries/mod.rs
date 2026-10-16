@@ -6,6 +6,27 @@ use openzt2_game_data::{
 };
 
 impl SpeciesAssets {
+    /// Pending catalogue batches must finish before a missing saved species is an error.
+    pub fn catalogue_load_is_pending(&self, server: &AssetServer) -> bool {
+        if self.handles.iter().any(|handle| {
+            matches!(
+                server.load_state(handle.id()),
+                bevy::asset::LoadState::Failed(_)
+            )
+        }) {
+            return false;
+        }
+        self.revision.is_none()
+            || self.dirty
+            || !self.pending_paths.is_empty()
+            || self.handles.iter().any(|handle| {
+                !matches!(
+                    server.load_state(handle.id()),
+                    bevy::asset::LoadState::Loaded
+                )
+            })
+    }
+
     pub fn get<'a>(&'a self, assets: &'a Assets<SpeciesAsset>) -> Option<SpeciesView<'a>> {
         self.complete.then_some(SpeciesView {
             handles: &self.handles,

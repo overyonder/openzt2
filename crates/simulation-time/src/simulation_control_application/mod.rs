@@ -16,6 +16,7 @@ pub(crate) fn apply_requested_simulation_control_changes(
     mut simulation_control: ResMut<SimulationControl>,
     mut virtual_time: ResMut<Time<Virtual>>,
     mut control_changes: MessageWriter<SimulationControlChanged>,
+    speed_override: Res<super::simulation_speed_override::SimulationSpeedOverride>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -40,7 +41,8 @@ pub(crate) fn apply_requested_simulation_control_changes(
     }
 
     let speed_multiplier = &speed_multipliers[usize::from(simulation_control.speed_tier)];
-    let relative_speed = speed_multiplier.numerator as f32 / speed_multiplier.denominator as f32;
+    let relative_speed =
+        speed_multiplier.numerator as f32 / speed_multiplier.denominator as f32 * speed_override.0;
     if virtual_time.relative_speed() != relative_speed || virtual_time.is_paused() {
         virtual_time.set_relative_speed(relative_speed);
         // Domain simulation sets use `simulation_is_running`. Bevy virtual time

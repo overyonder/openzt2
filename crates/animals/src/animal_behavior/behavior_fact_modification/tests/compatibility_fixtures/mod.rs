@@ -23,6 +23,7 @@ pub(super) fn install_definitions(
     let variant_id = AssetId::from_key("test:variant");
     let document = SpeciesDocument {
         species: vec![Species {
+            donation: None,
             id: species_id,
             authored_species_name: "test:species".to_owned(),
             name_key: species_id,
@@ -62,6 +63,8 @@ pub(super) fn install_definitions(
                     .to_vec(),
                 navigation_collision_policy: None,
                 ground_navigation_clip_asset_key: None,
+                medium_ground_navigation_clip_asset_key: None,
+                fast_ground_navigation_clip_asset_key: None,
                 sex: Sex::Female,
                 life_stage: LifeStage::Adult,
                 model: String::new(),

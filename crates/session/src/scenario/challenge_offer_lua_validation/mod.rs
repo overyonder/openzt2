@@ -50,6 +50,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
     fact_sources: ScenarioLuaQueryFactSources,
+    spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
     fixed_time: Res<Time<Fixed>>,
     mut roots: Query<
         (
@@ -70,6 +71,10 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
         MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
         MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
+        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
+        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     ),
 ) {
     let Some(clock) = fact_sources.zoo_clock() else {
@@ -166,8 +171,14 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
     let candidate_count = candidates.len();
     let (handle, binding) = candidates
         .swap_remove(rng.generate_next_challenge_selection_value() as usize % candidate_count);
-    let counts = fact_sources.count_live_world_entities_by_definition();
-    let queries = fact_sources.borrow_scenario_lua_query_facts(&counts);
+    let spawn_sources = std::cell::RefCell::new(spawn_sources);
+    let spawn_animal = |kind, position, rotation, reserved: &[_]| {
+        spawn_sources
+            .borrow_mut()
+            .resolve(kind, position, rotation, reserved)
+    };
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    queries.spawn_animal = Some(&spawn_animal);
     match execute_loaded_scenario_lua_script_binding(
         &mut runtime,
         &SelectedScenarioDocument(handle),
@@ -199,6 +210,10 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
                 &mut outputs.4,
                 &mut outputs.5,
                 &mut outputs.6,
+                &mut outputs.7,
+                &mut outputs.8,
+                &mut outputs.9,
+                &mut outputs.10,
             );
         }
         Err(error) => {

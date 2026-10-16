@@ -64,6 +64,22 @@ pub struct AnimationClipPlaybackRequestRejected {
     pub animation_clip_asset_key: String,
 }
 
+/// Withdraw one explicit request, including any demand-loading wait.
+#[derive(Message, Clone, Copy, Debug)]
+pub struct CancelAnimationClipPlaybackRequest {
+    pub animation_subject_entity: Entity,
+    pub request_id: usize,
+}
+
+/// The presentation that actually accepted an explicit request and its prior node.
+#[derive(Message, Clone, Debug)]
+pub struct AnimationClipPlaybackRequestStarted {
+    pub animation_subject_entity: Entity,
+    pub request_id: usize,
+    pub playback_generation: u64,
+    pub previous_graph_node: Option<String>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationGraphNodePlaybackRequestRejectionReason {
     MissingAnimationAsset,

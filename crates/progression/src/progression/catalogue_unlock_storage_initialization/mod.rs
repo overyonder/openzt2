@@ -28,6 +28,9 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     research_availability: Query<&ResearchProjectAvailability>,
+    profile_variables: Option<
+        Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
+    >,
     mut identifiers: ResMut<PersistentIdAllocator>,
     mut unlocked_catalogue_definitions: ResMut<UnlockedCatalogueDefinitionSet>,
 ) {
@@ -49,7 +52,14 @@ pub(super) fn initialize_catalogue_unlock_storage_from_active_world_definitions(
         unlocked_catalogue_definitions.definition_count = definition_count;
     }
     for authored_unlock in definitions.unlocks() {
-        if matches!(&authored_unlock.requirement, UnlockRequirement::Always) {
+        let unlocked = match authored_unlock.requirement {
+            UnlockRequirement::Always => true,
+            UnlockRequirement::Profile(key) => profile_variables
+                .as_deref()
+                .is_some_and(|variables| variables.get(key) == Some("true")),
+            _ => false,
+        };
+        if unlocked {
             let target = authored_unlock.target;
             if let Some(index) = find_catalogue_definition_index(definitions, target) {
                 let _ = mark_catalogue_definition_unlocked_at_index(

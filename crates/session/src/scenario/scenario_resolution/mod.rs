@@ -11,7 +11,6 @@ use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioTerminalResult;
 
 use super::{
-    campaign_progress_types::ScenarioCampaignCompletionProgress,
     challenge_offer_types::{ScenarioChallengeOffer, ScenarioChallengeOfferState},
     scenario_lua_types::ScenarioLuaVirtualMachineContexts,
 };
@@ -112,7 +111,7 @@ pub(super) fn apply_terminal_scenario_results_and_remove_completed_challenges(
     mut sessions: Query<
         (
             Option<&mut ActiveScenarioSession>,
-            Option<&mut ScenarioCampaignCompletionProgress>,
+            &openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity,
         ),
         With<WorldRoot>,
     >,
@@ -121,18 +120,43 @@ pub(super) fn apply_terminal_scenario_results_and_remove_completed_challenges(
     objectives: Query<(Entity, &ScenarioObjective)>,
     mut results: MessageWriter<ScenarioTerminalResult>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
+    mut profile_variables: ResMut<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
+    scenarios: Res<openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios>,
+    scenario_assets: Res<Assets<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>>,
 ) {
     for (entity, terminal) in &terminals {
-        let Ok((active, mut campaign)) = sessions.single_mut() else {
+        let Ok((active, selection)) = sessions.single_mut() else {
             continue;
         };
         if let Some(mut active) = active {
             if active.definition == terminal.scenario {
                 active.state = terminal.state;
-                if terminal.state == ScenarioSessionState::Won {
-                    if let Some(campaign) = campaign.as_deref_mut() {
-                        let mission = campaign.mission;
-                        let _ = campaign.record_completed_mission(mission);
+                if terminal.state == ScenarioSessionState::Won
+                    && selection.mode
+                        == openzt2_world_state::game_session_types::WorldSessionMode::Campaign
+                {
+                    if let Err(reason) =
+                        profile_variables.set(selection.requested, Some("completed"))
+                    {
+                        error!(reason, "campaign completion could not be recorded");
+                    }
+                    if let Some((campaign, mission)) = scenarios
+                        .get(&scenario_assets)
+                        .and_then(|view| view.campaign_for_scenario(selection.requested))
+                    {
+                        if let Some(next) = campaign.scenarios.get(mission + 1) {
+                            if profile_variables.scenario_state(next)
+                                == openzt2_game_data::world_scenario::CampaignScenarioState::Locked
+                            {
+                                if let Err(reason) =
+                                    profile_variables.set(next.id, Some("unlocked"))
+                                {
+                                    error!(reason, "next campaign mission could not be unlocked");
+                                }
+                            }
+                        }
                     }
                 }
             }

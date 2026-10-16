@@ -30,6 +30,9 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
     )>,
     mut profile_index: ResMut<ProfileIndex>,
     mut profile_options: ResMut<ProfileOptions>,
+    mut scenario_variables: ResMut<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
     mut profile_challenge_completion_counts: ResMut<ProfileChallengeCompletionCounts>,
     mut audio_settings: ResMut<AudioSettings>,
     mut game_action_input_bindings: ResMut<GameActionInputBindings>,
@@ -67,12 +70,14 @@ pub(super) fn apply_completed_profile_filesystem_tasks_to_canonical_profile_stat
                 profile,
                 options,
                 challenge_progress,
+                scenario_variables: loaded_scenario_variables,
                 audio,
                 bindings,
                 display,
                 graphics,
             }) => {
                 *profile_options = options;
+                *scenario_variables = loaded_scenario_variables;
                 *profile_challenge_completion_counts = challenge_progress;
                 *audio_settings = audio;
                 *game_action_input_bindings = bindings;

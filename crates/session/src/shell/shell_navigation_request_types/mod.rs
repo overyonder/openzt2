@@ -12,6 +12,9 @@ pub struct ChooseWorld(pub AssetId);
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct StartSelectedWorld;
 
+#[derive(Message, Debug, Clone, Copy)]
+pub struct ContinueCampaign(pub AssetId);
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NavigateShellBack;
 

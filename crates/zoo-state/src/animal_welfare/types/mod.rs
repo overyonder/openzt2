@@ -52,6 +52,10 @@ pub struct HabitatSuitability {
     pub overall: u16,
 }
 
+/// The habitat score has been applied as the environment need's baseline.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct EnvironmentHabitatAssessed;
+
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AnimalWelfare(pub u16);
 

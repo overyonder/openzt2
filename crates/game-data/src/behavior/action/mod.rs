@@ -15,6 +15,8 @@ pub mod show_event;
 pub mod synchronized_sets;
 pub mod target_test;
 pub mod termination;
+pub mod token;
 pub mod view_animals;
 pub mod view_event;
+pub mod wander;
 pub mod watch_show;

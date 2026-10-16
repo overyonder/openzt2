@@ -646,34 +646,45 @@ fn lower_campaign(document: &OrderedSourceDocument) -> io::Result<ScenarioCampai
         return Err(invalid(format!("{path}: campaign has no entries")));
     }
     let description = entries[0].attribute("description").unwrap_or(name);
-    let scenarios =
-        entries
-            .iter()
-            .map(|entry| {
-                let id = required(document, entry, "key")?;
-                let map = required(document, entry, "map")?;
-                let cash = required(document, entry, "cash")?
-                    .parse::<i64>()
-                    .ok()
-                    .and_then(|dollars| dollars.checked_mul(100))
-                    .ok_or_else(|| at(document, entry, "campaign cash is not whole dollars"))?;
-                Ok(CampaignScenarioRecord {
-                    id: AssetId::from_key(id),
-                    map: AssetId::from_key(map),
-                    starting_zoo: AssetId::from_key(&format!("start:{map}")),
-                    starting_cash_cents: cash,
-                    difficulty: AssetId::from_key(&canonicalize_source_document_record_key(
-                        required(document, entry, "difficulty")?,
-                    )),
-                    name_key: AssetId::from_key(&canonicalize_source_document_record_key(
-                        required(document, entry, "name")?,
-                    )),
-                    description_key: AssetId::from_key(&canonicalize_source_document_record_key(
-                        entry.attribute("description").unwrap_or(id),
-                    )),
-                })
+    let scenarios = entries
+        .iter()
+        .map(|entry| {
+            let id = required(document, entry, "key")?;
+            let map = required(document, entry, "map")?;
+            let cash = required(document, entry, "cash")?
+                .parse::<i64>()
+                .ok()
+                .and_then(|dollars| dollars.checked_mul(100))
+                .ok_or_else(|| at(document, entry, "campaign cash is not whole dollars"))?;
+            Ok(CampaignScenarioRecord {
+                id: AssetId::from_key(id),
+                initial_state: match entry.attribute("state").unwrap_or("unlocked") {
+                    "locked" => openzt2_game_data::world_scenario::CampaignScenarioState::Locked,
+                    "unlock" | "unlocked" => {
+                        openzt2_game_data::world_scenario::CampaignScenarioState::Unlocked
+                    }
+                    "completed" => {
+                        openzt2_game_data::world_scenario::CampaignScenarioState::Completed
+                    }
+                    _ => return Err(at(document, entry, "unknown campaign scenario state")),
+                },
+                map: AssetId::from_key(map),
+                starting_zoo: AssetId::from_key(&format!("start:{map}")),
+                starting_cash_cents: cash,
+                difficulty: AssetId::from_key(&canonicalize_source_document_record_key(required(
+                    document,
+                    entry,
+                    "difficulty",
+                )?)),
+                name_key: AssetId::from_key(&canonicalize_source_document_record_key(required(
+                    document, entry, "name",
+                )?)),
+                description_key: AssetId::from_key(&canonicalize_source_document_record_key(
+                    entry.attribute("description").unwrap_or(id),
+                )),
             })
-            .collect::<io::Result<Vec<_>>>()?;
+        })
+        .collect::<io::Result<Vec<_>>>()?;
     Ok(ScenarioCampaignRecord {
         id: AssetId::from_key(id),
         name_key: AssetId::from_key(&canonicalize_source_document_record_key(name)),

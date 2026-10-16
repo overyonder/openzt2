@@ -50,6 +50,7 @@ use super::super::{
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
+    pub(super) donations: super::donation_snapshot_section::DonationSnapshotEntities<'w, 's>,
     pub(super) habitat_waste:
         super::maintenance_snapshot_capture::HabitatWasteSnapshotEntities<'w, 's>,
     pub(super) animals: super::animal_snapshot_capture::AnimalSnapshotEntities<'w, 's>,

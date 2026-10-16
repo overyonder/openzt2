@@ -243,6 +243,7 @@ pub(crate) fn apply_guest_reactions(
             replacement,
         );
         applied.write(GuestReactionApplied {
+            view_event: reaction.view_event,
             guest: reaction.guest,
             subject: reaction.subject,
             kind: reaction.kind,

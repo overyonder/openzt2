@@ -29,6 +29,7 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
     values: Query<&UiValue>,
     choices: Query<(Entity, &WorldChoice)>,
     mut shell: ScenarioShellMessageWriters,
+    continuation: Res<super::scenario_lua_ui::ScenarioContinuation>,
 ) {
     let Some(scenarios) = active_scenarios.get(&scenarios) else {
         return;
@@ -71,18 +72,10 @@ pub(super) fn route_scenario_selection_and_start_ui_actions(
                     }
                 }
                 UiScenarioAction::PlayNextScenario => {
-                    if let Some(current_scenario) = selection.scenario {
-                        let next_scenario = scenarios.campaigns().find_map(|campaign| {
-                            campaign
-                                .scenarios
-                                .windows(2)
-                                .find(|pair| pair[0].id == current_scenario)
-                                .map(|pair| pair[1].id)
-                        });
-                        if let Some(next_scenario) = next_scenario {
-                            shell.choose_world.write(ChooseWorld(next_scenario));
-                            shell.start_world.write(StartSelectedWorld);
-                        }
+                    if let Some(target) = continuation.scenario {
+                        shell.continue_campaign.write(
+                            crate::shell::shell_navigation_request_types::ContinueCampaign(target),
+                        );
                     }
                 }
                 UiScenarioAction::SelectionChanged => {

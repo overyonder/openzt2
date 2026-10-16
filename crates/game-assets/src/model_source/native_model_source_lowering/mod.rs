@@ -173,7 +173,11 @@ pub fn lower_native_model_source(
 }
 
 pub fn native_model_scene_labelled_asset_path(native_model_asset_path: &str) -> String {
-    format!("{native_model_asset_path}#Scene")
+    // Loader dispatch happens before the archive's case-insensitive lookup.
+    let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(Path::new(
+        native_model_asset_path,
+    ));
+    format!("{}#Scene", path.display())
 }
 
 pub(super) fn native_model_particle_effect_labelled_asset_path(

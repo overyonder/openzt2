@@ -44,6 +44,7 @@ fn routing_app(selection: ShellSelection, profile: Option<AssetId>) -> App {
         })
         .init_resource::<Assets<WorldScenarioDocumentAsset>>()
         .init_resource::<WorldScenarios>()
+        .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
         .add_message::<StartSelectedWorld>()
         .add_message::<BeginWorldLoad>()
         .add_message::<ShowUiRole>()
@@ -153,6 +154,7 @@ fn failed_load_reuses_retained_map_selection() {
         starting_cash_cents: None,
     })
     .init_resource::<UiRoleRequests>()
+    .init_resource::<NextState<GamePhase>>()
     .add_systems(Update, create_or_reuse_selected_mode_map_selection_screen);
     let screen = app
         .world_mut()
@@ -219,4 +221,158 @@ fn completed_load_removes_retained_map_selection() {
             .count(),
         0
     );
+}
+
+#[test]
+fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
+    use super::shell_navigation_and_world_launch::continue_campaign_after_world_exit;
+    use super::shell_navigation_request_types::ContinueCampaign;
+    use openzt2_game_data::world_scenario::{
+        CampaignScenarioRecord, CampaignScenarioState, ScenarioCampaignRecord,
+        ScenarioDefinitionRecord,
+    };
+    use openzt2_world::world_spawn::world_unloading::despawn_all_world_roots_and_members_when_leaving_ingame;
+    use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
+    use openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables;
+
+    // The same authored action starts the next mission or retries the current one.
+    for target in [id(2), id(3)] {
+        let mut app = routing_app(
+            ShellSelection {
+                mode: Some(WorldSessionMode::Campaign),
+                scenario: Some(id(2)),
+                starting_cash_cents: Some(99),
+            },
+            Some(id(1)),
+        );
+        app.insert_state(GamePhase::InGame)
+            .add_message::<ContinueCampaign>()
+            .add_systems(
+                Update,
+                continue_campaign_after_world_exit.before(begin_loading_selected_world),
+            )
+            .add_systems(
+                OnExit(GamePhase::InGame),
+                despawn_all_world_roots_and_members_when_leaving_ingame,
+            );
+        let document = WorldScenarioDocument {
+            maps: vec![WorldMapRecord {
+                id: id(4),
+                catalogue_order: 0,
+                name_key: id(5),
+                location: id(6),
+                biome: id(7),
+                biome_key: id(8),
+                size_key: id(9),
+                description_key: None,
+                thumbnail: id(10),
+                environment: id(11),
+                camera: id(12),
+                terrain: id(13),
+                starting_zoo: id(14),
+                expansion_pack_filter_identifier: 0,
+                supported_game_modes: WorldMapSupportedGameModeFlags::CAMPAIGN,
+            }],
+            campaigns: vec![ScenarioCampaignRecord {
+                id: id(15),
+                name_key: id(15),
+                description_key: id(15),
+                scenarios: [id(2), id(3)]
+                    .into_iter()
+                    .map(|scenario| CampaignScenarioRecord {
+                        id: scenario,
+                        initial_state: if scenario == id(2) {
+                            CampaignScenarioState::Unlocked
+                        } else {
+                            CampaignScenarioState::Locked
+                        },
+                        map: id(4),
+                        starting_zoo: id(14),
+                        starting_cash_cents: 50_000,
+                        difficulty: id(16),
+                        name_key: scenario,
+                        description_key: scenario,
+                    })
+                    .collect(),
+            }],
+            scenarios: [id(2), id(3)]
+                .into_iter()
+                .map(|scenario| ScenarioDefinitionRecord {
+                    id: scenario,
+                    name_key: scenario,
+                    description_key: scenario,
+                    objectives: Vec::new(),
+                    time_limit_ticks: 0,
+                    flags: default(),
+                    ui_modifications: Vec::new(),
+                })
+                .collect(),
+            ..default()
+        };
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<WorldScenarioDocumentAsset>>()
+            .add(WorldScenarioDocumentAsset::from_test_document(
+                document.clone(),
+            ));
+        app.world_mut()
+            .resource_mut::<WorldScenarios>()
+            .index_test_document(handle, &document);
+        let old_world = app.world_mut().spawn(WorldRoot { scenario: id(2) }).id();
+        let old_member = app.world_mut().spawn(WorldMember { root: old_world }).id();
+        let mut loads = app
+            .world()
+            .resource::<Messages<BeginWorldLoad>>()
+            .get_cursor();
+        app.update();
+        if target == id(3) {
+            app.world_mut().write_message(ContinueCampaign(target));
+            app.update();
+            app.update();
+            assert_eq!(
+                *app.world().resource::<State<GamePhase>>().get(),
+                GamePhase::InGame
+            );
+            assert!(app.world().entities().contains(old_world));
+            assert!(loads
+                .read(app.world().resource::<Messages<BeginWorldLoad>>())
+                .next()
+                .is_none());
+            app.world_mut()
+                .resource_mut::<ProfileScenarioVariables>()
+                .set(target, Some("unlocked"))
+                .unwrap();
+        }
+        app.world_mut().write_message(ContinueCampaign(target));
+        app.update();
+        assert!(app.world().entities().contains(old_world));
+        assert!(loads
+            .read(app.world().resource::<Messages<BeginWorldLoad>>())
+            .next()
+            .is_none());
+        app.update();
+        assert!(!app.world().entities().contains(old_world));
+        assert!(!app.world().entities().contains(old_member));
+        let emitted: Vec<_> = loads
+            .read(app.world().resource::<Messages<BeginWorldLoad>>())
+            .collect();
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0].scenario, target);
+        assert_eq!(emitted[0].mode, WorldSessionMode::Campaign);
+        assert_eq!(emitted[0].profile, id(1));
+        assert_eq!(emitted[0].starting_cash_cents, None);
+        assert!(matches!(
+            app.world().resource::<NextState<GamePhase>>(),
+            NextState::Pending(GamePhase::Loading)
+        ));
+        app.update();
+        assert_eq!(
+            *app.world().resource::<State<GamePhase>>().get(),
+            GamePhase::Loading
+        );
+        assert!(loads
+            .read(app.world().resource::<Messages<BeginWorldLoad>>())
+            .next()
+            .is_none());
+    }
 }

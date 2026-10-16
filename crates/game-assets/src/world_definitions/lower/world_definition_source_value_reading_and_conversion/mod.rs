@@ -140,7 +140,7 @@ pub(super) fn optional_seconds_ns(
         .transpose()?
         .map_or(Ok(0), |value| seconds_ns(value, record))
 }
-pub(super) fn money_cents(value: f64, record: &RecordView<'_, '_>) -> Result<i32, BindError> {
+pub(crate) fn money_cents(value: f64, record: &RecordView<'_, '_>) -> Result<i32, BindError> {
     let cents = value * 100.0;
     if !cents.is_finite() || cents < f64::from(i32::MIN) || cents > f64::from(i32::MAX) {
         Err(BindError::record(

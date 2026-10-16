@@ -27,6 +27,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
     fact_sources: ScenarioLuaQueryFactSources,
+    spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
     mut objectives: Query<(
         Entity,
         &ScenarioObjective,
@@ -42,13 +43,23 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
         MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
         MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
+        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
+        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     ),
 ) {
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
         return;
     };
-    let definition_counts = fact_sources.count_live_world_entities_by_definition();
-    let queries = fact_sources.borrow_scenario_lua_query_facts(&definition_counts);
+    let spawn_sources = std::cell::RefCell::new(spawn_sources);
+    let spawn_animal = |kind, position, rotation, reserved: &[_]| {
+        spawn_sources
+            .borrow_mut()
+            .resolve(kind, position, rotation, reserved)
+    };
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    queries.spawn_animal = Some(&spawn_animal);
     for (entity, objective, mut status, progress) in &mut objectives {
         if *status != ScenarioObjectiveStatus::Active {
             continue;
@@ -98,6 +109,10 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                         &mut outputs.4,
                         &mut outputs.5,
                         &mut outputs.6,
+                        &mut outputs.7,
+                        &mut outputs.8,
+                        &mut outputs.9,
+                        &mut outputs.10,
                     );
                 }
                 Ok(result) if result.condition_status != ScenarioObjectiveStatus::Active => {
@@ -112,6 +127,10 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                         &mut outputs.4,
                         &mut outputs.5,
                         &mut outputs.6,
+                        &mut outputs.7,
+                        &mut outputs.8,
+                        &mut outputs.9,
+                        &mut outputs.10,
                     );
                     *status = next_status;
                     changed.write(ScenarioObjectiveStatusChanged {
@@ -131,6 +150,10 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                     &mut outputs.4,
                     &mut outputs.5,
                     &mut outputs.6,
+                    &mut outputs.7,
+                    &mut outputs.8,
+                    &mut outputs.9,
+                    &mut outputs.10,
                 ),
                 Err(error) => error!(entry = %binding.entry, %error, "scenario Lua call failed"),
             }
@@ -148,6 +171,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     script_index: Res<LuaScriptArchivePathIndex>,
     mut runtime: NonSendMut<ScenarioLuaVirtualMachineContexts>,
     fact_sources: ScenarioLuaQueryFactSources,
+    spawn_sources: super::scenario_lua_entity_commands::ScenarioAnimalSpawnSources,
     objectives: Query<&ScenarioObjective>,
     mut changed: MessageReader<ScenarioObjectiveStatusChanged>,
     mut outputs: (
@@ -158,13 +182,23 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         MessageWriter<openzt2_zoo_state::scenario::scenario_objective_types::ShowScenarioRuleRequest>,
         MessageWriter<openzt2_zoo_state::progression::adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>,
         MessageWriter<super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
+        MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
+        MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
+        MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
     ),
 ) {
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
         return;
     };
-    let definition_counts = fact_sources.count_live_world_entities_by_definition();
-    let queries = fact_sources.borrow_scenario_lua_query_facts(&definition_counts);
+    let spawn_sources = std::cell::RefCell::new(spawn_sources);
+    let spawn_animal = |kind, position, rotation, reserved: &[_]| {
+        spawn_sources
+            .borrow_mut()
+            .resolve(kind, position, rotation, reserved)
+    };
+    let mut queries = fact_sources.borrow_scenario_lua_query_facts();
+    queries.spawn_animal = Some(&spawn_animal);
     for event in changed.read() {
         let Ok(objective) = objectives.get(event.objective) else {
             continue;
@@ -219,6 +253,10 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
                         &mut outputs.4,
                         &mut outputs.5,
                         &mut outputs.6,
+                        &mut outputs.7,
+                        &mut outputs.8,
+                        &mut outputs.9,
+                        &mut outputs.10,
                     );
                 }
                 Err(error) => {

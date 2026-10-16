@@ -22,8 +22,16 @@ pub(super) struct AnimalSnapshotRecord {
     pub crated: bool,
     pub release_restricted: bool,
     pub crating_restricted: bool,
-    pub death: Option<(AssetId, u64)>,
+    pub death: Option<AnimalSnapshotDeath>,
     pub welfare: Option<AnimalWelfareSnapshotRecord>,
+}
+
+/// The tuple representation preserves disease records from older snapshots.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub(super) enum AnimalSnapshotDeath {
+    Disease(AssetId, u64),
+    Authored { program: AssetId, since_tick: u64 },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,5 +42,9 @@ pub(super) struct AnimalWelfareSnapshotRecord {
     pub cumulative_points: [f32; 2],
     pub welfare: u16,
     pub habitat_suitability: [u16; 3],
+    /// Older records cannot distinguish an unapplied zero score from an assessed
+    /// zero score. Reassess those records once instead of inventing a baseline.
+    #[serde(default)]
+    pub environment_habitat_assessed: bool,
     pub band: u8,
 }

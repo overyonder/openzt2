@@ -52,29 +52,41 @@ fn species_needs<'a>(
     ])
 }
 
-pub(super) fn initialize_animal_needs(
+pub(crate) fn initialize_animal_needs(
     mut commands: Commands,
     zoo_seed: Res<ZooSeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     animals: Query<
-        (Entity, &PersistentId, &SpeciesHandle),
+        (
+            Entity,
+            &PersistentId,
+            &SpeciesHandle,
+            Option<
+                &crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization,
+            >,
+        ),
         (With<Animal>, Without<AnimalWelfare>, Without<Dead>),
     >,
 ) {
-    for (entity, persistent_id, species) in &animals {
+    for (entity, persistent_id, species, scripted) in &animals {
         let Some(needs) = species_needs(&index, &assets, species) else {
             continue;
         };
         let mut random =
             DeterministicRng::from_entity(*zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
-        let initial = needs.map(|need| {
+        let mut initial = needs.map(|need| {
             let minimum = need.initial_wellness_permille_range[0];
             let maximum = need.initial_wellness_permille_range[1].max(minimum);
             let width = u32::from(maximum - minimum) + 1;
             let sampled = minimum + random.range_u32(width).unwrap_or_default() as u16;
             i32::from(sampled) * Q16_ONE
         });
+        if let Some(scripted) = scripted {
+            for (kind, value) in &scripted.needs {
+                initial[need_rank(kind)] = (*value).clamp(0, MAX_NEED_Q16);
+            }
+        }
         // The next assessment uses live membership and species population.
         let suitability = HabitatSuitability::default();
         let value = calculate_mean_animal_welfare_with_habitat_limit(
@@ -122,6 +134,9 @@ pub(super) fn initialize_animal_needs(
             CumulativeNeedPoints::default(),
             classify_animal_welfare_against_authored_thresholds(value, critical, good),
         ));
+        if scripted.is_some() {
+            commands.entity(entity).remove::<crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization>();
+        }
     }
 }
 

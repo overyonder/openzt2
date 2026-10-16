@@ -4,7 +4,8 @@ use openzt2_game_data::{
         document::BehaviorTask,
         eligibility::{
             BehaviorCandidateEligibilityFact, BehaviorCandidateEligibilityRequirements,
-            BehaviorCandidateRole, BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
+            BehaviorCandidateRole, BehaviorConditionEligibilityFact,
+            BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
             BehaviorEligibilityFactJunction, BehaviorEligibilityFactValue,
             BehaviorEntityStateEligibilityFact, BehaviorSpatialEligibilityFact,
         },
@@ -34,6 +35,7 @@ pub(super) struct StaffCandidateEligibilityFacts {
     pub(super) target_on_land: Option<bool>,
     pub(super) target_rampaging: Option<bool>,
     pub(super) target_in_show: Option<bool>,
+    pub(super) target_food_level_q16: Option<i32>,
 }
 
 pub(super) fn find_highest_priority_compatible_staff_behavior_task<'a>(
@@ -161,29 +163,40 @@ fn evaluate_candidate_eligibility_fact(
         (
             _,
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::SupportedSurface),
-        ) => Some(true), // Native inWater_OR_onLand is unconditional, unlike onLand/inWater.
+        ) => Some(1 << 16), // Native inWater_OR_onLand is unconditional, unlike onLand/inWater.
         (
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InWater),
-        ) => candidate_facts.target_in_water,
+        ) => candidate_facts
+            .target_in_water
+            .map(|value| i32::from(value) << 16),
         (
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::OnLand),
-        ) => candidate_facts.target_on_land,
+        ) => candidate_facts
+            .target_on_land
+            .map(|value| i32::from(value) << 16),
         (
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::Rampaging),
-        ) => candidate_facts.target_rampaging,
+        ) => candidate_facts
+            .target_rampaging
+            .map(|value| i32::from(value) << 16),
         (
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InShow),
-        ) => candidate_facts.target_in_show,
+        ) => candidate_facts
+            .target_in_show
+            .map(|value| i32::from(value) << 16),
+        (
+            BehaviorCandidateRole::Target,
+            BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::FoodLevel),
+        ) => candidate_facts.target_food_level_q16,
         _ => return None,
     }?;
     let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
         return None;
     };
-    let actual = if actual { 1 << 16 } else { 0 };
     Some(match fact.comparison {
         BehaviorEligibilityFactComparison::Equal => actual == expected,
         BehaviorEligibilityFactComparison::NotEqual => actual != expected,

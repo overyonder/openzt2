@@ -16,6 +16,7 @@ pub mod prefab_source_asset_handle;
 pub mod prefab_transform_conversion;
 pub mod selected_world_identity;
 pub mod selected_world_terrain_asset_handle;
+pub mod starting_animal_hydration;
 pub mod world_entity_crating;
 pub mod world_hydration_completion;
 pub mod world_hydration_types;

@@ -28,13 +28,44 @@ pub fn spawn_animal_entity_from_resolved_components(
     persistent_identifier: PersistentId,
     world_membership: WorldMember,
     habitat_entity: Option<Entity>,
-    mut transform: Transform,
+    transform: Transform,
     parents: Parents,
     born_tick: u64,
 ) -> Entity {
+    let animal = commands.spawn_empty().id();
+    insert_animal_entity_from_resolved_components(
+        commands,
+        animal,
+        species,
+        resolved_components,
+        persistent_identifier,
+        world_membership,
+        habitat_entity,
+        transform,
+        parents,
+        born_tick,
+    );
+    animal
+}
+
+/// Populate an identity reserved by a gameplay operation using the shared animal bundle.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_animal_entity_from_resolved_components(
+    commands: &mut Commands,
+    animal_entity: Entity,
+    species: AssetId,
+    resolved_components: ResolvedAnimalSpawnComponents,
+    persistent_identifier: PersistentId,
+    world_membership: WorldMember,
+    habitat_entity: Option<Entity>,
+    mut transform: Transform,
+    parents: Parents,
+    born_tick: u64,
+) {
     transform.scale *= resolved_components.scale;
-    let animal_entity = commands
-        .spawn((
+    commands
+        .entity(animal_entity)
+        .insert((
             Animal,
             SpeciesHandle { species },
             AnimalVariant(resolved_components.variant),
@@ -57,8 +88,7 @@ pub fn spawn_animal_entity_from_resolved_components(
             HabitatLocatable,
             transform,
             Visibility::Inherited,
-        ))
-        .id();
+        ));
     if let Some(habitat_entity) = habitat_entity {
         commands
             .entity(animal_entity)
@@ -73,7 +103,6 @@ pub fn spawn_animal_entity_from_resolved_components(
         &mut animal_entity_commands,
         resolved_components.variant_flags,
     );
-    animal_entity
 }
 
 fn insert_authored_species_classification_markers(

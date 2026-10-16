@@ -34,6 +34,9 @@ use super::{
     },
 };
 
+#[cfg(test)]
+mod tests;
+
 pub(super) fn begin_loading_profile_index(
     mut commands: Commands,
     mut profile_index_load_requests: MessageReader<LoadProfileIndex>,
@@ -192,6 +195,7 @@ pub(super) fn begin_creating_requested_profiles(
                     record: new_profile_record.clone(),
                     options: new_profile_options,
                     challenge_progress: ProfileChallengeCompletionCounts::default(),
+                    scenario_variables: Default::default(),
                     audio: AudioSettings::default(),
                     bindings: GameActionInputBindings::default(),
                     display: DisplaySettings::default(),
@@ -217,11 +221,49 @@ pub(super) fn begin_creating_requested_profiles(
     }
 }
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct ActiveProfileSettings<'w> {
+    options: Res<'w, ProfileOptions>,
+    challenge_progress: Res<'w, ProfileChallengeCompletionCounts>,
+    scenario_variables: Res<
+        'w,
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
+    audio: Res<'w, AudioSettings>,
+    bindings: Res<'w, GameActionInputBindings>,
+    display: Res<'w, DisplaySettings>,
+    graphics: Res<'w, GraphicsSettings>,
+}
+
+impl ActiveProfileSettings<'_> {
+    fn snapshot(&self, index: &ProfileIndex) -> Option<StoredProfileRecordAndSettings> {
+        let identifier = index.selected_profile_identifier?;
+        if self.options.profile_identifier != identifier {
+            return None;
+        }
+        Some(StoredProfileRecordAndSettings {
+            record: index
+                .profile_records
+                .iter()
+                .find(|record| record.profile_identifier == identifier)?
+                .clone(),
+            options: *self.options,
+            challenge_progress: *self.challenge_progress,
+            scenario_variables: self.scenario_variables.clone(),
+            audio: *self.audio,
+            bindings: self.bindings.clone(),
+            display: *self.display,
+            graphics: *self.graphics,
+        })
+    }
+}
+
 pub(super) fn begin_selecting_requested_profiles(
     mut commands: Commands,
     mut profile_selection_requests: MessageReader<SelectProfile>,
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_index: Res<ProfileIndex>,
+    active_settings: ActiveProfileSettings,
     active_profile_filesystem_tasks: Query<(), With<ProfileFilesystemTask>>,
     mut profile_operation_failure_messages: MessageWriter<ProfileOperationFailed>,
 ) {
@@ -259,12 +301,23 @@ pub(super) fn begin_selecting_requested_profiles(
         }
         let requested_profile_identifier = profile_selection_request.requested_profile_identifier;
         let profile_index_file_path = persistence_filesystem_paths.profile_index_file_path();
+        let outgoing_profile = active_settings.snapshot(&profile_index);
         operation_started = true;
         commands.spawn((
             ProfileFilesystemTaskContext(Some(requested_profile_identifier)),
             ProfileFilesystemTask(IoTaskPool::get().spawn(async move {
-                let (stored_profile_records_and_settings, _) =
+                let (mut stored_profile_records_and_settings, _) =
                     read_stored_profile_index_or_empty(&profile_index_file_path)?;
+                // Save outgoing live state before selection replaces its resources.
+                if let Some(outgoing) = outgoing_profile {
+                    let stored = stored_profile_records_and_settings
+                        .iter_mut()
+                        .find(|stored| {
+                            stored.record.profile_identifier == outgoing.record.profile_identifier
+                        })
+                        .ok_or(ProfileFailure::Missing)?;
+                    *stored = outgoing;
+                }
                 let selected_profile_options = stored_profile_records_and_settings
                     .iter()
                     .find(|stored_profile| {
@@ -298,6 +351,7 @@ pub(super) fn begin_selecting_requested_profiles(
                     profile: requested_profile_identifier,
                     options: selected_profile_options,
                     challenge_progress: selected_profile_challenge_progress,
+                    scenario_variables: selected_stored_profile.scenario_variables.clone(),
                     audio: selected_stored_profile.audio,
                     bindings: selected_stored_profile.bindings.clone(),
                     display: selected_stored_profile.display,
@@ -423,6 +477,12 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     active_profile_filesystem_tasks: Query<(), With<ProfileFilesystemTask>>,
     mut profile_operation_failure_messages: MessageWriter<ProfileOperationFailed>,
     mut pending_settings_profile: Local<Option<AssetId>>,
+    scenario_variables: Res<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
+    mut save_scenario_variables: MessageReader<
+        openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
+    >,
 ) {
     let Some(active_profile_identifier) = profile_index.selected_profile_identifier else {
         *pending_settings_profile = None;
@@ -432,7 +492,10 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         *pending_settings_profile = None;
         return;
     }
+    let scenario_save_requested = save_scenario_variables.read().count() != 0;
     if profile_options.is_changed()
+        || scenario_variables.is_changed()
+        || scenario_save_requested
         || profile_challenge_completion_counts.is_changed()
         || audio_settings.is_changed()
         || game_action_input_bindings.is_changed()
@@ -455,6 +518,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         return;
     };
     let profile_options_to_persist = *profile_options;
+    let scenario_variables_to_persist = scenario_variables.clone();
     let profile_challenge_completion_counts_to_persist = *profile_challenge_completion_counts;
     let audio_settings_to_persist = *audio_settings;
     let game_action_input_bindings_to_persist = game_action_input_bindings.clone();
@@ -473,6 +537,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
                 })
                 .ok_or(ProfileFailure::Missing)?;
             stored_active_profile.options = profile_options_to_persist;
+            stored_active_profile.scenario_variables = scenario_variables_to_persist;
             stored_active_profile.challenge_progress =
                 profile_challenge_completion_counts_to_persist;
             stored_active_profile.audio = audio_settings_to_persist;

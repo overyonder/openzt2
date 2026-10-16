@@ -50,3 +50,93 @@ fn corrupt_profile_records_are_rejected() {
         Err(ProfileFailure::CorruptIndex)
     );
 }
+
+#[test]
+fn older_profile_versions_decode_without_scenario_variables() {
+    use super::profile_index_encoding::decode_stored_profile_index;
+    use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+    use openzt2_interface_state::{
+        input::input_types::GameActionInputBindings,
+        settings::{audio_settings_types::AudioSettings, display_settings_types::DisplaySettings},
+    };
+    for version in 1_u32..=3 {
+        let id = create_test_profile_identifier(1);
+        let mut bytes = b"OZT2PROF".to_vec();
+        bytes.extend_from_slice(&version.to_le_bytes());
+        bytes.extend_from_slice(&1_u32.to_le_bytes());
+        bytes.extend_from_slice(&id.0);
+        bytes.extend_from_slice(&[0; 32]);
+        bytes.extend_from_slice(&id.0);
+        bytes.extend_from_slice(&10_u64.to_le_bytes());
+        bytes.extend_from_slice(&[0; 16]);
+        bytes.extend_from_slice(&[1, 0]);
+        if version >= 2 {
+            for count in [7_u32, 2, 1, 3, 1] {
+                bytes.extend_from_slice(&count.to_le_bytes());
+            }
+        }
+        if version >= 3 {
+            for settings in [
+                serde_json::to_vec(&AudioSettings::default()).unwrap(),
+                serde_json::to_vec(&GameActionInputBindings::default()).unwrap(),
+                serde_json::to_vec(&DisplaySettings::default()).unwrap(),
+                serde_json::to_vec(&GraphicsSettings::default()).unwrap(),
+            ] {
+                bytes.extend_from_slice(&(settings.len() as u32).to_le_bytes());
+                bytes.extend_from_slice(&settings);
+            }
+        }
+        bytes.extend_from_slice(&3_u16.to_le_bytes());
+        bytes.extend_from_slice(b"Ava");
+        let mut checksum = blake3::Hasher::new();
+        checksum.update(&bytes[..32]);
+        checksum.update(&bytes[64..]);
+        bytes[32..64].copy_from_slice(checksum.finalize().as_bytes());
+        let (profiles, selected) = decode_stored_profile_index(&bytes)
+            .unwrap_or_else(|error| panic!("profile version {version}: {error:?}"));
+        assert_eq!(selected, Some(id));
+        assert_eq!(profiles[0].record.profile_display_name, "Ava");
+        assert_eq!(profiles[0].scenario_variables.iter().len(), 0);
+        assert_eq!(
+            profiles[0].challenge_progress.all,
+            if version == 1 { 0 } else { 7 }
+        );
+    }
+}
+
+#[test]
+fn independently_bounded_variables_round_trip_across_profiles() {
+    use super::profile_index_encoding::{decode_stored_profile_index, encode_stored_profile_index};
+    let records: Vec<_> = (1..=3)
+        .map(|id| ProfileRecord {
+            profile_identifier: create_test_profile_identifier(id),
+            profile_display_name: format!("profile {id}"),
+            last_played_unix_timestamp_milliseconds: 0,
+        })
+        .collect();
+    let bytes = encode_profile_index_for_test(&records, None).unwrap();
+    let (mut profiles, _) = decode_stored_profile_index(&bytes).unwrap();
+    let value = "v".repeat(1024);
+    for profile in &mut profiles {
+        let mut count = 0;
+        while profile
+            .scenario_variables
+            .set(AssetId::from_key(&count.to_string()), Some(&value))
+            .is_ok()
+        {
+            count += 1;
+        }
+        assert_eq!(count, 62);
+        // Replacing a value does not consume an additional entry's byte budget.
+        profile
+            .scenario_variables
+            .set(AssetId::from_key("0"), Some(&value))
+            .unwrap();
+    }
+    let bytes = encode_stored_profile_index(&profiles, None).unwrap();
+    assert!(bytes.len() > 128 * 1024);
+    let (decoded, _) = decode_stored_profile_index(&bytes).unwrap();
+    for (expected, actual) in profiles.iter().zip(decoded) {
+        assert_eq!(actual.scenario_variables, expected.scenario_variables);
+    }
+}

@@ -90,6 +90,7 @@ pub(super) fn bind_guest(
         })
         .collect::<Result<Vec<_>, BindError>>()?;
     output.document.guests.push(GuestDefinition {
+        donation: lower_guest_donation_policy(record)?,
         id: id(record.key),
         object: asset(record, &["object", "entity"]),
         behavior_subject_type_identifiers: {
@@ -316,6 +317,7 @@ fn bind_authored_guest_binder(
         }),
         name_pool,
         rarity,
+        donation: lower_guest_donation_policy(record)?,
         preferred_animal_view_factor_q16,
         starting_cash_cents,
         initial_departure_points_q16: departure_points_q16 as i32,
@@ -496,4 +498,38 @@ fn positive_q16(value: f64, record: &RecordView<'_, '_>, property: &str) -> Resu
         ));
     }
     Ok(scaled as u32)
+}
+
+fn lower_guest_donation_policy(
+    record: &RecordView<'_, '_>,
+) -> Result<
+    Option<openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDonationPolicy>,
+    BindError,
+> {
+    let number = |name| {
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", name)
+            .or_else(|| record.value(&[name]))
+            .map(|value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .filter(|value| value.is_finite() && *value > 0.0)
+                    .ok_or_else(|| BindError::record(record, "invalid guest donation policy"))
+            })
+            .transpose()
+    };
+    let Some(threshold) = number("f_DonationThreshold")? else {
+        return Ok(None);
+    };
+    let Some(preferred_animal_factor) = number("f_PreferredAnimalDonateFactor")? else {
+        return Ok(None);
+    };
+    let Some(search_radius_m) = number("f_sensorRadius")? else {
+        return Ok(None);
+    };
+    Ok(Some(
+        openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDonationPolicy {
+            threshold,
+            preferred_animal_factor,
+            search_radius_m,
+        },
+    ))
 }

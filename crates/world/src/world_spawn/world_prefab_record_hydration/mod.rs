@@ -20,6 +20,7 @@ use openzt2_game_data::world_scenario::StartingZooSpawnEntityFlags;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -47,6 +48,8 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
     mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
+    species_assets: Res<Assets<SpeciesAsset>>,
+    species_index: Res<SpeciesAssets>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     models: Res<Assets<Gltf>>,
@@ -77,6 +80,9 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
     let Some(active_catalogue) = active_definitions.get(&definitions) else {
         return;
     };
+    let Some(species) = species_index.get(&species_assets) else {
+        return;
+    };
     let catalog = &start_asset.document;
     let end =
         pending.bounded_world_prefab_record_batch_end(WORLD_PREFAB_RECORD_HYDRATION_BATCH_SIZE);
@@ -91,6 +97,20 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
             break;
         };
         let definition_id = AssetId(record.definition.0);
+        if species.find_variant(definition_id).is_some() {
+            let entity = commands.spawn((
+                WorldMember { root },
+                DefinitionId(definition_id),
+                PersistentId(record.persistent_id),
+                transform_from_world(&record.transform),
+                openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal {
+                    variant: definition_id,
+                    initial_needs: record.initial_needs.clone(),
+                },
+            )).id();
+            pending.record_world_prefab_spawn_completion(entity);
+            continue;
+        }
         let object_definition_id = active_catalogue
             .find_object(definition_id)
             .map(|record| record.id)

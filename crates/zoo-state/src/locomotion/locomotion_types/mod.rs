@@ -229,6 +229,63 @@ pub struct ActiveTerrainDerivedNavigationGraph {
 }
 
 impl ActiveTerrainDerivedNavigationGraph {
+    /// Eligible dry node centres sampled from a habitat's topology cells,
+    /// nearest the recipient first. Route reachability remains the planner's job.
+    pub fn collect_dry_ground_candidates(
+        &self,
+        region: &crate::habitat::habitat_types::HabitatRegion,
+        grid: crate::topology::topology_graph_types::TopologyGrid,
+        agent: &NavAgent,
+        recipient: Vec3,
+        output: &mut Vec<Vec3>,
+    ) {
+        output.clear();
+        let graph = self.terrain_derived_navigation_graph();
+        let cell_size = f32::from(graph.terrain_cell_size_centimetres) * 0.01;
+        if !agent.is_valid() || !recipient.is_finite() || cell_size <= 0.0 {
+            return;
+        }
+        for cell in &region.topology_cells {
+            let centre =
+                grid.cell_translation(cell.extend(0)).xz() + Vec2::splat(grid.spacing_m * 0.5);
+            if centre.x < 0.0 || centre.y > 0.0 {
+                continue;
+            }
+            let terrain_cell = [
+                (centre.x / cell_size).floor() as u32,
+                (-centre.y / cell_size).floor() as u32,
+            ];
+            let Some(index) = graph.calculate_navigation_node_for_terrain_cell(terrain_cell) else {
+                continue;
+            };
+            let Some(node) = graph.find_navigation_node(index) else {
+                continue;
+            };
+            if node.eligibility_flags.0 & agent.capabilities.0 & NavFlags::ELIGIBILITY_BITS == 0
+                || node.eligibility_flags.0 & (NavFlags::WATER.0 | NavFlags::DISABLED_BY_DEFAULT.0)
+                    != 0
+                || f32::from(node.clearance_centimetres) < agent.radius_m * 100.0
+            {
+                continue;
+            }
+            if let Some(position) =
+                graph.calculate_navigation_node_world_position_centimetres(index)
+            {
+                output.push(
+                    Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32) * 0.01,
+                );
+            }
+        }
+        output.sort_unstable_by(|a, b| {
+            a.xz()
+                .distance_squared(recipient.xz())
+                .total_cmp(&b.xz().distance_squared(recipient.xz()))
+                .then_with(|| a.x.total_cmp(&b.x))
+                .then_with(|| a.z.total_cmp(&b.z))
+        });
+        output.dedup();
+    }
+
     pub const fn new(
         terrain_derived_navigation_graph:
             crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
@@ -455,3 +512,6 @@ pub struct MotionProgress {
 
 pub const STUCK_TICKS: u16 = 120;
 pub const MAX_STEERING_NEIGHBORS: usize = 24;
+
+#[cfg(test)]
+mod tests;

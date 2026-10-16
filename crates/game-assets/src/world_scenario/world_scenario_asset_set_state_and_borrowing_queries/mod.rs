@@ -62,6 +62,12 @@ impl WorldScenarios {
         handle: Handle<WorldScenarioDocumentAsset>,
         document: &openzt2_game_data::world_scenario::WorldScenarioDocument,
     ) {
+        for campaign in &document.campaigns {
+            self.campaigns.insert(campaign.id, handle.clone());
+            if !self.campaign_order.contains(&campaign.id) {
+                self.campaign_order.push(campaign.id);
+            }
+        }
         for map in &document.maps {
             self.maps.insert(map.id, handle.clone());
             self.terrains.insert(map.terrain, handle.clone());
@@ -281,8 +287,9 @@ impl<'a> WorldScenariosView<'a> {
     ) -> impl Iterator<Item = &'a openzt2_game_data::world_scenario::ScenarioDefinitionRecord> {
         self.owner
             .scenarios
-            .keys()
-            .filter_map(move |id| self.scenario(*id))
+            .iter()
+            .filter(|(id, source)| **id == source.record)
+            .filter_map(move |(id, _)| self.scenario(*id))
     }
 
     pub fn photo_challenge(

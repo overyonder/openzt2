@@ -45,6 +45,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     pending_behavior_sets: Query<(
         Entity,
         &PendingBehaviorSet,
@@ -87,6 +88,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 staff,
                 guest,
                 definitions,
+                animal_types.borrow_for(actor_entity),
             );
         let Some((behavior_document_handle, declaration_index)) = behavior_declaration_index
             .find_behavior_set_location(pending_behavior_set.program, subject_type_identifiers)

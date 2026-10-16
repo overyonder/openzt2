@@ -39,6 +39,7 @@ use task_cooldowns::{AnimalTaskCooldowns, RunningDelayedAnimalTask};
 use world_object_targets::{
     indexed_world_object_target_requirement, WorldObjectTargetLocation, WorldObjectTargetSources,
 };
+use super::behavior_token_execution::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
 
 pub(super) fn select_idle_animal_tasks(
     documents: Res<LoadedBehaviorDocumentCollection>,
@@ -71,6 +72,7 @@ pub(super) fn select_idle_animal_tasks(
         ),
     >,
     mut world_objects: WorldObjectTargetSources,
+    tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     mut commands: Commands,
 ) {
     world_objects.note_object_changes();
@@ -124,39 +126,66 @@ pub(super) fn select_idle_animal_tasks(
                 continue;
             }
             if task.targets.len() == 1 && task.targets[0] == "self" {
-                if !candidate_requirements_are_satisfied(
-                    &task.candidate_eligibility_requirements,
-                    |role, required| match role {
-                        BehaviorCandidateRole::Subject => {
-                            facts.matches_type(required, authored_types)
-                        }
-                        BehaviorCandidateRole::Target => required == AssetId::from_key("self"),
-                        BehaviorCandidateRole::Object => false,
-                    },
-                    |role, fact| role != BehaviorCandidateRole::Object && facts.satisfies(fact),
-                ) {
-                    trace!(?animal, task = %task.name, "animal self task qualifiers refused");
-                    continue;
-                }
-                let Some(score) = scoring::score_animal_task(
-                    task,
-                    &facts,
-                    policy.outside_range_need_value,
-                    0.0,
-                    &mut random,
-                ) else {
-                    trace!(?animal, task = %task.name, "animal self task has no supported score");
-                    continue;
-                };
-                considered_candidates += 1;
-                trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
+                let object_candidates = std::iter::once(None)
+                    .filter(|_| task.objects.is_empty())
+                    .chain(
+                        (!task.objects.is_empty())
+                            .then_some(())
+                            .into_iter()
+                            .flat_map(|()| tokens.iter())
+                            .filter_map(|(entity, token, recipient)| {
+                                (recipient.parent() == animal && clock.tick < token.expires_at)
+                                    .then_some(Some((entity, token)))
+                            }),
+                    );
+                for object in object_candidates {
+                    if !candidate_requirements_are_satisfied(
+                        &task.candidate_eligibility_requirements,
+                        |role, required| match role {
+                            BehaviorCandidateRole::Subject => {
+                                facts.matches_type(required, authored_types)
+                            }
+                            BehaviorCandidateRole::Target => required == AssetId::from_key("self"),
+                            BehaviorCandidateRole::Object => {
+                                object.is_some_and(|(_, token)| token.name == required)
+                            }
+                        },
+                        |role, fact| role != BehaviorCandidateRole::Object && facts.satisfies(fact),
+                    ) {
+                        trace!(?animal, task = %task.name, "animal self task qualifiers refused");
+                        continue;
+                    }
+                    let Some(score) = scoring::score_animal_task(
+                        task,
+                        &facts,
+                        policy.outside_range_need_value,
+                        0.0,
+                        &mut random,
+                    ) else {
+                        trace!(?animal, task = %task.name, "animal self task has no supported score");
+                        continue;
+                    };
+                    considered_candidates += 1;
+                    trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
-                ranking.consider(
-                    (document, declaration, task, animal),
-                    task.priority.unwrap_or_default(),
-                    score,
-                    |upper| random.range_u32(upper),
-                );
+                    ranking.consider(
+                        (
+                            document,
+                            declaration,
+                            task,
+                            animal,
+                            object.map(|(entity, _)| entity),
+                        ),
+                        task.priority.unwrap_or_default(),
+                        score,
+                        |upper| random.range_u32(upper),
+                    );
+                }
+                continue;
+            }
+            // Token payloads and concrete object participants need their own
+            // target producer; this path only considers an object-free target.
+            if !task.objects.is_empty() {
                 continue;
             }
             let Some(target_requirement) =
@@ -259,7 +288,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
-                    (document, declaration, task, target.entity),
+                    (document, declaration, task, target.entity, None),
                     task.priority.unwrap_or_default(),
                     score,
                     |upper| random.range_u32(upper),
@@ -268,7 +297,7 @@ pub(super) fn select_idle_animal_tasks(
         }
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
-        let Some((document, declaration, task, target)) = ranking.finish(false) else {
+        let Some((document, declaration, task, target, object)) = ranking.finish(false) else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
                 hunger = ?facts.source_need(AssetId::from_key("hunger")),
@@ -311,6 +340,11 @@ pub(super) fn select_idle_animal_tasks(
             continue;
         }
         let execution_id = execution_sequence.next();
+        if let Some(token) = object {
+            commands
+                .entity(token)
+                .insert(ClaimedBehaviorSelfToken { execution_id });
+        }
         debug!(?animal, task = %task.name, id = ?task.id, ?target, execution_id,
             cooldown_ticks = ?delay_ticks, "animal started task");
         let mut started = commands.entity(animal);
@@ -324,7 +358,7 @@ pub(super) fn select_idle_animal_tasks(
             action: 0,
             repetitions: 0,
             next_action_tick: clock.tick,
-            object: None,
+            object,
             interaction_slot: None,
             stack: ArrayVec::new(),
         });
@@ -361,7 +395,7 @@ fn subject_can_consider_task(
     facts: &AnimalCandidateFactsItem<'_, '_>,
     authored_types: &[AssetId],
 ) -> bool {
-    if !task.objects.is_empty() || task.targets.is_empty() || task.subjects.is_empty() {
+    if task.targets.is_empty() || task.subjects.is_empty() {
         return false;
     }
     if !task

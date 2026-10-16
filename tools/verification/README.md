@@ -10,6 +10,12 @@ Headless runs disable window, audio output and hardware gamepad backends. Script
 keyboard and controller events still use Bevy's input processing, so host input
 cannot interfere with a journey.
 
+For accelerated manual play on a private display, set
+`OPENZT2_SIMULATION_SPEED_MULTIPLIER=5` when launching the game. This scales
+simulation time, including fixed updates, while retaining normal pause controls.
+It defaults to 1 and does not change saved clock or speed settings. Use the
+runner's no-device `ALSA_CONFIG_PATH` configuration for silent private runs.
+
 A journey owns a complete player interaction, including its cleanup. Place,
 inspect, move and sell one building in one journey. Reuse the same enclosure for
 compatible animal checks. Put irreversible work last in its map: populated save/load and habitat work

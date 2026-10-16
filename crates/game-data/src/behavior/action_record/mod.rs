@@ -70,4 +70,6 @@ pub enum BehaviorAction {
     AnimationSwitchSet(action::locomotion_switch_set::BehaviorAnimationSwitchSetAction),
     AnimalShowEvent(action::show_event::BehaviorShowEventAction),
     HeadLook(action::head_look::BehaviorHeadLookAction),
+    Wander(action::wander::BehaviorWanderAction),
+    SendSelfTokens(Vec<action::token::BehaviorSelfTokenDelivery>),
 }

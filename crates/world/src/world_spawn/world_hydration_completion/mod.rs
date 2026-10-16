@@ -42,6 +42,10 @@ pub fn complete_or_fail_finished_world_hydration(
             Without<TerrainChunkRejected>,
         ),
     >,
+    starting_animals: Query<
+        &WorldMember,
+        With<openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal>,
+    >,
     mut finished: MessageWriter<WorldLoadFinished>,
     mut failed: MessageWriter<WorldLoadFailed>,
 ) {
@@ -78,7 +82,8 @@ pub fn complete_or_fail_finished_world_hydration(
         });
         drop(performance_timer);
         performance.finish_and_report(&archives, "failed");
-    } else if pending.is_complete() && unprojected_terrain.is_empty() {
+    } else if pending.is_complete() && unprojected_terrain.is_empty()
+        && !starting_animals.iter().any(|member| member.root == root) {
         // Surface composition stalls frames for seconds; keep it behind the loading screen.
         commands.entity(root).insert(WorldLoadCompleted);
         finished.write(WorldLoadFinished {

@@ -19,6 +19,7 @@ mod profile_index_encoding;
 mod profile_index_encoding_tests;
 mod profile_persistence_types;
 mod profile_request_execution;
+mod profile_scenario_variable_encoding;
 mod progression_snapshot_application;
 mod progression_snapshot_capture;
 mod progression_snapshot_section_encoding;
@@ -86,6 +87,8 @@ impl Plugin for PersistencePlugin {
         app.init_resource::<ReusableWorldSnapshotByteBuffer>()
             .init_resource::<ProfileIndex>()
             .init_resource::<ProfileOptions>()
+            .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
+            .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
             .init_resource::<SaveSlotCatalogue>()
             .init_resource::<openzt2_zoo_state::progression::profile_challenge_types::ProfileChallengeCompletionCounts>()
             .add_message::<SaveWorldSnapshotToSlot>()
@@ -128,7 +131,7 @@ impl Plugin for PersistencePlugin {
                 (
                     profile_request_execution::begin_loading_profile_index,
                     profile_request_execution::begin_creating_requested_profiles,
-                    profile_request_execution::begin_selecting_requested_profiles,
+                    profile_request_execution::begin_selecting_requested_profiles.after(GameSet::Intent),
                     profile_request_execution::begin_deleting_requested_profiles,
                     profile_filesystem_task_completion_application::
                         apply_completed_profile_filesystem_tasks_to_canonical_profile_state,

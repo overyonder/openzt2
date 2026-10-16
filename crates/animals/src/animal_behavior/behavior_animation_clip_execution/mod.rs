@@ -1,7 +1,15 @@
 use bevy::prelude::*;
+use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
 use openzt2_game_data::behavior::{
     action::animation::BehaviorAnimationPlaybackSpeed, action_record::BehaviorAction,
 };
+use openzt2_world_state::animation_graph::{
+    animation_graph_playback_state_types::AnimationGraphPlaybackState,
+    animation_graph_transition_operations::{
+        begin_requested_animation_graph_node_transition, find_animation_graph_transition_route,
+    },
+};
+use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::{
@@ -21,10 +29,13 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 
 /// The tick an authored play time ends for one clip request.
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone)]
 pub(super) struct TimedBehaviorAnimationClip {
     request_id: usize,
-    until_tick: u64,
+    duration_ticks: u64,
+    started: Option<(u64, u64)>,
+    return_node: Option<String>,
+    returning: bool,
 }
 
 pub(super) fn start_current_behavior_animation_clip_actions(
@@ -41,6 +52,7 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         (
             Without<PendingBehaviorAnimationClipCompletion>,
             Without<PendingBehaviorTaskFailure>,
+            Without<TimedBehaviorAnimationClip>,
         ),
     >,
     mut animation_clip_playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
@@ -130,7 +142,10 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         if let Some(until_tick) = play_until_tick {
             commands.entity(actor).insert(TimedBehaviorAnimationClip {
                 request_id: request_id.id,
-                until_tick,
+                duration_ticks: until_tick.saturating_sub(simulation_clock.tick),
+                started: None,
+                return_node: None,
+                returning: false,
             });
         }
         commands
@@ -249,17 +264,229 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
-    mut behavior_tasks: Query<
-        (
-            Entity,
-            &TimedBehaviorAnimationClip,
-            Option<&mut BehaviorTaskExecutionState>,
-            Option<&PendingBehaviorAnimationClipCompletion>,
-        ),
-        Without<PendingBehaviorTaskFailure>,
-    >,
+    asset_server: Res<AssetServer>,
+    mut animation_sets: ResMut<Assets<AnimationSetAsset>>,
+    mut presentations: Query<(
+        &AnimationPresentationOwner,
+        &mut AnimationPlaybackController,
+        &mut AnimationGraphPlaybackState,
+    )>,
+    mut cancellations: MessageWriter<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>,
+    mut started_requests: MessageReader<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>,
+    mut behavior_tasks: Query<(
+        Entity,
+        &mut TimedBehaviorAnimationClip,
+        Option<&mut BehaviorTaskExecutionState>,
+        Option<&PendingBehaviorAnimationClipCompletion>,
+        Has<PendingBehaviorTaskFailure>,
+    )>,
 ) {
-    for (actor, timed, task, pending) in &mut behavior_tasks {
+    for started in started_requests.read() {
+        if let Ok((_, mut timed, _, _, _)) =
+            behavior_tasks.get_mut(started.animation_subject_entity)
+        {
+            if timed.request_id == started.request_id && timed.started.is_none() {
+                timed.return_node.clone_from(&started.previous_graph_node);
+                timed.started = Some((
+                    started.playback_generation,
+                    simulation_clock.tick.saturating_add(timed.duration_ticks),
+                ));
+            }
+        }
+    }
+    for (actor, mut timed, task, pending, failing) in &mut behavior_tasks {
+        let owns_task = !failing
+            && task.as_ref().zip(pending).is_some_and(|(task, pending)| {
+                pending.request_id == timed.request_id && pending.still_owns_exact_task_frame(task)
+            });
+        if !owns_task {
+            cancellations.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest {
+                animation_subject_entity: actor, request_id: timed.request_id,
+            });
+            for (owner, mut controller, mut graph) in &mut presentations {
+                if owner.gameplay_entity == actor
+                    && graph.route_owner.is_some_and(|owner| {
+                        owner.request_id == timed.request_id
+                            && owner.playback_generation == controller.playback_generation
+                    })
+                {
+                    graph.route_owner = None;
+                    graph.remaining_transition_nodes.clear();
+                    graph.active_animation_graph_transition = None;
+                    controller.playback_generation = controller.playback_generation.wrapping_add(1);
+                    controller.playback_state = openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState::Finished;
+                }
+            }
+            commands
+                .entity(actor)
+                .remove::<TimedBehaviorAnimationClip>();
+            continue;
+        }
+        let mut waiting = false;
+        let mut succeeded = false;
+        let mut matched = false;
+        for (owner, mut controller, mut graph) in &mut presentations {
+            if owner.gameplay_entity != actor {
+                continue;
+            }
+            if timed.returning {
+                let Some(route_owner) = graph.route_owner.filter(|owner| {
+                    owner.request_id == timed.request_id
+                        && owner.playback_generation == controller.playback_generation
+                        && controller.explicit_clip_request_id.is_none()
+                }) else {
+                    continue;
+                };
+                matched = true;
+                let target_matches = animation_sets
+                    .get(&controller.animation_set_asset)
+                    .and_then(|set| {
+                        set.animation_graph_nodes
+                            .get(route_owner.target_node as usize)
+                    })
+                    .is_some_and(|node| {
+                        timed.return_node.as_ref() == Some(&node.animation_graph_node_asset_key)
+                    });
+                if !target_matches {
+                    continue;
+                }
+                waiting |= graph.active_animation_graph_transition.is_some();
+                succeeded |= graph.active_animation_graph_transition.is_none()
+                    && graph.remaining_transition_nodes.is_empty()
+                    && graph.current_animation_graph_node_index == route_owner.target_node;
+                continue;
+            }
+            if controller.explicit_clip_request_id != Some(timed.request_id) {
+                continue;
+            }
+            matched = true;
+            let Some((generation, until_tick)) = timed.started else {
+                waiting = true;
+                continue;
+            };
+            if generation != controller.playback_generation {
+                continue;
+            }
+            if simulation_clock.tick < until_tick {
+                waiting = true;
+                continue;
+            }
+            let Some(mut set) = animation_sets.get_mut(&controller.animation_set_asset) else {
+                continue;
+            };
+            let target = timed
+                .return_node
+                .as_ref()
+                .and_then(|name| {
+                    set.animation_graph_nodes
+                        .iter()
+                        .position(|node| &node.animation_graph_node_asset_key == name)
+                })
+                .and_then(|index| u32::try_from(index).ok());
+            if let Some(target) = target {
+                if let Some(route) = find_animation_graph_transition_route(
+                    &set,
+                    graph.current_animation_graph_node_index,
+                    target,
+                ) {
+                    let mut source = graph.current_animation_graph_node_index;
+                    let mut clip_choices = Vec::new();
+                    for next in &route {
+                        let source_name = &set.animation_graph_nodes[source as usize]
+                            .animation_graph_node_asset_key;
+                        let target_node = &set.animation_graph_nodes[*next as usize];
+                        if let Some(edge) = set.animation_graph_edges.iter().find(|edge| {
+                            &edge.source_animation_graph_node_asset_key == source_name
+                                && edge.target_animation_graph_node_asset_key
+                                    == target_node.animation_graph_node_asset_key
+                        }) {
+                            if !edge.transition_animation_clip_asset_keys.is_empty() {
+                                clip_choices
+                                    .push(edge.transition_animation_clip_asset_keys.clone());
+                            }
+                        }
+                        clip_choices.push(target_node.animation_clip_asset_keys.clone());
+                        source = *next;
+                    }
+                    let mut loading = false;
+                    let mut failed = false;
+                    for choices in clip_choices {
+                        // Graph execution selects one available alternative per edge/node.
+                        if choices
+                            .iter()
+                            .any(|clip| set.find_animation_clip_record_by_asset_key(clip).is_some())
+                        {
+                            continue;
+                        }
+                        // Try the authored alternatives in order, requesting only one
+                        // usable source at a time instead of loading every alternative.
+                        if choices
+                            .iter()
+                            .any(|clip| set.request_animation_clip_asset_load(&asset_server, clip))
+                        {
+                            loading = true;
+                        } else {
+                            failed = true;
+                        }
+                    }
+                    if failed {
+                        break;
+                    }
+                    if loading {
+                        waiting = true;
+                        continue;
+                    }
+                    if begin_requested_animation_graph_node_transition(
+                        &set,
+                        target,
+                        &mut controller,
+                        &mut graph,
+                        None,
+                        false,
+                    )
+                    .is_ok()
+                    {
+                        timed.returning = true;
+                        graph.route_owner = Some(openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphRouteOwner {
+                            request_id: timed.request_id,
+                            target_node: target,
+                            playback_generation: controller.playback_generation,
+                        });
+                        waiting |= graph.active_animation_graph_transition.is_some();
+                        succeeded |= graph.active_animation_graph_transition.is_none()
+                            && graph.remaining_transition_nodes.is_empty()
+                            && graph.current_animation_graph_node_index == target;
+                        continue;
+                    }
+                }
+            }
+        }
+        // Demand loading has not accepted this request yet; its timer has not begun.
+        if !matched && timed.started.is_none() && !timed.returning {
+            continue;
+        }
+        if waiting {
+            continue;
+        }
+        if !succeeded {
+            cancellations.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest {
+                animation_subject_entity: actor, request_id: timed.request_id,
+            });
+            super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            commands.entity(actor).remove::<(
+                TimedBehaviorAnimationClip,
+                PendingBehaviorAnimationClipCompletion,
+            )>();
+            warn!(
+                ?actor,
+                request_id = timed.request_id,
+                return_node = ?timed.return_node,
+                started = ?timed.started,
+                returning = timed.returning,
+                "timed behavior animation could not complete its authored return route"
+            );
+            continue;
+        }
         let (Some(mut task), Some(pending)) = (task, pending) else {
             commands
                 .entity(actor)
@@ -272,7 +499,10 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
                 .remove::<TimedBehaviorAnimationClip>();
             continue;
         }
-        if simulation_clock.tick < timed.until_tick {
+        if failing {
+            commands
+                .entity(actor)
+                .remove::<TimedBehaviorAnimationClip>();
             continue;
         }
         let current_clip = behavior_document_assets

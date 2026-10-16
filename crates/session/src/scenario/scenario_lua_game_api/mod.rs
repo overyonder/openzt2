@@ -24,8 +24,45 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         Option<super::challenge_offer_types::ScenarioChallengePanelRequest>,
     >,
     current_photo_challenge_set: &'env RefCell<Option<openzt2_game_data::AssetId>>,
+    profile_variables: &'env RefCell<
+        Vec<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
+    >,
+    persist_profile_variables: &'env std::cell::Cell<bool>,
+    ui: &'env RefCell<Vec<super::scenario_lua_ui::ScenarioUiCommand>>,
+    entity_operations: &'env super::scenario_lua_entity_commands::PendingEntityOperations,
 ) -> mlua::Result<()> {
     let globals = lua.globals();
+    globals.set(
+        "getuservar",
+        scope.create_function(move |_, name: String| {
+            let key = openzt2_game_data::AssetId::from_key(&name);
+            let pending = profile_variables.borrow();
+            Ok(pending
+                .iter()
+                .rev()
+                .find(|change| change.key == key)
+                .map_or_else(
+                    || queries.profile_variables.get(key).map(str::to_owned),
+                    |change| change.value.clone(),
+                ))
+        })?,
+    )?;
+    globals.set("setuservar", scope.create_function(move |_, (name, value): (String, Option<String>)| {
+        if name.is_empty() || value.as_ref().is_some_and(|value| value.len() > 1024) {
+            return Err(mlua::Error::runtime("invalid profile scenario variable"));
+        }
+        profile_variables.borrow_mut().push(openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable {
+            key: openzt2_game_data::AssetId::from_key(&name), value,
+        });
+        Ok(())
+    })?)?;
+    globals.set(
+        "saveOptions",
+        scope.create_function(move |_, _: MultiValue| {
+            persist_profile_variables.set(true);
+            Ok(())
+        })?,
+    )?;
     let state = globals
         .get::<Option<Table>>("__openzt2_scenario_state")?
         .unwrap_or(lua.create_table()?);
@@ -39,7 +76,20 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     globals.set(
         "setglobalvar",
-        scope.create_function(move |_, (name, value): (String, Value)| state.set(name, value))?,
+        scope.create_function(move |_, (name, value): (String, Value)| {
+            if name == "nextScenario" {
+                let next = match &value {
+                    Value::String(value) => Some(value.to_str()?.to_owned()),
+                    Value::Nil => None,
+                    _ => return Err(mlua::Error::runtime("nextScenario must be a string or nil")),
+                };
+                ui.borrow_mut()
+                    .push(super::scenario_lua_ui::ScenarioUiCommand::NextScenario(
+                        next,
+                    ));
+            }
+            state.set(name, value)
+        })?,
     )?;
     globals.set(
         "howMuchCash",
@@ -85,36 +135,6 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         })?,
     )?;
     globals.set(
-        "countType",
-        scope.create_function(move |_, kind: String| {
-            Ok(queries
-                .live_world_entity_counts_by_definition_identifier
-                .get(&openzt2_game_data::AssetId::from_key(&kind))
-                .copied()
-                .unwrap_or(0))
-        })?,
-    )?;
-    globals.set(
-        "howManyInTableExist",
-        scope.create_function(move |_, kinds: Table| {
-            kinds
-                .sequence_values::<String>()
-                .try_fold(0_u32, |count, kind| {
-                    kind.map(|kind| {
-                        count
-                            + u32::from(
-                                queries
-                                    .live_world_entity_counts_by_definition_identifier
-                                    .get(&openzt2_game_data::AssetId::from_key(&kind))
-                                    .copied()
-                                    .unwrap_or(0)
-                                    > 0,
-                            )
-                    })
-                })
-        })?,
-    )?;
-    globals.set(
         "BFS_ADDSCENARIO",
         scope.create_function_mut(move |_, values: MultiValue| {
             let path = values
@@ -134,6 +154,16 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
 
     let scenario_manager = lua.create_table()?;
     scenario_manager.set(
+        "BFS_GETLOCID",
+        scope.create_function(move |_, (_, key): (Table, String)| {
+            let canonical = openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&key);
+            queries.localization
+                .and_then(|localization| localization.find_plain_localized_text(openzt2_game_data::AssetId::from_key(&canonical)))
+                .map(str::to_owned)
+                .ok_or_else(|| mlua::Error::runtime(format!("missing localization {key}")))
+        })?,
+    )?;
+    scenario_manager.set(
         "BFS_ADDSCENARIO",
         globals.get::<mlua::Function>("BFS_ADDSCENARIO")?,
     )?;
@@ -148,11 +178,27 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             }
             available_content
                 .borrow_mut()
-                .push(openzt2_game_data::AssetId::from_key(&definition));
+                .push(openzt2_game_data::AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&definition)));
             Ok(())
         })?,
     )?;
+    super::scenario_lua_ui::install_manager_commands(scope, &scenario_manager, ui)?;
     let economy_manager = lua.create_table()?;
+    let status = lua.create_table()?;
+    status.set(
+        "ZT_GET_DONATIONBYANIMALTYPE",
+        scope.create_function(move |_, (_, category): (Table, String)| {
+            let category = openzt2_game_data::AssetId::from_key(&category);
+            let cents = queries
+                .donation_totals
+                .iter()
+                .try_fold(0_i64, |sum, totals| {
+                    sum.checked_add(totals.aggregate_for_category(Some(category))?.amount.0)
+                })
+                .ok_or_else(|| mlua::Error::runtime("donation total exceeds currency range"))?;
+            Ok(cents as f64 / 100.0)
+        })?,
+    )?;
     economy_manager.set(
         "ZT_GET_INFO",
         scope.create_function(move |_, (_, request): (Table, Table)| {
@@ -178,6 +224,9 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     let ui_root =
         super::challenge_lua_ui::create_challenge_ui_root(lua, scope, scenario, requested_panel)?;
+    let ui_root = super::scenario_lua_ui::extend_ui_root(lua, scope, ui_root, ui)?;
+    let mode =
+        super::scenario_lua_ui::create_mode_adapter(lua, scope, ui, queries, entity_operations)?;
     let photo_challenges =
         super::scenario_lua_photo_challenge_queries::create_scenario_lua_photo_challenge_component(
             lua,
@@ -186,15 +235,27 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             current_photo_challenge_set,
         )?;
     let entity_manager = super::scenario_lua_entity_queries::create_scenario_lua_entity_manager(
-        lua, scope, queries,
+        lua,
+        scope,
+        queries,
+        entity_operations,
+    )?;
+    let world_manager = super::scenario_lua_entity_queries::create_world_manager(
+        lua,
+        scope,
+        queries,
+        entity_operations,
     )?;
     globals.set(
         "queryObject",
         scope.create_function(move |_, name: String| match name.as_str() {
             "BFScenarioMgr" => Ok(Value::Table(scenario_manager.clone())),
             "ZTEconomyMgr" => Ok(Value::Table(economy_manager.clone())),
+            "ZTStatus" => Ok(Value::Table(status.clone())),
             "BFGManager" => Ok(Value::Table(entity_manager.clone())),
+            "ZTWorldMgr" => Ok(Value::Table(world_manager.clone())),
             "UIRoot" => Ok(Value::Table(ui_root.clone())),
+            "ZTMode" => Ok(Value::Table(mode.clone())),
             "ZTPhotoChallengesComponent" => Ok(Value::Table(photo_challenges.clone())),
             _ => Err(mlua::Error::runtime(format!(
                 "queryObject does not expose {name}"

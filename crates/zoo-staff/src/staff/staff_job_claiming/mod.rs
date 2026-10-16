@@ -5,6 +5,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_health::types::Rampaging;
+use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
@@ -65,6 +66,8 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         Option<&HabitatMember>,
         Option<&Rampaging>,
         &DefinitionId,
+        Option<&FoodContainer>,
+        Option<&DrinkContainer>,
     )>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
@@ -85,8 +88,15 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         if job.token.is_none() {
             continue;
         }
-        let Ok((target_transform, parent, habitat, target_rampaging, target_definition)) =
-            targets.get(job.target)
+        let Ok((
+            target_transform,
+            parent,
+            habitat,
+            target_rampaging,
+            target_definition,
+            food,
+            drink,
+        )) = targets.get(job.target)
         else {
             continue;
         };
@@ -112,6 +122,9 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_rampaging = target_rampaging.is_some();
         let target_on_land = terrain_surfaces.on_land(target_position.xz());
         let candidate_facts = StaffCandidateEligibilityFacts {
+            target_food_level_q16: food
+                .map(|container| container.amount_q16)
+                .or_else(|| drink.map(|container| container.amount_q16)),
             target_in_water: target_on_land.map(|on_land| !on_land),
             target_on_land,
             target_rampaging: Some(target_rampaging),
@@ -229,7 +242,9 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         else {
             continue;
         };
-        let Ok((target_transform, _, _, rampaging, definition)) = targets.get(job.target) else {
+        let Ok((target_transform, _, _, rampaging, definition, food, drink)) =
+            targets.get(job.target)
+        else {
             continue;
         };
         let target_in_show = catalogue
@@ -243,6 +258,9 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                 job.kind,
                 job.token,
                 StaffCandidateEligibilityFacts {
+                    target_food_level_q16: food
+                        .map(|container| container.amount_q16)
+                        .or_else(|| drink.map(|container| container.amount_q16)),
                     target_in_water: target_on_land.map(|on_land| !on_land),
                     target_on_land,
                     target_rampaging: Some(rampaging.is_some()),

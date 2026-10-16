@@ -58,6 +58,8 @@ pub struct GuestMemoryPolicy {
 )]
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct GuestDefinition {
+    #[serde(default)]
+    pub donation: Option<GuestDonationPolicy>,
     pub id: AssetId,
     pub object: AssetId,
     pub behavior_subject_type_identifiers: Vec<AssetId>,
@@ -91,6 +93,13 @@ pub struct GuestDefinition {
     pub destination_weights: Vec<GuestDestinationWeight>,
     pub reactions: Vec<GuestReactionDefinition>,
     pub memory: GuestMemoryPolicy,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestDonationPolicy {
+    pub threshold: f32,
+    pub preferred_animal_factor: f32,
+    pub search_radius_m: f32,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub enum GuestRarity {

@@ -36,6 +36,8 @@ pub(super) struct ScenarioGoalRowProjection {
 
 #[derive(SystemParam)]
 pub(super) struct ScenarioShellMessageWriters<'w> {
+    pub(super) continue_campaign:
+        MessageWriter<'w, crate::shell::shell_navigation_request_types::ContinueCampaign>,
     pub(super) choose_world: MessageWriter<'w, ChooseWorld>,
     pub(super) start_world: MessageWriter<'w, StartSelectedWorld>,
 }

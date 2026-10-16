@@ -133,6 +133,11 @@ impl ScenarioLuaVirtualMachine {
         let available_content = RefCell::new(Vec::new());
         let requested_challenge_panel = RefCell::new(None);
         let current_photo_challenge_set = RefCell::new(None);
+        let ui = RefCell::new(Vec::new());
+        let entity_operations =
+            RefCell::new(super::scenario_lua_entity_commands::EntityOperations::default());
+        let profile_variables = RefCell::new(Vec::new());
+        let persist_profile_variables = std::cell::Cell::new(false);
         let loaded_lua_script_asset_identifiers = RefCell::new(std::mem::take(
             &mut self.loaded_lua_script_asset_identifiers,
         ));
@@ -167,6 +172,10 @@ impl ScenarioLuaVirtualMachine {
                     &available_content,
                     &requested_challenge_panel,
                     &current_photo_challenge_set,
+                    &profile_variables,
+                    &persist_profile_variables,
+                    &ui,
+                    &entity_operations,
                 )?;
                 let scenario_lua_function: Function = self
                     .lua_virtual_machine
@@ -198,6 +207,10 @@ impl ScenarioLuaVirtualMachine {
                 Err(failure) => (ScenarioObjectiveStatus::Active, Some(failure)),
             };
             Ok(ScenarioLuaScriptResult {
+                entities: std::mem::take(&mut *entity_operations.borrow_mut()).finish(),
+                profile_variables: profile_variables.borrow_mut().drain(..).collect(),
+                persist_profile_variables: persist_profile_variables.get(),
+                ui: ui.borrow_mut().drain(..).collect(),
                 failure,
                 current_photo_challenge_set: current_photo_challenge_set.borrow_mut().take(),
                 available_content: available_content.borrow_mut().drain(..).collect(),

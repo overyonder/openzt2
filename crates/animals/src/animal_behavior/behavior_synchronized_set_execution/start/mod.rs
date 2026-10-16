@@ -50,6 +50,7 @@ pub(super) fn start_synchronized_behavior_sets(
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: SynchronizedBehaviorSources,
+    animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     mut actors: SynchronizedBehaviorActors,
     mut claims_this_tick: Local<HashSet<Entity>>,
     mut execution_sequence: ResMut<
@@ -103,9 +104,15 @@ pub(super) fn start_synchronized_behavior_sets(
                 });
             declarations.find_behavior_set_location(
                 set,
-                behavior_subject_type_identifiers(species, staff, guest, definitions)
-                    .chain(object.map(|object| object.0))
-                    .chain(object_types.iter().copied()),
+                behavior_subject_type_identifiers(
+                    species,
+                    staff,
+                    guest,
+                    definitions,
+                    animal_types.borrow_for(entity),
+                )
+                .chain(object.map(|object| object.0))
+                .chain(object_types.iter().copied()),
             )
         };
         let (subject_set, target_set) = (

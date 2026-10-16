@@ -1,5 +1,6 @@
 use super::adoption::lower_authored_animal_adoption_count_range;
 use super::locomotion::lower_animal_ground_navigation_clip;
+use super::locomotion::lower_animal_ground_navigation_clip_for_speed;
 use super::locomotion::lower_animal_navigation_collision_policy;
 use super::locomotion::lower_authored_initial_animal_ground_animation;
 use super::locomotion::lower_first_available_authored_initial_animal_ground_animation;
@@ -49,6 +50,12 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(species),
         navigation_collision_policy: lower_animal_navigation_collision_policy(species)?,
         ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip(species),
+        medium_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
+            species, "medium",
+        ),
+        fast_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
+            species, "fast",
+        ),
         sex: Sex::Any,
         life_stage: LifeStage::Adult,
         model,
@@ -167,6 +174,12 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(candidate),
         navigation_collision_policy: lower_animal_navigation_collision_policy(candidate)?,
         ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip(candidate),
+        medium_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
+            candidate, "medium",
+        ),
+        fast_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
+            candidate, "fast",
+        ),
         sex,
         life_stage,
         model,

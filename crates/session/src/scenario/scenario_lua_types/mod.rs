@@ -12,6 +12,11 @@ use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::progression::fame_types::Fame;
 
 pub(super) struct ScenarioLuaScriptResult {
+    pub(super) entities: Vec<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+    pub(super) ui: Vec<super::scenario_lua_ui::ScenarioUiCommand>,
+    pub(super) profile_variables:
+        Vec<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>,
+    pub(super) persist_profile_variables: bool,
     /// The photo challenge set named by `ZT_PHOTOEVENT_SET_CURRENT_CHALLENGE`.
     pub(super) current_photo_challenge_set: Option<openzt2_game_data::AssetId>,
     /// The error that ended the call early. Native calls made before it have
@@ -30,6 +35,11 @@ pub(super) struct ScenarioLuaScriptResult {
 
 #[derive(Clone, Copy)]
 pub(super) struct ScenarioLuaQueryFacts<'a> {
+    pub(super) donation_totals: &'a ScenarioLuaDonationTotalsQuery<'a, 'a>,
+    pub(super) localization: Option<openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<'a>>,
+    pub(super) spawn_animal: Option<&'a dyn Fn(openzt2_game_data::AssetId, [f32; 3], f32, &[openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest]) -> mlua::Result<openzt2_animals::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalSpawnRequest>>,
+    pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
+    pub(super) profile_variables: &'a openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     pub(super) zoo_cash: &'a ZooCash,
     pub(super) guest_admission_price: &'a AdmissionPrice,
     pub(super) finance_history:
@@ -41,26 +51,29 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) zoo_months_since_calendar_epoch: Option<i64>,
     pub(super) zoo_month_progress:
         Option<super::scenario_lua_query_fact_collection::ScenarioZooMonthProgress>,
-    pub(super) live_world_entity_counts_by_definition_identifier:
-        &'a BTreeMap<openzt2_game_data::AssetId, u32>,
-    pub(super) live_world_animals: &'a ScenarioLuaLiveAnimalQuery<'a, 'a>,
+    pub(super) live_world_entities: &'a ScenarioLuaLiveEntityQuery<'a, 'a>,
+    pub(super) world_definitions: Option<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'a>>,
     pub(super) scenario_document_assets: &'a bevy::prelude::Assets<WorldScenarioDocumentAsset>,
     pub(super) current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a>,
     pub(super) photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a>,
     pub(super) selected_entity: Option<bevy::prelude::Entity>,
 }
 
-/// Animals in the live world, with whether each is pregnant.
-pub(super) type ScenarioLuaLiveAnimalQuery<'w, 's> = bevy::prelude::Query<
+pub(super) type ScenarioLuaDonationTotalsQuery<'w, 's> = bevy::prelude::Query<
     'w,
     's,
+    &'static openzt2_zoo_state::donations::donation_payment_types::DonationCategoryTotals,
+    bevy::prelude::With<openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+>;
+
+/// World entities and the canonical components exposed to scenario scripts.
+pub(super) type ScenarioLuaLiveEntityQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    super::scenario_lua_entity_facts::ScenarioLuaEntityFacts,
     (
-        bevy::prelude::Entity,
-        bevy::prelude::Has<openzt2_zoo_state::animal_lifecycle::types::Pregnancy>,
-    ),
-    (
-        bevy::prelude::With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
         bevy::prelude::With<openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+        bevy::prelude::Without<openzt2_zoo_state::animal_health::types::Dead>,
     ),
 >;
 

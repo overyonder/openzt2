@@ -250,6 +250,22 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                     continue;
                 }
             };
+        let donation_snapshot_records =
+            match super::donation_snapshot_section::capture_donation_records(
+                &world_snapshot_capture_queries.donations,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
         let economy_snapshot_records =
             capture_economy_snapshot_records_from_live_world(&world_snapshot_capture_queries);
         let (photo_snapshot_records, photo_challenge_progress_snapshot_records) =
@@ -312,6 +328,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &staff_snapshot_records,
                 &tank_snapshot_records,
                 &economy_snapshot_records,
+                &donation_snapshot_records,
                 &progression_snapshot_records,
                 &simulation_time_snapshot_record,
                 &show_stage_snapshot_records,

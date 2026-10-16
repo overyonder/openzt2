@@ -5,7 +5,7 @@ mod animal_health_state_initialization;
 mod animal_rampage_execution;
 mod animal_tranquilization_and_capture_execution;
 mod disease_hint_ui_action_routing;
-mod disease_mortality_execution;
+pub(crate) mod disease_mortality_execution;
 mod disease_progression_calculations;
 mod disease_progression_execution;
 use openzt2_zoo_state::animal_health::tranquilizer_eligibility_calculation;

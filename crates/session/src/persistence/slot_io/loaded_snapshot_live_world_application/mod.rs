@@ -86,6 +86,13 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     {
         return Ok(false);
     }
+    let Some(species) = active_species.get(&species_assets) else {
+        return if active_species.catalogue_load_is_pending(&asset_server) {
+            Ok(false)
+        } else {
+            Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)
+        };
+    };
 
     // Every payload was checked before loading this baseline world. Decode the
     // records here, then check their references against the loaded entities.
@@ -126,6 +133,10 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Aquatic),
     )?;
+    let donation_snapshot_records = super::donation_snapshot_section::decode_donation_records(
+        snapshot_container_bytes,
+        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Donations),
+    )?;
     let economy_snapshot_records = decode_and_validate_economy_snapshot_section(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Economy),
@@ -137,9 +148,6 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             .payload_byte_range_within_container(snapshot_container_bytes.len())?],
         progression_snapshot_section.encoded_record_count,
     )?;
-    let species = active_species
-        .get(&species_assets)
-        .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
     let world_definitions = active_world_definitions
         .get(&world_definition_assets)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
@@ -227,6 +235,11 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         progression_snapshot_application_parameters,
     )?;
 
+    let resolved_donations = super::donation_snapshot_section::resolve_donation_records(
+        donation_snapshot_records,
+        &entities_with_persistent_identifiers,
+    )?;
+    super::donation_snapshot_section::apply_donation_records(commands, resolved_donations);
     apply_tank_snapshot_records_to_existing_tank_entities(
         commands,
         tank_snapshot_records,

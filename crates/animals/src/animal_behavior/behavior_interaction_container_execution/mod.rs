@@ -27,6 +27,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     simulation_clock: Res<ZooClock>,
     target_definitions: Query<&DefinitionId>,
     mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
@@ -188,6 +189,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 staff_role,
                 guest,
                 world_definitions,
+                animal_types.borrow_for(actor),
             );
         let Some((document, declaration)) = behavior_declarations
             .find_behavior_set_location(requested_behavior_set, subject_type_identifiers)

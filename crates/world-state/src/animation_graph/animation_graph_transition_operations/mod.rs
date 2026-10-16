@@ -33,12 +33,6 @@ pub fn begin_requested_animation_graph_node_transition(
             blend_duration_override_milliseconds.unwrap_or_default(),
         );
     }
-    let authored_animation_graph_edge = find_authored_animation_graph_edge_between_nodes(
-        animation_set_asset,
-        animation_graph_playback_state.current_animation_graph_node_index,
-        target_animation_graph_node_index,
-    )
-    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
     if animation_graph_playback_state
         .active_animation_graph_transition
         .is_some()
@@ -47,13 +41,133 @@ pub fn begin_requested_animation_graph_node_transition(
             AnimationGraphNodePlaybackRequestRejectionReason::ActiveTransitionNotInterruptible,
         );
     }
+    let mut route = find_animation_graph_transition_route(
+        animation_set_asset,
+        animation_graph_playback_state.current_animation_graph_node_index,
+        target_animation_graph_node_index,
+    )
+    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
+    // A missing transition clip must not turn an authored edge into a teleport.
+    let mut source = animation_graph_playback_state.current_animation_graph_node_index;
+    for target in &route {
+        let edge =
+            find_authored_animation_graph_edge_between_nodes(animation_set_asset, source, *target)
+                .ok_or(
+                    AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge,
+                )?;
+        if (!edge.transition_animation_clip_asset_keys.is_empty()
+            && !edge
+                .transition_animation_clip_asset_keys
+                .iter()
+                .any(|clip| {
+                    animation_set_asset
+                        .find_animation_clip_record_by_asset_key(clip)
+                        .is_some()
+                }))
+            || select_preferred_animation_clip_from_graph_node(
+                animation_set_asset,
+                &animation_set_asset.animation_graph_nodes[*target as usize],
+            )
+            .is_none()
+        {
+            return Err(AnimationGraphNodePlaybackRequestRejectionReason::MissingAnimationAsset);
+        }
+        source = *target;
+    }
+    let next = route
+        .pop_front()
+        .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
+    let authored_animation_graph_edge = find_authored_animation_graph_edge_between_nodes(
+        animation_set_asset,
+        animation_graph_playback_state.current_animation_graph_node_index,
+        next,
+    )
+    .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
     begin_authored_animation_graph_edge_transition(
         animation_set_asset,
         authored_animation_graph_edge,
         animation_playback_controller,
         animation_graph_playback_state,
         blend_duration_override_milliseconds,
+    )?;
+    animation_graph_playback_state.remaining_transition_nodes = route;
+    animation_graph_playback_state.route_owner = None;
+    continue_animation_graph_transition_route(
+        animation_set_asset,
+        animation_playback_controller,
+        animation_graph_playback_state,
     )
+}
+
+/// Shortest authored directed route, excluding the starting node.
+pub fn find_animation_graph_transition_route(
+    asset: &AnimationSetAsset,
+    source: u32,
+    target: u32,
+) -> Option<std::collections::VecDeque<u32>> {
+    let count = asset.animation_graph_nodes.len();
+    if source as usize >= count || target as usize >= count {
+        return None;
+    }
+    let mut predecessors = vec![None; count];
+    let mut queue = std::collections::VecDeque::from([source]);
+    predecessors[source as usize] = Some(source);
+    while let Some(current) = queue.pop_front() {
+        if current == target {
+            break;
+        }
+        for edge in &asset.animation_graph_edges {
+            if edge.source_animation_graph_node_asset_key
+                != asset.animation_graph_nodes[current as usize].animation_graph_node_asset_key
+            {
+                continue;
+            }
+            let Some(next) = asset
+                .animation_graph_nodes
+                .iter()
+                .position(|node| {
+                    node.animation_graph_node_asset_key
+                        == edge.target_animation_graph_node_asset_key
+                })
+                .and_then(|index| u32::try_from(index).ok())
+            else {
+                continue;
+            };
+            if predecessors[next as usize].is_none() {
+                predecessors[next as usize] = Some(current);
+                queue.push_back(next);
+            }
+        }
+    }
+    let mut route = std::collections::VecDeque::new();
+    let mut current = target;
+    while current != source {
+        route.push_front(current);
+        current = predecessors[current as usize]?;
+    }
+    Some(route)
+}
+
+pub fn continue_animation_graph_transition_route(
+    asset: &AnimationSetAsset,
+    controller: &mut AnimationPlaybackController,
+    state: &mut AnimationGraphPlaybackState,
+) -> Result<(), AnimationGraphNodePlaybackRequestRejectionReason> {
+    while state.active_animation_graph_transition.is_none() {
+        let Some(next) = state.remaining_transition_nodes.pop_front() else {
+            break;
+        };
+        let edge = find_authored_animation_graph_edge_between_nodes(
+            asset,
+            state.current_animation_graph_node_index,
+            next,
+        )
+        .ok_or(AnimationGraphNodePlaybackRequestRejectionReason::MissingAuthoredGraphEdge)?;
+        let remaining = std::mem::take(&mut state.remaining_transition_nodes);
+        begin_authored_animation_graph_edge_transition(asset, edge, controller, state, None)?;
+        state.remaining_transition_nodes = remaining;
+    }
+    Ok(())
 }
 
 fn begin_authored_animation_graph_edge_transition(
@@ -140,6 +254,10 @@ pub fn enter_animation_graph_node_playback(
         AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy;
     animation_graph_playback_state.current_animation_graph_node_index = animation_graph_node_index;
     animation_graph_playback_state.active_animation_graph_transition = None;
+    animation_graph_playback_state
+        .remaining_transition_nodes
+        .clear();
+    animation_graph_playback_state.route_owner = None;
     Ok(())
 }
 

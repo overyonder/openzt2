@@ -74,6 +74,7 @@ fn enter_selected_behavior_set(
     task: &mut BehaviorTaskExecutionState,
     program: AssetId,
     lookup: &BehaviorSetLookup,
+    animal_types: &[AssetId],
     subject: (
         Option<&SpeciesHandle>,
         Option<&StaffRole>,
@@ -92,7 +93,11 @@ fn enter_selected_behavior_set(
     let Some((document, declaration)) = view.find_behavior_set_location(
         program,
         super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
-            subject.0, subject.1, subject.2, catalogue,
+            subject.0,
+            subject.1,
+            subject.2,
+            catalogue,
+            animal_types,
         ),
     ) else {
         return false;
@@ -117,6 +122,7 @@ fn enter_selected_behavior_set(
 pub(super) fn play_locomotion_medium_behavior_sets(
     mut commands: Commands,
     lookup: BehaviorSetLookup,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
     terrain: DryGroundSampling,
     mut actors: Query<
@@ -156,6 +162,7 @@ pub(super) fn play_locomotion_medium_behavior_sets(
             &mut task,
             program,
             &lookup,
+            animal_types.borrow_for(actor),
             (species, staff, guest),
             clock.tick,
         ) {
@@ -210,6 +217,7 @@ pub(super) fn fail_medium_following_sets_after_leaving_dry_ground(
 pub(super) fn play_animation_node_behavior_sets(
     mut commands: Commands,
     lookup: BehaviorSetLookup,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
     animation_sets: Res<Assets<AnimationSetAsset>>,
     controllers: Query<(
@@ -263,6 +271,7 @@ pub(super) fn play_animation_node_behavior_sets(
                 &mut task,
                 program,
                 &lookup,
+                animal_types.borrow_for(actor),
                 (species, staff, guest),
                 clock.tick,
             )

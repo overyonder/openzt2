@@ -88,7 +88,11 @@ pub(super) fn expose_authored_ui_surface_for_document_role(
 
     if matches!(
         role,
-        UiDocumentRole::ChallengeOffer | UiDocumentRole::InstantChallengeOffer
+        UiDocumentRole::ChallengeOffer
+            | UiDocumentRole::InstantChallengeOffer
+            | UiDocumentRole::ScenarioWin
+            | UiDocumentRole::ScenarioFailed
+            | UiDocumentRole::GenericOk
     ) {
         // This source file owns separate branch, instant, offer and result
         // modals. Each offer role installs only its authored surface beneath

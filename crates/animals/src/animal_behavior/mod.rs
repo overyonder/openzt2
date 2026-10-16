@@ -31,7 +31,10 @@ use openzt2_zoo_state::animal_behavior::behavior_target_placement_types;
 mod behavior_target_test_execution;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition;
 mod behavior_task_phase_transition_execution;
+mod behavior_termination_execution;
+mod behavior_token_execution;
 mod behavior_trick_learning_execution;
+mod behavior_wander_execution;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy;
 mod interaction_container_cleanup;
 
@@ -55,6 +58,18 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_queue_wait_execution::register_queue_wait_execution(application);
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
+        behavior_wander_execution::register_wander_execution(application);
+        behavior_token_execution::register_token_execution(application);
+        application.add_systems(
+            FixedUpdate,
+            (
+                behavior_termination_execution::execute_animal_termination_actions,
+                behavior_termination_execution::hide_animals_after_authored_removal_period,
+            )
+                .chain()
+                .in_set(FixedGameSet::Think)
+                .run_if(in_state(GamePhase::InGame)),
+        );
         application
             .init_non_send::<behavior_script_execution::BehaviorScriptContexts>()
             .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()

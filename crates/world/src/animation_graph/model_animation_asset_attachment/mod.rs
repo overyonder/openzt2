@@ -130,8 +130,21 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         let animation_clip_targets_are_external_to_the_model_scene =
             !initial_animation_set_asset.model_asset_path.is_empty();
         let initial_animation_graph_playback_state =
-            (!initial_animation_set_asset.animation_graph_nodes.is_empty())
-                .then(AnimationGraphPlaybackState::default);
+            (!initial_animation_set_asset.animation_graph_nodes.is_empty()).then(|| {
+                let mut state = AnimationGraphPlaybackState::default();
+                if let Some(index) = initial_animation_set_asset
+                    .animation_graph_nodes
+                    .iter()
+                    .position(|node| {
+                        node.animation_clip_asset_keys
+                            .contains(&initial_animation_clip_asset_key)
+                    })
+                    .and_then(|index| u32::try_from(index).ok())
+                {
+                    state.current_animation_graph_node_index = index;
+                }
+                state
+            });
         let mut prefab_model_commands = commands.entity(prefab_model_entity);
         prefab_model_commands.try_insert((
             ModelAnimationAttachmentResolved,

@@ -30,7 +30,9 @@ impl Plugin for AnimationGraphPlugin {
             .init_resource::<EmbeddedModelAnimationSetAssetHandlesByGltfAsset>()
             .add_message::<AnimationGraphNodePlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequest>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
             .add_message::<AnimationGraphNodePlaybackRequestRejected>()
             .add_systems(
                 Update,

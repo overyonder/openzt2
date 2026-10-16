@@ -6,6 +6,13 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
 
 pub(super) fn lower_animal_ground_navigation_clip(record: &RecordView<'_, '_>) -> Option<String> {
+    lower_animal_ground_navigation_clip_for_speed(record, "slow")
+}
+
+pub(super) fn lower_animal_ground_navigation_clip_for_speed(
+    record: &RecordView<'_, '_>,
+    speed: &str,
+) -> Option<String> {
     let ancestry = record.type_tokens();
     let mut clip = None;
     let mut has_inherited_modulation = false;
@@ -27,15 +34,15 @@ pub(super) fn lower_animal_ground_navigation_clip(record: &RecordView<'_, '_>) -
             else {
                 continue;
             };
-            let Some(slow) = loco
+            let Some(row) = loco
                 .element_children()
-                .find(|child| child.name.as_str() == "slow")
+                .find(|child| child.name.as_str() == speed)
             else {
                 continue;
             };
             // Variable/random playback-rate policies need their own sampled
             // lifetime. This initial integration accepts the unmodulated row.
-            has_inherited_modulation |= slow
+            has_inherited_modulation |= row
                 .attribute_named_any(&[
                     "minAnimSpeed",
                     "maxAnimSpeed",
@@ -46,8 +53,8 @@ pub(super) fn lower_animal_ground_navigation_clip(record: &RecordView<'_, '_>) -
                     "maxResetPeriod",
                 ])
                 .is_some()
-                || slow.element_children().next().is_some();
-            if let Some(name) = slow
+                || row.element_children().next().is_some();
+            if let Some(name) = row
                 .attribute_named_any(&["name"])
                 .filter(|name| !name.trim().is_empty())
             {

@@ -55,6 +55,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
+    animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     mut actors: QueueWaitActors,
     mut occupancy: ResMut<InteractionContainerOccupancy>,
 ) {
@@ -131,7 +132,13 @@ pub(super) fn start_or_repeat_authored_queue_wait(
         };
         let Some((document, declaration)) = declarations.find_behavior_set_location(
             action.waiting_behavior_set,
-            behavior_subject_type_identifiers(species, staff, guest, definitions),
+            behavior_subject_type_identifiers(
+                species,
+                staff,
+                guest,
+                definitions,
+                animal_types.borrow_for(actor),
+            ),
         ) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;

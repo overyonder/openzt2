@@ -28,6 +28,7 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     clock: Res<ZooClock>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     mut tasks: Query<(
         Entity,
         &mut BehaviorTaskExecutionState,
@@ -127,6 +128,7 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
                 staff,
                 guest,
                 definitions,
+                animal_types.borrow_for(entity),
             ),
         ) else {
             mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);

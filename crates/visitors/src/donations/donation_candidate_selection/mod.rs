@@ -7,44 +7,36 @@ use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestPhase;
-use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 use openzt2_zoo_state::guests::guest_simulation_types::Viewing;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
-use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 
 use super::{
     donation_guest_decision_calculations::{
         calculate_eligible_donation_amount, create_donation_candidate_from_observation,
     },
-    donation_guest_decision_types::{
-        DonationCandidate, DonationObservation, DonationProgress, DonationRng,
-    },
+    donation_guest_decision_types::{DonationCandidate, DonationObservation, DonationProgress},
     donation_opportunity_types::{DonationAcceptor, DonationOpportunity, DonationUsePoint},
     donation_payment_types::DonationPaymentRequested,
 };
 
 pub(super) fn choose_donation_candidates_from_new_guest_observations(
     mut commands: Commands,
-    spatial_grid: Res<SpatialGrid>,
     mut guests: Query<
         (
             Entity,
             &GlobalTransform,
-            &GuestSatisfaction,
             &Wallet,
             &NavAgent,
             &DonationObservation,
-            &mut DonationRng,
             &Viewing,
             &GuestPhase,
             &WorldMember,
         ),
         (
             With<Guest>,
-            Changed<DonationObservation>,
             Without<DonationCandidate>,
             Without<DonationProgress>,
             Without<DonationPaymentRequested>,
@@ -65,18 +57,8 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut docking_requests: MessageWriter<DockAt>,
 ) {
-    for (
-        guest,
-        guest_transform,
-        satisfaction,
-        wallet,
-        navigation_agent,
-        observation,
-        mut donation_rng,
-        viewing,
-        phase,
-        world,
-    ) in &mut guests
+    for (guest, guest_transform, wallet, navigation_agent, observation, viewing, phase, world) in
+        &mut guests
     {
         if *phase != GuestPhase::Visiting
             || *viewing != observation.viewing
@@ -87,7 +69,6 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
             continue;
         }
         let Some((acceptor, use_point)) = find_nearest_matching_donation_acceptor(
-            &spatial_grid,
             guest_transform.translation(),
             *observation,
             world.root,
@@ -96,21 +77,14 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
             continue;
         };
 
-        let probability_roll = (observation.chance_permyriad < 10_000)
-            .then(|| donation_rng.0.range_u32(10_000))
-            .flatten();
-        let Some(amount) = calculate_eligible_donation_amount(
-            satisfaction.0,
-            wallet.0,
-            *observation,
-            probability_roll,
-        ) else {
+        let Some(amount) = calculate_eligible_donation_amount(wallet.0, *observation) else {
             continue;
         };
 
         let navigation_request_id = navigation_request_sequence.next();
         commands
             .entity(guest)
+            .remove::<DonationObservation>()
             .insert(create_donation_candidate_from_observation(
                 *observation,
                 acceptor,
@@ -129,7 +103,6 @@ pub(super) fn choose_donation_candidates_from_new_guest_observations(
 }
 
 fn find_nearest_matching_donation_acceptor(
-    spatial_grid: &SpatialGrid,
     guest_position: Vec3,
     observation: DonationObservation,
     world: Entity,
@@ -141,11 +114,7 @@ fn find_nearest_matching_donation_acceptor(
         &WorldMember,
     )>,
 ) -> Option<(Entity, DonationUsePoint)> {
-    if !spatial_grid.cell_size_m.is_finite() || spatial_grid.cell_size_m <= 0.0 {
-        return None;
-    }
-
-    let maximum_distance = spatial_grid.cell_size_m * f32::from(observation.acceptor_radius_cells);
+    let maximum_distance = observation.acceptor_radius_cm as f32 / 100.0;
     let maximum_distance_squared = maximum_distance * maximum_distance;
     let mut nearest_acceptor: Option<(f32, u64, Entity, DonationUsePoint)> = None;
 

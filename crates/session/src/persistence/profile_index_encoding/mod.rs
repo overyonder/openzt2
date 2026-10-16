@@ -19,8 +19,13 @@ use super::{
 pub(super) const MAXIMUM_PROFILE_COUNT: usize = 1024;
 pub(super) const MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT: usize = 64;
 const PROFILE_INDEX_MAGIC_BYTES: [u8; 8] = *b"OZT2PROF";
-const PROFILE_INDEX_FORMAT_VERSION: u32 = 3;
-pub(super) const MAXIMUM_PROFILE_INDEX_BYTE_COUNT: usize = 128 * 1024;
+const PROFILE_INDEX_FORMAT_VERSION: u32 = 4;
+// Bound the complete index by the independently admitted profile payloads.
+pub(super) const MAXIMUM_PROFILE_INDEX_BYTE_COUNT: usize = 64 + MAXIMUM_PROFILE_COUNT * (
+    42 + 20 + 4 * (4 + MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT)
+    + openzt2_zoo_state::progression::profile_scenario_variables::MAXIMUM_PROFILE_SCENARIO_VARIABLE_BYTES
+    + 2 + MAXIMUM_PROFILE_DISPLAY_NAME_BYTE_COUNT
+);
 const MAXIMUM_ENCODED_PROFILE_SETTINGS_BYTE_COUNT: usize = 64 * 1024;
 
 #[cfg(test)]
@@ -38,6 +43,7 @@ pub(super) fn encode_profile_index_for_test(
                 controller_input_enabled: true,
             },
             challenge_progress: ProfileChallengeCompletionCounts::default(),
+            scenario_variables: Default::default(),
             audio: AudioSettings::default(),
             bindings: GameActionInputBindings::default(),
             display: DisplaySettings::default(),
@@ -179,6 +185,10 @@ pub(super) fn encode_stored_profile_index(
             &mut profile_index_bytes,
             &stored_profile_record_and_settings.graphics,
         )?;
+        super::profile_scenario_variable_encoding::append_profile_scenario_variables(
+            &mut profile_index_bytes,
+            &stored_profile_record_and_settings.scenario_variables,
+        );
         profile_index_bytes.extend_from_slice(
             &(stored_profile_record_and_settings
                 .record
@@ -354,6 +364,14 @@ pub(super) fn decode_stored_profile_index(
         )?;
         migrate_legacy_controller_defaults(&mut game_action_input_bindings);
         release_keyboard_chords_owned_by_authored_overhead_hotkeys(&mut game_action_input_bindings);
+        let scenario_variables = if profile_index_format_version >= 4 {
+            super::profile_scenario_variable_encoding::decode_profile_scenario_variables(
+                profile_index_bytes,
+                &mut profile_index_byte_cursor,
+            )?
+        } else {
+            Default::default()
+        };
         let profile_display_name_byte_count = read_little_endian_u16_from_profile_index(
             profile_index_bytes,
             profile_index_byte_cursor,
@@ -389,6 +407,7 @@ pub(super) fn decode_stored_profile_index(
                 controller_input_enabled,
             },
             challenge_progress: profile_challenge_completion_counts,
+            scenario_variables,
             audio: audio_settings,
             bindings: game_action_input_bindings,
             display: display_settings,

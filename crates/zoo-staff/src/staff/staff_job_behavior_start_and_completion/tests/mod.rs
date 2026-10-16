@@ -343,3 +343,54 @@ fn successful_container_refill_releases_worker_and_preserves_controller_request(
     assert!(app.world().get::<CurrentJob>(worker).is_none());
     assert!(app.world().get::<AvailableForWork>(worker).is_some());
 }
+
+#[test]
+fn completed_water_placement_releases_keeper_without_a_second_service_effect() {
+    use crate::staff::staff_job_completion_and_cancellation::release_staff_and_despawn_completed_jobs;
+
+    let mut app = App::new();
+    app.add_message::<BehaviorTaskFinished>()
+        .add_message::<StaffJobCompleted>()
+        .add_message::<CancelStaffJobRequest>()
+        .add_systems(
+            Update,
+            (
+                settle_staff_jobs_after_authored_behavior_finishes,
+                release_staff_and_despawn_completed_jobs,
+            )
+                .chain(),
+        );
+    let root = app.world_mut().spawn_empty().id();
+    let target = app.world_mut().spawn((Animal, WorldMember { root })).id();
+    let worker = app.world_mut().spawn(Staff).id();
+    let job = app
+        .world_mut()
+        .spawn((
+            StaffJob {
+                kind: StaffJobKind::RefillWater,
+                target,
+                urgency: 6,
+                token: Some(AssetId::from_key("t_wateranimal")),
+            },
+            JobClaim { staff: worker },
+            StaffJobBehaviorTask {
+                task: AssetId::from_key("keeper:wateranimal"),
+                document: Handle::default(),
+                declaration_index: 0,
+                execution_id: Some(1),
+            },
+        ))
+        .id();
+    app.world_mut()
+        .entity_mut(worker)
+        .insert(CurrentJob { job });
+    app.world_mut().write_message(BehaviorTaskFinished {
+        actor: worker,
+        execution_id: 1,
+    });
+    app.update();
+    assert!(app.world().get_entity(job).is_err());
+    assert!(app.world().get::<CurrentJob>(worker).is_none());
+    assert!(app.world().get::<AvailableForWork>(worker).is_some());
+    assert!(app.world().get::<Animal>(target).is_some());
+}

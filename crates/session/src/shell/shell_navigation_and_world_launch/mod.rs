@@ -126,6 +126,9 @@ pub(super) fn begin_loading_selected_world(
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     mut next_phase: ResMut<NextState<GamePhase>>,
     mut begin_load: MessageWriter<BeginWorldLoad>,
+    profile_variables: Res<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
 ) {
     if *phase.get() != GamePhase::MapSelection {
         requests.clear();
@@ -144,6 +147,10 @@ pub(super) fn begin_loading_selected_world(
             let map = match mode {
                 WorldSessionMode::Campaign => catalogue
                     .campaign_scenario(scenario)
+                    .filter(|scenario| {
+                        profile_variables.scenario_state(scenario)
+                            != openzt2_game_data::world_scenario::CampaignScenarioState::Locked
+                    })
                     .filter(|_| catalogue.scenario(scenario).is_some())
                     .and_then(|scenario| catalogue.map(scenario.map)),
                 WorldSessionMode::Freeform | WorldSessionMode::Challenge => catalogue.map(scenario),
@@ -264,4 +271,49 @@ pub(super) fn replace_current_shell_screen(
     let owner = commands.spawn((screen, Visibility::Inherited)).id();
     show_ui.write(ShowUiRole { role, owner });
     owner
+}
+
+/// Keep the authored next/retry target across the ordinary world teardown.
+pub(super) fn continue_campaign_after_world_exit(
+    mut requests: MessageReader<super::shell_navigation_request_types::ContinueCampaign>,
+    phase: Res<State<GamePhase>>,
+    mut selection: ResMut<ShellSelection>,
+    mut next_phase: ResMut<NextState<GamePhase>>,
+    mut pending: Local<Option<openzt2_game_data::AssetId>>,
+    mut starts: MessageWriter<StartSelectedWorld>,
+    scenarios: Res<WorldScenarios>,
+    assets: Res<Assets<WorldScenarioDocumentAsset>>,
+    variables: Res<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
+) {
+    for request in requests.read() {
+        if *phase.get() != GamePhase::InGame {
+            continue;
+        }
+        let Some(scenario) = scenarios
+            .get(&assets)
+            .and_then(|view| view.campaign_scenario(request.0))
+        else {
+            continue;
+        };
+        if variables.scenario_state(scenario)
+            == openzt2_game_data::world_scenario::CampaignScenarioState::Locked
+        {
+            continue;
+        }
+        *pending = Some(request.0);
+        selection.mode = Some(WorldSessionMode::Campaign);
+        selection.scenario = Some(request.0);
+        selection.starting_cash_cents = None;
+        next_phase.set(GamePhase::MapSelection);
+    }
+    if *phase.get() == GamePhase::MapSelection {
+        if let Some(target) = pending.take() {
+            selection.scenario = Some(target);
+            starts.write(StartSelectedWorld);
+        }
+    } else if *phase.get() == GamePhase::MainMenu {
+        *pending = None;
+    }
 }

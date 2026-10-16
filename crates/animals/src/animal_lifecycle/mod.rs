@@ -19,6 +19,8 @@ mod animal_spawn_operation_contracts;
 mod animal_spawn_request_execution;
 pub mod animal_spawn_resolution;
 pub mod animal_spawn_resolution_types;
+pub mod scripted_animal_spawning;
+mod starting_animal_hydration;
 use openzt2_zoo_state::animal_lifecycle::types;
 mod ui_actions;
 
@@ -40,6 +42,14 @@ pub struct AnimalLifecyclePlugin;
 
 impl Plugin for AnimalLifecyclePlugin {
     fn build(&self, app: &mut App) {
+        app.add_systems(Update, (
+            starting_animal_hydration::hydrate_starting_animals,
+            crate::animal_welfare::systems::initialize_animal_needs
+                .run_if(resource_exists::<openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed>),
+            starting_animal_hydration::finish_starting_animal_hydration,
+        ).chain().in_set(GameSet::Intent)
+            .before(openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet)
+            .run_if(in_state(GamePhase::Loading)));
         app.add_message::<AdoptAnimal>()
             .add_message::<BeginAnimalAdoptionPlacement>()
             .add_message::<AnimalAdopted>()
@@ -50,6 +60,14 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_message::<AnimalBorn>()
             .add_message::<ReleaseAnimal>()
             .add_message::<AnimalReleased>()
+            .add_message::<scripted_animal_spawning::ScriptedAnimalSpawnRequest>()
+            .add_systems(
+                FixedUpdate,
+                scripted_animal_spawning::spawn_scripted_animals
+                    .in_set(FixedGameSet::Act)
+                    .in_set(scripted_animal_spawning::ScriptedAnimalSpawnSet)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 Update,
                 (

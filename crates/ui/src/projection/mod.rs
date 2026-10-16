@@ -321,29 +321,6 @@ pub(super) fn reconcile_ui_list_rows(
         );
         if lists
             .get(pending_row.list)
-            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ProfileIndex)
-        {
-            // This fragment fills the list width. Its content-size fallback is
-            // one pixel because the authored root has no fixed width or children.
-            let region = document.canonical_ui_document().nodes[0].region.clone();
-            commands
-                .entity(root)
-                .entry::<Node>()
-                .and_modify(move |mut node| {
-                    node.width = Val::Auto;
-                    authored_node_layout_projection::apply_authored_node_region_to_bevy_node(
-                        &mut node, &region,
-                    );
-                    authored_document_projection::flow_authored_row(
-                        &mut node,
-                        Some(FlexDirection::Column),
-                        0,
-                        0,
-                    );
-                });
-        }
-        if lists
-            .get(pending_row.list)
             .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ScenarioObjectives)
         {
             // `ZTGoalPanel` places each objective's status list box directly in

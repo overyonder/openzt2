@@ -3,6 +3,7 @@
 mod created;
 mod detach;
 mod events;
+mod held_food_prop;
 mod holder;
 mod presentation;
 #[cfg(test)]
@@ -23,7 +24,6 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
@@ -89,6 +89,7 @@ struct AttachmentAssets<'w> {
 pub(super) fn register_object_attachment_execution(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
+    held_food_prop::register(app);
     app.add_systems(FixedUpdate, (
         start_or_finish_object_attachment,
         detach_held_objects_for_current_actions,
@@ -142,8 +143,6 @@ fn start_or_finish_object_attachment(
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
     attachment_nodes: Query<&PrefabAuthoredAttachmentIdentifier>,
-    target_definitions: Query<&DefinitionId>,
-    waiting_clips: Query<(), With<PendingBehaviorAnimationClipCompletion>>,
     animated: Query<
         &openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner,
         With<openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
@@ -171,54 +170,6 @@ fn start_or_finish_object_attachment(
             continue;
         };
         if action.attaches_target_held_prop() {
-            if waiting_clips.contains(actor) {
-                continue;
-            }
-            let held_prop = task
-                .target()
-                .and_then(|target| target_definitions.get(target).ok())
-                .and_then(|target| definitions.find_object(target.0))
-                .and_then(|target| target.container_quantity)
-                .map(|quantity| quantity.held_prop);
-            match held_prop {
-                // The target holds no prop: only the authored clip plays,
-                // and the animation owner finishes the step.
-                Some(None) => {
-                    let Some(animation) = &action.animation else {
-                        advance_behavior_task_to_next_action(&mut task, clock.tick);
-                        continue;
-                    };
-                    let request = requests.write(AnimationClipPlaybackRequest {
-                        animation_subject_entity: actor,
-                        animation_clip_asset_key: animation.clone(),
-                        blend_duration_milliseconds: 0,
-                        playback_speed_permille: 1000,
-                        playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
-                    });
-                    commands
-                        .entity(actor)
-                        .insert(PendingBehaviorAnimationClipCompletion {
-                            execution_id: task.execution_id,
-                            request_id: request.id,
-                            origin: task.create_return_frame_after_action(task.action),
-                            stack_depth: task.stack.len(),
-                            target: task.target,
-                            random_choice: None,
-                        });
-                    task.next_action_tick = clock.tick.saturating_add(1);
-                }
-                Some(Some(prop)) => {
-                    // Placing a held prop at the target's node is not mapped yet.
-                    warn!(?actor, ?prop, target_node = ?action.target_node,
-                        "held prop attachment from a target container is not implemented");
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                }
-                None => {
-                    if assets.definitions.is_complete() {
-                        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    }
-                }
-            }
             continue;
         }
         let Some(holder) = holder::AttachmentHolder::find(&definitions, actor_definition.0) else {

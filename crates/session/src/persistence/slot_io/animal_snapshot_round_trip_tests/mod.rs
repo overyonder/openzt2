@@ -125,6 +125,12 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     let mother = spawn_named_animal(&mut source, 51, "Mère", Sex::Female, LifeStage::Adult);
     let father = spawn_named_animal(&mut source, 72, "Father", Sex::Male, LifeStage::Elder);
     let child = spawn_named_animal(&mut source, 9, "Cub", Sex::Female, LifeStage::Young);
+    source
+        .entity_mut(child)
+        .insert(openzt2_zoo_state::animal_health::types::Dead {
+            cause: openzt2_zoo_state::animal_health::types::DeathCause::Authored(AssetId([9; 16])),
+            since_tick: 201,
+        });
     source.entity_mut(child).insert(Parents {
         mother: Some(mother),
         father: Some(father),
@@ -134,6 +140,7 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         due_tick: 999,
     });
     source.entity_mut(mother).insert((
+        EnvironmentHabitatAssessed,
         ReleaseRestricted,
         CratingRestricted,
         openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated,
@@ -147,6 +154,9 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     let expected = capture(&mut source);
     let profile = AssetId([7; 16]);
     let payload = encode_animal_snapshot_records(&expected).unwrap();
+    let wire: serde_json::Value = serde_json::from_slice(&payload).unwrap();
+    assert!(wire[2]["death"].is_array()); // Existing disease tuple format.
+    assert!(wire[0]["death"].is_object());
     let mut container = Vec::new();
     initialize_empty_world_snapshot_container(&mut container, profile);
     for kind in WorldSnapshotSectionKind::ENCODING_ORDER {
@@ -206,8 +216,18 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     assert!(destination.get_entity(baseline).is_err());
     assert!(destination.get_entity(unrelated).is_ok());
     assert_eq!(capture(&mut destination), expected);
+    assert!(destination
+        .get::<EnvironmentHabitatAssessed>(restored[&51])
+        .is_some());
+    assert!(destination
+        .get::<EnvironmentHabitatAssessed>(restored[&9])
+        .is_none());
     assert_ne!(restored[&9], child);
     let restored_child = restored[&9];
+    assert_eq!(
+        destination.get::<Visibility>(restored_child),
+        Some(&Visibility::Hidden)
+    );
     assert_eq!(
         destination.get::<Parents>(restored_child).unwrap().mother,
         Some(restored[&51])
@@ -265,6 +285,47 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         validate_world_snapshot_container_and_section_directory(&container, profile),
         Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion)
     );
+}
+
+#[test]
+fn older_welfare_records_without_baseline_ownership_load_for_reassessment() {
+    let mut source = World::new();
+    let animal = spawn_named_animal(&mut source, 1, "Saved", Sex::Female, LifeStage::Adult);
+    source.entity_mut(animal).insert(EnvironmentHabitatAssessed);
+    let current = capture(&mut source);
+    let mut old_shape = serde_json::to_value(&current).unwrap();
+    old_shape[0]["welfare"]
+        .as_object_mut()
+        .unwrap()
+        .remove("environment_habitat_assessed");
+    let old_payload = serde_json::to_vec(&old_shape).unwrap();
+    let loaded = decode_animal_snapshot_records(
+        &old_payload,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: 1,
+            payload_start_byte_offset: 0,
+            payload_byte_count: old_payload.len() as u64,
+        },
+    )
+    .unwrap();
+    let welfare = loaded[0].welfare.as_ref().unwrap();
+    assert!(!welfare.environment_habitat_assessed);
+    assert_eq!(welfare.needs, current[0].welfare.as_ref().unwrap().needs);
+    assert_eq!(
+        welfare.habitat_suitability,
+        current[0].welfare.as_ref().unwrap().habitat_suitability
+    );
+    let new_payload = encode_animal_snapshot_records(&current).unwrap();
+    let restored = decode_animal_snapshot_records(
+        &new_payload,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: 1,
+            payload_start_byte_offset: 0,
+            payload_byte_count: new_payload.len() as u64,
+        },
+    )
+    .unwrap();
+    assert_eq!(restored, current);
 }
 
 #[test]

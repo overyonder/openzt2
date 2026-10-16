@@ -66,6 +66,9 @@ pub(super) fn apply_catalogue_definition_unlock_requests(
 /// operation correlation without retaining a scenario mirror in progression.
 pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_facts(
     fame: Res<Fame>,
+    profile_variables: Option<
+        Res<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>,
+    >,
     mut research_completed: MessageReader<ResearchProjectCompleted>,
     mut awards_granted: MessageReader<ProgressionAwardGranted>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -77,6 +80,20 @@ pub(super) fn apply_authored_catalogue_unlock_requirements_from_progression_fact
         return;
     };
 
+    if let Some(variables) = profile_variables.filter(|variables| variables.is_changed()) {
+        for definition in definitions.unlocks() {
+            if matches!(definition.requirement,
+                UnlockRequirement::Profile(key) if variables.get(key) == Some("true"))
+            {
+                mark_authored_catalogue_definition_target_unlocked(
+                    definitions,
+                    definition,
+                    &mut unlocks,
+                    &mut changed,
+                );
+            }
+        }
+    }
     if fame.is_changed() {
         for definition in definitions.unlocks() {
             if matches!(

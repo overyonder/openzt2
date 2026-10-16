@@ -6,11 +6,9 @@ use openzt2_game_data::{
 
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -25,10 +23,7 @@ use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 
-use super::{
-    campaign_progress_types::ScenarioCampaignCompletionProgress,
-    challenge_offer_types::ScenarioChallengeSelectionRandomNumberGenerator,
-};
+use super::challenge_offer_types::ScenarioChallengeSelectionRandomNumberGenerator;
 
 pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     mut commands: Commands,
@@ -37,16 +32,13 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     clock: Res<ZooClock>,
     active: Query<(), With<ActiveScenarioSession>>,
     mut allocator: ResMut<PersistentIdAllocator>,
-    roots: Query<
-        (Entity, &WorldRoot, &SelectedWorldIdentity),
-        (With<WorldLoadCompleted>, Without<ActiveScenarioSession>),
-    >,
+    roots: Query<(Entity, &WorldRoot), (With<WorldLoadCompleted>, Without<ActiveScenarioSession>)>,
     existing: Query<(), With<ScenarioObjective>>,
 ) {
     if !active.is_empty() || !existing.is_empty() {
         return;
     }
-    for (root, world, selection) in &roots {
+    for (root, world) in &roots {
         let Some(view) = scenarios.get(&assets) else {
             continue;
         };
@@ -63,17 +55,6 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
             started_tick: clock.tick,
             state: ScenarioSessionState::Running,
         });
-        if selection.mode == WorldSessionMode::Campaign {
-            if let Some((campaign, mission)) = view.campaign_for_scenario(world.scenario) {
-                commands.entity(root).insert(
-                    ScenarioCampaignCompletionProgress::create_for_campaign_mission_count(
-                        campaign.id,
-                        mission as u32,
-                        campaign.scenarios.len() as u32,
-                    ),
-                );
-            }
-        }
         spawn_authored_scenario_objectives(
             &mut commands,
             &mut allocator,

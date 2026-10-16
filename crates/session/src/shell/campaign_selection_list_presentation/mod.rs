@@ -77,6 +77,9 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     selected_campaign: Query<(&CampaignChoice, &UiSelected)>,
     active: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
+    profile_variables: Res<
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
 ) {
     if selection.mode != Some(WorldSessionMode::Campaign) {
         return;
@@ -99,9 +102,11 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     if let Some(campaign) = active_campaign.and_then(|id| catalogue.campaign(id)) {
         let launchable_scenarios = || {
             campaign.scenarios.iter().filter(|scenario| {
-                choices
-                    .iter()
-                    .any(|(_, choice)| choice.scenario == scenario.id)
+                profile_variables.scenario_state(scenario)
+                    != openzt2_game_data::world_scenario::CampaignScenarioState::Locked
+                    && choices
+                        .iter()
+                        .any(|(_, choice)| choice.scenario == scenario.id)
             })
         };
         if !launchable_scenarios().any(|scenario| Some(scenario.id) == selection.scenario) {
@@ -161,6 +166,9 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     commands.entity(entity).remove::<WorldChoiceView>();
                     continue;
                 };
+                commands.entity(entity).insert(openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled(
+                    profile_variables.scenario_state(scenario) != openzt2_game_data::world_scenario::CampaignScenarioState::Locked,
+                ));
                 let Some(source) = choices.iter().find_map(|(entity, choice)| {
                     (choice.scenario == scenario.id).then_some(entity)
                 }) else {

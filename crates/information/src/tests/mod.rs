@@ -56,6 +56,29 @@ fn selection_uses_last_valid_request_and_emits_once() {
 }
 
 #[test]
+fn selecting_native_crate_uses_its_inspectable_animal() {
+    use openzt2_world_state::world_spawn::world_entity_crating::ContainedCratedAnimal;
+    let mut app = test_app();
+    let animal = app
+        .world_mut()
+        .spawn(Inspectable { definition: id(1) })
+        .id();
+    let crate_entity = app
+        .world_mut()
+        .spawn((
+            Inspectable { definition: id(2) },
+            ContainedCratedAnimal(animal),
+        ))
+        .id();
+    app.world_mut().write_message(SelectionRequest {
+        entity: Some(crate_entity),
+        source: ActionSource::KeyboardMouse,
+    });
+    app.update();
+    assert_eq!(app.world().resource::<SelectedEntity>().0, Some(animal));
+}
+
+#[test]
 fn removing_selected_inspectable_clears_it_once() {
     let mut app = test_app();
     let subject = app

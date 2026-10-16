@@ -233,6 +233,45 @@ fn select_from_candidate_pair<'a>(
 }
 
 #[test]
+fn authored_food_level_qualifier_compares_quantity_in_authored_points() {
+    use openzt2_game_data::behavior::eligibility::BehaviorConditionEligibilityFact;
+
+    let mut task =
+        authored_keeper_feed_task("keeper:FillFoodContainer", &["t_fillfoodcontainer"], 10);
+    task.candidate_eligibility_requirements = vec![BehaviorCandidateEligibilityRequirements {
+        candidate_role: BehaviorCandidateRole::Target,
+        eligibility_fact_junction: BehaviorEligibilityFactJunction::All,
+        candidate_type_junction: BehaviorEligibilityFactJunction::Any,
+        candidate_type_identifiers: vec![AssetId::from_key("fromtoken")],
+        eligibility_facts: vec![BehaviorCandidateEligibilityFact {
+            fact_input: BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::FoodLevel,
+            ),
+            comparison: BehaviorEligibilityFactComparison::LessOrEqual,
+            expected_value: BehaviorEligibilityFactValue::Q16(33 << 16),
+        }],
+    }];
+    for (quantity, eligible) in [
+        (None, false),
+        (Some(0), true),
+        (Some(33 << 16), true),
+        (Some(34 << 16), false),
+    ] {
+        let selected =
+            select_highest_priority_authored_staff_behavior_task_with_candidate_eligibility(
+                StaffRoleKind::Keeper,
+                [candidate_for_task(&task)].into_iter(),
+                Some(AssetId::from_key("t_fillfoodcontainer")),
+                StaffCandidateEligibilityFacts {
+                    target_food_level_q16: quantity,
+                    ..Default::default()
+                },
+            );
+        assert_eq!(selected.is_some(), eligible);
+    }
+}
+
+#[test]
 fn candidate_requirements_gate_cure_land_water_and_unsupported_facts() {
     let boolean_fact = |fact_input| BehaviorCandidateEligibilityFact {
         fact_input,
@@ -288,6 +327,7 @@ fn candidate_requirements_gate_cure_land_water_and_unsupported_facts() {
         target_on_land: Some(true),
         target_rampaging: Some(false),
         target_in_show: Some(false),
+        target_food_level_q16: None,
     };
     let selected = select_highest_priority_authored_staff_behavior_task_with_candidate_eligibility(
         StaffRoleKind::Keeper,

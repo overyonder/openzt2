@@ -70,6 +70,9 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::MultiList, "multilist layout".into()),
                 (UiDocumentRole::Zoopedia, "ztzoopedia".into()),
                 (UiDocumentRole::Scenario, "goals layout".into()),
+                (UiDocumentRole::ScenarioWin, "Scenario Win  Layout".into()),
+                (UiDocumentRole::ScenarioFailed, "Scenario Failed Layout".into()),
+                (UiDocumentRole::GenericOk, "Generic OK Layout".into()),
                 (UiDocumentRole::ChallengeOffer, "challenge layout".into()),
                 (
                     UiDocumentRole::InstantChallengeOffer,

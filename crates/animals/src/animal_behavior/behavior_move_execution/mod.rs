@@ -21,6 +21,31 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::habitat::{
+    habitat_membership_and_containment::locate_habitat_at_world_position,
+    habitat_types::{HabitatIndex, HabitatMember, HabitatRegion},
+};
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    ActiveTerrainDerivedNavigationGraph, NavFlags,
+};
+use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct KeeperLandApproach<'w, 's> {
+    graph: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
+    habitats: Res<'w, HabitatIndex>,
+    grid: Res<'w, TopologyGrid>,
+    regions: Query<'w, 's, &'static HabitatRegion>,
+    animals: Query<
+        'w,
+        's,
+        Option<&'static HabitatMember>,
+        With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+    >,
+    worlds: Query<'w, 's, &'static WorldMember>,
+    candidates: Local<'s, Vec<Vec3>>,
+}
 
 pub(super) fn start_current_supported_behavior_move_actions(
     mut commands: Commands,
@@ -45,6 +70,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
     children: Query<&Children>,
     authored_attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
     mut navigation_requests: MessageWriter<NavigateTo>,
+    mut land_approach: KeeperLandApproach,
 ) {
     for (actor, mut behavior_task, staff_role, navigation_agent) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
@@ -90,7 +116,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 )
                 .map(|transform| transform.translation())
             });
-        let destination = match resolve_behavior_move_destination(
+        let mut destination = match resolve_behavior_move_destination(
             target_transform.translation(),
             named_node_position,
         ) {
@@ -100,6 +126,74 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 continue;
             }
         };
+        if move_action.target_node_name.is_none()
+            && staff_role
+                .and_then(|role| definitions.and_then(|view| view.find_staff(role.0)))
+                .is_some_and(|staff| staff.role == StaffRoleKind::Keeper)
+            && land_approach.animals.contains(target)
+        {
+            let approach = &mut land_approach;
+            let Some(graph) = approach.graph.as_ref() else {
+                continue;
+            };
+            let navigation = graph.terrain_derived_navigation_graph();
+            let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
+            let target_node = (destination.x >= 0.0 && destination.z <= 0.0 && size > 0.0)
+                .then(|| {
+                    [
+                        (destination.x / size).floor() as u32,
+                        (-destination.z / size).floor() as u32,
+                    ]
+                })
+                .and_then(|cell| navigation.calculate_navigation_node_for_terrain_cell(cell))
+                .and_then(|index| navigation.find_navigation_node(index));
+            let Some(target_node) = target_node else {
+                continue;
+            };
+            if target_node.eligibility_flags.contains(NavFlags::WATER) {
+                let same_world = approach
+                    .worlds
+                    .get(actor)
+                    .ok()
+                    .zip(approach.worlds.get(target).ok())
+                    .is_some_and(|(actor, target)| actor.root == target.root);
+                let Some(habitat) = approach
+                    .animals
+                    .get(target)
+                    .ok()
+                    .flatten()
+                    .map(|member| member.habitat_entity)
+                else {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                };
+                let Some(region) = approach.regions.get(habitat).ok().filter(|_| same_world) else {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                };
+                let Some(agent) = navigation_agent else {
+                    continue;
+                };
+                graph.collect_dry_ground_candidates(
+                    region,
+                    *approach.grid,
+                    agent,
+                    destination,
+                    &mut approach.candidates,
+                );
+                let Some(shore) = approach.candidates.iter().copied().find(|position| {
+                    locate_habitat_at_world_position(
+                        &approach.habitats,
+                        position.xz(),
+                        *approach.grid,
+                    ) == Some(habitat)
+                }) else {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                };
+                destination = shore;
+            }
+        }
         let arrival_radius_m = move_action.move_radius_cm as f32 * 0.01;
         let request_id = navigation_request_sequence.next();
         navigation_requests.write(NavigateTo {

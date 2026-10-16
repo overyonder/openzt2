@@ -3,8 +3,12 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
+use openzt2_game_data::behavior::{
+    action::wander::BehaviorGroundLocomotionSpeed, action_record::BehaviorAction,
+};
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node;
 use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
@@ -17,6 +21,9 @@ use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalPresentationOwner;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
+use openzt2_zoo_state::behavior_task_execution_types::{
+    find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+};
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
@@ -35,6 +42,8 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
+    behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
+    behavior_tasks: Query<&BehaviorTaskExecutionState, Without<PendingBehaviorTaskFailure>>,
     mut animations: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
     controllers: Query<(
@@ -56,7 +65,11 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             Has<DirectLocomotion>,
             Has<PendingBehaviorAnimationClipCompletion>,
         ),
-        With<Animal>,
+        (
+            With<Animal>,
+            Without<openzt2_zoo_state::animal_health::types::Dead>,
+            Without<openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated>,
+        ),
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     mut unprojected_reasons: Local<HashMap<Entity, &'static str>>,
@@ -141,12 +154,41 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         };
+        let wander = behavior_tasks
+            .get(animal_entity)
+            .ok()
+            .and_then(|task| {
+                behavior_documents
+                    .get(&task.document)
+                    .and_then(|document| find_current_behavior_task_action(document, task))
+            })
+            .and_then(|action| match action {
+                BehaviorAction::Wander(wander) => Some(wander),
+                _ => None,
+            });
+        let locomotion_key = match wander
+            .map(|wander| wander.locomotion_speed)
+            .unwrap_or_default()
+        {
+            BehaviorGroundLocomotionSpeed::Slow => {
+                variant.ground_navigation_clip_asset_key.as_ref()
+            }
+            BehaviorGroundLocomotionSpeed::Medium => {
+                variant.medium_ground_navigation_clip_asset_key.as_ref()
+            }
+            BehaviorGroundLocomotionSpeed::Fast => {
+                variant.fast_ground_navigation_clip_asset_key.as_ref()
+            }
+        };
+        if wander.is_some() && locomotion_key.is_none() {
+            openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal_entity, &mut commands);
+        }
         let (Some(radius), Some(locomotion_key)) = (
             variant
                 .navigation_collision_policy
                 .as_ref()
                 .map(|policy| policy.radius_m),
-            variant.ground_navigation_clip_asset_key.as_ref(),
+            locomotion_key,
         ) else {
             wait(
                 animal_entity,

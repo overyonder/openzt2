@@ -180,6 +180,8 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
         if (job.kind == StaffJobKind::Treat && job.token == Some(AssetId::from_key("t_cureanimal")))
             || (job.kind == StaffJobKind::Feed
                 && job.token == Some(AssetId::from_key("t_feedanimal")))
+            || (job.kind == StaffJobKind::RefillWater
+                && job.token == Some(AssetId::from_key("t_wateranimal")))
         {
             if cancelled_jobs.contains(&current_job.job) || !live_animals.contains(job.target) {
                 continue;

@@ -6,7 +6,9 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
 use openzt2_game_data::species::NeedKind;
+use openzt2_game_data::species::NeedPreference;
 use openzt2_game_data::species::SpeciesNeed;
+use openzt2_game_data::AssetId;
 
 #[derive(Default)]
 struct EffectiveAuthoredAnimalNeedState {
@@ -52,6 +54,7 @@ fn lower_effective_authored_animal_need_to_canonical_species_need(
     let mut state = EffectiveAuthoredAnimalNeedState::default();
     let mut adjustment = 0.0;
     let mut found_state = false;
+    let mut preferences = Vec::<NeedPreference>::new();
     let mut family_records = species
         .type_tokens()
         .into_iter()
@@ -61,6 +64,42 @@ fn lower_effective_authored_animal_need_to_canonical_species_need(
     family_records.push(*species);
 
     for family_record in family_records {
+        if kind == NeedKind::Environment {
+            for biome_data in find_all_semantically_named_source_descendants(
+                family_record.source_document_element(),
+                "BFGBiomeData",
+            ) {
+                for biome in biome_data.element_children() {
+                    let Some(value) = biome.attribute_named_any(&["sensitivity"]) else {
+                        continue;
+                    };
+                    let weight = parse_blue_fang_source_numeric_lexeme::<i16>(value)
+                        .filter(|value| (-10..=10).contains(value))
+                        .ok_or_else(|| {
+                            BindError::record(
+                                species,
+                                format!(
+                                    "biome {} has invalid sensitivity {value}",
+                                    biome.name.as_str()
+                                ),
+                            )
+                        })?;
+                    let target = AssetId::from_key(&biome.name.as_str().to_ascii_lowercase());
+                    let preference = NeedPreference {
+                        kind: NeedKind::Environment,
+                        target,
+                        weight,
+                        minimum_quality: 0,
+                    };
+                    if let Some(existing) = preferences.iter_mut().find(|row| row.target == target)
+                    {
+                        *existing = preference;
+                    } else {
+                        preferences.push(preference);
+                    }
+                }
+            }
+        }
         for need_adjustments in find_all_semantically_named_source_descendants(
             family_record.source_document_element(),
             "BFAINeedAdjusts",
@@ -147,7 +186,7 @@ fn lower_effective_authored_animal_need_to_canonical_species_need(
                 state.pressing_threshold,
             ),
         advanced: state.advanced,
-        preferences: Vec::new(),
+        preferences,
     })
 }
 
@@ -225,3 +264,6 @@ fn lower_optional_authored_animal_need_threshold_to_wellness_permille(
         .filter(|value| (0.0..=100.0).contains(value))
         .map(|value| (1_000.0 - value * 10.0).round() as u16)
 }
+
+#[cfg(test)]
+mod tests;

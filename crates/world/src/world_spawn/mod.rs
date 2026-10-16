@@ -114,6 +114,7 @@ impl Plugin for WorldSpawnPlugin {
                 (
                     advance_authored_prefab_rotation_cycles_from_elapsed_real_time,
                     advance_authored_prefab_transform_animations_from_elapsed_time,
+                    crate::world_spawn::world_entity_crating::synchronize_contained_animal_transforms,
                 )
                     .in_set(GameSet::Presentation),
             )

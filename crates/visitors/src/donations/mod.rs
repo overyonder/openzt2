@@ -26,6 +26,7 @@ use self::{
         reject_donation_candidates_after_navigation_failure,
     },
     donation_opportunity_observation::{
+        hydrate_animal_donation_opportunities,
         observe_donation_opportunities_after_applied_viewing_reactions,
         remove_guest_donation_observation_after_viewing_ends,
     },
@@ -41,7 +42,6 @@ use self::{
     donation_state_hydration::{
         hydrate_authored_donation_acceptors_and_docking_points,
         initialize_new_donation_acceptors_with_operating_age_and_profit,
-        initialize_new_guests_with_deterministic_donation_random_streams,
     },
     zoo_donation_summary_presentation::project_zoo_donation_category_totals_into_authored_summary,
 };
@@ -60,7 +60,7 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    initialize_new_guests_with_deterministic_donation_random_streams,
+                    hydrate_animal_donation_opportunities,
                     hydrate_authored_donation_acceptors_and_docking_points,
                     initialize_new_donation_acceptors_with_operating_age_and_profit,
                     choose_donation_candidates_from_new_guest_observations,

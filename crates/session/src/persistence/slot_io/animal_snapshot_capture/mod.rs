@@ -1,7 +1,9 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
     animal_snapshot_section_encoding::validate_animal_snapshot_records,
-    animal_snapshot_types::{AnimalSnapshotRecord, AnimalWelfareSnapshotRecord},
+    animal_snapshot_types::{
+        AnimalSnapshotDeath, AnimalSnapshotRecord, AnimalWelfareSnapshotRecord,
+    },
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -55,6 +57,7 @@ pub(super) fn capture_animal_snapshot_records(
                     let suitability = required_animal_component::<HabitatSuitability>(animal)?;
                     [suitability.space, suitability.biome, suitability.overall]
                 },
+                environment_habitat_assessed: animal.contains::<EnvironmentHabitatAssessed>(),
                 band: match required_animal_component::<WelfareBand>(animal)? {
                     WelfareBand::Critical => 0,
                     WelfareBand::Poor => 1,
@@ -92,7 +95,13 @@ pub(super) fn capture_animal_snapshot_records(
             release_restricted: animal.contains::<ReleaseRestricted>(),
             crating_restricted: animal.contains::<CratingRestricted>(),
             death: animal.get::<Dead>().map(|dead| match dead.cause {
-                DeathCause::Disease(disease) => (disease, dead.since_tick),
+                DeathCause::Disease(disease) => {
+                    AnimalSnapshotDeath::Disease(disease, dead.since_tick)
+                }
+                DeathCause::Authored(program) => AnimalSnapshotDeath::Authored {
+                    program,
+                    since_tick: dead.since_tick,
+                },
             }),
             welfare,
         });

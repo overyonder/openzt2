@@ -26,6 +26,8 @@ pub struct SpeciesVariantBinding {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Species {
+    #[serde(default)]
+    pub donation: Option<AnimalDonationPolicy>,
     pub id: AssetId,
     /// Exact authored `s_Species`, preserving case and punctuation.
     pub authored_species_name: String,
@@ -54,6 +56,12 @@ pub struct Species {
     pub conservation: ConservationStatus,
     pub flags: SpeciesFlags,
     pub adoption_offer: AnimalAdoptionOfferDefinition,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimalDonationPolicy {
+    pub base_amount_cents: i32,
+    pub maximum_species_factor: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
@@ -171,6 +179,10 @@ pub struct SpeciesVariant {
     /// Source ground locomotion's `slow` clip (`variable` resolves to `slow`).
     #[serde(default)]
     pub ground_navigation_clip_asset_key: Option<String>,
+    #[serde(default)]
+    pub medium_ground_navigation_clip_asset_key: Option<String>,
+    #[serde(default)]
+    pub fast_ground_navigation_clip_asset_key: Option<String>,
     pub sex: Sex,
     pub life_stage: LifeStage,
     /// Canonical virtual path of the model asset.
@@ -242,6 +254,7 @@ pub struct SpeciesNeed {
 pub struct NeedPreference {
     pub kind: NeedKind,
     pub target: AssetId,
+    /// Environment rows preserve the authored biome sensitivity (-10..=10).
     pub weight: i16,
     pub minimum_quality: u16,
 }

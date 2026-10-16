@@ -37,6 +37,9 @@ pub(in crate::ui_document) const UI_DOCUMENT_ROLE_AND_SOURCE_PATH_DECLARATIONS: 
     (UiDocumentRole::Zoopedia, "ui/layout/zoopedia.xml"),
     (UiDocumentRole::Scenario, "ui/layout/goals.xml"),
     (UiDocumentRole::ChallengeOffer, "ui/layout/challenge.xml"),
+    (UiDocumentRole::ScenarioWin, "ui/layout/challenge.xml"),
+    (UiDocumentRole::ScenarioFailed, "ui/layout/challenge.xml"),
+    (UiDocumentRole::GenericOk, "ui/layout/challenge.xml"),
     (
         UiDocumentRole::InstantChallengeOffer,
         "ui/layout/challenge.xml",

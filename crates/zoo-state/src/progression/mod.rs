@@ -6,6 +6,7 @@ pub mod catalogue_unlock_set_operations;
 pub mod fame_history_types;
 pub mod fame_types;
 pub mod profile_challenge_types;
+pub mod profile_scenario_variables;
 pub mod rating_types;
 pub mod research_duration_calculation;
 pub mod research_types;

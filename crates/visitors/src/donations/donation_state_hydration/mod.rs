@@ -1,24 +1,16 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::world_objects::WorldObjectPropertyFlags, AssetId};
 
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
-use openzt2_zoo_state::guests::guest_simulation_types::Guest;
-use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
-use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
-use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
-use super::{
-    donation_guest_decision_types::DonationRng,
-    donation_opportunity_types::{
-        DonationAcceptor, DonationAcceptorFactsResolved, DonationUsePoint,
-    },
+use super::donation_opportunity_types::{
+    DonationAcceptor, DonationAcceptorFactsResolved, DonationUsePoint,
 };
 
 const DONATION_ACCEPTOR_DOCK_ATTACHMENT_NAME: &str = "AdultDock";
@@ -109,21 +101,5 @@ pub(super) fn initialize_new_donation_acceptors_with_operating_age_and_profit(
             OperatingSinceDay(clock.absolute_day),
             FacilityProfit::default(),
         ));
-    }
-}
-
-pub(super) fn initialize_new_guests_with_deterministic_donation_random_streams(
-    mut commands: Commands,
-    zoo_seed: Res<ZooSeed>,
-    guests: Query<(Entity, &PersistentId), (With<Guest>, Without<DonationRng>)>,
-) {
-    for (guest, persistent_id) in &guests {
-        commands
-            .entity(guest)
-            .insert(DonationRng(DeterministicRng::from_entity(
-                *zoo_seed,
-                *persistent_id,
-                RngDomain::Donation,
-            )));
     }
 }

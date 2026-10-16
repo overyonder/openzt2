@@ -22,6 +22,35 @@ pub struct DonationCategoryTotals {
 }
 
 impl DonationCategoryTotals {
+    pub fn iter(&self) -> impl Iterator<Item = (AssetId, DonationTotal)> + '_ {
+        self.totals
+            .iter()
+            .map(|entry| (entry.category, entry.total))
+    }
+
+    /// Restores completed totals without replaying payments or changing cash.
+    pub fn from_completed_totals(
+        totals: impl IntoIterator<Item = (AssetId, DonationTotal)>,
+    ) -> Option<Self> {
+        let mut restored = Self::default();
+        for (category, total) in totals {
+            if total.amount.0 <= 0
+                || total.count == 0
+                || restored
+                    .totals
+                    .iter()
+                    .any(|entry| entry.category == category)
+            {
+                return None;
+            }
+            restored
+                .totals
+                .push(DonationCategoryTotal { category, total });
+        }
+        restored.aggregate_for_category(None)?;
+        Some(restored)
+    }
+
     pub fn accumulate_completed_donation(
         &mut self,
         category: AssetId,

@@ -1,6 +1,6 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    animal_snapshot_types::AnimalSnapshotRecord,
+    animal_snapshot_types::{AnimalSnapshotDeath, AnimalSnapshotRecord},
 };
 use bevy::prelude::*;
 use openzt2_animals::animal_lifecycle::animal_entity_spawning::spawn_animal_entity_from_resolved_components;
@@ -104,13 +104,23 @@ pub(super) fn apply_animal_snapshot_records(
         if record.crating_restricted {
             entity.insert(CratingRestricted);
         }
-        if let Some((disease, since_tick)) = record.death {
-            entity.insert(Dead {
-                cause: DeathCause::Disease(disease),
-                since_tick,
-            });
+        if let Some(death) = record.death {
+            let (cause, since_tick) = match death {
+                AnimalSnapshotDeath::Disease(disease, tick) => (DeathCause::Disease(disease), tick),
+                AnimalSnapshotDeath::Authored {
+                    program,
+                    since_tick,
+                } => {
+                    entity.insert(Visibility::Hidden);
+                    (DeathCause::Authored(program), since_tick)
+                }
+            };
+            entity.insert(Dead { cause, since_tick });
         }
         if let Some(welfare) = &record.welfare {
+            if welfare.environment_habitat_assessed {
+                entity.insert(EnvironmentHabitatAssessed);
+            }
             let values = welfare.needs;
             entity.insert((
                 Hunger(values[0]),

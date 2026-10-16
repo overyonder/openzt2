@@ -1,4 +1,4 @@
-use bevy::prelude::{Commands, Entity, MessageWriter, NextState, Query, Res, ResMut, With};
+use bevy::prelude::{Commands, Entity, Local, MessageWriter, NextState, Query, Res, ResMut, With};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -43,6 +43,7 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
     live_world_snapshot_application_state: WorldSnapshotApplicationState,
     mut progression_snapshot_application_parameters: ProgressionSnapshotApplicationParameters,
     mut simulation_time_snapshot_application_resources: super::super::simulation_time_snapshot_section::SimulationTimeSnapshotLoadResources,
+    mut reported_load_state: Local<Option<String>>,
 ) {
     let WorldSnapshotApplicationMessages {
         mut begin_world_load_requests,
@@ -56,8 +57,28 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
     let Ok((pending_snapshot_application_entity, mut pending_snapshot_application)) =
         pending_snapshot_application.single_mut()
     else {
+        *reported_load_state = None;
         return;
     };
+    let photo_readiness = pending_snapshot_application
+        .baseline_world_root
+        .and_then(|root| {
+            persistent_identifier_allocator.as_ref().map(|allocator| {
+                live_world_snapshot_application_state
+                    .photo_baseline
+                    .is_ready_for_snapshot_application(root, allocator)
+            })
+        });
+    let load_state = format!(
+        "{pending_snapshot_application:?}; clock_ready={}; photo_readiness={photo_readiness:?}; species_ready={}",
+        simulation_time_snapshot_application_resources.is_initialized(),
+        live_world_snapshot_application_state.active_species
+            .get(&live_world_snapshot_application_state.species_assets).is_some(),
+    );
+    if reported_load_state.as_ref() != Some(&load_state) {
+        bevy::log::info!(state = %load_state, "snapshot application state changed");
+        *reported_load_state = Some(load_state);
+    }
     if pending_snapshot_application.baseline_world_load_requested {
         if pending_snapshot_application.baseline_world_root.is_none() {
             pending_snapshot_application.baseline_world_root =
@@ -138,6 +159,7 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         match snapshot_application_result {
             Ok(false) => {}
             Ok(true) => {
+                bevy::log::info!(?root, "snapshot application completed; entering game");
                 next_game_phase.set(GamePhase::InGame);
                 commands
                     .entity(pending_snapshot_application_entity)
@@ -149,6 +171,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                 snapshot_scratch_storage.clear_logical_contents();
             }
             Err(persistence_failure) => {
+                bevy::log::warn!(
+                    ?root,
+                    ?persistence_failure,
+                    "snapshot application failed; returning to map selection"
+                );
                 world_unload_requests.write(UnloadWorld(root));
                 next_game_phase.set(GamePhase::MapSelection);
                 discard_pending_snapshot_application_after_load_failure(

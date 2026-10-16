@@ -24,7 +24,21 @@ pub(super) fn publish_commands_produced_by_scenario_lua_script(
     photo_challenge_sets: &mut MessageWriter<
         super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest,
     >,
+    profile_variables: &mut MessageWriter<
+        openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable,
+    >,
+    persist_profile_variables: &mut MessageWriter<
+        openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables,
+    >,
+    ui: &mut MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
+    entities: &mut MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
 ) {
+    let _ = entities.write_batch(result.entities);
+    let _ = ui.write_batch(result.ui);
+    let _ = profile_variables.write_batch(result.profile_variables);
+    if result.persist_profile_variables {
+        persist_profile_variables.write(openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables);
+    }
     if let Some(set) = result.current_photo_challenge_set {
         photo_challenge_sets.write(
             super::scenario_photo_challenge_selection::SelectCurrentPhotoChallengeSetRequest {

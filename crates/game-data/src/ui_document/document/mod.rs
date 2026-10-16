@@ -73,4 +73,7 @@ pub enum UiDocumentRole {
     ChallengeOffer,
     SaveGame,
     InstantChallengeOffer,
+    ScenarioWin,
+    ScenarioFailed,
+    GenericOk,
 }

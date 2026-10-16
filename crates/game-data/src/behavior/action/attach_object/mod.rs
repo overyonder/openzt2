@@ -19,6 +19,9 @@ pub struct BehaviorAttachObjectAction {
     /// `Dock_Attach`. Authored only with the target's held prop.
     #[serde(default)]
     pub target_node: Option<String>,
+    /// Behavior played after the item detaches, before the next instruction.
+    #[serde(default)]
+    pub detach_behavior_set: Option<AssetId>,
 }
 
 impl BehaviorAttachObjectAction {

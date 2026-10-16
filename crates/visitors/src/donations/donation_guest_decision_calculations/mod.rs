@@ -1,31 +1,17 @@
 use bevy::prelude::Entity;
 
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::guests::guest_simulation_types::Viewing;
 
 use super::{
     donation_guest_decision_types::{DonationCandidate, DonationObservation, DonationProgress},
-    donation_opportunity_types::DonationOpportunity,
     donation_payment_types::DonationRejection,
 };
 
 pub(super) fn calculate_eligible_donation_amount(
-    satisfaction_permille: u16,
     wallet: Money,
     observation: DonationObservation,
-    probability_roll: Option<u32>,
 ) -> Option<Money> {
-    if observation.amount.0 <= 0
-        || wallet.0 < observation.amount.0
-        || satisfaction_permille < observation.minimum_satisfaction_permille
-        || observation.chance_permyriad > 10_000
-    {
-        return None;
-    }
-
-    let chance_permyriad = u32::from(observation.chance_permyriad);
-    (chance_permyriad == 10_000 || probability_roll.is_some_and(|roll| roll < chance_permyriad))
-        .then_some(observation.amount)
+    (observation.amount.0 > 0 && wallet.0 >= observation.amount.0).then_some(observation.amount)
 }
 
 pub(super) fn create_donation_candidate_from_observation(
@@ -51,19 +37,6 @@ pub(super) fn begin_donation_progress_from_candidate(
         subject: candidate.subject,
         amount: candidate.amount,
         remaining_ticks: interaction_ticks,
-    }
-}
-
-pub(super) fn create_donation_observation_from_authored_opportunity(
-    viewing: Viewing,
-    opportunity: DonationOpportunity,
-) -> DonationObservation {
-    DonationObservation {
-        viewing,
-        amount: opportunity.amount,
-        minimum_satisfaction_permille: opportunity.minimum_satisfaction_permille,
-        chance_permyriad: opportunity.chance_permyriad,
-        acceptor_radius_cells: opportunity.acceptor_radius_cells,
     }
 }
 

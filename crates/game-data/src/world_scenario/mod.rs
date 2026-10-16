@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AssetId;
 
-pub const WORLD_SCENARIO_VERSION: u32 = 33;
+pub const WORLD_SCENARIO_VERSION: u32 = 34;
 
 /// Maximum distinct subject identities selected across one authored photo set.
 /// The shipped sequential sets top out at three independently selected types.
@@ -144,7 +144,7 @@ pub struct StartingZooRecord {
     pub fences: Vec<StartingFenceRecord>,
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StartingZooSpawnEntityRecord {
     pub persistent_id: u64,
     pub prefab: AssetId,
@@ -152,6 +152,11 @@ pub struct StartingZooSpawnEntityRecord {
     pub transform: StartingZooEntityTransform,
     pub parent: u32,
     pub flags: StartingZooSpawnEntityFlags,
+    #[serde(default)]
+    pub initial_needs: Vec<(crate::species::NeedKind, i32)>,
+    /// Record indexes contained by an authored owning, hiding slot.
+    #[serde(default)]
+    pub contained_entities: Vec<u32>,
 }
 
 /// One authored path tile in a starting zoo.
@@ -213,12 +218,22 @@ pub struct ScenarioCampaignRecord {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CampaignScenarioRecord {
     pub id: AssetId,
+    #[serde(default)]
+    pub initial_state: CampaignScenarioState,
     pub map: AssetId,
     pub starting_zoo: AssetId,
     pub starting_cash_cents: i64,
     pub difficulty: AssetId,
     pub name_key: AssetId,
     pub description_key: AssetId,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CampaignScenarioState {
+    Locked,
+    #[default]
+    Unlocked,
+    Completed,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

@@ -1,18 +1,21 @@
-pub mod campaign_progress_types;
 mod challenge_lua_ui;
 mod challenge_offer_execution;
 mod challenge_offer_lua_validation;
 mod challenge_offer_presentation;
 pub mod challenge_offer_types;
+mod profile_scenario_variable_application;
 mod scenario_goal_and_challenge_ui_action_routing;
 mod scenario_goal_panel_presentation;
 mod scenario_instantiation;
 mod scenario_lua_command_publication;
+mod scenario_lua_entity_commands;
+mod scenario_lua_entity_facts;
 mod scenario_lua_entity_queries;
 mod scenario_lua_game_api;
 mod scenario_lua_photo_challenge_queries;
 mod scenario_lua_query_fact_collection;
 pub(crate) mod scenario_lua_types;
+mod scenario_lua_ui;
 mod scenario_lua_virtual_machine;
 mod scenario_lua_virtual_machine_invalidation;
 mod scenario_objective_lua_execution;
@@ -49,7 +52,13 @@ pub struct ScenarioPlugin;
 
 impl Plugin for ScenarioPlugin {
     fn build(&self, app: &mut App) {
+        scenario_lua_ui::register(app);
+        scenario_lua_entity_commands::register(app);
         app.init_non_send::<scenario_lua_types::ScenarioLuaVirtualMachineContexts>()
+            .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
+            .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>()
+            .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
+            .add_systems(Update, profile_scenario_variable_application::apply_profile_scenario_variable_changes.in_set(GameSet::Intent))
             .add_message::<RespondToScenarioChallengeRequest>()
             .add_message::<challenge_offer_types::ScenarioChallengePanelRequest>()
             .add_message::<ScenarioChallengeAccepted>()

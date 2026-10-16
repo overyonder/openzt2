@@ -20,6 +20,15 @@ pub struct AnimationGraphPlaybackState {
     pub current_animation_graph_node_index: u32,
     pub active_animation_graph_transition: Option<AnimationGraphTransition>,
     pub active_animation_graph_blend: Option<AnimationGraphBlend>,
+    pub remaining_transition_nodes: std::collections::VecDeque<u32>,
+    pub route_owner: Option<AnimationGraphRouteOwner>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct AnimationGraphRouteOwner {
+    pub request_id: usize,
+    pub target_node: u32,
+    pub playback_generation: u64,
 }
 
 impl AnimationGraphPlaybackState {

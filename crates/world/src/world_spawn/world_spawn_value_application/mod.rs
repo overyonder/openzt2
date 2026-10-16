@@ -36,6 +36,15 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     allocator: Option<ResMut<PersistentIdAllocator>>,
     mut hydration: Query<(Entity, &mut WorldHydration, &SelectedWorldIdentity)>,
+    starting_animals: Query<
+        (),
+        bevy::prelude::Or<(
+            bevy::prelude::With<
+                openzt2_world_state::world_spawn::starting_animal_hydration::PendingStartingAnimal,
+            >,
+            bevy::prelude::With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+        )>,
+    >,
 ) {
     let _performance_timer =
         performance.measure(WorldLoadingPerformanceStage::AuthoredSpawnValueApplication);
@@ -111,6 +120,35 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
         return;
     }
 
+    for (index, record) in start.entities.iter().enumerate() {
+        for &contained in &record.contained_entities {
+            let Some(animal) = hydration.spawned_world_prefab_root_at_record_index(contained)
+            else {
+                hydration.record_failure(WorldLoadFailure::InvalidRecord(contained));
+                return;
+            };
+            if starting_animals.get(animal).is_err() {
+                continue;
+            }
+            let Some(crate_entity) =
+                hydration.spawned_world_prefab_root_at_record_index(index as u32)
+            else {
+                hydration.record_failure(WorldLoadFailure::InvalidRecord(index as u32));
+                return;
+            };
+            use openzt2_world_state::world_spawn::world_entity_crating::{
+                AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
+            };
+            commands
+                .entity(crate_entity)
+                .insert(ContainedCratedAnimal(animal));
+            commands.entity(animal).insert((
+                AnimalCrate(crate_entity),
+                WorldEntityIsCrated,
+                bevy::prelude::Visibility::Hidden,
+            ));
+        }
+    }
     for value in values {
         match value {
             StartingZooSpawnValue::Name { entity, text } => {

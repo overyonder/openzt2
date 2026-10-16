@@ -26,7 +26,10 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
     mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,
     mut animation_clip_requests: MessageReader<AnimationClipPlaybackRequest>,
     mut rejected_animation_clip_requests: MessageWriter<AnimationClipPlaybackRequestRejected>,
+    mut started_animation_clip_requests: MessageWriter<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>,
     mut deferred_requests: Local<Vec<DeferredAnimationClipPlaybackRequest>>,
+    mut cancellations: MessageReader<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>,
+    subjects: Query<()>,
     mut animation_playback_controllers: Query<(
         Entity,
         &AnimationPresentationOwner,
@@ -36,7 +39,20 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
         Option<&AnimationGraphEnabled>,
     )>,
 ) {
-    let new_requests = animation_clip_requests
+    let cancelled = cancellations.read().copied().collect::<Vec<_>>();
+    for cancellation in &cancelled {
+        for (entity, owner, _, mut controller, _, _) in &mut animation_playback_controllers {
+            if (entity == cancellation.animation_subject_entity
+                || owner.gameplay_entity == cancellation.animation_subject_entity)
+                && controller.explicit_clip_request_id == Some(cancellation.request_id)
+            {
+                controller.explicit_clip_request_id = None;
+                controller.playback_generation = controller.playback_generation.wrapping_add(1);
+                controller.playback_state = AnimationPlaybackState::Finished;
+            }
+        }
+    }
+    let mut new_requests = animation_clip_requests
         .read_with_id()
         .map(|(request, id)| DeferredAnimationClipPlaybackRequest {
             request: request.clone(),
@@ -45,16 +61,49 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
         .collect::<Vec<_>>();
     // A newer request for the same subject supersedes one still loading.
     deferred_requests.retain(|deferred| {
-        !new_requests.iter().any(|request| {
+        let superseded = new_requests.iter().any(|request| {
             request.request.animation_subject_entity == deferred.request.animation_subject_entity
-        })
+        });
+        if superseded {
+            rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
+                request_id: deferred.request_id,
+                animation_subject_entity: deferred.request.animation_subject_entity,
+                animation_clip_asset_key: deferred.request.animation_clip_asset_key.clone(),
+            });
+        }
+        !superseded
     });
+    let mut seen_subjects = bevy::platform::collections::HashSet::<Entity>::default();
+    new_requests.reverse();
+    new_requests.retain(|request| {
+        let latest = seen_subjects.insert(request.request.animation_subject_entity);
+        if !latest {
+            rejected_animation_clip_requests.write(AnimationClipPlaybackRequestRejected {
+                request_id: request.request_id,
+                animation_subject_entity: request.request.animation_subject_entity,
+                animation_clip_asset_key: request.request.animation_clip_asset_key.clone(),
+            });
+        }
+        latest
+    });
+    new_requests.reverse();
     let pending_requests = std::mem::take(&mut *deferred_requests);
     for DeferredAnimationClipPlaybackRequest {
         request: animation_clip_request,
         request_id,
     } in pending_requests.into_iter().chain(new_requests)
     {
+        if subjects
+            .get(animation_clip_request.animation_subject_entity)
+            .is_err()
+            || cancelled.iter().any(|cancellation| {
+                cancellation.request_id == request_id
+                    && cancellation.animation_subject_entity
+                        == animation_clip_request.animation_subject_entity
+            })
+        {
+            continue;
+        }
         let animation_clip_request = &animation_clip_request;
         let mut started = false;
         for (
@@ -123,6 +172,14 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
                 replacement_animation_graph_playback_state.current_animation_graph_node_index =
                     containing_graph_node_index;
             }
+            let previous_graph_node = animation_set_assets
+                .get(&animation_playback_controller.animation_set_asset)
+                .and_then(|set| {
+                    set.animation_graph_nodes.get(
+                        animation_graph_playback_state.current_animation_graph_node_index as usize,
+                    )
+                })
+                .map(|node| node.animation_graph_node_asset_key.clone());
             animation_playback_controller.animation_set_asset = animation_set_asset_handle;
             animation_playback_controller.playback_generation = animation_playback_controller
                 .playback_generation
@@ -138,6 +195,12 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             animation_playback_controller.playback_repetition_policy =
                 animation_clip_request.playback_repetition_policy;
             *animation_graph_playback_state = replacement_animation_graph_playback_state;
+            started_animation_clip_requests.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted {
+                animation_subject_entity: animation_clip_request.animation_subject_entity,
+                request_id,
+                playback_generation: animation_playback_controller.playback_generation,
+                previous_graph_node,
+            });
             started = true;
             break;
         }
@@ -227,6 +290,8 @@ mod tests {
             .init_asset::<AnimationSetAsset>()
             .add_message::<AnimationClipPlaybackRequest>()
             .add_message::<AnimationClipPlaybackRequestRejected>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
+            .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
             .add_systems(Update, execute_explicit_animation_clip_playback_requests);
         let subject = application.world_mut().spawn_empty().id();
         let request_id = application

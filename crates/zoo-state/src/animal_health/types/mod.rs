@@ -64,6 +64,7 @@ pub struct Frozen;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeathCause {
     Disease(AssetId),
+    Authored(AssetId),
 }
 
 /// Immobilize a live animal and cancel its current movement/activity.

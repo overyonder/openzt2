@@ -3,6 +3,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types;
 use openzt2_world_state::simulation_time::simulation_control_queries;
 mod simulation_control_action_routing;
 mod simulation_control_application;
+mod simulation_speed_override;
 use openzt2_world_state::simulation_time::simulation_control_types;
 mod simulation_control_ui_presentation;
 pub mod simulation_time_world_lifecycle;
@@ -25,6 +26,7 @@ use simulation_control_types::{
 
 impl Plugin for SimulationTimePlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<simulation_speed_override::SimulationSpeedOverride>();
         app.add_systems(Update, simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world.in_set(openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadPreparationSet::InitializeClock).in_set(GameSet::Intent).run_if(in_state(GamePhase::Loading)));
         app.add_message::<SetSimulationSpeed>()
             .add_message::<SimulationPauseRequest>()

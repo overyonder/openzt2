@@ -15,7 +15,9 @@ use openzt2_game_data::behavior::{
     action::place_target::BehaviorPlacedTargetType, action_record::BehaviorAction,
 };
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
@@ -38,6 +40,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
     mut actors: Query<
         (
@@ -51,7 +54,10 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
-    recipients: Query<(&WorldMember, &SpeciesHandle)>,
+    recipients: Query<
+        (&WorldMember, &SpeciesHandle),
+        (Without<Dead>, Without<WorldEntityIsCrated>),
+    >,
     mut failing: Query<
         (
             Entity,
@@ -94,6 +100,14 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                     .remove::<PendingBehaviorTargetPlacement>();
                 continue;
             }
+            if !recipients
+                .get(pending.recipient)
+                .is_ok_and(|(recipient_world, _)| recipient_world.root == pending.root)
+            {
+                restore_placement_recipient(&pending, &mut task);
+                fail_placement(actor, &mut commands);
+                continue;
+            }
             if !pending.is_current(&task) || task.next_action_tick > clock.tick {
                 continue;
             }
@@ -116,7 +130,11 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                     let Some((document, declaration)) = view.find_behavior_set_location(
                         action.placement_behavior_set,
                         super::behavior_subject_type_resolution::behavior_subject_type_identifiers(
-                            species, staff, guest, catalogue,
+                            species,
+                            staff,
+                            guest,
+                            catalogue,
+                            animal_types.borrow_for(actor),
                         ),
                     ) else {
                         fail_placement(actor, &mut commands);

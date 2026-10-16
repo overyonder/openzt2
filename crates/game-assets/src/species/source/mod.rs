@@ -27,6 +27,7 @@ use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;
+mod donation;
 pub mod habitat_space;
 pub mod locomotion;
 pub mod needs;
@@ -211,6 +212,7 @@ fn lower_species_source_record_to_canonical_species(
     }
 
     Ok(Species {
+        donation: donation::lower_animal_donation_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
         authored_species_name: find_effective_authored_species_name(species)
             .ok_or_else(|| BindError::record(species, "animal family has no s_Species"))?

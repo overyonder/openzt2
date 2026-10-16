@@ -252,6 +252,7 @@ pub struct GuestViewReactionReceipt(pub u64);
 /// Confirms that one reaction reached and mutated its canonical guest.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestReactionApplied {
+    pub view_event: Option<GuestViewReactionOrigin>,
     pub guest: Entity,
     pub subject: Entity,
     pub kind: GuestMemoryKind,

@@ -30,8 +30,5 @@ pub struct DonationUsePoint {
 pub struct DonationOpportunity {
     pub category: AssetId,
     pub amount: Money,
-    pub minimum_satisfaction_permille: u16,
-    pub chance_permyriad: u16,
     pub interaction_ticks: u32,
-    pub acceptor_radius_cells: u8,
 }

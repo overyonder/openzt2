@@ -11,6 +11,7 @@ fn document() -> SpeciesDocument {
     let id = AssetId::from_key("test_species");
     SpeciesDocument {
         species: vec![Species {
+            donation: None,
             id,
             authored_species_name: "test_species".to_owned(),
             name_key: id,
@@ -51,6 +52,8 @@ fn document() -> SpeciesDocument {
                     behavior_subject_type_identifiers: vec![],
                     navigation_collision_policy: None,
                     ground_navigation_clip_asset_key: None,
+                    medium_ground_navigation_clip_asset_key: None,
+                    fast_ground_navigation_clip_asset_key: None,
                     sex,
                     life_stage: LifeStage::Young,
                     model: format!("young_{index}.nif"),

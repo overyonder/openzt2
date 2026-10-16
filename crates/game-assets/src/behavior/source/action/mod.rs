@@ -28,14 +28,25 @@ pub mod spawn_object_action_lowering;
 pub mod synchronized_set_action_lowering;
 pub mod target_test_action_lowering;
 pub mod termination_action_lowering;
+pub mod token_action_lowering;
 pub mod trick_learning_action_lowering;
 pub mod view_animals_action_lowering;
 pub mod view_event_action_lowering;
+pub mod wander_action_lowering;
 pub mod watch_show_action_lowering;
 
 pub(super) fn lower_one_behavior_action_source_node(
     behavior_action_source_node: &DataNode,
 ) -> io::Result<BehaviorAction> {
+    if let Some(action) =
+        token_action_lowering::lower_self_token_delivery(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
+    if let Some(action) = wander_action_lowering::lower_wander_action(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
     if let Some(action) =
         show_event_action_lowering::lower_animal_show_event_action(behavior_action_source_node)?
     {

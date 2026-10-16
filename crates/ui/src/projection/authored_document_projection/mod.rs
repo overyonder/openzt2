@@ -113,6 +113,11 @@ pub fn project_document(
             style
         };
         let mut node = project_authored_node_and_style_to_bevy_layout(record, style, flags);
+        let fragment_stretches_horizontally = index == 0
+            && !top_level
+            && node.width == Val::Auto
+            && node.left != Val::Auto
+            && node.right != Val::Auto;
         let scroll_decoration = scroll_decoration(data, index);
         let parent_layout =
             parent_layout_ownership(data, record).filter(|_| scroll_decoration.is_none());
@@ -157,6 +162,11 @@ pub fn project_document(
                 node.position_type = PositionType::Absolute;
                 node.flex_shrink = 0.0;
             } else {
+                if fragment_stretches_horizontally {
+                    // A parent-relative fragment fills its list, including its
+                    // pointer surface. Its intrinsic child extent is not a width.
+                    flow_authored_row(&mut node, Some(FlexDirection::Column), 0, 0);
+                }
                 node.position_type = PositionType::Relative;
                 // Reusable rows retain their authored extent. Overflow belongs
                 // to the owning list's scroll area, not flex compression.
@@ -336,7 +346,7 @@ pub fn project_document(
                     } else {
                         logical_size
                     };
-                    if canvas[0] > 0.0 {
+                    if canvas[0] > 0.0 && !fragment_stretches_horizontally {
                         node.width = px(canvas[0]);
                     }
                     if canvas[1] > 0.0 {

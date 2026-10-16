@@ -42,6 +42,18 @@ pub(crate) fn plan_route(
         .ok_or(NavigationFailure::NoStartNode)?;
     let goal = nearest_eligible(navigation, agent, destination, minimum_normal_y)
         .ok_or(NavigationFailure::OutsideWorld)?;
+    // Docking may deliberately snap a non-animal endpoint to a nearby node.
+    // Its final exact segment still cannot take a ground actor through water.
+    if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
+        && !ground_endpoint_segment_is_dry(
+            navigation,
+            navigation_position(navigation, goal),
+            destination,
+        )
+    {
+        route.clear();
+        return Err(NavigationFailure::NoRoute);
+    }
     if scratch.costs.len() != navigation.navigation_node_count()
         || scratch.previous.len() != navigation.navigation_node_count()
     {
@@ -169,6 +181,73 @@ pub(crate) fn plan_route(
         return Err(NavigationFailure::NoRoute);
     }
     Ok(())
+}
+
+fn ground_endpoint_segment_is_dry(
+    navigation: &TerrainDerivedNavigationGraph,
+    from: Vec3,
+    to: Vec3,
+) -> bool {
+    let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
+    if size <= 0.0
+        || !from.is_finite()
+        || !to.is_finite()
+        || from.x < 0.0
+        || to.x < 0.0
+        || from.z > 0.0
+        || to.z > 0.0
+    {
+        return false;
+    }
+    let from = Vec2::new(from.x, -from.z) / size;
+    let to = Vec2::new(to.x, -to.z) / size;
+    let mut cell = from.floor().as_ivec2();
+    let end = to.floor().as_ivec2();
+    let delta = to - from;
+    let step = IVec2::new(delta.x.signum() as i32, delta.y.signum() as i32);
+    let next_boundary = |position: f32, coordinate: i32, direction: f32| {
+        if direction == 0.0 {
+            f32::INFINITY
+        } else {
+            ((coordinate + i32::from(direction > 0.0)) as f32 - position) / direction
+        }
+    };
+    let mut crossing = Vec2::new(
+        next_boundary(from.x, cell.x, delta.x),
+        next_boundary(from.y, cell.y, delta.y),
+    );
+    let interval = Vec2::new(delta.x.abs().recip(), delta.y.abs().recip());
+    let dry = |cell: IVec2| {
+        if cell.x < 0 || cell.y < 0 {
+            return false;
+        }
+        navigation
+            .calculate_navigation_node_for_terrain_cell(cell.as_uvec2().to_array())
+            .and_then(|index| navigation.find_navigation_node(index))
+            .is_some_and(|node| !node.eligibility_flags.contains(NavFlags::WATER))
+    };
+    // Traverse crossed grid cells, including both neighbours at exact corners.
+    loop {
+        if !dry(cell) {
+            return false;
+        }
+        if cell == end {
+            return true;
+        }
+        if crossing.x == crossing.y {
+            if !dry(cell + IVec2::new(step.x, 0)) || !dry(cell + IVec2::new(0, step.y)) {
+                return false;
+            }
+            cell += step;
+            crossing += interval;
+        } else if crossing.x < crossing.y {
+            cell.x += step.x;
+            crossing.x += interval.x;
+        } else {
+            cell.y += step.y;
+            crossing.y += interval.y;
+        }
+    }
 }
 
 fn nearest_eligible(
@@ -360,6 +439,9 @@ fn heap_pop(heap: &mut Vec<OpenNode>, positions: &mut [u32]) -> Option<OpenNode>
 fn open_key(node: OpenNode) -> (u64, u64, u32) {
     (node.estimate, node.cost, node.node)
 }
+
+#[cfg(test)]
+mod shoreline_tests;
 
 #[cfg(test)]
 mod tests {

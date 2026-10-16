@@ -1,5 +1,3 @@
-use std::collections::BTreeMap;
-
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 
@@ -11,20 +9,29 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::simulation_time::zoo_calendar_calculation::days_in_month;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 
 use super::scenario_lua_types::{
-    ScenarioLuaCurrentPhotoChallengeSetQuery, ScenarioLuaLiveAnimalQuery,
+    ScenarioLuaCurrentPhotoChallengeSetQuery, ScenarioLuaLiveEntityQuery,
     ScenarioLuaPhotoChallengeQuery, ScenarioLuaQueryFacts,
 };
 
 /// The live game state that scenario Lua queries read.
 #[derive(SystemParam)]
 pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
+    donation_totals: super::scenario_lua_types::ScenarioLuaDonationTotalsQuery<'w, 's>,
+    localization: Res<'w, openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>,
+    localization_assets: Res<'w, Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>>,
+    species: Res<'w, openzt2_game_assets::species::species_asset_types::SpeciesAssets>,
+    species_assets:
+        Res<'w, Assets<openzt2_game_assets::species::species_asset_types::SpeciesAsset>>,
+    profile_variables: Res<
+        'w,
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
+    >,
     zoo_cash: Res<'w, ZooCash>,
     guest_admission_price: Res<'w, AdmissionPrice>,
     finance_history: Res<'w, MonthlyFinanceHistory>,
@@ -34,8 +41,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     world_definitions: Res<'w, WorldDefinitions>,
     world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     selected_entity: Option<Res<'w, SelectedEntity>>,
-    definitions: Query<'w, 's, &'static DefinitionId>,
-    live_world_animals: ScenarioLuaLiveAnimalQuery<'w, 's>,
+    live_world_entities: ScenarioLuaLiveEntityQuery<'w, 's>,
     scenario_document_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     current_photo_challenge_sets: ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's>,
     photo_challenges: ScenarioLuaPhotoChallengeQuery<'w, 's>,
@@ -46,29 +52,19 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         self.zoo_clock.as_deref()
     }
 
-    pub(super) fn count_live_world_entities_by_definition(
-        &self,
-    ) -> BTreeMap<openzt2_game_data::AssetId, u32> {
-        self.definitions
-            .iter()
-            .fold(BTreeMap::new(), |mut counts, id| {
-                *counts.entry(id.0).or_default() += 1;
-                counts
-            })
-    }
-
-    pub(super) fn borrow_scenario_lua_query_facts<'a>(
-        &'a self,
-        live_world_entity_counts_by_definition_identifier: &'a BTreeMap<
-            openzt2_game_data::AssetId,
-            u32,
-        >,
-    ) -> ScenarioLuaQueryFacts<'a> {
-        let live_world_animals: &'a ScenarioLuaLiveAnimalQuery<'a, 'a> = &self.live_world_animals;
+    pub(super) fn borrow_scenario_lua_query_facts<'a>(&'a self) -> ScenarioLuaQueryFacts<'a> {
+        let live_world_entities: &'a ScenarioLuaLiveEntityQuery<'a, 'a> = &self.live_world_entities;
         let current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a> =
             &self.current_photo_challenge_sets;
         let photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a> = &self.photo_challenges;
         ScenarioLuaQueryFacts {
+            donation_totals: &self.donation_totals,
+            localization: self
+                .localization
+                .borrow_loaded_localization_view(&self.localization_assets),
+            spawn_animal: None,
+            species: self.species.get(&self.species_assets),
+            profile_variables: &self.profile_variables,
             zoo_cash: &self.zoo_cash,
             guest_admission_price: &self.guest_admission_price,
             finance_history: &self.finance_history,
@@ -77,8 +73,8 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             zoo_calendar: self.zoo_calendar.as_deref(),
             zoo_months_since_calendar_epoch: self.count_zoo_months_since_calendar_epoch(),
             zoo_month_progress: self.measure_zoo_month_progress(),
-            live_world_entity_counts_by_definition_identifier,
-            live_world_animals,
+            live_world_entities,
+            world_definitions: self.world_definitions.get(&self.world_definition_assets),
             scenario_document_assets: &self.scenario_document_assets,
             current_photo_challenge_sets,
             photo_challenges,

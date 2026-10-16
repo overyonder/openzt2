@@ -27,6 +27,7 @@ pub(super) fn lower_attach_object_action(
             "locoMod",
             "subjectNode",
             "targetNode",
+            "detachBehSet",
         ]
         .contains(&attribute.name())
     }) || node.element_children().next().is_some()
@@ -39,7 +40,9 @@ pub(super) fn lower_attach_object_action(
         .ok_or_else(|| invalid_behavior_source_data("BFBehAttachObject requires attachEntity"))?;
     let target_node = read_optional_trimmed_string_attribute(node, "targetNode");
     // A target node only places the target container's held prop.
-    if target_node.is_some() && !entity.eq_ignore_ascii_case("s_prop") {
+    if (target_node.is_some() || node.attribute("detachBehSet").is_some())
+        && !entity.eq_ignore_ascii_case("s_prop")
+    {
         return Err(invalid_behavior_source_data(
             "BFBehAttachObject target node is only mapped for s_prop",
         ));
@@ -59,6 +62,8 @@ pub(super) fn lower_attach_object_action(
                 .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
             subject_node: read_optional_trimmed_string_attribute(node, "subjectNode"),
             target_node,
+            detach_behavior_set: read_optional_trimmed_string_attribute(node, "detachBehSet")
+                .map(|value| AssetId::from_key(&value.to_ascii_lowercase())),
         },
     )))
 }

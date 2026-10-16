@@ -40,7 +40,8 @@ pub struct ShellPlugin;
 
 impl Plugin for ShellPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<ShellSelection>()
+        app.add_message::<shell_navigation_request_types::ContinueCampaign>()
+            .init_resource::<ShellSelection>()
             .add_message::<NavigateShellBack>()
             .add_message::<ShowOptions>()
             .add_message::<ShowDownloads>()
@@ -137,6 +138,7 @@ impl Plugin for ShellPlugin {
                     shell_navigation_and_world_launch::
                         select_world_from_activated_choice_view,
                     shell_navigation_and_world_launch::select_requested_compatible_world,
+                    shell_navigation_and_world_launch::continue_campaign_after_world_exit,
                     shell_navigation_and_world_launch::begin_loading_selected_world,
                     in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
                     in_game_options_overlay_lifecycle::

@@ -5,7 +5,7 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
 
 use super::{
     animal_adoption_contracts::{AnimalCatalogueGender, DeclineCurrentAnimalAdoptionOffers},
@@ -22,7 +22,8 @@ pub(super) fn consume_animal_ui_actions(
     nodes: Query<(&UiAnimalActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
     selected: Res<SelectedEntity>,
-    animals: Query<(), (With<Animal>, Without<ReleaseRestricted>)>,
+    animals: Query<Has<ReleaseRestricted>, With<Animal>>,
+    mut uncrate: MessageWriter<RemoveWorldEntityFromCrate>,
     mut releases: MessageWriter<ReleaseAnimal>,
     mut decline_adoption_offers: MessageWriter<DeclineCurrentAnimalAdoptionOffers>,
 ) {
@@ -51,11 +52,14 @@ pub(super) fn consume_animal_ui_actions(
                 }
                 UiAnimalAction::ReleaseSelectedAnimalFromCrateIntoZoo => {
                     if let Some(animal) = selected.0.filter(|entity| animals.get(*entity).is_ok()) {
-                        commands.entity(animal).remove::<WorldEntityIsCrated>();
+                        uncrate.write(RemoveWorldEntityFromCrate(animal));
                     }
                 }
                 UiAnimalAction::ReleaseSelectedAnimalToWild => {
-                    if let Some(animal) = selected.0.filter(|entity| animals.get(*entity).is_ok()) {
+                    if let Some(animal) = selected
+                        .0
+                        .filter(|entity| animals.get(*entity).is_ok_and(|restricted| !restricted))
+                    {
                         releases.write(ReleaseAnimal(animal));
                     }
                 }

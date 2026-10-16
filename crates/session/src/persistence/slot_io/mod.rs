@@ -6,6 +6,7 @@ mod animal_snapshot_round_trip_tests;
 mod animal_snapshot_section_encoding;
 mod animal_snapshot_types;
 pub(super) mod delete_snapshot_file_request_execution;
+mod donation_snapshot_section;
 mod economy_snapshot_application;
 mod economy_snapshot_capture;
 mod economy_snapshot_section_encoding;

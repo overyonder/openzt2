@@ -121,6 +121,15 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
                 .get(&scenario.handle)
                 .and_then(|asset| asset.document.scenarios.first())
             {
+                // Objectives retain the goal document's canonical scenario ID;
+                // campaign selection addresses the same document by its alias.
+                scenario_records.insert(
+                    record.id,
+                    ScenarioDocumentHandle {
+                        record: record.id,
+                        handle: scenario.handle.clone(),
+                    },
+                );
                 scenario_records.insert(
                     scenario.id,
                     ScenarioDocumentHandle {
@@ -273,6 +282,26 @@ mod tests {
                 .unwrap()
                 .id,
             record_id
+        );
+        let view = scenarios.get(assets).unwrap();
+        assert_eq!(
+            view.scenarios()
+                .map(|scenario| scenario.id)
+                .collect::<Vec<_>>(),
+            vec![record_id]
+        );
+        let objective_scenario = view.scenario(authored_key).unwrap().id;
+        let objective_document = view.handle_for_scenario(objective_scenario).unwrap();
+        assert_eq!(objective_document, &dependency);
+        assert_eq!(
+            assets
+                .get(objective_document)
+                .unwrap()
+                .document
+                .find_scenario_record(objective_scenario)
+                .unwrap()
+                .id,
+            record_id,
         );
     }
 }

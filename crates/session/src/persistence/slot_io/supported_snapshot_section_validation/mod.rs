@@ -64,6 +64,11 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
                 snapshot_container_bytes,
                 section_byte_range,
             )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::Donations {
+            super::donation_snapshot_section::decode_donation_records(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
         } else if snapshot_section == WorldSnapshotSectionKind::Economy {
             decode_and_validate_economy_snapshot_section(
                 snapshot_container_bytes,

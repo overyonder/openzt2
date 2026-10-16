@@ -157,6 +157,21 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
             Ok(assigned)
         };
 
+    let mut source_indexes = BTreeMap::new();
+    for (index, (entity, ..)) in renderables.iter().enumerate() {
+        if let Some(handle) = entity.attribute("safehandledobjid") {
+            if source_indexes
+                .insert(handle.to_owned(), index as u32)
+                .is_some()
+            {
+                return Err(at(
+                    document,
+                    entity,
+                    "duplicate starting entity safe handle",
+                ));
+            }
+        }
+    }
     let entities = renderables
         .into_iter()
         .map(|(entity, definition, scene, presentation_scale)| {
@@ -226,6 +241,8 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
                 .transpose()?
                 .unwrap_or_default();
             Ok(StartingZooSpawnEntityRecord {
+                initial_needs: lower_saved_needs(document, entity)?,
+                contained_entities: lower_owned_hidden_contents(document, entity, &source_indexes)?,
                 persistent_id: persistent_id(entity, true)?,
                 prefab,
                 definition: AssetId::from_key(&definition),
@@ -338,6 +355,75 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
     starting_zoo_record.topology_nodes = topology_nodes;
     starting_zoo_record.fences = fences;
     Ok(())
+}
+
+fn lower_saved_needs(
+    document: &OrderedSourceDocument,
+    entity: &OrderedSourceDocumentNode,
+) -> io::Result<Vec<(openzt2_game_data::species::NeedKind, i32)>> {
+    use openzt2_game_data::species::NeedKind;
+    let roots = [entity];
+    descendants(&roots)
+        .filter(|node| local(&node.name) == "BFAIStateVar")
+        .filter_map(|node| {
+            let kind = match node.attribute("Name")? {
+                "hunger" => NeedKind::Hunger,
+                "thirst" => NeedKind::Thirst,
+                "rest" => NeedKind::Rest,
+                "privacy" => NeedKind::Privacy,
+                "social" => NeedKind::Social,
+                "exercise" => NeedKind::Exercise,
+                "stimulation" => NeedKind::Stimulation,
+                "environment" => NeedKind::Environment,
+                "health" => NeedKind::Health,
+                "hygiene" => NeedKind::Hygiene,
+                "bathroom" => NeedKind::Bathroom,
+                _ => return None,
+            };
+            Some(required_f32(document, node, "Value").and_then(|value| {
+                if !value.is_finite() {
+                    return Err(at(document, node, "nonfinite saved animal need"));
+                }
+                Ok((
+                    kind,
+                    ((100.0 - value).clamp(0.0, 100.0) * 10.0 * 65_536.0).round() as i32,
+                ))
+            }))
+        })
+        .collect()
+}
+
+fn lower_owned_hidden_contents(
+    document: &OrderedSourceDocument,
+    entity: &OrderedSourceDocumentNode,
+    indexes: &BTreeMap<String, u32>,
+) -> io::Result<Vec<u32>> {
+    let roots = [entity];
+    let mut contents = Vec::new();
+    for slot in descendants(&roots).filter(|node| {
+        local(&node.name) == "BFGEntityContainerSlot"
+            && node.attribute("ownContents") == Some("true")
+            && node.attribute("hideContents") == Some("true")
+    }) {
+        let Some(entries) = child(slot, "entities") else {
+            continue;
+        };
+        for entry in entries
+            .element_children()
+            .filter(|node| local(&node.name) == "entity")
+        {
+            let handle = required(document, entry, "safehandleID")?;
+            let index = indexes.get(handle).copied().ok_or_else(|| {
+                at(
+                    document,
+                    entry,
+                    "owned hidden entity handle has no starting record",
+                )
+            })?;
+            contents.push(index);
+        }
+    }
+    Ok(contents)
 }
 
 fn scene_stem(path: &str) -> &str {

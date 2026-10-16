@@ -16,6 +16,8 @@ pub(super) struct StoredProfileRecordAndSettings {
     pub(super) record: ProfileRecord,
     pub(super) options: ProfileOptions,
     pub(super) challenge_progress: ProfileChallengeCompletionCounts,
+    pub(super) scenario_variables:
+        openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     pub(super) audio: AudioSettings,
     pub(super) bindings: GameActionInputBindings,
     pub(super) display: DisplaySettings,
@@ -43,6 +45,8 @@ pub(super) enum ProfileFilesystemTaskCompletion {
         profile: AssetId,
         options: ProfileOptions,
         challenge_progress: ProfileChallengeCompletionCounts,
+        scenario_variables:
+            openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
         audio: AudioSettings,
         bindings: GameActionInputBindings,
         display: DisplaySettings,

@@ -9,6 +9,7 @@ use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
+use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
@@ -186,7 +187,7 @@ pub(super) fn reconcile_staff_request_rows_on_definition_revision(
     }
 }
 
-/// Evaluates authored container and animal hunger controllers against their
+/// Evaluates authored container and animal hunger/thirst controllers against their
 /// live owners. Unsupported attributes remain unsampled.
 pub(super) fn evaluate_staff_request_rows(
     active_world_definitions: Res<WorldDefinitions>,
@@ -198,7 +199,10 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
     )>,
-    animal_hunger: Query<&Hunger, (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>)>,
+    animal_needs: Query<
+        (Option<&Hunger>, Option<&Thirst>),
+        (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
+    >,
     jobs: Query<(Entity, &StaffJob)>,
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
@@ -222,8 +226,17 @@ pub(super) fn evaluate_staff_request_rows(
             };
             let sample = if row.attribute_key == Some(food_level_key()) {
                 sample
-            } else if row.attribute_key == Some(AssetId::from_key("hunger")) {
-                let Ok(hunger) = animal_hunger.get(entity) else {
+            } else if row.attribute_key == Some(AssetId::from_key("hunger"))
+                || row.attribute_key == Some(AssetId::from_key("thirst"))
+            {
+                let wellness = animal_needs.get(entity).ok().and_then(|(hunger, thirst)| {
+                    if row.attribute_key == Some(AssetId::from_key("hunger")) {
+                        hunger.map(|hunger| hunger.0)
+                    } else {
+                        thirst.map(|thirst| thirst.0)
+                    }
+                });
+                let Some(wellness) = wellness else {
                     // A dead, crated or no-longer-initialized animal cannot own
                     // feeding work. Resume with a fresh sample if it returns.
                     state.previous = None;
@@ -244,7 +257,7 @@ pub(super) fn evaluate_staff_request_rows(
                 };
                 // Controllers use authored deprivation on 0..100, whereas
                 // the welfare owner stores wellness on 0..1000 in Q16.
-                Some((MAX_NEED_Q16 - hunger.0.clamp(0, MAX_NEED_Q16)) / 10)
+                Some((MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10)
             } else {
                 None
             };
@@ -390,6 +403,8 @@ fn evaluate_staff_request_row(
 fn job_kind(token: AssetId) -> Option<StaffJobKind> {
     if token == fill_food_container_token() || token == AssetId::from_key("t_feedanimal") {
         Some(StaffJobKind::Feed)
+    } else if token == AssetId::from_key("t_wateranimal") {
+        Some(StaffJobKind::RefillWater)
     } else if token == empty_trash_token() || token == empty_recycling_bin_token() {
         Some(StaffJobKind::EmptyBin)
     } else {

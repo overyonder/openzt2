@@ -15,11 +15,15 @@ pub(super) fn create_or_reuse_selected_mode_map_selection_screen(
     shell_selection: Res<ShellSelection>,
     existing_shell_screens: Query<(), With<ShellScreen>>,
     mut requested_ui_roles: ResMut<UiRoleRequests>,
+    mut next_phase: ResMut<NextState<openzt2_game_assets::application_lifecycle::GamePhase>>,
 ) {
     if !existing_shell_screens.is_empty() {
         return;
     }
     let Some(selected_play_mode) = shell_selection.mode else {
+        // Loading a saved zoo from the main menu has no map-selection mode.
+        // A failed restore must return to a screen that can actually be built.
+        next_phase.set(openzt2_game_assets::application_lifecycle::GamePhase::MainMenu);
         return;
     };
     let (map_selection_document_role, map_selection_screen) =
