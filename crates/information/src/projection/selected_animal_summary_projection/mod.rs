@@ -17,6 +17,7 @@ use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
 use openzt2_zoo_state::animal_health::types::Treatment;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_ui::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
@@ -31,7 +32,7 @@ use openzt2_interface_state::information::entity_selection_types::SelectedEntity
 
 pub(crate) fn project_selected_entity_information_section_visibility(
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
-    subjects: Query<&Inspectable>,
+    subjects: Query<(&Inspectable, Has<WorldEntityIsCrated>, Has<Animal>)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut visibility_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
@@ -40,11 +41,23 @@ pub(crate) fn project_selected_entity_information_section_visibility(
         return;
     };
     for (information_panel_entity, information_panel, inherited_visibility) in &information_panels {
-        let selected_section = subjects
-            .get(information_panel.subject)
-            .ok()
-            .and_then(|subject| definitions.find_object(subject.definition))
-            .map(|definition| definition.information_panel);
+        let selected_section =
+            subjects
+                .get(information_panel.subject)
+                .ok()
+                .and_then(|(subject, crated, animal)| {
+                    if crated {
+                        Some(AssetId::from_key(if animal {
+                            "Crate Info"
+                        } else {
+                            "Crated entity Info"
+                        }))
+                    } else {
+                        definitions
+                            .find_object(subject.definition)
+                            .map(|definition| definition.information_panel)
+                    }
+                });
         for (owner, binding, mut visibility) in &mut visibility_nodes {
             if owner.0 != information_panel_entity {
                 continue;

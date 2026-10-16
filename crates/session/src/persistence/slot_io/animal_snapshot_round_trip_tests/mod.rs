@@ -204,7 +204,7 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
             state.get_mut(&mut destination).unwrap();
         apply_animal_snapshot_records(
             &mut commands,
-            records,
+            &records,
             resolved,
             root,
             &mut allocator,
@@ -353,7 +353,7 @@ fn empty_saved_population_removes_baseline_animals() {
         let (mut commands, mut allocator, animals) = state.get_mut(&mut destination).unwrap();
         assert!(apply_animal_snapshot_records(
             &mut commands,
-            records,
+            &records,
             vec![],
             root,
             &mut allocator,
@@ -365,4 +365,130 @@ fn empty_saved_population_removes_baseline_animals() {
     state.apply(&mut destination);
     assert!(destination.get_entity(baseline).is_err());
     assert!(capture(&mut destination).is_empty());
+}
+
+#[test]
+fn native_crate_relationship_preserves_relocated_pose_and_restored_identity() {
+    use super::native_crate_snapshot_links::{
+        apply_native_crate_links, capture_native_crate_links, validate_native_crate_links,
+        NativeCrateSnapshotEntities,
+    };
+    use super::placement_snapshot_section::PlacementSnapshotRecord;
+    use openzt2_world_state::world_spawn::world_entity_crating::{
+        AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
+    };
+    use std::collections::BTreeMap;
+
+    let mut source = World::new();
+    let root = source.spawn_empty().id();
+    let animal = spawn_named_animal(&mut source, 11, "Lion", Sex::Male, LifeStage::Adult);
+    let pose = Transform::from_xyz(80.0, 2.0, -10.0).with_rotation(Quat::from_rotation_y(1.25));
+    let crate_entity = source
+        .spawn((
+            PersistentId(12),
+            WorldMember { root },
+            pose,
+            ContainedCratedAnimal(animal),
+        ))
+        .id();
+    source.entity_mut(animal).insert((
+        WorldMember { root },
+        WorldEntityIsCrated,
+        AnimalCrate(crate_entity),
+    ));
+    let mut records = capture(&mut source);
+    let scale = records[0].scale;
+    let mut capture_state =
+        SystemState::<(AnimalSnapshotEntities, NativeCrateSnapshotEntities)>::new(&mut source);
+    let (animals, crates) = capture_state.get(&source).unwrap();
+    capture_native_crate_links(&animals, &crates, &mut records).unwrap();
+    let placements = [PlacementSnapshotRecord {
+        persistent_identifier: 12,
+        definition: AssetId([7; 16]),
+        transform: pose,
+    }];
+    validate_native_crate_links(&records, &placements).unwrap();
+    assert_eq!(records[0].translation, pose.translation.to_array());
+    assert_eq!(records[0].rotation, pose.rotation.to_array());
+    assert_eq!(records[0].scale, scale);
+    assert!(validate_native_crate_links(&records, &[]).is_err());
+    let mut invalid = records.clone();
+    invalid[0].crated = false;
+    assert!(validate_native_crate_links(&invalid, &placements).is_err());
+    invalid = records.clone();
+    invalid[0].crate_identifier = Some(11);
+    assert!(validate_native_crate_links(&invalid, &placements).is_err());
+
+    let bytes = encode_animal_snapshot_records(&records).unwrap();
+    let records: Vec<AnimalSnapshotRecord> = serde_json::from_slice(&bytes).unwrap();
+    let mut legacy = serde_json::to_value(&records).unwrap();
+    legacy[0]
+        .as_object_mut()
+        .unwrap()
+        .remove("crate_identifier");
+    let legacy: Vec<AnimalSnapshotRecord> = serde_json::from_value(legacy).unwrap();
+    assert_eq!(legacy[0].crate_identifier, None);
+
+    let mut destination = World::new();
+    for _ in 0..8 {
+        destination.spawn_empty();
+    }
+    let restored_root = destination.spawn_empty().id();
+    destination.insert_resource(PersistentIdAllocator::new(restored_root));
+    let restored_crate = destination
+        .spawn((
+            PersistentId(12),
+            pose,
+            WorldMember {
+                root: restored_root,
+            },
+        ))
+        .id();
+    let mut state = SystemState::<(
+        Commands,
+        ResMut<PersistentIdAllocator>,
+        Query<Entity, With<Animal>>,
+    )>::new(&mut destination);
+    let restored = {
+        let (mut commands, mut allocator, baseline) = state.get_mut(&mut destination).unwrap();
+        let restored = apply_animal_snapshot_records(
+            &mut commands,
+            &records,
+            records.iter().map(resolved_components).collect(),
+            restored_root,
+            &mut allocator,
+            &baseline,
+        )
+        .unwrap();
+        apply_native_crate_links(
+            &mut commands,
+            &records,
+            &restored,
+            &BTreeMap::from([(12, restored_crate)]),
+        )
+        .unwrap();
+        restored
+    };
+    state.apply(&mut destination);
+    let restored_animal = restored[&11];
+    assert_ne!(restored_animal, animal);
+    assert_eq!(
+        destination.get::<AnimalCrate>(restored_animal).unwrap().0,
+        restored_crate
+    );
+    assert_eq!(
+        destination
+            .get::<ContainedCratedAnimal>(restored_crate)
+            .unwrap()
+            .0,
+        restored_animal
+    );
+    assert_eq!(
+        destination.get::<Visibility>(restored_animal),
+        Some(&Visibility::Hidden)
+    );
+    let transform = destination.get::<Transform>(restored_animal).unwrap();
+    assert_eq!(transform.translation, pose.translation);
+    assert_eq!(transform.rotation, pose.rotation);
+    assert_eq!(transform.scale.to_array(), scale);
 }

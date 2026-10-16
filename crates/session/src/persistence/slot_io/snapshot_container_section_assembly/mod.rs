@@ -44,6 +44,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     tank_snapshot_records: &[TankSnapshotRecord],
     economy_snapshot_records: &EconomySnapshotRecords,
     donation_snapshot_records: &[super::donation_snapshot_section::DonationSnapshotRecord],
+    placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
     progression_snapshot_records: &ProgressionSnapshotRecords,
     simulation_time_snapshot_record: &SimulationTimeSnapshotRecord,
     show_stage_snapshot_records: &[ShowStageSnapshotRecord],
@@ -57,6 +58,8 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
         animal_adoption_offer_inventory,
         world_snapshot_record.session_mode,
     )?;
+    let placement_bytes =
+        super::placement_snapshot_section::encode_placement_records(placement_snapshot_records)?;
     let donation_bytes =
         super::donation_snapshot_section::encode_donation_records(donation_snapshot_records)?;
     let animal_bytes = super::animal_snapshot_section_encoding::encode_animal_snapshot_records(
@@ -130,6 +133,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                                 );
                             });
                     },
+                )
+            }
+            WorldSnapshotSectionKind::Placement => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    placement_snapshot_records.len() as u32,
+                    |bytes| bytes.extend_from_slice(&placement_bytes),
                 )
             }
             WorldSnapshotSectionKind::Donations => {
@@ -255,6 +266,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                     .len()
                     .saturating_add(animal_snapshot_records.len())
                     .saturating_add(donation_snapshot_records.len())
+                    .saturating_add(placement_snapshot_records.len())
                     .saturating_add(habitat_waste_records.len())
                     .saturating_add(staff_snapshot_records.len())
                     .saturating_add(show_stage_snapshot_records.len())

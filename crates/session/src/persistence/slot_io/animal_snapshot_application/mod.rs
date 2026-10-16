@@ -58,14 +58,14 @@ pub(super) fn resolve_saved_animal_components(
 
 pub(super) fn apply_animal_snapshot_records(
     commands: &mut Commands,
-    records: Vec<AnimalSnapshotRecord>,
+    records: &[AnimalSnapshotRecord],
     resolved_components: Vec<ResolvedAnimalSpawnComponents>,
     world_root: Entity,
     allocator: &mut PersistentIdAllocator,
     baseline_animals: &Query<Entity, With<Animal>>,
 ) -> Result<BTreeMap<u64, Entity>, WorldSnapshotPersistenceFailure> {
     // Reserve every identifier before queuing any entity mutations.
-    for record in &records {
+    for record in records {
         allocator
             .reserve_imported(world_root, PersistentId(record.persistent_identifier))
             .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;

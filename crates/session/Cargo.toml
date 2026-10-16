@@ -35,6 +35,9 @@ ureq.workspace = true
 windows-sys.workspace = true
 
 [dev-dependencies]
+openzt2_construction = { workspace = true, features = ["testing"] }
+openzt2_economy = { workspace = true, features = ["testing"] }
+openzt2_visitors = { workspace = true, features = ["testing"] }
 openzt2_environment.workspace = true
 openzt2_game_assets = { workspace = true, features = ["testing"] }
 openzt2_photos.workspace = true

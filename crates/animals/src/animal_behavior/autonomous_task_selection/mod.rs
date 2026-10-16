@@ -72,6 +72,8 @@ pub(super) fn select_idle_animal_tasks(
         ),
     >,
     mut world_objects: WorldObjectTargetSources,
+    shores: super::shore_targets::ShoreTargets,
+    mut shore_candidates: Local<Vec<super::shore_targets::SelectedShoreTarget>>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     mut commands: Commands,
 ) {
@@ -175,6 +177,7 @@ pub(super) fn select_idle_animal_tasks(
                             task,
                             animal,
                             object.map(|(entity, _)| entity),
+                            None,
                         ),
                         task.priority.unwrap_or_default(),
                         score,
@@ -186,6 +189,92 @@ pub(super) fn select_idle_animal_tasks(
             // Token payloads and concrete object participants need their own
             // target producer; this path only considers an object-free target.
             if !task.objects.is_empty() {
+                continue;
+            }
+            if task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("shore") {
+                use openzt2_game_data::behavior::eligibility::{
+                    BehaviorEligibilityFactInput as Input, BehaviorEligibilityFactValue as Value,
+                    BehaviorEntityStateEligibilityFact as State,
+                    BehaviorSpatialEligibilityFact as Spatial,
+                };
+                let radius = task
+                    .candidate_eligibility_requirements
+                    .iter()
+                    .filter(|requirement| {
+                        requirement.candidate_role == BehaviorCandidateRole::Target
+                    })
+                    .flat_map(|requirement| &requirement.eligibility_facts)
+                    .filter_map(|fact| match (fact.fact_input, fact.expected_value) {
+                        (Input::Spatial(Spatial::InSight), Value::Q16(radius)) if radius > 0 => {
+                            Some(radius as f32 / 65_536.0)
+                        }
+                        _ => None,
+                    })
+                    .reduce(f32::max);
+                let Some(radius) = radius else {
+                    continue;
+                };
+                shores.collect(
+                    animal,
+                    facts.world.root,
+                    facts.transform.translation(),
+                    radius,
+                    &mut shore_candidates,
+                );
+                for shore in shore_candidates.iter().copied() {
+                    let distance = facts
+                        .transform
+                        .translation()
+                        .xz()
+                        .distance(shore.water.xz());
+                    if !candidate_requirements_are_satisfied(
+                        &task.candidate_eligibility_requirements,
+                        |role, required| match role {
+                            BehaviorCandidateRole::Subject => {
+                                facts.matches_type(required, authored_types)
+                            }
+                            BehaviorCandidateRole::Target => required == AssetId::from_key("shore"),
+                            BehaviorCandidateRole::Object => false,
+                        },
+                        |role, fact| match role {
+                            BehaviorCandidateRole::Subject => facts.satisfies(fact),
+                            BehaviorCandidateRole::Target => {
+                                match (fact.fact_input, fact.expected_value) {
+                                    (Input::Spatial(Spatial::InSight), Value::Q16(radius)) => {
+                                        distance < radius as f32 / 65_536.0
+                                    }
+                                    (Input::State(State::InHabitat), Value::Q16(expected)) => {
+                                        candidate_facts::compare_q16(
+                                            1 << 16,
+                                            expected,
+                                            fact.comparison,
+                                        )
+                                    }
+                                    _ => false,
+                                }
+                            }
+                            BehaviorCandidateRole::Object => false,
+                        },
+                    ) {
+                        continue;
+                    }
+                    let Some(score) = scoring::score_animal_task(
+                        task,
+                        &facts,
+                        policy.outside_range_need_value,
+                        distance,
+                        &mut random,
+                    ) else {
+                        continue;
+                    };
+                    considered_candidates += 1;
+                    ranking.consider(
+                        (document, declaration, task, shore.region, None, Some(shore)),
+                        task.priority.unwrap_or_default(),
+                        score,
+                        |upper| random.range_u32(upper),
+                    );
+                }
                 continue;
             }
             let Some(target_requirement) =
@@ -288,7 +377,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
-                    (document, declaration, task, target.entity, None),
+                    (document, declaration, task, target.entity, None, None),
                     task.priority.unwrap_or_default(),
                     score,
                     |upper| random.range_u32(upper),
@@ -297,7 +386,8 @@ pub(super) fn select_idle_animal_tasks(
         }
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
-        let Some((document, declaration, task, target, object)) = ranking.finish(false) else {
+        let Some((document, declaration, task, target, object, shore)) = ranking.finish(false)
+        else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
                 hunger = ?facts.source_need(AssetId::from_key("hunger")),
@@ -348,6 +438,11 @@ pub(super) fn select_idle_animal_tasks(
         debug!(?animal, task = %task.name, id = ?task.id, ?target, execution_id,
             cooldown_ticks = ?delay_ticks, "animal started task");
         let mut started = commands.entity(animal);
+        if let Some(shore) = shore {
+            started.insert(shore);
+        } else {
+            started.remove::<super::shore_targets::SelectedShoreTarget>();
+        }
         started.insert(BehaviorTaskExecutionState {
             execution_id,
             program: task.id,

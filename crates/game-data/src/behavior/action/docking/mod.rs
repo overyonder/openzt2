@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BehaviorWaterDockAction {
+    pub subject_node_name: String,
+    pub target_animation_clip_asset_key: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BehaviorDockAction {
     pub subject_node_name: Option<String>,
     pub target_node_name: Option<String>,

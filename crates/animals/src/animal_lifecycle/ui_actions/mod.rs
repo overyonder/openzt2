@@ -5,10 +5,11 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
 
 use super::{
-    animal_adoption_contracts::{AnimalCatalogueGender, DeclineCurrentAnimalAdoptionOffers},
+    animal_adoption_contracts::{
+        AnimalCatalogueGender, DeclineCurrentAnimalAdoptionOffers, PlaceAnimalForAdoption,
+    },
     animal_birth_and_release_contracts::ReleaseAnimal,
     types::{Animal, ReleaseRestricted},
 };
@@ -23,7 +24,7 @@ pub(super) fn consume_animal_ui_actions(
     roots: Query<&UiDocumentRoot>,
     selected: Res<SelectedEntity>,
     animals: Query<Has<ReleaseRestricted>, With<Animal>>,
-    mut uncrate: MessageWriter<RemoveWorldEntityFromCrate>,
+    mut outgoing_adoptions: MessageWriter<PlaceAnimalForAdoption>,
     mut releases: MessageWriter<ReleaseAnimal>,
     mut decline_adoption_offers: MessageWriter<DeclineCurrentAnimalAdoptionOffers>,
 ) {
@@ -50,9 +51,12 @@ pub(super) fn consume_animal_ui_actions(
                     };
                     commands.entity(owner.0).insert(AnimalCatalogueGender(sex));
                 }
-                UiAnimalAction::ReleaseSelectedAnimalFromCrateIntoZoo => {
-                    if let Some(animal) = selected.0.filter(|entity| animals.get(*entity).is_ok()) {
-                        uncrate.write(RemoveWorldEntityFromCrate(animal));
+                UiAnimalAction::PutSelectedAnimalUpForAdoption => {
+                    if let Some(animal) = selected
+                        .0
+                        .filter(|entity| animals.get(*entity).is_ok_and(|restricted| !restricted))
+                    {
+                        outgoing_adoptions.write(PlaceAnimalForAdoption(animal));
                     }
                 }
                 UiAnimalAction::ReleaseSelectedAnimalToWild => {

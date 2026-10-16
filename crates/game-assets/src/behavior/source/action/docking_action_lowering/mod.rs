@@ -15,9 +15,44 @@ use super::{
     },
 };
 
+pub(super) fn lower_water_docking_action_source_node(
+    docking_action_source_node: &DataNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if docking_action_source_node.name == "ZTBehDockWater" {
+        if docking_action_source_node
+            .attributes
+            .iter()
+            .any(|attribute| !matches!(attribute.name(), "targetAnim" | "subjectNode"))
+            || docking_action_source_node
+                .element_children()
+                .next()
+                .is_some()
+        {
+            return Err(invalid_behavior_source_data(
+                "ZTBehDockWater has unmapped policy",
+            ));
+        }
+        let required = |name| {
+            read_optional_trimmed_string_attribute(docking_action_source_node, name).ok_or_else(
+                || invalid_behavior_source_data(format!("ZTBehDockWater requires {name}")),
+            )
+        };
+        return Ok(Some(BehaviorAction::DockWater(
+            openzt2_game_data::behavior::action::docking::BehaviorWaterDockAction {
+                subject_node_name: required("subjectNode")?,
+                target_animation_clip_asset_key: required("targetAnim")?,
+            },
+        )));
+    }
+    Ok(None)
+}
+
 pub(super) fn lower_docking_action_source_node(
     docking_action_source_node: &DataNode,
 ) -> io::Result<Option<BehaviorAction>> {
+    if let Some(action) = lower_water_docking_action_source_node(docking_action_source_node)? {
+        return Ok(Some(action));
+    }
     let radial = match docking_action_source_node.name.as_str() {
         "BFBehDock" => false,
         "BFBehDockRadial" => true,

@@ -152,21 +152,15 @@ pub(super) fn decode_donation_records(
 
 pub(super) fn resolve_donation_records(
     records: Vec<DonationSnapshotRecord>,
-    entities: &Query<(Entity, &PersistentId)>,
+    entities: &std::collections::BTreeMap<u64, Entity>,
 ) -> Result<Vec<(Entity, DonationTotal, DonationCategoryTotals)>, Failure> {
     records
         .into_iter()
         .map(|record| {
-            let mut matches = entities
-                .iter()
-                .filter(|(_, identifier)| **identifier == record.identifier);
-            let entity = matches
-                .next()
-                .ok_or(Failure::BrokenPersistentEntityReference)?
-                .0;
-            if matches.next().is_some() {
-                return Err(Failure::DuplicatePersistentEntityIdentifier);
-            }
+            let entity = entities
+                .get(&record.identifier.0)
+                .copied()
+                .ok_or(Failure::BrokenPersistentEntityReference)?;
             Ok((entity, record.total, record.categories))
         })
         .collect()

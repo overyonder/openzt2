@@ -25,6 +25,7 @@ pub enum BehaviorAction {
         animation: String,
     },
     Dock(action::docking::BehaviorDockAction),
+    DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),
     WaitInteractionQueue(action::queue::BehaviorQueueWaitAction),
     DockQueue(action::queue::BehaviorDockQueueAction),

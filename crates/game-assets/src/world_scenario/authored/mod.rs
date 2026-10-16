@@ -172,6 +172,12 @@ pub(in crate::world_scenario) fn lower_documents(
                         description_key: document
                             .root
                             .attribute("description")
+                            .or_else(|| {
+                                child(&document.root, "info")
+                                    .and_then(|info| info.attribute("locid"))
+                            })
+                            .map(canonicalize_source_document_record_key)
+                            .as_deref()
                             .map(AssetId::from_key)
                             .unwrap_or_default(),
                         objectives,

@@ -127,8 +127,8 @@ until selected_object_visible_meshes == 0
 snapshot relocation-destination
 click 1050 360
 until selected_object_completed_relocations == 1
-key ESCAPE                     # cancel any ordinary repeat preview, not the move
 until placement_previews == 0
+capture relocation-tool-finished
 click 1050 360
 until visible "Building Info"
 expect-text "Entity Name Label" "Entertainer Stage"

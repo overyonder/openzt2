@@ -92,6 +92,7 @@ pub(super) fn capture_animal_snapshot_records(
                 })
                 .transpose()?,
             crated: animal.contains::<WorldEntityIsCrated>(),
+            crate_identifier: None,
             release_restricted: animal.contains::<ReleaseRestricted>(),
             crating_restricted: animal.contains::<CratingRestricted>(),
             death: animal.get::<Dead>().map(|dead| match dead.cause {

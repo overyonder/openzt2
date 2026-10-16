@@ -7,6 +7,7 @@ use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
 
 #[derive(Component, Debug, Clone)]
 pub(crate) struct PendingSnapshotApplication {
+    pub(super) placement_hydration: Option<Vec<u64>>,
     pub(in crate::persistence) save_slot_identifier: SaveSlotId,
     pub(in crate::persistence) scenario_definition_identifier: Option<AssetId>,
     pub(in crate::persistence) session_mode: Option<WorldSessionMode>,

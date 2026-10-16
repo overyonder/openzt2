@@ -7,6 +7,10 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 
 pub const MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT: usize = 16;
 
+/// A dock owns a stationary authored pose while measuring its attachment point.
+#[derive(Component)]
+pub struct SamplingBehaviorDockPose;
+
 /// Bevy-owned identity for one root task execution, including nested sets.
 #[derive(Resource, Default)]
 pub struct BehaviorTaskExecutionSequence(u64);

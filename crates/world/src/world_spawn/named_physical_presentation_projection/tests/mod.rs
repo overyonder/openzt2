@@ -15,7 +15,7 @@ use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use crate::plugins::world_spawn::world_membership_types::DefinitionId;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 fn presentation(
     name: &str,

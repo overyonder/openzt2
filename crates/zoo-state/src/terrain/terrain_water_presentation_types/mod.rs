@@ -22,6 +22,13 @@ pub struct NaturalWaterRegion {
     pub area_m2: f32,
 }
 
+/// Canonical water-cell centres belonging to this region, including surface height.
+#[derive(Component, Debug)]
+pub struct NaturalWaterRegionCells {
+    pub cell_size_m: f32,
+    pub centres: Box<[Vec3]>,
+}
+
 /// Marks a chunk after spawning the water regions that begin in it.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainWaterRegionsProjected;

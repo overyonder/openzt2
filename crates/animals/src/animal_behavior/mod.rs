@@ -35,6 +35,8 @@ mod behavior_termination_execution;
 mod behavior_token_execution;
 mod behavior_trick_learning_execution;
 mod behavior_wander_execution;
+mod behavior_water_docking_execution;
+mod shore_targets;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy;
 mod interaction_container_cleanup;
 
@@ -60,6 +62,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
         behavior_wander_execution::register_wander_execution(application);
         behavior_token_execution::register_token_execution(application);
+        behavior_water_docking_execution::register(application);
         application.add_systems(
             FixedUpdate,
             (

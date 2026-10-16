@@ -127,3 +127,55 @@ fn pregnant_and_non_adult_animals_are_not_released() {
         .resource::<Messages<AnimalReleased>>()
         .is_empty());
 }
+
+#[test]
+fn outgoing_adoption_removes_animal_and_crate_without_wild_release_credit() {
+    use super::animal_adoption_contracts::PlaceAnimalForAdoption;
+    use openzt2_world_state::world_spawn::world_entity_crating::{
+        AnimalCrate, ContainedCratedAnimal, WorldEntityIsCrated,
+    };
+
+    let mut app = App::new();
+    app.add_message::<PlaceAnimalForAdoption>()
+        .add_message::<AnimalReleased>()
+        .add_systems(Update, (
+            super::outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
+            super::animal_lineage_reference_cleanup::clear_lineage_references_to_deleted_animal_entities,
+        ).chain());
+    let animal = app.world_mut().spawn((Animal, WorldEntityIsCrated)).id();
+    let presentation = app.world_mut().spawn(ChildOf(animal)).id();
+    let crate_entity = app.world_mut().spawn(ContainedCratedAnimal(animal)).id();
+    app.world_mut()
+        .entity_mut(animal)
+        .insert(AnimalCrate(crate_entity));
+    let restricted = app.world_mut().spawn((Animal, ReleaseRestricted)).id();
+    let child = app
+        .world_mut()
+        .spawn(Parents {
+            mother: Some(animal),
+            father: Some(restricted),
+        })
+        .id();
+    app.world_mut()
+        .write_message(PlaceAnimalForAdoption(animal));
+    app.world_mut()
+        .write_message(PlaceAnimalForAdoption(animal));
+    app.world_mut()
+        .write_message(PlaceAnimalForAdoption(restricted));
+    app.update();
+    assert!(app.world().get_entity(animal).is_err());
+    assert!(app.world().get_entity(presentation).is_err());
+    assert!(app.world().get_entity(crate_entity).is_err());
+    assert!(app.world().get_entity(restricted).is_ok());
+    assert_eq!(
+        *app.world().get::<Parents>(child).unwrap(),
+        Parents {
+            mother: None,
+            father: Some(restricted)
+        }
+    );
+    assert!(app
+        .world()
+        .resource::<Messages<AnimalReleased>>()
+        .is_empty());
+}

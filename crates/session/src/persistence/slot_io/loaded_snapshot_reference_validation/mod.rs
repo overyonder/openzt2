@@ -33,6 +33,8 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     >,
     staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
     baseline_staff: &[Entity],
+    baseline_placements: &[Entity],
+    placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
     tank_snapshot_records: &[TankSnapshotRecord],
     economy_snapshot_records: &EconomySnapshotRecords,
     progression_snapshot_records: &ProgressionSnapshotRecords,
@@ -87,6 +89,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
             !baseline_animals.contains(*entity)
                 && !baseline_waste.contains(*entity)
                 && !baseline_staff.contains(entity)
+                && !baseline_placements.contains(entity)
         })
         .map(|(_, persistent_identifier)| *persistent_identifier)
         .collect::<Vec<_>>();
@@ -104,9 +107,15 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         .facility_economy_records
         .iter()
         .all(|record| {
-            facility_persistent_identifiers
+            placement_snapshot_records
                 .iter()
-                .any(|persistent_identifier| *persistent_identifier == record.persistent_identifier)
+                .any(|placement| placement.persistent_identifier == record.persistent_identifier.0)
+                || facility_persistent_identifiers
+                    .iter()
+                    .any(|persistent_identifier| {
+                        *persistent_identifier == record.persistent_identifier
+                            && persistent_identifier_exists(*persistent_identifier)
+                    })
         })
         && show_snapshot_records.stage_records.iter().all(|record| {
             show_stages_with_mutable_snapshot_state.iter_mut().any(
@@ -257,6 +266,11 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         )
         .chain(
             staff_snapshot_records
+                .iter()
+                .map(|record| PersistentId(record.persistent_identifier)),
+        )
+        .chain(
+            placement_snapshot_records
                 .iter()
                 .map(|record| PersistentId(record.persistent_identifier)),
         )

@@ -45,6 +45,13 @@ pub(in crate::persistence) struct WorldSnapshotApplicationMessages<'w, 's> {
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
+    pub(super) placements: super::placement_snapshot_section::PlacementSnapshotEntities<'w, 's>,
+    pub(super) placement_models: Res<'w, Assets<bevy::gltf::Gltf>>,
+    pub(super) placement_readiness: Query<'w, 's, (
+        &'static PersistentId,
+        &'static openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference,
+        Has<openzt2_zoo_state::donations::donation_opportunity_types::DonationUsePoint>,
+    )>,
     pub(super) photo_baseline:
         super::photo_snapshot_baseline_readiness::PhotoSnapshotBaselineReadiness<'w, 's>,
     pub(super) baseline_waste: Query<

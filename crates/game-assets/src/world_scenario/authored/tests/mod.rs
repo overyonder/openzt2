@@ -4,6 +4,40 @@ use crate::source_document::{
 };
 
 #[test]
+fn scenario_briefing_and_objectives_use_canonical_localization_keys() {
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("scenario/goals/briefing.xml"),
+        br#"<ZTScenarioMgr><info locid="Example:Introduction"/><children>
+            <BFScenarioRule name="goal"><info type="primary">
+                <neutral locid="Example:Goal"/>
+                <success locid="Example:GoalOK"/>
+                <failure locid="Example:GoalFailed"/>
+            </info></BFScenarioRule>
+        </children></ZTScenarioMgr>"#,
+    )
+    .expect("valid scenario source");
+    let document =
+        lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
+    let scenario = &document.scenarios[0];
+    assert_eq!(
+        scenario.description_key,
+        AssetId::from_key("example:introduction")
+    );
+    assert_eq!(
+        scenario.objectives[0].text_key,
+        AssetId::from_key("example:goal")
+    );
+    assert_eq!(
+        scenario.objectives[0].success_text_key,
+        AssetId::from_key("example:goalok")
+    );
+    assert_eq!(
+        scenario.objectives[0].failure_text_key,
+        AssetId::from_key("example:goalfailed")
+    );
+}
+
+#[test]
 fn named_hidden_rules_keep_their_script_identity_and_chain() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("scenario/goals/challenge/example.xml"),

@@ -20,6 +20,8 @@ pub(super) struct AnimalSnapshotRecord {
     pub parents: [Option<u64>; 2],
     pub pregnancy: Option<(u64, u64)>,
     pub crated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crate_identifier: Option<u64>,
     pub release_restricted: bool,
     pub crating_restricted: bool,
     pub death: Option<AnimalSnapshotDeath>,

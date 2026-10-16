@@ -51,7 +51,8 @@ fn completed_categories_survive_capture_binary_restore_and_next_payment() {
     let mut state =
         SystemState::<(Commands, Query<(Entity, &PersistentId)>)>::new(&mut destination);
     let (mut commands, entities) = state.get_mut(&mut destination).unwrap();
-    let resolved = resolve_donation_records(decoded, &entities).unwrap();
+    let identities = entities.iter().map(|(entity, id)| (id.0, entity)).collect();
+    let resolved = resolve_donation_records(decoded, &identities).unwrap();
     apply_donation_records(&mut commands, resolved);
     state.apply(&mut destination);
     assert_eq!(

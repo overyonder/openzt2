@@ -122,6 +122,7 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .init_resource::<Assets<WorldDefinitionAsset>>()
     .init_resource::<WorldDefinitions>()
     .init_resource::<Assets<ScenePrefabAsset>>()
+    .init_resource::<Assets<bevy::gltf::Gltf>>()
     .init_resource::<Assets<Image>>()
     .init_resource::<Fame>()
     .init_resource::<FameHistory>()
@@ -335,6 +336,7 @@ pub(crate) fn prepare_photo_snapshot_application(world: &mut World) {
             baseline_world_load_completed: false,
             baseline_world_root: Some(root),
             maintenance_prefabs: vec![],
+            placement_hydration: None,
         })
         .id();
     world
@@ -378,6 +380,7 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
             baseline_world_load_completed: false,
             baseline_world_root: None,
             maintenance_prefabs: vec![],
+            placement_hydration: None,
         })
         .id()
 }
@@ -474,6 +477,7 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
             baseline_world_load_completed: false,
             baseline_world_root: None,
             maintenance_prefabs: vec![],
+            placement_hydration: None,
         })
         .id();
     app.world_mut()
@@ -575,6 +579,7 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
             baseline_world_load_completed: false,
             baseline_world_root: Some(root),
             maintenance_prefabs: vec![],
+            placement_hydration: None,
         })
         .id();
     app.world_mut()

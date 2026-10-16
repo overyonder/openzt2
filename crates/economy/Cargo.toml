@@ -6,6 +6,9 @@ rust-version.workspace = true
 publish.workspace = true
 license.workspace = true
 
+[features]
+testing = []
+
 [lints]
 workspace = true
 

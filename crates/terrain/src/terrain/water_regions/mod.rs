@@ -10,6 +10,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegion;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegionCells;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionsProjected;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain;
 
@@ -48,6 +49,23 @@ pub(super) fn project_natural_water_regions(
             emitter /= region.row_major_cell_indices.len() as f32;
             let local = emitter - Vec3::new(chunk.origin.x, 0.0, chunk.origin.y);
             commands.spawn((
+                NaturalWaterRegionCells {
+                    cell_size_m: asset.canonical_terrain_grid().units.cell_size_metres,
+                    centres: region
+                        .row_major_cell_indices
+                        .iter()
+                        .map(|cell| {
+                            Vec3::new(
+                                (*cell % asset.canonical_terrain_grid().width) as f32,
+                                0.0,
+                                -((*cell / asset.canonical_terrain_grid().width) as f32),
+                            ) * asset.canonical_terrain_grid().units.cell_size_metres
+                                + Vec3::Y
+                                    * (asset.canonical_terrain_grid().units.base_height_metres
+                                        + region.height_relative_to_base_metres)
+                        })
+                        .collect(),
+                },
                 NaturalWaterRegion {
                     style: AssetId::from_key(&format!(
                         "terrain/water/{}",
@@ -157,8 +175,10 @@ pub(super) fn rebuild_edited_water_regions(
             let mut area_m2 = 0.0_f64;
             let mut weighted_position = DVec3::ZERO;
             let mut owner = cells[seed];
+            let mut region_centres = Vec::new();
             while let Some(index) = pending.pop() {
                 let cell = cells[index];
+                region_centres.push(cell.position);
                 let area = f64::from(cell.area_m2);
                 area_m2 += area;
                 weighted_position += cell.position.as_dvec3() * area;
@@ -180,6 +200,10 @@ pub(super) fn rebuild_edited_water_regions(
             let centroid = (weighted_position / area_m2).as_vec3();
             let local = centroid - Vec3::new(owner.owner_origin.x, 0.0, owner.owner_origin.y);
             commands.spawn((
+                NaturalWaterRegionCells {
+                    cell_size_m: owner.area_m2.sqrt(),
+                    centres: region_centres.into_boxed_slice(),
+                },
                 NaturalWaterRegion {
                     style: AssetId::from_key(&format!("terrain/water/{style}")),
                     area_m2: area_m2 as f32,

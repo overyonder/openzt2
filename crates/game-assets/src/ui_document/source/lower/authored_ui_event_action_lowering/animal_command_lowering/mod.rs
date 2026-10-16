@@ -35,7 +35,7 @@ pub(super) fn lower_animal_command(
         })),
         "ZT_ANIMAL_RELEASE_ZOO" => Ok(UiActionRecord::Animal(UiAnimalActionRecord {
             trigger,
-            action: UiAnimalAction::ReleaseSelectedAnimalFromCrateIntoZoo,
+            action: UiAnimalAction::PutSelectedAnimalUpForAdoption,
         })),
         "ZT_ANIMAL_RELEASE_WILD" => Ok(UiActionRecord::Animal(UiAnimalActionRecord {
             trigger,

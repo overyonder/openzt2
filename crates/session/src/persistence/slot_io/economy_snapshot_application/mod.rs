@@ -1,6 +1,5 @@
-use bevy::prelude::{Commands, Entity, Query};
+use bevy::prelude::{Commands, Entity};
 
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
@@ -17,7 +16,7 @@ use super::{
 pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
     commands: &mut Commands,
     economy_snapshot_records: EconomySnapshotRecords,
-    entities_with_persistent_identifiers: &Query<(Entity, &PersistentId)>,
+    entities_with_persistent_identifiers: &std::collections::BTreeMap<u64, Entity>,
     zoo_cash: &mut ZooCash,
     zoo_admission_price: &mut AdmissionPrice,
     zoo_admissions_open_state: &mut ZooAdmissionsOpen,
@@ -41,11 +40,8 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
 
     for facility_economy_snapshot_record in economy_snapshot_records.facility_economy_records {
         let facility_entity = entities_with_persistent_identifiers
-            .iter()
-            .find_map(|(entity, persistent_identifier)| {
-                (*persistent_identifier == facility_economy_snapshot_record.persistent_identifier)
-                    .then_some(entity)
-            })
+            .get(&facility_economy_snapshot_record.persistent_identifier.0)
+            .copied()
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
 
         commands.entity(facility_entity).insert((

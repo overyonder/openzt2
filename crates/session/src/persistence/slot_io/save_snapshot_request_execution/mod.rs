@@ -181,7 +181,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                     continue;
                 }
             };
-        let animal_snapshot_records =
+        let mut animal_snapshot_records =
             match super::animal_snapshot_capture::capture_animal_snapshot_records(
                 &world_snapshot_capture_queries.animals,
             ) {
@@ -266,6 +266,42 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                     continue;
                 }
             };
+        let placement_snapshot_records =
+            match super::placement_snapshot_section::capture_world_placement_records(
+                &world_snapshot_capture_queries,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
+        if let Err(failure_reason) = super::native_crate_snapshot_links::capture_native_crate_links(
+            &world_snapshot_capture_queries.animals,
+            &world_snapshot_capture_queries.native_crates,
+            &mut animal_snapshot_records,
+        )
+        .and_then(|()| {
+            super::native_crate_snapshot_links::validate_native_crate_links(
+                &animal_snapshot_records,
+                &placement_snapshot_records,
+            )
+        }) {
+            snapshot_scratch_storage.clear_logical_contents();
+            publish_persistence_failure_for_slot_operation(
+                &mut persistence_failures,
+                WorldSnapshotPersistenceOperation::SaveToSlot,
+                save_request.save_slot_identifier,
+                failure_reason,
+            );
+            continue;
+        }
         let economy_snapshot_records =
             capture_economy_snapshot_records_from_live_world(&world_snapshot_capture_queries);
         let (photo_snapshot_records, photo_challenge_progress_snapshot_records) =
@@ -329,6 +365,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &tank_snapshot_records,
                 &economy_snapshot_records,
                 &donation_snapshot_records,
+                &placement_snapshot_records,
                 &progression_snapshot_records,
                 &simulation_time_snapshot_record,
                 &show_stage_snapshot_records,

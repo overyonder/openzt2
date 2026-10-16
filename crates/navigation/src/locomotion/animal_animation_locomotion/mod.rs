@@ -44,6 +44,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     species_index: Res<SpeciesAssets>,
     behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
     behavior_tasks: Query<&BehaviorTaskExecutionState, Without<PendingBehaviorTaskFailure>>,
+    docking_poses: Query<(), With<openzt2_zoo_state::behavior_task_execution_types::SamplingBehaviorDockPose>>,
     mut animations: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
     controllers: Query<(
@@ -130,6 +131,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             continue;
         };
         let has_agent = agent.is_some();
+        let task_animation = task_animation || docking_poses.contains(animal_entity);
         if agent.is_some() && owner.is_none() {
             continue;
         }

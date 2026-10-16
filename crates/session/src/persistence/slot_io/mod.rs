@@ -22,6 +22,7 @@ mod maintenance_snapshot_section_encoding;
 #[cfg(test)]
 mod maintenance_snapshot_tests;
 mod maintenance_snapshot_types;
+mod native_crate_snapshot_links;
 pub(crate) mod pending_snapshot_application_types;
 mod persistence_failure_message_publication;
 mod persistence_slot_filesystem_task_types;
@@ -34,6 +35,7 @@ mod photo_snapshot_section_encoding;
 #[cfg(test)]
 mod photo_snapshot_tests;
 mod photo_snapshot_types;
+mod placement_snapshot_section;
 pub(super) mod save_slot_catalogue_load_execution;
 mod save_snapshot_file_write_task_execution;
 pub(super) mod save_snapshot_request_execution;

@@ -816,9 +816,14 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             // Compile the exact `Uncrate` child identity into the
             // native binding; runtime presentation then needs no named-control
             // lookup or token synchronization pass.
-            "uncrate" => &[UiNodePropertyBinding::Visibility(
-                UiBooleanPropertyBindingSource::SelectedEntityCrated,
-            )],
+            "uncrate" => &[
+                UiNodePropertyBinding::Visibility(
+                    UiBooleanPropertyBindingSource::SelectedEntityCrated,
+                ),
+                UiNodePropertyBinding::InteractionEnabled(
+                    UiBooleanPropertyBindingSource::SelectedEntityCrated,
+                ),
+            ],
             _ => &[],
         };
         bindings

@@ -8,6 +8,7 @@ mod animal_adoption_execution;
 mod animal_adoption_pricing;
 mod animal_age_resolution;
 mod animal_ageing_execution;
+mod outgoing_animal_adoption_execution;
 use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts;
 mod animal_birth_execution;
 pub mod animal_entity_spawning;
@@ -34,6 +35,7 @@ use openzt2_zoo_state::placement::ObjectPlacementPreviewUpdateSet;
 
 use animal_adoption_contracts::{
     AdoptAnimal, AnimalAdopted, BeginAnimalAdoptionPlacement, DeclineCurrentAnimalAdoptionOffers,
+    PlaceAnimalForAdoption,
 };
 use animal_birth_and_release_contracts::{AnimalBorn, AnimalReleased, ReleaseAnimal};
 use animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest};
@@ -54,6 +56,7 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_message::<BeginAnimalAdoptionPlacement>()
             .add_message::<AnimalAdopted>()
             .add_message::<DeclineCurrentAnimalAdoptionOffers>()
+            .add_message::<PlaceAnimalForAdoption>()
             .add_message::<SpawnAnimalRequest>()
             .add_message::<AnimalSpawned>()
             .add_message::<AnimalSpawnRejected>()
@@ -133,6 +136,7 @@ impl Plugin for AnimalLifecyclePlugin {
                     animal_adoption_execution::
                         refund_paid_animal_adoptions_after_rejected_spawns,
                     animal_release_execution::release_eligible_adult_animals_from_the_zoo,
+                    outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
                     animal_lineage_reference_cleanup::
                         clear_lineage_references_to_deleted_animal_entities,
                 )

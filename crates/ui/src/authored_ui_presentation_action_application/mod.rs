@@ -16,7 +16,7 @@ use super::{
     authored_timed_action_sequence::UiAuthoredTimedActionSequencePlayback,
     authored_tooltip_presentation::{UiLongTooltipKey, UiShortTooltipKey},
     authored_tree_expansion_and_row_indentation::UiAuthoredTreeExpansion,
-    authored_ui_change_activation_dispatch::UiPreviousSelection,
+    authored_ui_change_activation_dispatch::{apply_explicit_authored_selection, UiPreviousSelection},
     authored_ui_focus_navigation_and_activation::choose_wrapped_authored_ui_focus_candidate,
     authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable},
     authored_ui_integer_range_components::{UiMaximum, UiMinimum},
@@ -124,7 +124,7 @@ pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
     emote_presentations:
         Query<'w, 's, &'static mut Visibility, (With<EmotePresentation>, Without<UiNodeId>)>,
     visibilities: Query<'w, 's, &'static InheritedVisibility>,
-    type_list_selections: Query<'w, 's, &'static mut UiPreviousSelection, With<UiTypeListPolicy>>,
+    previous_selections: Query<'w, 's, (&'static mut UiPreviousSelection, Has<UiTypeListPolicy>)>,
 }
 
 /// Applies authored presentation actions to their projected Bevy-tree,
@@ -164,7 +164,7 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
         mut authored_timed_action_sequence_playbacks,
         mut emote_presentations,
         visibilities,
-        mut type_list_selections,
+        mut previous_selections,
     } = queries;
     let mut pending_actions = Vec::new();
     for activation in activations.read() {
@@ -391,23 +391,26 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                                 || group_children.is_some_and(|members| members.contains(&entity)))
                         {
                             if let Some(mut selected) = selected {
-                                selected.0 = *active;
-                            }
-                            if let Some(mut previous) = type_list_selections
-                                .get_mut(entity)
-                                .ok()
-                                .filter(|_| *active)
-                            {
-                                // A TypeList activation restores its remembered child even
-                                // when its own selection boolean was already on. Consume
-                                // the selection echo so this authored request runs once.
-                                previous.synchronize_with_non_authored_selection_change(true);
+                                let Ok((mut previous, is_type_list)) = previous_selections.get_mut(entity) else {
+                                    selected.0 = *active;
+                                    continue;
+                                };
+                                // Explicit off/on requests can occur in one frame. Dispatch
+                                // each transition here before the change observer coalesces them.
+                                let Some(trigger) = apply_explicit_authored_selection(
+                                    &mut selected,
+                                    &mut previous,
+                                    *active,
+                                    is_type_list,
+                                ) else {
+                                    continue;
+                                };
                                 let source = activation.source;
                                 commands.queue(move |world: &mut World| {
                                     world.write_message(UiNodeActivated {
                                         source,
                                         node: entity,
-                                        trigger: UiTrigger::On,
+                                        trigger,
                                     });
                                 });
                             }

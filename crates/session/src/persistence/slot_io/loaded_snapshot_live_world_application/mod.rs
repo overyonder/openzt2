@@ -52,8 +52,12 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     retained_maintenance_prefabs: &mut Vec<
         bevy::prelude::Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
     >,
+    placement_hydration: &mut Option<Vec<u64>>,
 ) -> Result<bool, WorldSnapshotPersistenceFailure> {
     let WorldSnapshotApplicationState {
+        placements,
+        placement_models,
+        placement_readiness,
         photo_baseline,
         baseline_waste,
         prefabs,
@@ -77,6 +81,17 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         mut monthly_finance_history,
         photo_album_persistent_identifiers,
     } = world_snapshot_application_state;
+
+    if let Some(identifiers) = placement_hydration.as_ref() {
+        let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
+            return Ok(false);
+        };
+        return Ok(identifiers.iter().all(|id| placement_readiness.iter().any(|(candidate, placed, dock)| {
+            candidate.0 == *id && definitions.find_object(placed.definition).is_some_and(|object| {
+                !object.properties.contains_all(openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags::DONATION_ACCEPTOR) || dock
+            })
+        })));
+    }
 
     // The coordinator runs after Intent and its deferred commands. Initialization
     // must be committed before any live reference check or restored mutation.
@@ -133,6 +148,10 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Aquatic),
     )?;
+    let placement_snapshot_records = super::placement_snapshot_section::decode_placement_records(
+        snapshot_container_bytes,
+        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Placement),
+    )?;
     let donation_snapshot_records = super::donation_snapshot_section::decode_donation_records(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Donations),
@@ -151,6 +170,32 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     let world_definitions = active_world_definitions
         .get(&world_definition_assets)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
+    let placement_records = placement_snapshot_records.as_deref().unwrap_or_default();
+    super::native_crate_snapshot_links::validate_native_crate_links(
+        &animal_snapshot_records,
+        placement_records,
+    )?;
+    let baseline_placements = if placement_snapshot_records.is_some() {
+        super::placement_snapshot_section::baseline_placement_entities(
+            &placements,
+            world_definitions,
+            world_root_entity,
+        )
+    } else {
+        Vec::new()
+    };
+    let Some(resolved_placement_prefabs) =
+        super::placement_snapshot_section::resolve_placement_prefabs(
+            placement_records,
+            world_definitions,
+            &prefabs,
+            &placement_models,
+            &asset_server,
+            retained_maintenance_prefabs,
+        )?
+    else {
+        return Ok(false);
+    };
     if let Some(inventory) = animal_adoption_offer_inventory.as_ref() {
         validate_animal_adoption_offer_inventory_against_loaded_authored_content(
             inventory,
@@ -219,6 +264,8 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         &baseline_waste,
         &staff_snapshot_records,
         &baseline_staff,
+        &baseline_placements,
+        placement_records,
         &tank_snapshot_records,
         &economy_snapshot_records,
         &progression_snapshot_records,
@@ -235,9 +282,41 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         progression_snapshot_application_parameters,
     )?;
 
+    let mut restored_identities = std::collections::BTreeMap::new();
+    for (entity, id) in &entities_with_persistent_identifiers {
+        if !baseline_placements.contains(&entity)
+            && restored_identities.insert(id.0, entity).is_some()
+        {
+            return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
+        }
+    }
+    let mut planned_identities = restored_identities.clone();
+    for record in placement_records {
+        planned_identities.insert(record.persistent_identifier, Entity::PLACEHOLDER);
+    }
+    // Validate references before spawning or removing any placement entities.
+    super::donation_snapshot_section::resolve_donation_records(
+        donation_snapshot_records.clone(),
+        &planned_identities,
+    )?;
+    let restored_placements = super::placement_snapshot_section::apply_placement_records(
+        commands,
+        placement_records,
+        &prefabs,
+        &resolved_placement_prefabs,
+        world_definitions,
+        &baseline_placements,
+        world_root_entity,
+        persistent_identifier_allocator,
+    )?;
+    restored_identities.extend(
+        restored_placements
+            .iter()
+            .map(|(id, entity)| (*id, *entity)),
+    );
     let resolved_donations = super::donation_snapshot_section::resolve_donation_records(
         donation_snapshot_records,
-        &entities_with_persistent_identifiers,
+        &restored_identities,
     )?;
     super::donation_snapshot_section::apply_donation_records(commands, resolved_donations);
     apply_tank_snapshot_records_to_existing_tank_entities(
@@ -248,7 +327,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
         commands,
         economy_snapshot_records,
-        &entities_with_persistent_identifiers,
+        &restored_identities,
         &mut zoo_cash,
         &mut zoo_admission_price,
         &mut zoo_admissions_open_state,
@@ -257,11 +336,17 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
 
     let restored_animals = super::animal_snapshot_application::apply_animal_snapshot_records(
         commands,
-        animal_snapshot_records,
+        &animal_snapshot_records,
         resolved_animals,
         world_root_entity,
         persistent_identifier_allocator,
         &baseline_animals,
+    )?;
+    super::native_crate_snapshot_links::apply_native_crate_links(
+        commands,
+        &animal_snapshot_records,
+        &restored_animals,
+        &restored_placements,
     )?;
     super::maintenance_snapshot_application::apply_habitat_waste_records(
         commands,
@@ -338,5 +423,15 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         simulation_time_snapshot_application_resources,
     )?;
 
-    Ok(true)
+    if placement_snapshot_records.is_some() {
+        *placement_hydration = Some(
+            placement_records
+                .iter()
+                .map(|record| record.persistent_identifier)
+                .collect(),
+        );
+        Ok(false)
+    } else {
+        Ok(true)
+    }
 }

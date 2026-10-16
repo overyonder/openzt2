@@ -57,6 +57,10 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    relocating: Query<
+        (),
+        With<openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject>,
+    >,
     animals: Query<
         (
             &SpeciesHandle,
@@ -66,6 +70,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             Has<WorldEntityIsCrated>,
             Has<Rampaging>,
             Has<Dead>,
+            Option<&openzt2_world_state::world_spawn::world_entity_crating::AnimalCrate>,
         ),
         With<Animal>,
     >,
@@ -101,6 +106,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             is_crated,
             is_rampaging,
             is_dead,
+            crate_link,
         )) = animals.get(information_panel.subject)
         else {
             continue;
@@ -184,19 +190,23 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
         for (document_owner, enabled_binding, mut interaction_enabled, focusable, mut pickable) in
             &mut interaction_nodes
         {
-            if document_owner.0 != panel_entity
-                || !matches!(
-                    &enabled_binding.0,
-                    UiBooleanPropertyBindingSource::AnimalPickupEnabled
-                )
-            {
+            if document_owner.0 != panel_entity {
                 continue;
             }
-            interaction_enabled.0 = pickup_should_be_enabled;
+            let enabled = match &enabled_binding.0 {
+                UiBooleanPropertyBindingSource::AnimalPickupEnabled => pickup_should_be_enabled,
+                UiBooleanPropertyBindingSource::SelectedEntityCrated => {
+                    is_crated
+                        && !relocating
+                            .contains(crate_link.map_or(information_panel.subject, |link| link.0))
+                }
+                _ => continue,
+            };
+            interaction_enabled.0 = enabled;
             if let Some(mut focusable) = focusable {
-                focusable.enabled = pickup_should_be_enabled;
+                focusable.enabled = enabled;
             }
-            *pickable = if pickup_should_be_enabled {
+            *pickable = if enabled {
                 Pickable::default()
             } else {
                 Pickable::IGNORE

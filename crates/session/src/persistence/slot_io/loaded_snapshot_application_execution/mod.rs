@@ -141,6 +141,7 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                 if world_roots.get(root).is_ok()
                     && persistent_identifier_allocator.owns_world(root) =>
             {
+                let pending = &mut *pending_snapshot_application;
                 decode_validate_and_apply_snapshot_to_loaded_baseline_world(
                     &mut commands,
                     &snapshot_scratch_storage.snapshot_container_bytes,
@@ -151,7 +152,8 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     &mut progression_snapshot_application_parameters,
                     &mut simulation_time_snapshot_application_resources,
                     &mut show_platform_upgrade_restore_requests,
-                    &mut pending_snapshot_application.maintenance_prefabs,
+                    &mut pending.maintenance_prefabs,
+                    &mut pending.placement_hydration,
                 )
             }
             _ => Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference),

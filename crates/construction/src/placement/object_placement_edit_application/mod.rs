@@ -12,6 +12,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
+use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -345,7 +346,7 @@ fn apply_prepared_object_placement_mutation(
     object_placed: &mut MessageWriter<ObjectPlacementCommitted>,
 ) -> bool {
     if edit.mutation == PreparedObjectPlacementEditMutationKind::Relocate {
-        return apply_prepared_placed_object_relocation_edit(
+        let accepted = apply_prepared_placed_object_relocation_edit(
             commands,
             request.application,
             edit,
@@ -354,6 +355,10 @@ fn apply_prepared_object_placement_mutation(
             scratch,
             placed,
         );
+        if accepted && request.application == EditApplication::InitialCommit {
+            *tool = ConstructionTool::Inspect;
+        }
+        return accepted;
     }
 
     let entity_exists = edit

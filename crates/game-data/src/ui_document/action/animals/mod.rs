@@ -11,7 +11,7 @@ pub struct UiAnimalActionRecord {
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub enum UiAnimalAction {
     SetAdoptionCatalogueGenderFilter { gender: UiAnimalGender },
-    ReleaseSelectedAnimalFromCrateIntoZoo,
+    PutSelectedAnimalUpForAdoption,
     ReleaseSelectedAnimalToWild,
     DeclineAllCurrentAdoptionOffers,
 }

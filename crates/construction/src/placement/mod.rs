@@ -124,14 +124,13 @@ impl Plugin for ObjectPlacementPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
-                FixedUpdate,
+                Update,
                 (
                     hydrate_placed_object_placement_components,
                     rebuild_placed_object_footprint_occupancy_index,
                 )
                     .chain()
-                    .in_set(FixedGameSet::Act)
-                    .run_if(in_state(GamePhase::InGame)),
+                    .in_set(GameSet::Intent),
             )
             .add_systems(
                 FixedUpdate,
@@ -183,3 +182,6 @@ fn reset_object_placement_resources(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(any(test, feature = "testing"))]
+pub mod persistence_test_support;

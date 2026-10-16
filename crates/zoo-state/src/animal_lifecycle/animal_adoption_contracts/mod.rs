@@ -60,3 +60,7 @@ pub struct AnimalAdopted {
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DeclineCurrentAnimalAdoptionOffers;
+
+/// Transfers an existing zoo animal out through the adoption action.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlaceAnimalForAdoption(pub Entity);
