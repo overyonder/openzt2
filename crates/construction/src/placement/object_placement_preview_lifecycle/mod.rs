@@ -98,17 +98,7 @@ pub(super) fn create_active_object_placement_preview(
     let Some(object) = catalogue.find_object(definition) else {
         return;
     };
-    // Objects without a mainObj model, such as food, show their first
-    // required named presentation when newly placed.
-    let preview_scene = if object.prefab == AssetId::default() {
-        object
-            .named_physical_presentations
-            .iter()
-            .find(|presentation| presentation.required && presentation.prefab != AssetId::default())
-            .map(|presentation| presentation.prefab)
-    } else {
-        Some(object.prefab)
-    };
+    let preview_scene = openzt2_zoo_state::placement::object_placement_definition_queries::object_placement_prefab_identifier(object);
     let Some(prefab) = preview_scene.and_then(|scene| catalogue.scene(scene)) else {
         return;
     };

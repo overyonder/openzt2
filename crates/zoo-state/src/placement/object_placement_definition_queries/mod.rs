@@ -79,6 +79,22 @@ pub fn resolve_object_placeable_definition<'a>(
     asset.find_placeable(object)
 }
 
+/// Food and other objects without a main model use their first required
+/// named presentation for both purchased and restored placements.
+pub fn object_placement_prefab_identifier(
+    object: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+) -> Option<openzt2_game_data::AssetId> {
+    use openzt2_game_data::AssetId;
+    if object.prefab != AssetId::default() {
+        return Some(object.prefab);
+    }
+    object
+        .named_physical_presentations
+        .iter()
+        .find(|presentation| presentation.required && presentation.prefab != AssetId::default())
+        .map(|presentation| presentation.prefab)
+}
+
 pub fn object_placeable_definition_is_unlocked(
     asset: WorldDefinitionsView<'_>,
     object: openzt2_game_data::AssetId,

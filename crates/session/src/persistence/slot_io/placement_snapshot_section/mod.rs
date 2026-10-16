@@ -210,6 +210,7 @@ pub(super) fn resolve_placement_prefabs(
     let mut resolved = Vec::with_capacity(records.len());
     for record in records {
         if !placement_owns_definition(definitions, record.definition) {
+            bevy::log::warn!(?record, "saved placement definition is unavailable");
             return Err(Failure::UnknownAssetIdentifier);
         }
         // Saved scenery can retain tilted or freely rotated authored poses.
@@ -218,8 +219,14 @@ pub(super) fn resolve_placement_prefabs(
             .find_object(record.definition)
             .ok_or(Failure::UnknownAssetIdentifier)?;
         let handle = definitions
-            .scene(object.prefab)
-            .ok_or(Failure::UnknownAssetIdentifier)?;
+            .scene(
+                openzt2_zoo_state::placement::object_placement_definition_queries::object_placement_prefab_identifier(object)
+                    .ok_or(Failure::UnknownAssetIdentifier)?,
+            )
+            .ok_or_else(|| {
+                bevy::log::warn!(?record, prefab = ?object.prefab, "saved placement prefab is unavailable");
+                Failure::UnknownAssetIdentifier
+            })?;
         if matches!(
             server.get_load_state(handle.id()),
             Some(LoadState::Failed(_))
@@ -227,6 +234,7 @@ pub(super) fn resolve_placement_prefabs(
             server.get_recursive_dependency_load_state(handle.id()),
             Some(RecursiveDependencyLoadState::Failed(_))
         ) {
+            bevy::log::warn!(?record, ?handle, "saved placement prefab failed to load");
             return Err(Failure::UnknownAssetIdentifier);
         }
         if !retained.contains(&handle) {
