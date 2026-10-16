@@ -92,6 +92,7 @@ also the ownership map for checks combined from older journeys.
 | map-biome-filter | Globe, biome/expansion filters, map-selection F1 scope | Cancels selection without loading; navigation later launches filtered Alpine in both modes |
 | mod-overlay-close | Archive state, close/reopen, menu reconstruction | Closes overlay |
 | options-apply-dismiss | Apply, draft cancellation, hover visibility | Reapplies original settings |
+| options-custom-detail | Advanced Settings rows, slider draft, Apply and reopen | Reapplies the fresh-profile preset |
 | profile-and-options-lists | Profile rows/name, Escape, close, Continue | Closes dialog |
 | first-person-map-bounds | Second map after return, walking bounds, wheel limits/reversal, camera restoration | Small Alpine fixture; returns to menu |
 | save-dialog-cancel | First Save projection, both Save routes, pause changes, options/controller, gameplay F1 scope | First journey on the shared Freeform map; restores it |

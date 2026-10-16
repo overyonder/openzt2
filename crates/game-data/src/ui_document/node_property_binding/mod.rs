@@ -115,6 +115,8 @@ pub enum UiTextPropertyBindingSource {
         format: AssetId,
     },
     SelectedEntityName,
+    GraphicsDetailSettingLabel,
+    GraphicsDetailSettingLevel,
     ZooName,
     SelectedEntityDefinitionName,
     SelectedEntitySaleConfirmation,

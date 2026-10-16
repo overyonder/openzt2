@@ -191,6 +191,7 @@ pub(super) fn begin_creating_requested_profiles(
                     bindings: GameActionInputBindings::default(),
                     display: DisplaySettings::default(),
                     graphics: GraphicsSettings::default(),
+                    online_messages: crate::plugins::settings::online_message_policy_types::OnlineMessagePolicy::default(),
                 });
                 stored_profile_records_and_settings
                     .sort_by_key(|stored_profile| stored_profile.record.profile_identifier.0);
@@ -297,6 +298,7 @@ pub(super) fn begin_selecting_requested_profiles(
                     bindings: selected_stored_profile.bindings.clone(),
                     display: selected_stored_profile.display,
                     graphics: selected_stored_profile.graphics,
+                    online_messages: selected_stored_profile.online_messages,
                 })
             })),
         ));
@@ -413,6 +415,9 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     game_action_input_bindings: Res<GameActionInputBindings>,
     display_settings: Res<DisplaySettings>,
     graphics_settings: Res<GraphicsSettings>,
+    online_message_policy: Res<
+        crate::plugins::settings::online_message_policy_types::OnlineMessagePolicy,
+    >,
     persistence_filesystem_paths: Option<Res<PersistenceFilesystemPaths>>,
     profile_index: Res<ProfileIndex>,
     active_profile_filesystem_tasks: Query<(), With<ProfileFilesystemTask>>,
@@ -433,6 +438,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
         || game_action_input_bindings.is_changed()
         || display_settings.is_changed()
         || graphics_settings.is_changed()
+        || online_message_policy.is_changed()
     {
         *pending_settings_profile = Some(active_profile_identifier);
     }
@@ -455,6 +461,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
     let game_action_input_bindings_to_persist = game_action_input_bindings.clone();
     let display_settings_to_persist = *display_settings;
     let graphics_settings_to_persist = *graphics_settings;
+    let online_message_policy_to_persist = *online_message_policy;
     let profile_index_file_path = persistence_filesystem_paths.profile_index_file_path();
     commands.spawn((
         ProfileFilesystemTaskContext(Some(active_profile_identifier)),
@@ -474,6 +481,7 @@ pub(super) fn begin_persisting_changed_active_profile_options(
             stored_active_profile.bindings = game_action_input_bindings_to_persist;
             stored_active_profile.display = display_settings_to_persist;
             stored_active_profile.graphics = graphics_settings_to_persist;
+            stored_active_profile.online_messages = online_message_policy_to_persist;
             let encoded_profile_index_bytes = encode_stored_profile_index(
                 &stored_profile_records_and_settings,
                 selected_profile_identifier,

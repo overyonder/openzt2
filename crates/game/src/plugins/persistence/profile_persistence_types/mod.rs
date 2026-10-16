@@ -19,6 +19,8 @@ pub(super) struct StoredProfileRecordAndSettings {
     pub(super) bindings: GameActionInputBindings,
     pub(super) display: DisplaySettings,
     pub(super) graphics: GraphicsSettings,
+    pub(super) online_messages:
+        crate::plugins::settings::online_message_policy_types::OnlineMessagePolicy,
 }
 
 #[derive(Component)]
@@ -46,6 +48,7 @@ pub(super) enum ProfileFilesystemTaskCompletion {
         bindings: GameActionInputBindings,
         display: DisplaySettings,
         graphics: GraphicsSettings,
+        online_messages: crate::plugins::settings::online_message_policy_types::OnlineMessagePolicy,
     },
     SettingsSaved,
     Deleted {

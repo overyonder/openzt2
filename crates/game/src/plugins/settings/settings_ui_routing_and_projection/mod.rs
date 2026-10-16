@@ -65,7 +65,11 @@ pub(in crate::plugins) fn project_settings_to_authored_controls(
         }
         // This mirrors the draft; it is not a player choice. Replaying the
         // control's authored On action would mark the fresh draft dirty.
-        if let Some(mut previous) = previous {
+        // Custom detail's On action only reveals the slider panels, which a
+        // custom draft needs when the screen reopens.
+        let replays_custom_detail_panels =
+            should_be_selected && *authored_setting == InformationSettingAction::CustomDetail;
+        if let Some(mut previous) = previous.filter(|_| !replays_custom_detail_panels) {
             previous.synchronize_with_non_authored_selection_change(should_be_selected);
         }
     }

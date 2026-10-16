@@ -13,9 +13,9 @@ use crate::{
         },
         ui_document::source::lower::authored_ui_document_lowering::{
             UiResolvedDependencies, CAMPAIGN_ROW_DOCUMENT, CAMPAIGN_SCENARIO_ROW_DOCUMENT,
-            DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT,
-            MULTILIST_ROW_DOCUMENTS, NATIVE_FINANCE_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT,
-            PROFILE_ROW_DOCUMENT,
+            DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_VALUE_ROW_DOCUMENT,
+            GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT, MULTILIST_ROW_DOCUMENTS,
+            NATIVE_FINANCE_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT,
         },
     },
 };
@@ -305,6 +305,11 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
                 "ui/layout/options.xml",
                 "ui/layout/resolution.xml",
                 DISPLAY_RESOLUTION_ROW_DOCUMENT,
+            ),
+            (
+                "ui/layout/options.xml",
+                "ui/layout/optionsslider.xml",
+                GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT,
             ),
         ] {
             if source_document_path == layout_path {

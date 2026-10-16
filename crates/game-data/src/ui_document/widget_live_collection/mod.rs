@@ -6,6 +6,7 @@ pub enum UiWidgetLiveCollectionSource {
     #[default]
     Unbound,
     DisplayResolutions,
+    GraphicsDetailSettings,
     ProfileIndex,
     WorldChoices,
     WorldChoicePrototype,

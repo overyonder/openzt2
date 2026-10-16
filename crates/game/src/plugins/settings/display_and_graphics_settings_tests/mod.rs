@@ -42,6 +42,9 @@ fn settings_test_application() -> App {
         .add_message::<
             crate::plugins::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount,
         >()
+        .init_resource::<bevy::light::DirectionalLightShadowMap>()
+        .init_resource::<openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>()
+        .init_resource::<Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>>()
         .insert_resource(representative_display_settings())
         .insert_resource(representative_graphics_settings())
         .configure_sets(
@@ -113,4 +116,22 @@ fn accepted_values_map_to_actual_bevy_components() {
             .shadow_maps_enabled
     );
     assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
+
+    app.world_mut()
+        .write_message(ReplaceGraphicsSettingsRequest(
+            GraphicsSettings::from_source_highest_detail_preset(),
+        ));
+    app.update();
+    assert!(
+        app.world()
+            .get::<DirectionalLight>(light)
+            .unwrap()
+            .shadow_maps_enabled
+    );
+    assert_eq!(
+        app.world()
+            .resource::<bevy::light::DirectionalLightShadowMap>()
+            .size,
+        4096
+    );
 }

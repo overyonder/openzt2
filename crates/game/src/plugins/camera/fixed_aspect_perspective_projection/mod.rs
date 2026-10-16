@@ -26,6 +26,10 @@ impl FixedAspectPerspectiveProjection {
             aspect_ratio,
         }
     }
+
+    pub(super) const fn set_far(&mut self, far: f32) {
+        self.perspective.far = far;
+    }
 }
 
 impl CameraProjection for FixedAspectPerspectiveProjection {

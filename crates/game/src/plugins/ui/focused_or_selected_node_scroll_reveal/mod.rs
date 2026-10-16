@@ -6,7 +6,7 @@ use super::authored_ui_selection_state::UiSelected;
 
 /// Scrolls the nearest ancestor to reveal the focused or selected node after layout.
 pub(super) fn scroll_nearest_ancestor_to_reveal_focused_or_selected_node(
-    scopes: Query<&UiFocusScope, Changed<UiFocusScope>>,
+    scopes: Query<Ref<UiFocusScope>, Changed<UiFocusScope>>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     selected: Query<(Entity, &UiSelected), Changed<UiSelected>>,
     parents: Query<&ChildOf>,
@@ -38,6 +38,12 @@ pub(super) fn scroll_nearest_ancestor_to_reveal_focused_or_selected_node(
     // Focus is the narrower user intent when a domain presenter changes
     // selection and focus in the same frame, so apply it last.
     for scope in &scopes {
+        // A newly projected document only starts at its default focus. List
+        // rows are documents of their own, so following them would scroll
+        // the list to its last row.
+        if scope.is_added() {
+            continue;
+        }
         if let Some(focused) = scope.focused {
             scroll_nearest_ancestor_to_reveal_node(
                 focused,

@@ -183,7 +183,7 @@ pub(super) fn bind_camera(
             0.0
         },
         near_m: required_number(record, &["nearM", "near"])?,
-        far_m: required_number(record, &["farM", "far"])?,
+        far_m: [required_number(record, &["farM", "far"])?; 3],
         offset_m: convert_source_z_up_vector_to_bevy_y_up_coordinates(array_required(
             record,
             &["offsetX", "offsetY", "offsetZ"],
@@ -315,7 +315,7 @@ fn bind_perspective_camera(
         fixed_aspect_ratio: horizontal_span / vertical_span,
         vertical_view_per_zoom: 0.0,
         near_m: number_or(frustum, "near", 0.2)?,
-        far_m: maximum_view_distances[2],
+        far_m: maximum_view_distances,
         offset_m: [
             0.0,
             if first_person_camera.is_some() {
@@ -428,7 +428,7 @@ pub(super) fn bind_overhead_camera(
         near_m: near,
         // The source camera delegates its far plane to the maximum-view
         // quality setting; the shipped maximum tier is 800 metres.
-        far_m: 800.0,
+        far_m: [800.0; 3],
         offset_m: [0.0, number(camera, "lookAtHeight")?, 0.0],
         pitch_radians: [pitch, pitch],
         yaw_radians: [-std::f32::consts::PI, std::f32::consts::PI],

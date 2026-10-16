@@ -9,9 +9,9 @@ use crate::ui_document::source::lower::authored_ui_asset_dependency_resolution::
 use crate::ui_document::source::lower::authored_ui_document_lowering::{
     list_row_document_path, AuthoredUiDocument, CAMPAIGN_ROW_DOCUMENT,
     CAMPAIGN_SCENARIO_ROW_DOCUMENT, DISPLAY_RESOLUTION_ROW_DOCUMENT, FINANCE_CATEGORY_ROW_DOCUMENT,
-    FINANCE_VALUE_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT, MULTILIST_ROW_DOCUMENTS,
-    OVERVIEW_LEGEND_ROW_DOCUMENT, PHOTO_ALBUM_CHOICE_ROW_DOCUMENT, PHOTO_CAMERA_ROLL_ROW_DOCUMENT,
-    PROFILE_ROW_DOCUMENT, SELECTED_ANIMAL_NEED_ROW_DOCUMENT,
+    FINANCE_VALUE_ROW_DOCUMENT, GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT, LOAD_SLOT_ROW_DOCUMENT,
+    MULTILIST_ROW_DOCUMENTS, OVERVIEW_LEGEND_ROW_DOCUMENT, PHOTO_ALBUM_CHOICE_ROW_DOCUMENT,
+    PHOTO_CAMERA_ROLL_ROW_DOCUMENT, PROFILE_ROW_DOCUMENT, SELECTED_ANIMAL_NEED_ROW_DOCUMENT,
     SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT,
 };
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
@@ -240,6 +240,11 @@ pub(super) fn unbound_list_source(
     name: Option<&str>,
 ) -> UiWidgetLiveCollectionSource {
     match (role, name) {
+        // The source game fills this list with one `optionsslider.xml` row per
+        // `ui/options/settings.xml` entry.
+        (UiDocumentRole::Options, Some(name)) if name.eq_ignore_ascii_case("Slider List") => {
+            UiWidgetLiveCollectionSource::GraphicsDetailSettings
+        }
         (UiDocumentRole::SavedGames, Some(name)) if name.eq_ignore_ascii_case("SavedGamesList") => {
             UiWidgetLiveCollectionSource::SavedGameSlots
         }
@@ -348,6 +353,9 @@ pub(super) fn list_row_document(
             }
             UiWidgetLiveCollectionSource::DisplayResolutions => {
                 AssetId::from_virtual_path(DISPLAY_RESOLUTION_ROW_DOCUMENT)
+            }
+            UiWidgetLiveCollectionSource::GraphicsDetailSettings => {
+                AssetId::from_virtual_path(GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT)
             }
             UiWidgetLiveCollectionSource::ProfileIndex => {
                 AssetId::from_virtual_path(PROFILE_ROW_DOCUMENT)

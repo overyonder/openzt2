@@ -14,7 +14,10 @@ use camera_control_message_types::{
 };
 use systems::{
     camera_action_intent_projection::project_camera_actions_into_camera_intent,
-    camera_definition_hydration::apply_authored_camera_definition_to_runtime_components,
+    camera_definition_hydration::{
+        apply_authored_camera_definition_to_runtime_components,
+        apply_view_distance_graphics_setting_to_zoo_camera_far_planes,
+    },
     camera_mode_transitions::{
         advance_camera_transition, apply_free_camera_pose, begin_camera_transition,
         capture_camera_return_state, clear_camera_input_on_return, restore_camera_return_state,
@@ -92,6 +95,9 @@ impl Plugin for ZooCameraPlugin {
                         .before(advance_camera_transition),
                     apply_overhead_camera_zoom_graphics_setting
                         .after(apply_authored_camera_definition_to_runtime_components),
+                    apply_view_distance_graphics_setting_to_zoo_camera_far_planes
+                        .after(apply_authored_camera_definition_to_runtime_components)
+                        .after(photo_zoom::apply_photo_camera_zoom),
                     advance_overhead_camera.after(apply_overhead_camera_zoom_graphics_setting),
                     photo_zoom::apply_photo_camera_zoom
                         .after(apply_authored_camera_definition_to_runtime_components),
