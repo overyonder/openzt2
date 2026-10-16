@@ -1,14 +1,25 @@
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
 use openzt2_world_state::world_spawn::prefab_ambient_light_contribution::PrefabAmbientLightContribution;
 
 pub(super) fn project_prefab_ambient_light_contributions(
-    contributions: Query<&PrefabAmbientLightContribution>,
+    contributions: Query<(
+        &PrefabAmbientLightContribution,
+        Option<&RenderLayers>,
+        Option<&InheritedVisibility>,
+    )>,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
-    let linear = contributions.iter().fold(Vec3::ZERO, |sum, value| {
-        sum + value.color_linear * value.intensity
-    });
+    let linear = contributions
+        .iter()
+        .filter(|(_, layers, visibility)| {
+            !layers.is_some_and(|layers| *layers == RenderLayers::none())
+                && visibility.is_none_or(|visibility| visibility.get())
+        })
+        .fold(Vec3::ZERO, |sum, (value, _, _)| {
+            sum + value.color_linear * value.intensity
+        });
     let brightness = linear.max_element();
     let color = if brightness > f32::EPSILON {
         linear / brightness

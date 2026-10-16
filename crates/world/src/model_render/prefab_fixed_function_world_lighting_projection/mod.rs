@@ -12,8 +12,8 @@ use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_polic
 
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialSourceRenderLayers;
-use crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers;
 use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
+use crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers;
 use openzt2_world_state::model_render::ModelExpanded;
 
 #[derive(Component)]
@@ -32,7 +32,7 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
     render_layer_hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&RelocationModelRenderLayers>,
+        Option<&SuppressedModelRenderLayers>,
     )>,
     children: Query<&Children>,
     primitives: Query<

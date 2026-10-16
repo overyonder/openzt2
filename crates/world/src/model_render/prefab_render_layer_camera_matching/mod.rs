@@ -1,14 +1,14 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
-use crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers;
+use crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers;
 
 pub(crate) fn render_layers_for_prefab_entity_and_ancestor_chain(
     mut entity: Entity,
     hierarchy: &Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&RelocationModelRenderLayers>,
+        Option<&SuppressedModelRenderLayers>,
     )>,
 ) -> RenderLayers {
     for _ in 0..64 {

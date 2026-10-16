@@ -18,6 +18,7 @@ pub mod selected_world_identity;
 pub mod selected_world_terrain_asset_handle;
 pub mod starting_animal_hydration;
 pub mod world_entity_crating;
+pub mod world_entity_view_filter;
 pub mod world_hydration_completion;
 pub mod world_hydration_types;
 pub mod world_load_completion_marker;

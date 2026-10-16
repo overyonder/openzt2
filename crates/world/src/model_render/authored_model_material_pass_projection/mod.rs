@@ -68,7 +68,7 @@ pub(super) fn project_authored_model_material_passes(
     hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
     )>,
 ) {
     for (root, overrides, clothing) in &roots {
@@ -313,7 +313,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
     hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
     )>,
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(

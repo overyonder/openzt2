@@ -1,16 +1,14 @@
-use openzt2_world_state::model_render::ModelExpanded;
 use bevy::camera::visibility::RenderLayers;
 use bevy::light::NotShadowCaster;
 use bevy::light::NotShadowReceiver;
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
+use openzt2_world_state::model_render::ModelExpanded;
 
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
 
-use super::{
-    authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection,
-};
+use super::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
 
 #[cfg(test)]
 mod tests;

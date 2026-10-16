@@ -13,7 +13,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
     hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
     )>,
     mut lods: Query<(
         Entity,

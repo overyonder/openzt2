@@ -6,13 +6,13 @@ mod authored_model_material_pass_projection;
 mod gltf_model_scene_instantiation;
 mod material_render_view_invalidation;
 mod model_scene_visibility_and_shadow_projection;
-mod placed_object_relocation_model_presentation;
 mod prefab_ambient_light_projection;
 mod prefab_fixed_function_world_lighting_projection;
 mod prefab_model_billboard_orientation;
 mod prefab_model_level_of_detail_projection;
 pub mod prefab_model_tint_projection;
 mod prefab_texture_replacement_projection;
+mod world_entity_model_suppression;
 
 use bevy::camera::visibility::VisibilitySystems;
 use bevy::prelude::*;
@@ -86,10 +86,11 @@ impl Plugin for ModelRenderPlugin {
                     .after(project_prefab_fixed_function_world_lighting_policies),
                 project_effect_pass_material_instances_for_additional_render_views
                     .after(project_authored_model_material_passes),
-                crate::model_render::placed_object_relocation_model_presentation::project_placed_object_relocation_model_presentation
+                crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression
                     .after(project_effect_pass_material_instances_for_additional_render_views)
                     .before(VisibilitySystems::CheckVisibility),
-                project_prefab_ambient_light_contributions,
+                project_prefab_ambient_light_contributions
+                    .after(crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression),
                 update_fixed_function_world_light_buffer
                     .after(project_prefab_ambient_light_contributions)
                     .after(VisibilitySystems::CheckVisibility),

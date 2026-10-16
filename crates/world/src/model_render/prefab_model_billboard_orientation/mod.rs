@@ -12,7 +12,7 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
     hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
-        Option<&crate::model_render::placed_object_relocation_model_presentation::RelocationModelRenderLayers>,
+        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
     )>,
     global_transforms: Query<Ref<GlobalTransform>>,
     children: Query<&Children>,
