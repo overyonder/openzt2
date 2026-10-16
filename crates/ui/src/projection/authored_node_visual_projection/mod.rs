@@ -269,14 +269,6 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
         }
         let mut layer_commands = commands.spawn((
             Name::new(format!("ui visual {offset}")),
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0.0),
-                top: px(0.0),
-                width: percent(100.0),
-                height: percent(100.0),
-                ..default()
-            },
             UiVisualLayer(role),
             UiVisualPicking(!matches!(&visual.hit_policy, UiNodePointerHitPolicy::Never)),
             // Sort skins before authored child controls. Render extraction
@@ -291,6 +283,19 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
             Pickable::IGNORE,
             ChildOf(entity),
         ));
+        // Text color and sound states are metadata, not layout children.
+        // A text node with child Nodes becomes a Taffy container and loses
+        // its intrinsic text measurement, even when those children are hidden.
+        if image.is_some() || !node_has_text_presentation {
+            layer_commands.insert(Node {
+                position_type: PositionType::Absolute,
+                left: px(0.0),
+                top: px(0.0),
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            });
+        }
         let text_only_aspect_color =
             node_has_text_presentation && image.is_none() && visual.affects_color;
         if (visual.affects_text_color || text_only_aspect_color)

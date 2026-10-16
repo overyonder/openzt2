@@ -36,6 +36,17 @@ pub(super) struct AnimalNavigationAnimationOwner {
     controller: Entity,
     move_request_id: Option<usize>,
     requested_generation: u64,
+    rate_source: Option<openzt2_game_data::AssetId>,
+    playback_speed_permille: i16,
+    rate_seconds_remaining: f32,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct AnimalLocomotionRuntime<'w, 's> {
+    fixed_time: Res<'w, Time<Fixed>>,
+    random_streams: Query<'w, 's, &'static mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
+    unprojected_reasons: Local<'s, HashMap<Entity, &'static str>>,
+    unprojected_clip_states: Local<'s, HashMap<Entity, String>>,
 }
 
 pub(super) fn project_animal_animation_motion_to_navigation(
@@ -44,7 +55,10 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     species_index: Res<SpeciesAssets>,
     behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
     behavior_tasks: Query<&BehaviorTaskExecutionState, Without<PendingBehaviorTaskFailure>>,
-    docking_poses: Query<(), With<openzt2_zoo_state::behavior_task_execution_types::SamplingBehaviorDockPose>>,
+    docking_poses: Query<
+        (),
+        With<openzt2_zoo_state::behavior_task_execution_types::SamplingBehaviorDockPose>,
+    >,
     mut animations: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
     controllers: Query<(
@@ -73,9 +87,14 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         ),
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
-    mut unprojected_reasons: Local<HashMap<Entity, &'static str>>,
-    mut unprojected_clip_states: Local<HashMap<Entity, String>>,
+    runtime: AnimalLocomotionRuntime,
 ) {
+    let AnimalLocomotionRuntime {
+        fixed_time,
+        mut random_streams,
+        mut unprojected_reasons,
+        mut unprojected_clip_states,
+    } = runtime;
     // Logs why an animal has no navigation agent yet, once per change of reason.
     let mut wait = |animal: Entity, has_agent: bool, reason: &'static str| {
         if has_agent {
@@ -140,7 +159,8 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         }) {
             continue;
         }
-        if mode.is_some_and(|mode| *mode != LocomotionMode::Ground) {
+        if mode.is_some_and(|mode| !matches!(*mode, LocomotionMode::Ground | LocomotionMode::Swim))
+        {
             wait(
                 animal_entity,
                 has_agent,
@@ -156,7 +176,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         };
-        let wander = behavior_tasks
+        let movement = behavior_tasks
             .get(animal_entity)
             .ok()
             .and_then(|task| {
@@ -165,24 +185,41 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                     .and_then(|document| find_current_behavior_task_action(document, task))
             })
             .and_then(|action| match action {
-                BehaviorAction::Wander(wander) => Some(wander),
+                BehaviorAction::Wander(wander) => Some(wander.locomotion_speed),
+                BehaviorAction::Move(movement) => Some(match movement.locomotion_speed {
+                    None | Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Slow) => BehaviorGroundLocomotionSpeed::Slow,
+                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Medium) => BehaviorGroundLocomotionSpeed::Medium,
+                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Fast) => BehaviorGroundLocomotionSpeed::Fast,
+                }),
                 _ => None,
             });
-        let locomotion_key = match wander
-            .map(|wander| wander.locomotion_speed)
-            .unwrap_or_default()
-        {
-            BehaviorGroundLocomotionSpeed::Slow => {
-                variant.ground_navigation_clip_asset_key.as_ref()
-            }
-            BehaviorGroundLocomotionSpeed::Medium => {
-                variant.medium_ground_navigation_clip_asset_key.as_ref()
-            }
-            BehaviorGroundLocomotionSpeed::Fast => {
-                variant.fast_ground_navigation_clip_asset_key.as_ref()
+        let water = variant
+            .surface_water_locomotion
+            .as_ref()
+            .filter(|_| mode == Some(&LocomotionMode::Swim));
+        let water_row = water.map(|water| match movement.unwrap_or_default() {
+            BehaviorGroundLocomotionSpeed::Slow => &water.slow,
+            BehaviorGroundLocomotionSpeed::Medium => &water.medium,
+            BehaviorGroundLocomotionSpeed::Fast => &water.fast,
+        });
+        let locomotion_key = if let Some(row) = water_row {
+            Some(&row.node)
+        } else if mode == Some(&LocomotionMode::Swim) {
+            None
+        } else {
+            match movement.unwrap_or_default() {
+                BehaviorGroundLocomotionSpeed::Slow => {
+                    variant.ground_navigation_clip_asset_key.as_ref()
+                }
+                BehaviorGroundLocomotionSpeed::Medium => {
+                    variant.medium_ground_navigation_clip_asset_key.as_ref()
+                }
+                BehaviorGroundLocomotionSpeed::Fast => {
+                    variant.fast_ground_navigation_clip_asset_key.as_ref()
+                }
             }
         };
-        if wander.is_some() && locomotion_key.is_none() {
+        if movement.is_some() && locomotion_key.is_none() {
             openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal_entity, &mut commands);
         }
         let (Some(radius), Some(locomotion_key)) = (
@@ -377,14 +414,47 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 controller: controller_entity,
                 move_request_id: None,
                 requested_generation: controller.playback_generation,
+                rate_source: None,
+                playback_speed_permille: 1000,
+                rate_seconds_remaining: 0.0,
             });
+        let rate_source = water_row.map(|row| {
+            openzt2_game_data::AssetId::from_key(&format!(
+                "{}:{:?}",
+                row.node,
+                movement.unwrap_or_default()
+            ))
+        });
+        ownership.rate_seconds_remaining -= fixed_time.delta_secs();
+        if rate_source != ownership.rate_source
+            || (rate_source.is_some() && ownership.rate_seconds_remaining <= 0.0)
+        {
+            if let Some(row) = water_row {
+                let Ok(mut random) = random_streams.get_mut(animal_entity) else {
+                    continue;
+                };
+                let rate = row.playback_speed_range[0]
+                    + random.0.unit_f32()
+                        * (row.playback_speed_range[1] - row.playback_speed_range[0]);
+                ownership.playback_speed_permille =
+                    (rate * 1000.0).round().clamp(1.0, f32::from(i16::MAX)) as i16;
+                ownership.rate_seconds_remaining = row.reset_seconds_range[0]
+                    + random.0.unit_f32()
+                        * (row.reset_seconds_range[1] - row.reset_seconds_range[0]);
+            } else {
+                ownership.playback_speed_permille = 1000;
+            }
+            ownership.rate_source = rate_source;
+        }
         let moving = navigating || direct;
         if !task_animation
             && ownership.move_request_id.is_some()
             && ((controller.playback_generation != ownership.requested_generation
                 && controller.explicit_clip_request_id != ownership.move_request_id)
                 || (controller.explicit_clip_request_id == ownership.move_request_id
-                    && controller.animation_clip_asset_key != clip_key))
+                    && (controller.animation_clip_asset_key != clip_key
+                        || controller.playback_speed_permille
+                            != ownership.playback_speed_permille)))
         {
             ownership.move_request_id = None;
         }
@@ -393,7 +463,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 animation_subject_entity: controller_entity,
                 animation_clip_asset_key: clip_key.clone(),
                 blend_duration_milliseconds: 0,
-                playback_speed_permille: 1000,
+                playback_speed_permille: ownership.playback_speed_permille,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
             });
             ownership.move_request_id = Some(request.id);
@@ -408,7 +478,10 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 .entity(controller_entity)
                 .remove::<ConsumedLocomotionRootMotion>();
             if !task_animation {
-                if let Some(idle) = &variant.initial_animation_clip_asset_key {
+                let idle = water
+                    .map(|water| &water.stop)
+                    .or(variant.initial_animation_clip_asset_key.as_ref());
+                if let Some(idle) = idle {
                     playback_requests.write(AnimationClipPlaybackRequest {
                         animation_subject_entity: controller_entity,
                         animation_clip_asset_key: idle.clone(),
@@ -444,7 +517,14 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             radius_m: radius,
             max_speed_mps: speed,
             acceleration_mps2: f32::MAX,
-            capabilities: NavFlags::ANIMAL,
+            capabilities: NavFlags(
+                NavFlags::ANIMAL.0
+                    | if variant.surface_water_locomotion.is_some() {
+                        NavFlags::AMPHIBIOUS.0
+                    } else {
+                        0
+                    },
+            ),
         };
         if let Some(mut agent) = agent {
             *agent = projected;

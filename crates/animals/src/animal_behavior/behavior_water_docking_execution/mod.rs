@@ -1,6 +1,6 @@
 use super::{
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    shore_targets::{SelectedShoreTarget, ShoreTargets},
+    natural_water_targets::{NaturalWaterTargets, SelectedNaturalWaterTarget},
 };
 use bevy::prelude::*;
 use openzt2_game_assets::{
@@ -60,7 +60,7 @@ struct WaterDock {
     execution: u64,
     origin: BehaviorTaskReturnFrame,
     depth: usize,
-    shore: SelectedShoreTarget,
+    shore: SelectedNaturalWaterTarget,
     node: String,
     clip_request: Option<usize>,
     stage: WaterDockStage,
@@ -164,7 +164,7 @@ fn execute_water_docking(
     mut commands: Commands,
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
-    shores: ShoreTargets,
+    shores: NaturalWaterTargets,
     transforms: Query<&GlobalTransform>,
     controllers: Query<&AnimationPlaybackController>,
     movement: Query<&Destination>,
@@ -176,7 +176,7 @@ fn execute_water_docking(
         (
             Entity,
             Option<&mut BehaviorTaskExecutionState>,
-            Option<&SelectedShoreTarget>,
+            Option<&SelectedNaturalWaterTarget>,
             Option<&mut WaterDock>,
             Has<PendingBehaviorTaskFailure>,
             Has<WorldEntityIsCrated>,
@@ -210,9 +210,11 @@ fn execute_water_docking(
                 if !invalid && task.as_ref().is_some_and(|task| dock.owns(task)) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
-                commands
-                    .entity(actor)
-                    .remove::<(WaterDock, SamplingBehaviorDockPose, SelectedShoreTarget)>();
+                commands.entity(actor).remove::<(
+                    WaterDock,
+                    SamplingBehaviorDockPose,
+                    SelectedNaturalWaterTarget,
+                )>();
                 continue;
             }
         }

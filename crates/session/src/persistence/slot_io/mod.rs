@@ -39,6 +39,7 @@ mod placement_snapshot_section;
 pub(super) mod save_slot_catalogue_load_execution;
 mod save_snapshot_file_write_task_execution;
 pub(super) mod save_snapshot_request_execution;
+mod scenario_snapshot_section;
 mod show_snapshot_application;
 mod show_snapshot_capture;
 mod show_snapshot_section_encoding;

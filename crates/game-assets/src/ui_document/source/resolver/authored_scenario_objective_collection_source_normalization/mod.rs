@@ -114,6 +114,11 @@ fn create_authored_scenario_objective_row_template(
                 OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
                     "autosize", "true",
                 ),
+                // Only the active status contributes to the objective row's
+                // height; its authored list must participate in normal flow.
+                OrderedSourceDocumentAttribute::new_synthetic_ordered_source_document_attribute(
+                    "rows", "-1",
+                ),
             ],
             OrderedSourceDocumentChildren::from_ordered_source_document_child_items(
                 objective_visual_rows,

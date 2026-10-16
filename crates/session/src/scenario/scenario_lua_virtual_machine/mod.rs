@@ -94,12 +94,14 @@ impl ScenarioLuaVirtualMachineContexts {
             .virtual_machines_by_scenario_identifier
             .entry(scenario_identifier)
             .or_insert_with(|| ScenarioLuaVirtualMachine {
+                executed_source_paths: Vec::new(),
                 lua_virtual_machine: Lua::new(),
                 scenario_document_asset_identifier,
                 loaded_lua_script_asset_identifiers: BTreeSet::new(),
             });
         if context.scenario_document_asset_identifier != scenario_document_asset_identifier {
             *context = ScenarioLuaVirtualMachine {
+                executed_source_paths: Vec::new(),
                 lua_virtual_machine: Lua::new(),
                 scenario_document_asset_identifier,
                 loaded_lua_script_asset_identifiers: BTreeSet::new(),
@@ -160,6 +162,14 @@ impl ScenarioLuaVirtualMachine {
                     &loaded_lua_script_asset_identifiers,
                     &active_lua_script_source_path_stack,
                 )?;
+                if !self
+                    .executed_source_paths
+                    .iter()
+                    .any(|path| path == lua_script_source_path)
+                {
+                    self.executed_source_paths
+                        .push(lua_script_source_path.to_owned());
+                }
                 install_scenario_game_query_and_command_functions(
                     &self.lua_virtual_machine,
                     lua_scope,

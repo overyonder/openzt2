@@ -26,18 +26,19 @@ pub(crate) fn plan_route(
     if !start_world.is_finite() || !destination.is_finite() {
         return Err(NavigationFailure::OutsideWorld);
     }
-    let minimum_normal_y = if mode == LocomotionMode::Ground {
-        maximum_ground_slope_radians
-            .map(|slope| {
-                if !slope.is_finite() || slope < 0.0 {
-                    return Err(NavigationFailure::NoRoute);
-                }
-                Ok(slope.min(std::f32::consts::FRAC_PI_2).cos().max(0.0))
-            })
-            .transpose()?
-    } else {
-        None
-    };
+    let minimum_normal_y =
+        if mode == LocomotionMode::Ground || agent.capabilities.contains(NavFlags::AMPHIBIOUS) {
+            maximum_ground_slope_radians
+                .map(|slope| {
+                    if !slope.is_finite() || slope < 0.0 {
+                        return Err(NavigationFailure::NoRoute);
+                    }
+                    Ok(slope.min(std::f32::consts::FRAC_PI_2).cos().max(0.0))
+                })
+                .transpose()?
+        } else {
+            None
+        };
     let start = nearest_eligible(navigation, agent, start_world, minimum_normal_y)
         .ok_or(NavigationFailure::NoStartNode)?;
     let goal = nearest_eligible(navigation, agent, destination, minimum_normal_y)
@@ -45,6 +46,7 @@ pub(crate) fn plan_route(
     // Docking may deliberately snap a non-animal endpoint to a nearby node.
     // Its final exact segment still cannot take a ground actor through water.
     if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
+        && !agent.capabilities.contains(NavFlags::AMPHIBIOUS)
         && !ground_endpoint_segment_is_dry(
             navigation,
             navigation_position(navigation, goal),
@@ -91,7 +93,8 @@ pub(crate) fn plan_route(
             if scratch.closed[next as usize]
                 || edge_is_blocked(current.node, next)
                 || edge.edge_flags.0 & NavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0 != 0
-                || !traversal_allowed(edge.traversal_kind, mode)
+                || !(agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+                    || traversal_allowed(edge.traversal_kind, mode))
             {
                 continue;
             }
@@ -101,10 +104,12 @@ pub(crate) fn plan_route(
             if next_node.eligibility_flags.0 & agent.capabilities.0 == 0
                 || f32::from(next_node.clearance_centimetres) < agent.radius_m * 100.0
                 || f32::from(edge.width_centimetres) < agent.radius_m * 200.0
-                || !cell_meets_ground_slope_limit(
-                    next_node.minimum_triangle_normal_y,
-                    minimum_normal_y,
-                )
+                || !(agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+                    && next_node.eligibility_flags.contains(NavFlags::WATER))
+                    && !cell_meets_ground_slope_limit(
+                        next_node.minimum_triangle_normal_y,
+                        minimum_normal_y,
+                    )
             {
                 continue;
             }
@@ -273,7 +278,12 @@ fn nearest_eligible(
         return (node.eligibility_flags.0 & agent.capabilities.0 != 0
             && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
             && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
-            && cell_meets_ground_slope_limit(node.minimum_triangle_normal_y, minimum_normal_y))
+            && ((agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+                && node.eligibility_flags.contains(NavFlags::WATER))
+                || cell_meets_ground_slope_limit(
+                    node.minimum_triangle_normal_y,
+                    minimum_normal_y,
+                )))
         .then_some(index);
     }
     navigation
@@ -304,6 +314,7 @@ fn traversal_allowed(
     mode: LocomotionMode,
 ) -> bool {
     match traversal {
+        TerrainDerivedNavigationGraphTraversalKind::Shore => false,
         TerrainDerivedNavigationGraphTraversalKind::Swim => mode == LocomotionMode::Swim,
         TerrainDerivedNavigationGraphTraversalKind::Ground
         | TerrainDerivedNavigationGraphTraversalKind::Path => mode != LocomotionMode::Swim,

@@ -38,6 +38,25 @@ fn scenario_briefing_and_objectives_use_canonical_localization_keys() {
 }
 
 #[test]
+fn scenario_overview_uses_group_instructions_before_manager_title() {
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("scenario/goals/briefing.xml"),
+        br#"<ZTScenarioMgr><info locid="Example:Title"/><children>
+            <BFScenarioGroup><info type="primary"><neutral overview="Example:Instructions"/></info>
+                <children><BFScenarioRule name="goal"/></children>
+            </BFScenarioGroup>
+        </children></ZTScenarioMgr>"#,
+    )
+    .expect("valid scenario source");
+    let document =
+        lower_documents(&[&source], &[], &BTreeMap::new(), None).expect("valid scenario");
+    assert_eq!(
+        document.scenarios[0].description_key,
+        AssetId::from_key("example:instructions")
+    );
+}
+
+#[test]
 fn named_hidden_rules_keep_their_script_identity_and_chain() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("scenario/goals/challenge/example.xml"),

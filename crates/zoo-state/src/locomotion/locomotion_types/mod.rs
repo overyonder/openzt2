@@ -14,6 +14,8 @@ impl NavFlags {
     pub const DISABLED_BY_DEFAULT: Self = Self(1 << 5);
     pub const WATER: Self = Self(1 << 6);
     pub const PATH: Self = Self(1 << 7);
+    /// An animal whose authored locomotion permits both land and surface water.
+    pub const AMPHIBIOUS: Self = Self(1 << 8);
     pub const ELIGIBILITY_BITS: u16 =
         Self::GUEST.0 | Self::STAFF.0 | Self::ANIMAL.0 | Self::VEHICLE.0;
 
@@ -143,6 +145,11 @@ pub enum SwimLayer {
     #[default]
     Surface,
     Submerged,
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct AnimalTerrainWaterContact {
+    pub depth_m: Option<f32>,
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq)]

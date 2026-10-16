@@ -19,8 +19,6 @@ use super::{
     world_snapshot_section_encoding::decode_and_validate_world_snapshot_section,
 };
 
-const SCENARIO_RULE_SNAPSHOT_RECORD_BYTE_COUNT: usize = 42;
-
 pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
     snapshot_container_bytes: &[u8],
     required_profile_identifier: AssetId,
@@ -80,12 +78,7 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
                 section_byte_range,
             )?;
         } else if snapshot_section == WorldSnapshotSectionKind::Scenario {
-            if section_byte_range.payload_byte_count
-                != u64::from(section_byte_range.encoded_record_count)
-                    * SCENARIO_RULE_SNAPSHOT_RECORD_BYTE_COUNT as u64
-            {
-                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
-            }
+            super::scenario_snapshot_section::decode(snapshot_container_bytes, section_byte_range)?;
         } else if snapshot_section == WorldSnapshotSectionKind::Progression {
             let section_payload_bytes = &snapshot_container_bytes[section_byte_range
                 .payload_byte_range_within_container(snapshot_container_bytes.len())?];

@@ -4,6 +4,7 @@ mod animal_animation_locomotion;
 mod animal_navigation_policy;
 #[cfg(test)]
 mod animal_terrain_slope_tests;
+mod animal_water_contact;
 mod avian_navigation_agent_driving;
 mod changed_destination_route_planning;
 mod contact_steering_projection;
@@ -65,6 +66,7 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    animal_water_contact::project_animal_water_contact,
                     crate::locomotion::animal_animation_locomotion::project_animal_animation_motion_to_navigation
                         .in_set(AnimalAnimationNavigationProjection),
                     person_walk_animation::project_person_motion_to_walk_animation

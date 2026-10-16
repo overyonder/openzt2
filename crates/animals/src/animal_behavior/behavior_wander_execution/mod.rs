@@ -186,7 +186,10 @@ fn execute_current_wander_actions(
         else {
             continue;
         };
-        if mode != Some(&LocomotionMode::Ground) {
+        if mode != Some(&LocomotionMode::Ground)
+            && !(mode == Some(&LocomotionMode::Swim)
+                && agent.capabilities.contains(NavFlags::AMPHIBIOUS))
+        {
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
@@ -276,6 +279,8 @@ fn execute_current_wander_actions(
                             .eligibility_flags
                             .contains(NavFlags::DISABLED_BY_DEFAULT)
                         || (action.avoid_water && node.eligibility_flags.contains(NavFlags::WATER))
+                        || (node.eligibility_flags.contains(NavFlags::WATER)
+                            && !agent.capabilities.contains(NavFlags::AMPHIBIOUS))
                         || f32::from(node.clearance_centimetres) * 0.01 < agent.radius_m
                     {
                         continue;

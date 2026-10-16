@@ -171,6 +171,7 @@ impl Plugin for PersistencePlugin {
                 (
                     slot_io::save_snapshot_request_execution::
                         begin_saving_requested_live_world_snapshot_to_save_slot
+                        .after(openzt2_interface_state::ui::UiSet::DomainProjection)
                         .run_if(in_state(GamePhase::InGame)),
                     slot_io::load_snapshot_file_request_execution::
                         begin_loading_requested_world_snapshot_from_save_slot,

@@ -60,9 +60,8 @@ impl TerrainDerivedNavigationGraph {
         let source_node = self.find_navigation_node(source_navigation_node)?;
         let destination_node = self.find_navigation_node(destination_navigation_node)?;
         let traverses_water = source_node.eligibility_flags.contains(NavFlags::WATER);
-        if traverses_water != destination_node.eligibility_flags.contains(NavFlags::WATER) {
-            return None;
-        }
+        let crosses_shore =
+            traverses_water != destination_node.eligibility_flags.contains(NavFlags::WATER);
         let follows_path = source_node.eligibility_flags.contains(NavFlags::PATH)
             || destination_node.eligibility_flags.contains(NavFlags::PATH);
         let mut edge_flags = TerrainDerivedNavigationGraphEdgeFlags::default();
@@ -91,7 +90,9 @@ impl TerrainDerivedNavigationGraph {
                 .clearance_centimetres
                 .min(destination_node.clearance_centimetres)
                 .saturating_mul(2),
-            traversal_kind: if traverses_water {
+            traversal_kind: if crosses_shore {
+                TerrainDerivedNavigationGraphTraversalKind::Shore
+            } else if traverses_water {
                 TerrainDerivedNavigationGraphTraversalKind::Swim
             } else if follows_path {
                 TerrainDerivedNavigationGraphTraversalKind::Path

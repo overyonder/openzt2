@@ -48,7 +48,7 @@ pub(super) fn register(app: &mut App) {
                 .run_if(in_state(GamePhase::InGame)),
         )
         .add_systems(
-            OnEnter(GamePhase::InGame),
+            OnExit(GamePhase::InGame),
             |mut continuation: ResMut<ScenarioContinuation>| {
                 continuation.scenario = None;
             },
@@ -233,4 +233,42 @@ fn create_node<'scope, 'env: 'scope>(
         })?,
     )?;
     Ok(node)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScenarioUiSavedState {
+    enabled: std::collections::BTreeMap<String, bool>,
+    continuation: Option<AssetId>,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct ScenarioUiSnapshotCapture<'w> {
+    pending: Option<Res<'w, presentation::PendingScenarioUi>>,
+    continuation: Option<Res<'w, ScenarioContinuation>>,
+}
+
+impl ScenarioUiSnapshotCapture<'_> {
+    pub(crate) fn capture(&self) -> ScenarioUiSavedState {
+        ScenarioUiSavedState {
+            enabled: self
+                .pending
+                .as_ref()
+                .map(|pending| pending.enabled.clone())
+                .unwrap_or_default(),
+            continuation: self
+                .continuation
+                .as_ref()
+                .and_then(|continuation| continuation.scenario),
+        }
+    }
+}
+
+pub(crate) fn restore_saved_scenario_ui(commands: &mut Commands, saved: ScenarioUiSavedState) {
+    let mut pending = presentation::PendingScenarioUi::default();
+    pending.enabled = saved.enabled;
+    commands.insert_resource(pending);
+    commands.insert_resource(ScenarioContinuation {
+        scenario: saved.continuation,
+    });
 }

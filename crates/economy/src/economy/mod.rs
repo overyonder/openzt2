@@ -182,8 +182,13 @@ pub fn add_account_transaction_test_systems(app: &mut App) {
         .add_message::<TransactionCompleted>()
         .add_message::<TransactionRejected>()
         .init_resource::<ZooCash>()
-        .add_systems(Update, (
-            account_transaction_settlement::settle_requested_account_transactions,
-            facility_accounting::record_completed_transaction_results_for_attributed_facilities,
-        ).chain().in_set(FixedGameSet::Economy));
+        .add_systems(
+            Update,
+            (
+                account_transaction_settlement::settle_requested_account_transactions,
+                facility_accounting::record_completed_transaction_results_for_attributed_facilities,
+            )
+                .chain()
+                .in_set(FixedGameSet::Economy),
+        );
 }

@@ -16,7 +16,9 @@ use super::{
     authored_timed_action_sequence::UiAuthoredTimedActionSequencePlayback,
     authored_tooltip_presentation::{UiLongTooltipKey, UiShortTooltipKey},
     authored_tree_expansion_and_row_indentation::UiAuthoredTreeExpansion,
-    authored_ui_change_activation_dispatch::{apply_explicit_authored_selection, UiPreviousSelection},
+    authored_ui_change_activation_dispatch::{
+        apply_explicit_authored_selection, UiPreviousSelection,
+    },
     authored_ui_focus_navigation_and_activation::choose_wrapped_authored_ui_focus_candidate,
     authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable},
     authored_ui_integer_range_components::{UiMaximum, UiMinimum},
@@ -391,7 +393,9 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                                 || group_children.is_some_and(|members| members.contains(&entity)))
                         {
                             if let Some(mut selected) = selected {
-                                let Ok((mut previous, is_type_list)) = previous_selections.get_mut(entity) else {
+                                let Ok((mut previous, is_type_list)) =
+                                    previous_selections.get_mut(entity)
+                                else {
                                     selected.0 = *active;
                                     continue;
                                 };

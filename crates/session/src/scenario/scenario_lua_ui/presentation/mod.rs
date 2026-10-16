@@ -20,7 +20,7 @@ use std::collections::{BTreeMap, VecDeque};
 #[derive(Resource, Default)]
 pub(super) struct PendingScenarioUi {
     nodes: VecDeque<(Vec<String>, NodeOperation)>,
-    enabled: BTreeMap<String, bool>,
+    pub(super) enabled: BTreeMap<String, bool>,
 }
 
 pub(super) fn clear_scenario_ui(

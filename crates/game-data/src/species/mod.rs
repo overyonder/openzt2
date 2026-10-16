@@ -183,6 +183,8 @@ pub struct SpeciesVariant {
     pub medium_ground_navigation_clip_asset_key: Option<String>,
     #[serde(default)]
     pub fast_ground_navigation_clip_asset_key: Option<String>,
+    #[serde(default)]
+    pub surface_water_locomotion: Option<AnimalSurfaceWaterLocomotion>,
     pub sex: Sex,
     pub life_stage: LifeStage,
     /// Canonical virtual path of the model asset.
@@ -205,6 +207,32 @@ pub struct SpeciesVariant {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(transparent)]
 pub struct SpeciesVariantFlags(u8);
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimalSurfaceWaterLocomotion {
+    pub slow: AnimalWaterLocomotionRow,
+    pub medium: AnimalWaterLocomotionRow,
+    pub fast: AnimalWaterLocomotionRow,
+    pub stop: String,
+    pub water_entry_depth_m: f32,
+    pub water_exit_depth_m: f32,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimalWaterLocomotionRow {
+    pub node: String,
+    pub playback_speed_range: [f32; 2],
+    pub reset_seconds_range: [f32; 2],
+    pub animation_parameters: Vec<AnimalWaterAnimationParameters>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct AnimalWaterAnimationParameters {
+    pub clip: String,
+    pub yaw: Option<f32>,
+    pub pitch: Option<f32>,
+    pub roll: Option<f32>,
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub enum Sex {

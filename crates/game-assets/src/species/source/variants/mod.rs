@@ -49,6 +49,7 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
         ))),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(species),
         navigation_collision_policy: lower_animal_navigation_collision_policy(species)?,
+        surface_water_locomotion: super::locomotion::lower_animal_surface_water_locomotion(species),
         ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip(species),
         medium_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
             species, "medium",
@@ -173,6 +174,9 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         id: AssetId::from_key(&canonicalize_source_document_record_key(candidate.key)),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(candidate),
         navigation_collision_policy: lower_animal_navigation_collision_policy(candidate)?,
+        surface_water_locomotion: super::locomotion::lower_animal_surface_water_locomotion(
+            candidate,
+        ),
         ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip(candidate),
         medium_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
             candidate, "medium",

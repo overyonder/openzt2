@@ -24,6 +24,7 @@ use super::{
 };
 
 pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identifiers(
+    scenario_snapshot: Option<&super::scenario_snapshot_section::ScenarioSnapshot>,
     animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
     baseline_animals: &Query<Entity, With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
     habitat_waste_records: &[super::maintenance_snapshot_types::HabitatWasteSnapshotRecord],
@@ -200,6 +201,9 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     let mut imported_persistent_identifiers = photo_snapshot_records
         .iter()
         .map(|record| record.persistent_identifier)
+        .chain(
+            super::scenario_snapshot_section::persistent_ids(scenario_snapshot).map(PersistentId),
+        )
         .chain(
             show_snapshot_records
                 .stage_records

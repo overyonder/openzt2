@@ -16,14 +16,21 @@ use openzt2_zoo_state::{
 };
 
 #[derive(Component, Clone, Copy, Debug)]
-pub(super) struct SelectedShoreTarget {
+pub(super) struct SelectedNaturalWaterTarget {
     pub region: Entity,
     pub water: Vec3,
     pub approach: Vec3,
+    pub kind: NaturalWaterTargetKind,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) enum NaturalWaterTargetKind {
+    Shore,
+    Surface { depth: f32 },
 }
 
 #[derive(SystemParam)]
-pub(super) struct ShoreTargets<'w, 's> {
+pub(super) struct NaturalWaterTargets<'w, 's> {
     regions: Query<
         'w,
         's,
@@ -40,7 +47,56 @@ pub(super) struct ShoreTargets<'w, 's> {
     grid: Res<'w, TopologyGrid>,
 }
 
-impl ShoreTargets<'_, '_> {
+impl NaturalWaterTargets<'_, '_> {
+    pub(super) fn collect_water(
+        &self,
+        world: Entity,
+        position: Vec3,
+        radius: f32,
+        output: &mut Vec<SelectedNaturalWaterTarget>,
+    ) {
+        output.clear();
+        for (region, cells, parent) in &self.regions {
+            if !self
+                .worlds
+                .get(parent.parent())
+                .is_ok_and(|member| member.root == world)
+            {
+                continue;
+            }
+            for &point in &cells.centres {
+                if point.xz().distance_squared(position.xz()) >= radius * radius
+                    || !self.same_habitat(point, position)
+                {
+                    continue;
+                }
+                let Some((chunk, edited)) = terrain_chunk_at(&self.index, point.xz())
+                    .and_then(|entity| self.chunks.get(entity).ok())
+                else {
+                    continue;
+                };
+                let Some(sample) = self
+                    .assets
+                    .get(&chunk.asset)
+                    .and_then(|asset| sample_terrain(chunk, asset, edited, point.xz()))
+                else {
+                    continue;
+                };
+                let Some(height) = sample.water_height_m else {
+                    continue;
+                };
+                let water = Vec3::new(point.x, height, point.z);
+                output.push(SelectedNaturalWaterTarget {
+                    region,
+                    water,
+                    approach: water,
+                    kind: NaturalWaterTargetKind::Surface {
+                        depth: height - sample.height_m,
+                    },
+                });
+            }
+        }
+    }
     pub(super) fn same_habitat(&self, first: Vec3, second: Vec3) -> bool {
         let first = locate_habitat_at_world_position(&self.habitats, first.xz(), *self.grid);
         first.is_some()
@@ -55,18 +111,33 @@ impl ShoreTargets<'_, '_> {
         sample_terrain(chunk, self.assets.get(&chunk.asset)?, edited, point)?.water_height_m
     }
 
-    pub(super) fn valid(&self, target: &SelectedShoreTarget) -> bool {
+    pub(super) fn valid(&self, target: &SelectedNaturalWaterTarget) -> bool {
         self.regions.contains(target.region)
             && self
                 .water_height(target.water.xz())
                 .is_some_and(|height| (height - target.water.y).abs() < 0.01)
+            && match target.kind {
+                NaturalWaterTargetKind::Shore => true,
+                NaturalWaterTargetKind::Surface { depth } => self
+                    .water_depth(target.water.xz())
+                    .is_some_and(|current| (depth - current).abs() < 0.01),
+            }
+    }
+
+    pub(super) fn water_depth(&self, point: Vec2) -> Option<f32> {
+        let (chunk, edited) = self
+            .chunks
+            .get(terrain_chunk_at(&self.index, point)?)
+            .ok()?;
+        let sample = sample_terrain(chunk, self.assets.get(&chunk.asset)?, edited, point)?;
+        Some(sample.water_height_m? - sample.height_m)
     }
 
     pub(super) fn docking_endpoint(
         &self,
         actor: Entity,
         point: Vec3,
-        shore: &SelectedShoreTarget,
+        shore: &SelectedNaturalWaterTarget,
     ) -> bool {
         let Some((chunk, edited)) = terrain_chunk_at(&self.index, point.xz())
             .and_then(|entity| self.chunks.get(entity).ok())
@@ -135,7 +206,7 @@ impl ShoreTargets<'_, '_> {
         world: Entity,
         position: Vec3,
         radius: f32,
-        output: &mut Vec<SelectedShoreTarget>,
+        output: &mut Vec<SelectedNaturalWaterTarget>,
     ) {
         output.clear();
         let habitat_at =
@@ -199,10 +270,11 @@ impl ShoreTargets<'_, '_> {
                     {
                         continue;
                     }
-                    output.push(SelectedShoreTarget {
+                    output.push(SelectedNaturalWaterTarget {
                         region,
                         water: wet_edge,
                         approach: dry,
+                        kind: NaturalWaterTargetKind::Shore,
                     });
                 }
             }

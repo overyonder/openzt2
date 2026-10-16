@@ -42,6 +42,7 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
     mut authored_text: Query<(&UiTextBinding, &mut Text)>,
     mut authored_integer_values: Query<(&UiValueBinding, &mut UiValue)>,
     mut authored_boolean_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
+    mut formatted_text: Local<String>,
 ) {
     let world_scenarios = world_scenarios.get(&scenario_documents);
     // Challenge maps have no selected campaign document, but their accepted
@@ -50,9 +51,9 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         .as_deref()
         .and_then(|selection| scenario_documents.get(&selection.0))
         .map(|asset| &asset.document);
-    let Some(localization_catalogue) =
-        active_localization.borrow_loaded_localization_view(&localization_assets)
-    else {
+    let localization_catalogue =
+        active_localization.borrow_loaded_localization_view(&localization_assets);
+    let Some(localization_catalogue) = localization_catalogue else {
         return;
     };
     for (property_binding, mut projected_text) in &mut authored_text {
@@ -83,12 +84,18 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         else {
             continue;
         };
-        projected_text.0.clear();
+        formatted_text.clear();
         let _ = localization_catalogue.write_localized_text_with_format_arguments(
             localization_key,
             &[],
-            &mut projected_text.0,
+            &mut *formatted_text,
         );
+        if projected_text.0 != *formatted_text {
+            super::text_replacement_operations::replace_projected_ui_text_if_changed(
+                &mut projected_text.0,
+                &formatted_text,
+            );
+        }
     }
     let Some(scenario_document) = selected_scenario_document else {
         return;
@@ -157,12 +164,18 @@ pub(crate) fn project_active_scenario_status_to_authored_information_bindings(
         let Some(localization_key) = localization_key else {
             continue;
         };
-        projected_text.0.clear();
+        formatted_text.clear();
         let _ = localization_catalogue.write_localized_text_with_format_arguments(
             localization_key,
             &[],
-            &mut projected_text.0,
+            &mut *formatted_text,
         );
+        if projected_text.0 != *formatted_text {
+            super::text_replacement_operations::replace_projected_ui_text_if_changed(
+                &mut projected_text.0,
+                &formatted_text,
+            );
+        }
     }
 }
 

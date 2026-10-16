@@ -12,7 +12,8 @@ use openzt2_game_data::{
 };
 use openzt2_zoo_state::animal_welfare::types::{SetAnimalNeed, MAX_NEED_Q16, Q16_ONE};
 
-const ENTITY_FIELD: &str = "__openzt2_entity";
+pub(super) const ENTITY_FIELD: &str = "__openzt2_entity";
+pub(super) const PERSISTENT_ENTITY_FIELD: &str = "__openzt2_persistent_entity";
 const NEEDS: [(&str, NeedKind); 11] = [
     ("hunger", NeedKind::Hunger),
     ("thirst", NeedKind::Thirst),
@@ -29,6 +30,7 @@ const NEEDS: [(&str, NeedKind); 11] = [
 
 struct EntityFacts {
     entity: Entity,
+    persistent_id: Option<u64>,
     definition: AssetId,
     species: Option<AssetId>,
     variant: Option<AssetId>,
@@ -53,6 +55,7 @@ fn collect_entity_facts(
         .iter()
         .map(|animal| EntityFacts {
             entity: animal.entity,
+            persistent_id: animal.persistent_id.map(|id| id.0),
             definition: animal.definition.0,
             species: animal.species.map(|v| v.species),
             variant: animal.variant.map(|v| v.0),
@@ -66,6 +69,7 @@ fn collect_entity_facts(
     for request in &pending.spawns {
         facts.push(EntityFacts {
             entity: request.entity,
+            persistent_id: Some(request.persistent_id.0),
             definition: request.components.definition,
             species: Some(request.species),
             variant: Some(request.components.variant),
@@ -107,6 +111,27 @@ fn matches_kind(fact: &EntityFacts, kind: &str, queries: ScenarioLuaQueryFacts<'
     matches_entity_type(fact, kind, queries.species, queries.world_definitions)
 }
 
+fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool> {
+    if let Some(id) = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)? {
+        Ok(fact.persistent_id == Some(id))
+    } else {
+        Ok(reference.get::<Option<u64>>(ENTITY_FIELD)? == Some(fact.entity.to_bits()))
+    }
+}
+
+fn resolve_reference_entity(
+    reference: &Table,
+    queries: ScenarioLuaQueryFacts<'_>,
+    pending: &PendingEntityOperations,
+) -> mlua::Result<Entity> {
+    for fact in entity_facts(queries, pending) {
+        if matches_reference(&fact, reference)? {
+            return Ok(fact.entity);
+        }
+    }
+    Err(mlua::Error::runtime("scenario entity is no longer present"))
+}
+
 fn matches_entity_type(
     fact: &EntityFacts,
     kind: &str,
@@ -140,8 +165,16 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
 ) -> mlua::Result<Table> {
     lua.globals().set(
         "resolveTable",
-        lua.create_function(|_, value: Value| match value {
-            Value::Table(entity) if entity.contains_key(ENTITY_FIELD)? => Ok(entity),
+        scope.create_function(move |lua, value: Value| match value {
+            Value::Table(reference) => {
+                for fact in entity_facts(queries, pending) {
+                    if matches_reference(&fact, &reference)? {
+                        return create_entity_component(lua, scope, queries, pending, fact)
+                            .map(Value::Table);
+                    }
+                }
+                Ok(Value::Nil)
+            }
             _ => Err(mlua::Error::runtime(
                 "resolveTable requires an entity reference from BFG_GET_ENTITIES",
             )),
@@ -150,17 +183,24 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
     lua.globals().set(
         "areCompsEqual",
         lua.create_function(|_, (left, right): (Table, Table)| {
+            if let (Some(left), Some(right)) = (
+                left.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+                right.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+            ) {
+                return Ok(left == right);
+            }
             Ok(left.get::<u64>(ENTITY_FIELD)? == right.get::<u64>(ENTITY_FIELD)?)
         })?,
     )?;
     lua.globals().set(
         "isKindOf",
         scope.create_function(move |_, (binder, kind): (Table, String)| {
-            let entity = Entity::from_bits(binder.get::<u64>(ENTITY_FIELD)?);
-            Ok(entity_facts(queries, pending)
-                .iter()
-                .find(|v| v.entity == entity)
-                .is_some_and(|v| matches_kind(v, &kind, queries)))
+            for fact in entity_facts(queries, pending) {
+                if matches_reference(&fact, &binder)? {
+                    return Ok(matches_kind(&fact, &kind, queries));
+                }
+            }
+            Ok(false)
         })?,
     )?;
     let manager = lua.create_table()?;
@@ -216,6 +256,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
     let entity = fact.entity;
     let component = lua.create_table()?;
     component.set(ENTITY_FIELD, entity.to_bits())?;
+    component.set(PERSISTENT_ENTITY_FIELD, fact.persistent_id)?;
     component.set("_this", component.clone())?;
     component.set(
         "BFG_FIND_CONTAINED_ENTITY",
@@ -340,7 +381,7 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
                 return Err(mlua::Error::runtime("unsupported world string attribute"));
             }
             let binder: Table = attribute.get("key")?;
-            let entity = Entity::from_bits(binder.get::<u64>(ENTITY_FIELD)?);
+            let entity = resolve_reference_entity(&binder, queries, pending)?;
             let facts = entity_facts(queries, pending);
             let fact = facts
                 .iter()
@@ -365,7 +406,7 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
     manager.set(
         "ZT_NAME_ENTITY",
         scope.create_function(move |_, (_, component): (Table, Table)| {
-            let entity = Entity::from_bits(component.get::<u64>(ENTITY_FIELD)?);
+            let entity = resolve_reference_entity(&component, queries, pending)?;
             if !entity_facts(queries, pending)
                 .iter()
                 .any(|v| v.entity == entity)

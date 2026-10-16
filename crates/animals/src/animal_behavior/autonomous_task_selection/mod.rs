@@ -72,8 +72,8 @@ pub(super) fn select_idle_animal_tasks(
         ),
     >,
     mut world_objects: WorldObjectTargetSources,
-    shores: super::shore_targets::ShoreTargets,
-    mut shore_candidates: Local<Vec<super::shore_targets::SelectedShoreTarget>>,
+    shores: super::natural_water_targets::NaturalWaterTargets,
+    mut shore_candidates: Local<Vec<super::natural_water_targets::SelectedNaturalWaterTarget>>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     mut commands: Commands,
 ) {
@@ -191,7 +191,14 @@ pub(super) fn select_idle_animal_tasks(
             if !task.objects.is_empty() {
                 continue;
             }
-            if task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("shore") {
+            if task.targets.len() == 1
+                && (task.targets[0].eq_ignore_ascii_case("shore")
+                    || task.targets[0].eq_ignore_ascii_case("water"))
+            {
+                let water_target = task.targets[0].eq_ignore_ascii_case("water");
+                if water_target && variant.surface_water_locomotion.is_none() {
+                    continue;
+                }
                 use openzt2_game_data::behavior::eligibility::{
                     BehaviorEligibilityFactInput as Input, BehaviorEligibilityFactValue as Value,
                     BehaviorEntityStateEligibilityFact as State,
@@ -214,13 +221,22 @@ pub(super) fn select_idle_animal_tasks(
                 let Some(radius) = radius else {
                     continue;
                 };
-                shores.collect(
-                    animal,
-                    facts.world.root,
-                    facts.transform.translation(),
-                    radius,
-                    &mut shore_candidates,
-                );
+                if water_target {
+                    shores.collect_water(
+                        facts.world.root,
+                        facts.transform.translation(),
+                        radius,
+                        &mut shore_candidates,
+                    );
+                } else {
+                    shores.collect(
+                        animal,
+                        facts.world.root,
+                        facts.transform.translation(),
+                        radius,
+                        &mut shore_candidates,
+                    );
+                }
                 for shore in shore_candidates.iter().copied() {
                     let distance = facts
                         .transform
@@ -233,7 +249,14 @@ pub(super) fn select_idle_animal_tasks(
                             BehaviorCandidateRole::Subject => {
                                 facts.matches_type(required, authored_types)
                             }
-                            BehaviorCandidateRole::Target => required == AssetId::from_key("shore"),
+                            BehaviorCandidateRole::Target => {
+                                required
+                                    == AssetId::from_key(if water_target {
+                                        "water"
+                                    } else {
+                                        "shore"
+                                    })
+                            }
                             BehaviorCandidateRole::Object => false,
                         },
                         |role, fact| match role {
@@ -249,6 +272,11 @@ pub(super) fn select_idle_animal_tasks(
                                             expected,
                                             fact.comparison,
                                         )
+                                    }
+                                    (Input::Spatial(Spatial::WaterDepth), Value::Q16(expected)) => {
+                                        if let super::natural_water_targets::NaturalWaterTargetKind::Surface { depth } = shore.kind {
+                                            candidate_facts::compare_q16((depth * 65_536.0) as i32, expected, fact.comparison)
+                                        } else { false }
                                     }
                                     _ => false,
                                 }
@@ -441,7 +469,7 @@ pub(super) fn select_idle_animal_tasks(
         if let Some(shore) = shore {
             started.insert(shore);
         } else {
-            started.remove::<super::shore_targets::SelectedShoreTarget>();
+            started.remove::<super::natural_water_targets::SelectedNaturalWaterTarget>();
         }
         started.insert(BehaviorTaskExecutionState {
             execution_id,

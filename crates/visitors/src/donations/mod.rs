@@ -62,8 +62,9 @@ impl Plugin for GuestDonationDecisionAndPaymentPlugin {
                 (
                     hydrate_authored_donation_acceptors_and_docking_points,
                     initialize_new_donation_acceptors_with_operating_age_and_profit,
-                ).chain().in_set(openzt2_world_state::application_schedule::GameSet::Intent)
-                    .run_if(resource_exists::<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>),
+                )
+                    .chain()
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent),
             )
             .add_systems(
                 FixedUpdate,
@@ -121,26 +122,49 @@ pub fn add_donation_payment_test_systems(app: &mut App) {
         .add_message::<DonationRequest>()
         .add_message::<DonationCompleted>()
         .add_message::<DonationRejected>()
-        .add_systems(Update, (
-            hydrate_authored_donation_acceptors_and_docking_points,
-            initialize_new_donation_acceptors_with_operating_age_and_profit,
-            begin_donation_interactions_after_guests_reach_acceptors,
-            advance_donation_interactions_and_request_completed_payments,
-            claim_authorized_direct_donation_requests_before_transfer_submission,
-            submit_validated_donation_requests_to_economy_transfers,
-        ).chain().in_set(FixedGameSet::Think))
-        .add_systems(Update, (
-            settle_completed_donation_transactions_and_update_acceptor_totals,
-            settle_rejected_donation_transactions_and_clear_guest_payment_state,
-        ).chain().in_set(FixedGameSet::Cleanup));
+        .add_systems(
+            Update,
+            (
+                hydrate_authored_donation_acceptors_and_docking_points,
+                initialize_new_donation_acceptors_with_operating_age_and_profit,
+                begin_donation_interactions_after_guests_reach_acceptors,
+                advance_donation_interactions_and_request_completed_payments,
+                claim_authorized_direct_donation_requests_before_transfer_submission,
+                submit_validated_donation_requests_to_economy_transfers,
+            )
+                .chain()
+                .in_set(FixedGameSet::Think),
+        )
+        .add_systems(
+            Update,
+            (
+                settle_completed_donation_transactions_and_update_acceptor_totals,
+                settle_rejected_donation_transactions_and_clear_guest_payment_state,
+            )
+                .chain()
+                .in_set(FixedGameSet::Cleanup),
+        );
 }
 
 #[cfg(any(test, feature = "testing"))]
-pub fn queue_arrived_box_donation_for_test(world: &mut World, guest: Entity, acceptor: Entity, subject: Entity, amount: openzt2_zoo_state::economy::money_types::Money) {
-    world.entity_mut(guest).insert(donation_guest_decision_types::DonationCandidate {
-        navigation_request_id: 1, acceptor, subject, amount,
-    });
+pub fn queue_arrived_box_donation_for_test(
+    world: &mut World,
+    guest: Entity,
+    acceptor: Entity,
+    subject: Entity,
+    amount: openzt2_zoo_state::economy::money_types::Money,
+) {
+    world
+        .entity_mut(guest)
+        .insert(donation_guest_decision_types::DonationCandidate {
+            navigation_request_id: 1,
+            acceptor,
+            subject,
+            amount,
+        });
     world.write_message(openzt2_zoo_state::locomotion::locomotion_types::Arrived {
-        entity: guest, request_id: 1, target: Some(acceptor),
+        entity: guest,
+        request_id: 1,
+        target: Some(acceptor),
     });
 }

@@ -53,6 +53,8 @@ pub(crate) struct AnimalCandidateFacts {
     pub(super) transform: &'static GlobalTransform,
     pub(super) world: &'static WorldMember,
     mode: Option<&'static LocomotionMode>,
+    water_contact:
+        Option<&'static openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>,
     triggers: &'static NeedTriggerState,
     pregnant: Has<Pregnancy>,
     diseased: Has<Disease>,
@@ -145,6 +147,26 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEligibilityFactInput::Spatial(
                 BehaviorSpatialEligibilityFact::SupportedSurface,
             ) => Q16_ONE,
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InWater) => {
+                let Some(contact) = self.water_contact else {
+                    return false;
+                };
+                if contact.depth_m.is_some() {
+                    Q16_ONE
+                } else {
+                    0
+                }
+            }
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::OnLand) => {
+                let Some(contact) = self.water_contact else {
+                    return false;
+                };
+                if contact.depth_m.is_none() {
+                    Q16_ONE
+                } else {
+                    0
+                }
+            }
             BehaviorEligibilityFactInput::State(state) => {
                 let Some(value) = self.boolean_state(state) else {
                     return false;

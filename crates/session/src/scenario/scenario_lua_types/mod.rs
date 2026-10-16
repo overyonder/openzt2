@@ -78,12 +78,13 @@ pub(super) type ScenarioLuaLiveEntityQuery<'w, 's> = bevy::prelude::Query<
 >;
 
 #[derive(Default)]
-pub(super) struct ScenarioLuaVirtualMachineContexts {
+pub(crate) struct ScenarioLuaVirtualMachineContexts {
     pub(super) virtual_machines_by_scenario_identifier:
         BTreeMap<openzt2_game_data::AssetId, ScenarioLuaVirtualMachine>,
 }
 
 pub(super) struct ScenarioLuaVirtualMachine {
+    pub(super) executed_source_paths: Vec<String>,
     pub(super) lua_virtual_machine: Lua,
     pub(super) scenario_document_asset_identifier: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
     pub(super) loaded_lua_script_asset_identifiers: BTreeSet<bevy::asset::AssetId<LuaScriptAsset>>,

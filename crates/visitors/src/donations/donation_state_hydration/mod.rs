@@ -93,7 +93,7 @@ fn entity_is_descendant_of(
 
 pub(super) fn initialize_new_donation_acceptors_with_operating_age_and_profit(
     mut commands: Commands,
-    clock: Res<ZooClock>,
+    clock: If<Res<ZooClock>>,
     acceptors: Query<Entity, (With<DonationAcceptor>, Without<OperatingSinceDay>)>,
 ) {
     for acceptor in &acceptors {

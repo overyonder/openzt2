@@ -354,10 +354,26 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 continue;
             }
         };
+        let scenario_snapshot = match super::scenario_snapshot_section::capture(
+            &world_snapshot_capture_queries.scenario,
+        ) {
+            Ok(snapshot) => snapshot,
+            Err(failure_reason) => {
+                snapshot_scratch_storage.clear_logical_contents();
+                publish_persistence_failure_for_slot_operation(
+                    &mut persistence_failures,
+                    WorldSnapshotPersistenceOperation::SaveToSlot,
+                    save_request.save_slot_identifier,
+                    failure_reason,
+                );
+                continue;
+            }
+        };
         let snapshot_container_encoding_result =
             append_captured_world_snapshot_sections_and_finalize_container(
                 &mut snapshot_scratch_storage.snapshot_container_bytes,
                 &world_snapshot_record,
+                scenario_snapshot.as_ref(),
                 animal_adoption_offer_inventory,
                 &animal_snapshot_records,
                 &habitat_waste_records,

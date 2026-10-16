@@ -35,6 +35,7 @@ use super::{
 pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     snapshot_container_bytes: &mut Vec<u8>,
     world_snapshot_record: &WorldSnapshotRecord,
+    scenario_snapshot: Option<&super::scenario_snapshot_section::ScenarioSnapshot>,
     animal_adoption_offer_inventory: Option<
         &openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     >,
@@ -60,6 +61,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     )?;
     let placement_bytes =
         super::placement_snapshot_section::encode_placement_records(placement_snapshot_records)?;
+    let scenario_bytes = super::scenario_snapshot_section::encode(scenario_snapshot)?;
     let donation_bytes =
         super::donation_snapshot_section::encode_donation_records(donation_snapshot_records)?;
     let animal_bytes = super::animal_snapshot_section_encoding::encode_animal_snapshot_records(
@@ -174,8 +176,8 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
-                    0,
-                    |_| {},
+                    super::scenario_snapshot_section::record_count(scenario_snapshot),
+                    |bytes| bytes.extend_from_slice(&scenario_bytes),
                 )
             }
             WorldSnapshotSectionKind::Progression => {
@@ -265,6 +267,9 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 tank_snapshot_records
                     .len()
                     .saturating_add(animal_snapshot_records.len())
+                    .saturating_add(
+                        super::scenario_snapshot_section::persistent_ids(scenario_snapshot).count(),
+                    )
                     .saturating_add(donation_snapshot_records.len())
                     .saturating_add(placement_snapshot_records.len())
                     .saturating_add(habitat_waste_records.len())

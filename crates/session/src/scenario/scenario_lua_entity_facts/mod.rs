@@ -7,6 +7,8 @@ use openzt2_zoo_state::animal_welfare::types::*;
 #[derive(QueryData)]
 pub(super) struct ScenarioLuaEntityFacts {
     pub(super) entity: Entity,
+    pub(super) persistent_id:
+        Option<&'static openzt2_world_state::world_spawn::persistent_id_types::PersistentId>,
     pub(super) definition: &'static DefinitionId,
     pub(super) pregnant: Has<Pregnancy>,
     pub(super) crated:

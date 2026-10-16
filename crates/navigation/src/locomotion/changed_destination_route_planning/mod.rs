@@ -41,6 +41,16 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
         (Changed<Destination>, Without<DirectLocomotion>),
     >,
     mut navigation_failures: MessageWriter<NavigationFailed>,
+    terrain_index: Res<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    terrain_assets: Res<
+        Assets<
+            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+        >,
+    >,
+    terrain_chunks: Query<(
+        &openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
+        Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
+    )>,
 ) {
     let Some(locomotion_capacity) =
         locomotion_capacity.filter(|locomotion_capacity| locomotion_capacity.is_valid())
@@ -116,6 +126,21 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
                     &mut route_planning_scratch,
                 )
             });
+        if route_planning_result.is_ok()
+            && navigation_agent
+                .capabilities
+                .contains(openzt2_zoo_state::locomotion::locomotion_types::NavFlags::AMPHIBIOUS)
+        {
+            for point in &mut planned_route.points {
+                super::spatial_index_and_docking_operations::fit_to_terrain(
+                    LocomotionMode::Swim,
+                    point,
+                    &terrain_index,
+                    &terrain_assets,
+                    &terrain_chunks,
+                );
+            }
+        }
         if let Err(navigation_failure_reason) = route_planning_result {
             // An exhausted search leaves the nodes reachable from the start
             // closed; their count and extent show what encloses the agent.

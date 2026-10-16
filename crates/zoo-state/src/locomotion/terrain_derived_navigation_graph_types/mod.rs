@@ -34,6 +34,7 @@ pub enum TerrainDerivedNavigationGraphTraversalKind {
     Ground,
     Path,
     Swim,
+    Shore,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

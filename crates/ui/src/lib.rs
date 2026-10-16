@@ -19,6 +19,8 @@ pub mod authored_image_selection_diagnostic_override;
 pub mod authored_modal_presentation;
 pub mod authored_multi_icon_presentation;
 mod authored_rail_camera_presentation;
+#[cfg(debug_assertions)]
+mod modal_render_diagnostics;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types;
 pub mod authored_text_edit_bevy_adaptation;
 pub mod authored_text_physical_glyph_projection;
@@ -347,6 +349,12 @@ impl Plugin for GameUiPlugin {
                 Last,
                 authored_text_edit_bevy_adaptation::suppress_fitting_authored_text_edit_scroll_during_render_extraction,
             );
+        #[cfg(debug_assertions)]
+        app.add_systems(
+            PostUpdate,
+            modal_render_diagnostics::trace_changed_modal_render_state
+                .after(authored_ui_canvas_scaling_and_clipping::project_authored_scaled_canvas_clip_rectangles),
+        );
         app.sub_app_mut(bevy::render::RenderApp).add_systems(
             bevy::render::ExtractSchedule,
             (

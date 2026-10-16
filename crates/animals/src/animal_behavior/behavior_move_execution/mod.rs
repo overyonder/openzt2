@@ -71,6 +71,9 @@ pub(super) fn start_current_supported_behavior_move_actions(
     authored_attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
     mut navigation_requests: MessageWriter<NavigateTo>,
     mut land_approach: KeeperLandApproach,
+    animal_actors: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
+    water_targets: Query<&super::natural_water_targets::SelectedNaturalWaterTarget>,
+    waters: super::natural_water_targets::NaturalWaterTargets,
 ) {
     for (actor, mut behavior_task, staff_role, navigation_agent) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
@@ -87,12 +90,14 @@ pub(super) fn start_current_supported_behavior_move_actions(
             continue;
         }
         let definitions = active_world_definitions.get(&world_definition_assets);
-        if !keeper_fast_mode_uses_configured_navigation_speed(
-            move_action.locomotion_speed,
-            staff_role,
-            navigation_agent,
-            definitions,
-        ) {
+        if !animal_actors.contains(actor)
+            && !keeper_fast_mode_uses_configured_navigation_speed(
+                move_action.locomotion_speed,
+                staff_role,
+                navigation_agent,
+                definitions,
+            )
+        {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
@@ -126,6 +131,20 @@ pub(super) fn start_current_supported_behavior_move_actions(
                 continue;
             }
         };
+        if let Ok(water) = water_targets.get(actor) {
+            if water.region == target
+                && matches!(
+                    water.kind,
+                    super::natural_water_targets::NaturalWaterTargetKind::Surface { .. }
+                )
+            {
+                if !waters.valid(water) || move_action.target_node_name.is_some() {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                }
+                destination = water.water;
+            }
+        }
         if move_action.target_node_name.is_none()
             && staff_role
                 .and_then(|role| definitions.and_then(|view| view.find_staff(role.0)))
@@ -241,6 +260,11 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
     simulation_clock: Res<ZooClock>,
+    water_targets: Query<&super::natural_water_targets::SelectedNaturalWaterTarget>,
+    water_contact: Query<(
+        &openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact,
+        &openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode,
+    )>,
     mut behavior_tasks: Query<
         (
             Entity,
@@ -260,6 +284,24 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
             || !pending_move.still_owns_exact_task_frame(&behavior_task)
         {
             continue;
+        }
+        if let Ok(water) = water_targets.get(actor) {
+            if behavior_task.target() == Some(water.region)
+                && matches!(
+                    water.kind,
+                    super::natural_water_targets::NaturalWaterTargetKind::Surface { .. }
+                )
+            {
+                let arrived_in_water = water_contact.get(actor).is_ok_and(|(contact, mode)| {
+                    contact.depth_m.is_some_and(|depth| depth > 0.0)
+                        && *mode
+                            == openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode::Swim
+                });
+                if !arrived_in_water {
+                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                    continue;
+                }
+            }
         }
         advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
         commands

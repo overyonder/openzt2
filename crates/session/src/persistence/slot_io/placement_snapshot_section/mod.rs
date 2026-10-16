@@ -212,12 +212,8 @@ pub(super) fn resolve_placement_prefabs(
         if !placement_owns_definition(definitions, record.definition) {
             return Err(Failure::UnknownAssetIdentifier);
         }
-        let placeable = resolve_object_placeable_definition(definitions, record.definition)
-            .ok_or(Failure::UnknownAssetIdentifier)?;
-        let orientation = openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns(placeable, &record.transform);
-        if orientation.and_then(|turns| openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin(placeable, &record.transform, turns)).is_none() {
-            return Err(Failure::CorruptSnapshotSection);
-        }
+        // Saved scenery can retain tilted or freely rotated authored poses.
+        // Purchase-grid restrictions do not constrain restored world poses.
         let object = definitions
             .find_object(record.definition)
             .ok_or(Failure::UnknownAssetIdentifier)?;
@@ -242,6 +238,29 @@ pub(super) fn resolve_placement_prefabs(
         resolved.push(handle);
     }
     Ok(ready.then_some(resolved))
+}
+
+pub(super) fn placement_hydration_complete(
+    definitions: WorldDefinitionsView<'_>,
+    definition: AssetId,
+    transform: &Transform,
+    has_grid_placement: bool,
+    has_donation_dock: bool,
+) -> bool {
+    let Some(placeable) = resolve_object_placeable_definition(definitions, definition) else {
+        return false;
+    };
+    let Some(object) = definitions.find_object(definition) else {
+        return false;
+    };
+    let grid_pose = openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns(placeable, transform)
+        .and_then(|turns| openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin(placeable, transform, turns));
+    // Canonical placement hydration projects only authored grid orientations.
+    (grid_pose.is_none() || has_grid_placement)
+        && (!object
+            .properties
+            .contains_all(WorldObjectPropertyFlags::DONATION_ACCEPTOR)
+            || has_donation_dock)
 }
 
 pub(super) fn apply_placement_records(

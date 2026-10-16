@@ -36,7 +36,7 @@ mod behavior_token_execution;
 mod behavior_trick_learning_execution;
 mod behavior_wander_execution;
 mod behavior_water_docking_execution;
-mod shore_targets;
+mod natural_water_targets;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy;
 mod interaction_container_cleanup;
 

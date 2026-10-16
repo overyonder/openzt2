@@ -172,6 +172,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         description_key: document
                             .root
                             .attribute("description")
+                            .or_else(|| scenario_group_overview(&document.root))
                             .or_else(|| {
                                 child(&document.root, "info")
                                     .and_then(|info| info.attribute("locid"))
@@ -412,6 +413,18 @@ fn status_text(node: &OrderedSourceDocumentNode, status: &str) -> Option<String>
         })
         // Localization entries are keyed by their canonical identifier.
         .map(crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key)
+}
+
+fn scenario_group_overview(node: &OrderedSourceDocumentNode) -> Option<&str> {
+    if local(&node.name) == "BFScenarioGroup" {
+        if let Some(overview) = child(node, "info")
+            .and_then(|info| child(info, "neutral"))
+            .and_then(|neutral| neutral.attribute("overview"))
+        {
+            return Some(overview);
+        }
+    }
+    node.element_children().find_map(scenario_group_overview)
 }
 /// `ZTScenarioMgr/uimods/mod[@name]/new/UIState@visible`.
 fn lower_scenario_ui_modifications(

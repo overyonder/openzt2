@@ -55,6 +55,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     placement_hydration: &mut Option<Vec<u64>>,
 ) -> Result<bool, WorldSnapshotPersistenceFailure> {
     let WorldSnapshotApplicationState {
+        mut scenario,
         placements,
         placement_models,
         placement_readiness,
@@ -86,11 +87,20 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
             return Ok(false);
         };
-        return Ok(identifiers.iter().all(|id| placement_readiness.iter().any(|(candidate, placed, dock)| {
-            candidate.0 == *id && definitions.find_object(placed.definition).is_some_and(|object| {
-                !object.properties.contains_all(openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags::DONATION_ACCEPTOR) || dock
-            })
-        })));
+        return Ok(identifiers.iter().all(|id| {
+            placement_readiness
+                .iter()
+                .any(|(candidate, definition, transform, placed, dock)| {
+                    candidate.0 == *id
+                        && super::placement_snapshot_section::placement_hydration_complete(
+                            definitions,
+                            definition.0,
+                            transform,
+                            placed,
+                            dock,
+                        )
+                })
+        }));
     }
 
     // The coordinator runs after Intent and its deferred commands. Initialization
@@ -133,6 +143,15 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             snapshot_container_bytes,
             validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Animals),
         )?;
+    let scenario_snapshot = super::scenario_snapshot_section::decode(
+        snapshot_container_bytes,
+        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Scenario),
+    )?;
+    if scenario_snapshot.is_some()
+        && super::scenario_snapshot_section::scripts_are_pending(&scenario, &asset_server)
+    {
+        return Ok(false);
+    }
     let habitat_waste_records =
         super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
             snapshot_container_bytes,
@@ -258,6 +277,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         world_definitions.timing().ticks_per_day,
     )?;
     validate_loaded_snapshot_references_and_imported_persistent_identifiers(
+        scenario_snapshot.as_ref(),
         &animal_snapshot_records,
         &baseline_animals,
         &habitat_waste_records,
@@ -298,6 +318,11 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     super::donation_snapshot_section::resolve_donation_records(
         donation_snapshot_records.clone(),
         &planned_identities,
+    )?;
+    let prepared_scenario = super::scenario_snapshot_section::prepare(
+        scenario_snapshot,
+        world_snapshot_record.scenario_definition_identifier,
+        &scenario,
     )?;
     let restored_placements = super::placement_snapshot_section::apply_placement_records(
         commands,
@@ -423,6 +448,13 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         simulation_time_snapshot_application_resources,
     )?;
 
+    super::scenario_snapshot_section::apply(
+        commands,
+        prepared_scenario,
+        world_root_entity,
+        persistent_identifier_allocator,
+        &mut scenario,
+    )?;
     if placement_snapshot_records.is_some() {
         *placement_hydration = Some(
             placement_records

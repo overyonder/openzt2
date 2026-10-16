@@ -436,6 +436,81 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
 }
 
 #[test]
+fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydration() {
+    let (mut app, root, prefab) = fixture();
+    let expected = vec![PlacementSnapshotRecord {
+        persistent_identifier: 42,
+        definition: AssetId::from_key("donationbox-test"),
+        transform: Transform {
+            translation: Vec3::new(4.5, 2.0, -6.5),
+            rotation: Quat::from_euler(EulerRot::YXZ, 0.3, 0.02, 0.01),
+            scale: Vec3::splat(0.5),
+        },
+    }];
+    let bytes = encode_placement_records(&expected).unwrap();
+    let records = decode_placement_records(&bytes, section(&bytes, 1))
+        .unwrap()
+        .unwrap();
+    let mut state = SystemState::<(
+        Commands,
+        Res<Assets<ScenePrefabAsset>>,
+        Res<WorldDefinitions>,
+        Res<Assets<WorldDefinitionAsset>>,
+        ResMut<PersistentIdAllocator>,
+    )>::new(app.world_mut());
+    let restored = {
+        let (mut commands, prefabs, active, assets, mut allocator) =
+            state.get_mut(app.world_mut()).unwrap();
+        apply_placement_records(
+            &mut commands,
+            &records,
+            &prefabs,
+            &[prefab],
+            active.get(&assets).unwrap(),
+            &[],
+            root,
+            &mut allocator,
+        )
+        .unwrap()[&42]
+    };
+    state.apply(app.world_mut());
+    app.update();
+    app.update();
+    assert_eq!(capture(&mut app), expected);
+    assert!(app
+        .world()
+        .get::<PlacedObjectDefinitionReference>(restored)
+        .is_none());
+    assert!(app.world().get::<DonationUsePoint>(restored).is_some());
+    let definitions = app
+        .world()
+        .resource::<WorldDefinitions>()
+        .get(app.world().resource::<Assets<WorldDefinitionAsset>>())
+        .unwrap();
+    assert!(placement_hydration_complete(
+        definitions,
+        expected[0].definition,
+        &expected[0].transform,
+        false,
+        true
+    ));
+    assert!(!placement_hydration_complete(
+        definitions,
+        expected[0].definition,
+        &expected[0].transform,
+        false,
+        false
+    ));
+    assert!(!placement_hydration_complete(
+        definitions,
+        expected[0].definition,
+        &Transform::IDENTITY,
+        false,
+        true
+    ));
+}
+
+#[test]
 fn missing_placement_prefab_leaves_baseline_population_intact() {
     let (mut app, root, prefab) = fixture();
     app.world_mut()

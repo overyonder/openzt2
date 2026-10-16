@@ -136,10 +136,13 @@ mod tests {
         let mut app = App::new();
         app.add_message::<UiNodeActivated>()
             .add_systems(Update, dispatch_authored_selection_change_activations);
-        let node = app.world_mut().spawn((
-            UiSelected(true),
-            UiPreviousSelection::from_current_selection(true),
-        )).id();
+        let node = app
+            .world_mut()
+            .spawn((
+                UiSelected(true),
+                UiPreviousSelection::from_current_selection(true),
+            ))
+            .id();
         for active in [false, true] {
             let trigger = {
                 let world = app.world_mut();
@@ -155,12 +158,22 @@ mod tests {
             });
         }
         app.update();
-        let triggers = app.world_mut().resource_mut::<Messages<UiNodeActivated>>()
-            .drain().map(|activation| activation.trigger).collect::<Vec<_>>();
+        let triggers = app
+            .world_mut()
+            .resource_mut::<Messages<UiNodeActivated>>()
+            .drain()
+            .map(|activation| activation.trigger)
+            .collect::<Vec<_>>();
         assert_eq!(triggers, [UiTrigger::Off, UiTrigger::On]);
         let mut selected = UiSelected(true);
         let mut previous = UiPreviousSelection::from_current_selection(true);
-        assert_eq!(apply_explicit_authored_selection(&mut selected, &mut previous, true, false), None);
-        assert_eq!(apply_explicit_authored_selection(&mut selected, &mut previous, true, true), Some(UiTrigger::On));
+        assert_eq!(
+            apply_explicit_authored_selection(&mut selected, &mut previous, true, false),
+            None
+        );
+        assert_eq!(
+            apply_explicit_authored_selection(&mut selected, &mut previous, true, true),
+            Some(UiTrigger::On)
+        );
     }
 }
