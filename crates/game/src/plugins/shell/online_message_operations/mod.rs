@@ -117,9 +117,11 @@ pub(super) fn poll_online_message_requests_and_create_authored_rows(
 }
 
 /// Supplies the selected text to the original authored MOTD row fragment after
-/// the ordinary UI projector has created its `MOTDText` entity.
+/// the ordinary UI projector has created its `MOTDText` entity. Projected nodes
+/// name the document root as their owner; the row entity is that root's parent.
 pub(super) fn bind_displayed_online_message_to_authored_row_text(
     displayed_online_message_rows: Query<&DisplayedOnlineMessageRow>,
+    parent_relationships: Query<&ChildOf>,
     mut authored_online_message_nodes: Query<
         (
             &UiDocumentOwner,
@@ -137,7 +139,9 @@ pub(super) fn bind_displayed_online_message_to_authored_row_text(
     >,
 ) {
     for (document_owner, is_text, is_icon, mut text) in &mut authored_online_message_nodes {
-        let Ok(displayed_online_message) = displayed_online_message_rows.get(document_owner.0)
+        let Ok(displayed_online_message) = parent_relationships
+            .get(document_owner.0)
+            .and_then(|row| displayed_online_message_rows.get(row.parent()))
         else {
             continue;
         };
