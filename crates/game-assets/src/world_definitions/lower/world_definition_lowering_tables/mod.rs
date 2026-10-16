@@ -151,6 +151,7 @@ impl WorldDefinitionLoweringTables {
             fossil_placement,
             guest_generation,
             behavior_selection_policy,
+            need_adjustment,
             tank_surface_policy,
             tank_depth_policy,
             tank_edit_policy,

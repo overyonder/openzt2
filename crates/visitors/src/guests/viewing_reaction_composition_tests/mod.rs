@@ -94,8 +94,6 @@ fn policy_document() -> WorldDefinitionDocument {
             },
         }],
         guest_generation: Some(GuestGenerationPolicy {
-            need_adjustments_enabled: false,
-            need_adjustment_delay_steps: 0,
             enabled: false,
             use_test_type: false,
             maximum_guests_base: 0,

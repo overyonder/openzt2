@@ -28,6 +28,7 @@ use openzt2_game_data::{
         fences_and_gates::*,
         guest_simulation_definitions::*,
         immersive_mode_policy::*,
+        need_adjustment::NeedAdjustmentPolicy,
         object_placement::*,
         paths_and_tile_surfaces::*,
         simulation_time::*,
@@ -122,6 +123,7 @@ pub(super) enum SingletonKind {
     SimulationTiming,
     GuestGeneration,
     BehaviorSelection,
+    NeedAdjustment,
     TranquilizerMode,
     AdmissionPriceBands,
     TankSurface,
@@ -835,6 +837,12 @@ impl<'a> WorldDefinitionsView<'a> {
         BehaviorSelection,
         behavior_selection_policy,
         BehaviorSelectionPolicy
+    );
+    singleton!(
+        need_adjustment,
+        NeedAdjustment,
+        need_adjustment,
+        NeedAdjustmentPolicy
     );
     singleton!(
         tranquilizer_mode,

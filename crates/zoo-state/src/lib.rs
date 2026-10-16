@@ -15,6 +15,7 @@ pub mod guests;
 pub mod habitat;
 pub mod locomotion;
 pub mod maintenance;
+pub mod need_adjustment;
 pub mod person_name_selection_and_resolution;
 pub mod person_name_types;
 pub mod placement;

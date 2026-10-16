@@ -4,6 +4,12 @@ use openzt2_game_data::species::NeedKind;
 pub const Q16_ONE: i32 = 1 << 16;
 pub const MAX_NEED_Q16: i32 = 1000 * Q16_ONE;
 
+#[derive(Component, Debug, Clone, Copy)]
+pub struct AnimalNeedAdjustmentTimer {
+    pub remaining_ns: u64,
+    pub random: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng,
+}
+
 macro_rules! need_component {
     ($name:ident) => {
         #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

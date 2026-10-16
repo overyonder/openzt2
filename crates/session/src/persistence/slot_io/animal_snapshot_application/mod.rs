@@ -118,6 +118,12 @@ pub(super) fn apply_animal_snapshot_records(
             entity.insert(Dead { cause, since_tick });
         }
         if let Some(welfare) = &record.welfare {
+            if let Some((remaining_ns, random)) = welfare.need_adjustment_timer {
+                entity.insert(AnimalNeedAdjustmentTimer {
+                    remaining_ns,
+                    random: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw(random),
+                });
+            }
             if welfare.environment_habitat_assessed {
                 entity.insert(EnvironmentHabitatAssessed);
             }

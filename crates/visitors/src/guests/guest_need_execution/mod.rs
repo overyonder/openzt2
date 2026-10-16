@@ -61,10 +61,10 @@ pub(crate) fn decay_guest_needs(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(policy) = definitions.guest_generation() else {
+    let Some(policy) = definitions.need_adjustment() else {
         return;
     };
-    if !policy.need_adjustments_enabled {
+    if !policy.enabled {
         return;
     }
     let step_ns = u64::try_from(time.timestep().as_nanos()).unwrap_or(u64::MAX);
@@ -84,10 +84,10 @@ pub(crate) fn decay_guest_needs(
         mut satisfaction,
     ) in &mut guests
     {
-        if !super::guest_simulation_calculations::advance_guest_need_adjustment_timer(
+        if !openzt2_zoo_state::need_adjustment::advance_need_adjustment_timer(
             &mut visit_time.need_adjustment_remaining_ns,
             step_ns,
-            policy.need_adjustment_delay_steps,
+            policy.delay_steps,
             &mut rng.0,
         ) {
             continue;

@@ -111,6 +111,8 @@ pub struct WorldDefinitionDocument {
     pub simulation_timing: Option<SimulationTimingDefinition>,
     pub guest_generation: Option<GuestGenerationPolicy>,
     #[serde(default)]
+    pub need_adjustment: Option<super::need_adjustment::NeedAdjustmentPolicy>,
+    #[serde(default)]
     pub behavior_selection_policy:
         Option<super::behavior_selection_policy::BehaviorSelectionPolicy>,
     pub admission_price_bands_cents: Option<[i32; 4]>,

@@ -46,6 +46,12 @@ pub(super) fn bind_guest_policy(
         .filter(|steps| *steps > 0)
         .ok_or_else(|| BindError::record(record, "invalid StateThinkerInterval"))?;
     let need_adjustments_enabled = element_bool(&ai_policy, &["Need_Adjust_On"], true)?;
+    output.document.need_adjustment = Some(
+        openzt2_game_data::world_definitions::need_adjustment::NeedAdjustmentPolicy {
+            enabled: need_adjustments_enabled,
+            delay_steps: need_adjustment_delay_steps,
+        },
+    );
     let mut price_adjustments = Vec::new();
     for container in record.children_named(&["ZTSpawnPriceEffects"]) {
         for adjustment in container.element_children().filter(|child| {
@@ -97,8 +103,6 @@ pub(super) fn bind_guest_policy(
         monitored_signals = monitored_signals.with_additional_signals(signal);
     }
     output.document.guest_generation = Some(GuestGenerationPolicy {
-        need_adjustments_enabled,
-        need_adjustment_delay_steps,
         enabled: required_bool(record, &["On"])?,
         use_test_type: required_bool(record, &["UseAITestType"])?,
         maximum_guests_base: required_number(record, &["MaxGuestsBase"])?,

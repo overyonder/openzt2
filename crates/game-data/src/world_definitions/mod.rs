@@ -19,6 +19,7 @@ pub mod facilities_and_maintenance;
 pub mod fences_and_gates;
 pub mod guest_simulation_definitions;
 pub mod immersive_mode_policy;
+pub mod need_adjustment;
 pub mod object_placement;
 pub mod paths_and_tile_surfaces;
 pub mod simulation_time;

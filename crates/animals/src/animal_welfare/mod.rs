@@ -32,19 +32,7 @@ impl Plugin for AnimalWelfarePlugin {
             .add_message::<AccumulateNeedPoints>()
             .add_systems(
                 FixedUpdate,
-                (
-                    systems::decay_hunger,
-                    systems::decay_thirst,
-                    systems::decay_rest,
-                    systems::decay_privacy,
-                    systems::decay_social,
-                    systems::decay_exercise,
-                    systems::decay_stimulation,
-                    systems::decay_environment,
-                    systems::decay_health_need,
-                    systems::decay_hygiene,
-                    systems::decay_bathroom,
-                )
+                systems::decay_animal_needs
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame))
                     .run_if(simulation_is_running),

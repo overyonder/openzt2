@@ -165,59 +165,136 @@ fn rate_result(value: i32, row: &SpeciesNeed) -> (i32, bool) {
     (next, crossed)
 }
 
-macro_rules! decay_system {
-    ($function:ident, $component:ty, $index:expr, $kind:expr) => {
-        pub(super) fn $function(
-            assets: Res<Assets<SpeciesAsset>>,
-            index: Res<SpeciesAssets>,
-            mut animals: Query<
-                (
-                    Entity,
-                    &SpeciesHandle,
-                    &mut $component,
-                    &mut NeedTriggerState,
+#[allow(clippy::type_complexity)]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "Bevy systems receive resource guards by value"
+)]
+pub(super) fn decay_animal_needs(
+    mut commands: Commands,
+    time: Res<Time<Fixed>>,
+    seed: Res<ZooSeed>,
+    (definitions, definition_assets): (
+        Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
+        Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
+    ),
+    (assets, index): (Res<Assets<SpeciesAsset>>, Res<SpeciesAssets>),
+    mut animals: Query<
+        (
+            Entity,
+            &PersistentId,
+            &SpeciesHandle,
+            (
+                &mut Hunger,
+                &mut Thirst,
+                &mut RestNeed,
+                &mut PrivacyNeed,
+                &mut SocialNeed,
+                &mut ExerciseNeed,
+                &mut StimulationNeed,
+                &mut EnvironmentNeed,
+                &mut HealthNeed,
+                &mut HygieneNeed,
+                &mut BathroomNeed,
+            ),
+            &mut NeedTriggerState,
+            Option<&mut AnimalNeedAdjustmentTimer>,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
+    mut changed: MessageWriter<NeedChanged>,
+) {
+    let Some(definitions) = definitions.get(&definition_assets) else {
+        return;
+    };
+    let Some(policy) = definitions.need_adjustment() else {
+        return;
+    };
+    if !policy.enabled {
+        return;
+    }
+    let step_ns = u64::try_from(time.timestep().as_nanos()).unwrap_or(u64::MAX);
+    for (
+        entity,
+        persistent_id,
+        species,
+        (
+            mut hunger,
+            mut thirst,
+            mut rest,
+            mut privacy,
+            mut social,
+            mut exercise,
+            mut stimulation,
+            mut environment,
+            mut health,
+            mut hygiene,
+            mut bathroom,
+        ),
+        mut triggers,
+        timer,
+    ) in &mut animals
+    {
+        let Some(needs) = species_needs(&index, &assets, species) else {
+            continue;
+        };
+        let mut state = timer
+            .as_deref()
+            .copied()
+            .unwrap_or_else(|| AnimalNeedAdjustmentTimer {
+                remaining_ns: 0,
+                random: DeterministicRng::from_entity(
+                    *seed,
+                    *persistent_id,
+                    RngDomain::AnimalNeeds,
                 ),
-                (With<Animal>, Without<Dead>),
-            >,
-            mut changed: MessageWriter<NeedChanged>,
-        ) {
-            for (entity, species, mut value, mut triggers) in &mut animals {
-                let Some(needs) = species_needs(&index, &assets, species) else {
-                    continue;
-                };
-                let (next, crossed) = rate_result(value.0, needs[$index]);
-                if next != value.0 {
-                    value.0 = next;
-                }
-                triggers.observe(
-                    $index,
-                    next,
-                    needs[$index].trigger_wellness_threshold,
-                    needs[$index].cessation_wellness_threshold,
-                );
-                if crossed {
-                    changed.write(NeedChanged {
-                        animal: entity,
-                        need: $kind,
-                        value: convert_animal_need_q16_to_permille(next),
-                    });
-                }
+            });
+        let due = openzt2_zoo_state::need_adjustment::advance_need_adjustment_timer(
+            &mut state.remaining_ns,
+            step_ns,
+            policy.delay_steps,
+            &mut state.random,
+        );
+        if let Some(mut timer) = timer {
+            *timer = state;
+        } else {
+            commands.entity(entity).insert(state);
+        }
+        if !due {
+            continue;
+        }
+        let values = [
+            &mut hunger.0,
+            &mut thirst.0,
+            &mut rest.0,
+            &mut privacy.0,
+            &mut social.0,
+            &mut exercise.0,
+            &mut stimulation.0,
+            &mut environment.0,
+            &mut health.0,
+            &mut hygiene.0,
+            &mut bathroom.0,
+        ];
+        for (index, (value, need)) in values.into_iter().zip(needs).enumerate() {
+            let (next, crossed) = rate_result(*value, need);
+            *value = next;
+            triggers.observe(
+                index,
+                next,
+                need.trigger_wellness_threshold,
+                need.cessation_wellness_threshold,
+            );
+            if crossed {
+                changed.write(NeedChanged {
+                    animal: entity,
+                    need: need.kind,
+                    value: convert_animal_need_q16_to_permille(next),
+                });
             }
         }
-    };
+    }
 }
-
-decay_system!(decay_hunger, Hunger, 0, NeedKind::Hunger);
-decay_system!(decay_thirst, Thirst, 1, NeedKind::Thirst);
-decay_system!(decay_rest, RestNeed, 2, NeedKind::Rest);
-decay_system!(decay_privacy, PrivacyNeed, 3, NeedKind::Privacy);
-decay_system!(decay_social, SocialNeed, 4, NeedKind::Social);
-decay_system!(decay_exercise, ExerciseNeed, 5, NeedKind::Exercise);
-decay_system!(decay_stimulation, StimulationNeed, 6, NeedKind::Stimulation);
-decay_system!(decay_environment, EnvironmentNeed, 7, NeedKind::Environment);
-decay_system!(decay_health_need, HealthNeed, 8, NeedKind::Health);
-decay_system!(decay_hygiene, HygieneNeed, 9, NeedKind::Hygiene);
-decay_system!(decay_bathroom, BathroomNeed, 10, NeedKind::Bathroom);
 
 macro_rules! adjustment_system {
     ($function:ident, $message:ty, $component:ty, $index:expr, $kind:expr) => {

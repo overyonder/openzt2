@@ -197,9 +197,6 @@ pub struct ViewingOpportunitySlot {
     reason = "these independent authored guest-generation switches are not mutually exclusive states"
 )]
 pub struct GuestGenerationPolicy {
-    pub need_adjustments_enabled: bool,
-    /// Exclusive upper bound for random need delays, in 100 ms units.
-    pub need_adjustment_delay_steps: u32,
     pub enabled: bool,
     pub use_test_type: bool,
     pub maximum_guests_base: u32,

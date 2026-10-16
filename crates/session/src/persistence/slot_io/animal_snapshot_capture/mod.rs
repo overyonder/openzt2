@@ -34,6 +34,9 @@ pub(super) fn capture_animal_snapshot_records(
         let parents = required_animal_component::<Parents>(animal)?;
         let welfare = if let Some(welfare) = animal.get::<AnimalWelfare>() {
             Some(AnimalWelfareSnapshotRecord {
+                need_adjustment_timer: animal
+                    .get::<AnimalNeedAdjustmentTimer>()
+                    .map(|timer| (timer.remaining_ns, timer.random.to_raw())),
                 needs: [
                     required_animal_component::<Hunger>(animal)?.0,
                     required_animal_component::<Thirst>(animal)?.0,

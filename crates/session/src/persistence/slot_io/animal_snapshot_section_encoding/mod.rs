@@ -75,6 +75,11 @@ pub(super) fn validate_animal_snapshot_records(
                     || welfare.welfare > 1000
                     || welfare.band > 4
                     || welfare
+                        .need_adjustment_timer
+                        .is_some_and(|(remaining, random)| {
+                            random[1] & 1 == 0 || remaining > u64::from(u32::MAX) * 100_000_000
+                        })
+                    || welfare
                         .cumulative_points
                         .iter()
                         .any(|value| !value.is_finite())

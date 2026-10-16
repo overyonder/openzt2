@@ -40,6 +40,8 @@ pub(super) enum AnimalSnapshotDeath {
 #[serde(deny_unknown_fields)]
 pub(super) struct AnimalWelfareSnapshotRecord {
     pub needs: [i32; 11],
+    #[serde(default)]
+    pub need_adjustment_timer: Option<(u64, [u64; 2])>,
     pub triggers: u16,
     pub cumulative_points: [f32; 2],
     pub welfare: u16,

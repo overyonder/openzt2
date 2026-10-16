@@ -494,6 +494,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(SimulationTiming, simulation_timing);
     singleton!(GuestGeneration, guest_generation);
     singleton!(BehaviorSelection, behavior_selection_policy);
+    singleton!(NeedAdjustment, need_adjustment);
     singleton!(TranquilizerMode, tranquilizer_mode);
     singleton!(AdmissionPriceBands, admission_price_bands_cents);
     singleton!(TankSurface, tank_surface_policy);

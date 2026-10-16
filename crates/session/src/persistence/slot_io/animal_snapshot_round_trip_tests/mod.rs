@@ -71,6 +71,10 @@ fn spawn_named_animal(
     ));
     world.entity_mut(animal).insert((
         AnimalWelfare(72),
+        AnimalNeedAdjustmentTimer {
+            remaining_ns: 234_000_000,
+            random: openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng::from_raw([42, 3]),
+        },
         WelfareBand::Poor,
         NeedTriggerState(0x505),
         CumulativeNeedPoints {
