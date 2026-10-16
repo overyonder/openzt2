@@ -25,6 +25,7 @@ use openzt2_zoo_state::{
 #[derive(Component)]
 pub(super) struct BehaviorSelfToken {
     pub(super) name: AssetId,
+    pub(super) available_at: u64,
     pub(super) expires_at: u64,
 }
 
@@ -127,17 +128,20 @@ fn execute_current_self_token_deliveries(
             {
                 continue;
             }
-            let ticks = delivery
-                .lifetime
-                .as_nanos()
-                .saturating_mul(u128::from(definitions.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let at_tick = |duration: std::time::Duration| {
+                let ticks = duration
+                    .as_nanos()
+                    .saturating_mul(u128::from(definitions.timing().fixed_hz))
+                    .div_ceil(1_000_000_000);
+                clock
+                    .tick
+                    .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
+            };
             commands.spawn((
                 BehaviorSelfToken {
                     name: delivery.token,
-                    expires_at: clock
-                        .tick
-                        .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+                    available_at: at_tick(delivery.delay),
+                    expires_at: at_tick(delivery.lifetime),
                 },
                 ChildOf(actor),
             ));

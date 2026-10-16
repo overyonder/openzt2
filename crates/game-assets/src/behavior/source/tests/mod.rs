@@ -4,6 +4,25 @@ use crate::source_document::{
 };
 
 #[test]
+fn delayed_subject_tokens_preserve_activation_and_expiration_times() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    use std::time::Duration;
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/token.beh"),
+        br#"<BehaviorSets><Feed><behaviors><BFAITokenList><BFAIToken Name="t_Chew" GiveTo="subject" Timein="30" Timeout="180"/></BFAITokenList></behaviors></Feed></BehaviorSets>"#,
+    ).unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    assert!(!sets[0].actions.has_unsupported_suffix());
+    let [BehaviorAction::SendSelfTokens(deliveries)] = sets[0].actions.lowered_actions() else {
+        panic!("token delivery expected");
+    };
+    assert_eq!(deliveries[0].delay, Duration::from_secs(30));
+    assert_eq!(deliveries[0].lifetime, Duration::from_secs(180));
+}
+
+#[test]
 fn attachment_preserves_clip_spelling_and_does_not_invent_a_default_detach_rule() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("ai/tasks/staff/attach.beh"),

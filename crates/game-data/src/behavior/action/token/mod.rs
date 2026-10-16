@@ -7,6 +7,7 @@ use crate::AssetId;
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct BehaviorSelfTokenDelivery {
     pub token: AssetId,
+    pub delay: Duration,
     pub lifetime: Duration,
     pub chance_percent: f32,
 }

@@ -50,7 +50,10 @@ pub(super) fn lower_self_token_delivery(
     for token in list.element_children() {
         if token.name != "BFAIToken"
             || token.attributes.iter().any(|attribute| {
-                !matches!(attribute.name(), "Name" | "GiveTo" | "Timeout" | "Chance")
+                !matches!(
+                    attribute.name(),
+                    "Name" | "GiveTo" | "Timein" | "Timeout" | "Chance"
+                )
             })
             || token.element_children().next().is_some()
             || token.attribute("GiveTo") != Some("subject")
@@ -67,6 +70,10 @@ pub(super) fn lower_self_token_delivery(
         let lifetime = Duration::try_from_secs_f64(f64::from(seconds)).map_err(|_| {
             invalid_behavior_source_data("token Timeout must be finite and nonnegative")
         })?;
+        let delay = Duration::try_from_secs_f64(f64::from(
+            read_optional_float_attribute(token, "Timein")?.unwrap_or(0.0),
+        ))
+        .map_err(|_| invalid_behavior_source_data("token Timein must be finite and nonnegative"))?;
         let chance_percent = read_optional_float_attribute(token, "Chance")?.unwrap_or(100.0);
         if !chance_percent.is_finite() || !(0.0..=100.0).contains(&chance_percent) {
             return Err(invalid_behavior_source_data(
@@ -75,6 +82,7 @@ pub(super) fn lower_self_token_delivery(
         }
         deliveries.push(BehaviorSelfTokenDelivery {
             token: AssetId::from_key(&name.to_ascii_lowercase()),
+            delay,
             lifetime,
             chance_percent,
         });

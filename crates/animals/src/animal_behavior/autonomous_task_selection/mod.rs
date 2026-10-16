@@ -136,7 +136,9 @@ pub(super) fn select_idle_animal_tasks(
                             .into_iter()
                             .flat_map(|()| tokens.iter())
                             .filter_map(|(entity, token, recipient)| {
-                                (recipient.parent() == animal && clock.tick < token.expires_at)
+                                (recipient.parent() == animal
+                                    && clock.tick >= token.available_at
+                                    && clock.tick < token.expires_at)
                                     .then_some(Some((entity, token)))
                             }),
                     );
