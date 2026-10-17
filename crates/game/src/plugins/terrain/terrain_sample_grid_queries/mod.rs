@@ -52,10 +52,15 @@ pub(super) fn read_materialized_terrain_sample(
     let mut blend = [0; 16];
     *blend.get_mut(usize::from(source.biome_index))? = u8::MAX;
     let height_cm = read_terrain_sample_height_centimetres(chunk, asset, None, x, z)?;
-    let water_cm =
-        authored_terrain_sample_water_height_metres(asset, source, f32::from(height_cm) * 0.01)
-            .and_then(|height| i16::try_from((height * 100.0).round() as i32).ok())
-            .unwrap_or(height_cm);
+    let water_cm = authored_terrain_sample_water_height_metres(
+        chunk,
+        asset,
+        x,
+        z,
+        f32::from(height_cm) * 0.01,
+    )
+    .and_then(|height| i16::try_from((height * 100.0).round() as i32).ok())
+    .unwrap_or(height_cm);
     Some(TerrainSample {
         height_cm,
         blend,
@@ -130,17 +135,31 @@ pub(super) fn terrain_sample_height_metres(
         })
 }
 
+/// Saved water samples belong to a region whose authored level is the flat
+/// water surface; the sample's own height is the lake bed beneath it.
 pub(super) fn authored_terrain_sample_water_height_metres(
+    chunk: &TerrainChunk,
     asset: &TerrainAsset,
-    sample: &openzt2_game_data::terrain::TerrainSample,
+    x: usize,
+    z: usize,
     height: f32,
 ) -> Option<f32> {
-    let biome = (sample.water_depth != TerrainWaterDepth::Dry).then(|| {
-        asset
-            .canonical_terrain_grid()
-            .biomes
-            .get(usize::from(sample.biome_index))
-    })??;
+    let index = authored_terrain_sample_index(chunk, asset, x, z)?;
+    let sample = asset.canonical_terrain_grid().samples.get(index)?;
+    if sample.water_depth == TerrainWaterDepth::Dry {
+        return None;
+    }
+    if let Some(Some(region)) = asset.sample_authored_water_region_index(index) {
+        let grid = asset.canonical_terrain_grid();
+        return grid
+            .water_regions
+            .get(region)
+            .map(|region| grid.units.base_height_metres + region.height_relative_to_base_metres);
+    }
+    let biome = asset
+        .canonical_terrain_grid()
+        .biomes
+        .get(usize::from(sample.biome_index))?;
     let depth = match sample.water_depth {
         TerrainWaterDepth::Dry => None,
         TerrainWaterDepth::Shallow => biome.shallow_water_depth_mm,

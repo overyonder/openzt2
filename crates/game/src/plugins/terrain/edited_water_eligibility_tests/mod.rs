@@ -183,3 +183,30 @@ fn water_painted_on_originally_dry_ground_changes_eligibility() {
     world.entity_mut(chunk).remove::<EditedTerrainSamples>();
     assert_eq!(on_land(&mut world, point), Some(true));
 }
+
+#[test]
+fn saved_water_surface_stays_at_region_level_over_a_sloped_bed() {
+    let mut asset = saved_water_asset();
+    let (grid, _) = terrain_test_water_mut(&mut asset);
+    for (index, sample) in grid.samples.iter_mut().enumerate() {
+        sample.height_relative_to_base_metres = (index % 17) as f32 * 0.1;
+    }
+    let chunk = TerrainChunk {
+        source_coord: IVec2::ZERO,
+        coord: IVec2::ZERO,
+        asset: Handle::default(),
+        origin: Vec2::ZERO,
+        spacing_m: 1.0,
+        side: 17,
+    };
+    for x in [0.0, 4.0, 9.5, 15.0] {
+        let point = crate::plugins::terrain::terrain_world_sampling::sample_terrain(
+            &chunk,
+            &asset,
+            None,
+            Vec2::new(x, 8.0),
+        )
+        .unwrap();
+        assert_eq!(point.water_height_m, Some(1.0));
+    }
+}
