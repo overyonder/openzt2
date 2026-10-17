@@ -83,7 +83,7 @@ pub(crate) fn sample_terrain(
             .then_some(f32::from(*edited.water_cm.get(local)?) * 0.01)
             .filter(|water| *water > height_m)
     } else {
-        authored_terrain_sample_water_height_metres(asset, source, height_m)
+        authored_terrain_sample_water_height_metres(chunk, asset, nx, nz, height_m)
     };
     Some(TerrainPoint {
         height_m,
