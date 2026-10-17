@@ -2,7 +2,7 @@ use bevy::{ecs::system::SystemParam, prelude::*};
 
 use crate::plugins::{
     animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest,
-    audio::audio_playback_message_types::PlayAudioClip,
+    audio::audio_playback_message_types::PlayAudioCue,
 };
 use openzt2_game_assets::effect::{
     SpawnCompleteParticleEffectDocument, StopParticleEffectsAttachedToEntity,
@@ -28,7 +28,7 @@ pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's> {
 #[derive(SystemParam)]
 pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w> {
     pub(super) asset_server: Res<'w, AssetServer>,
-    pub(super) audio_messages: MessageWriter<'w, PlayAudioClip>,
+    pub(super) audio_messages: MessageWriter<'w, PlayAudioCue>,
     pub(super) effect_messages: MessageWriter<'w, SpawnCompleteParticleEffectDocument>,
     pub(super) stop_effect_messages: MessageWriter<'w, StopParticleEffectsAttachedToEntity>,
 }
