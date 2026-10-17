@@ -17,6 +17,7 @@ mod navigation_agent_initialization;
 mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
 mod pathfinding;
+mod person_walk_animation;
 mod spatial_index_and_docking_operations;
 mod terrain_derived_navigation_graph_construction;
 mod terrain_derived_navigation_graph_edge_queries;
@@ -65,6 +66,8 @@ impl Plugin for LocomotionPlugin {
                 FixedUpdate,
                 (
                     animal_animation_locomotion::project_animal_animation_motion_to_navigation
+                        .in_set(AnimalAnimationNavigationProjection),
+                    person_walk_animation::project_person_motion_to_walk_animation
                         .in_set(AnimalAnimationNavigationProjection),
                     terrain_edit_navigation_refresh::
                         refresh_navigation_graph_and_invalidate_routes_after_terrain_edits,
