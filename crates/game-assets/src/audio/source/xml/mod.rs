@@ -167,7 +167,7 @@ pub(super) fn canonical_token(token: &str) -> String {
     token.trim().to_ascii_lowercase()
 }
 
-pub(super) fn cue_id(name: &str) -> AssetId {
+pub fn cue_id(name: &str) -> AssetId {
     AssetId::from_key(&format!("audio-cue:{}", canonical_token(name)))
 }
 

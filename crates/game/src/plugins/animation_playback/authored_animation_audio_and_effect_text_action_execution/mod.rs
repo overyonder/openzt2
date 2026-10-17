@@ -1,6 +1,7 @@
-use bevy::{audio::AudioSource, prelude::*};
+use bevy::prelude::*;
 
-use crate::plugins::audio::audio_playback_message_types::PlayAudioClip;
+use crate::plugins::audio::audio_playback_message_types::PlayAudioCue;
+use openzt2_game_assets::audio::source::xml::cue_id;
 use openzt2_game_assets::effect::{
     ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
     StopParticleEffectsAttachedToEntity,
@@ -13,16 +14,16 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_> {
         &mut self,
         animation_playback_controller_entity: Entity,
         event_time_milliseconds: u32,
-        audio_asset_path: &str,
+        audio_cue_name: &str,
         audio_loops: bool,
         update_audio_position: bool,
     ) {
-        self.audio_messages.write(PlayAudioClip {
-            clip: self
-                .asset_server
-                .load::<AudioSource>(audio_asset_path.to_owned()),
+        // `snd Growl` names a sound cue from the audio documents, not a file.
+        self.audio_messages.write(PlayAudioCue {
+            cue: cue_id(audio_cue_name),
             emitter: update_audio_position.then_some(animation_playback_controller_entity),
             selection: event_time_milliseconds as u64,
+            priority: 128,
             force_looped: audio_loops,
         });
     }
