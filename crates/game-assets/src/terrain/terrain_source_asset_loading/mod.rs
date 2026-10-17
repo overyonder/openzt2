@@ -163,12 +163,15 @@ impl AssetLoader for TerrainSourceAssetLoader {
                 .chain(biome.ground_no_blend_brushes.iter())
                 .chain(biome.cover_no_blend_brushes.iter())
                 .chain(biome.water_presentation.iter().flat_map(|water| {
-                    std::iter::once(&water.gloss_map).chain(
-                        water
-                            .texture_animations
-                            .iter()
-                            .map(|animation| &animation.texture),
-                    )
+                    std::iter::once(&water.gloss_map)
+                        .chain(&water.submerged_texture)
+                        .chain(&water.shore_texture)
+                        .chain(
+                            water
+                                .texture_animations
+                                .iter()
+                                .map(|animation| &animation.texture),
+                        )
                 }))
         });
         let waterfall_texture_source_paths = canonical_terrain_grid

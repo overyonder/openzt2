@@ -5,8 +5,16 @@ use bevy::{
 };
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_data::terrain::{TerrainBiome, TerrainWaterDepth};
 
 use super::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum TerrainSurfaceWater {
+    Dry,
+    Shore,
+    Submerged,
+}
 
 #[derive(Clone, Copy)]
 struct TerrainSurfacePaint {
@@ -15,6 +23,47 @@ struct TerrainSurfacePaint {
     cover: bool,
     linked: bool,
     transition: bool,
+    height_m: f32,
+    water_level_m: Option<f32>,
+    water: TerrainSurfaceWater,
+}
+
+// ponytail: the shore band is any dry sample next to water and no higher than
+// that water plus its biome shoreOffset; the native rule is unknown.
+fn classify_terrain_surface_water<'a>(
+    paint: &TerrainSurfacePaint,
+    mut neighbours: impl Iterator<Item = &'a TerrainSurfacePaint>,
+    biomes: &[TerrainBiome],
+) -> TerrainSurfaceWater {
+    if paint.water_level_m.is_some() {
+        return TerrainSurfaceWater::Submerged;
+    }
+    let on_shore = neighbours.any(|other| {
+        other.water_level_m.is_some_and(|level| {
+            let offset_mm = biomes
+                .get(other.biome)
+                .and_then(|biome| biome.water_shore_offset_mm)
+                .unwrap_or(0);
+            paint.height_m <= level + offset_mm as f32 * 0.001
+        })
+    });
+    if on_shore {
+        TerrainSurfaceWater::Shore
+    } else {
+        TerrainSurfaceWater::Dry
+    }
+}
+
+fn surrounding_terrain_surface_paints(
+    paints: &[TerrainSurfacePaint],
+    side: usize,
+    index: usize,
+) -> impl Iterator<Item = &TerrainSurfacePaint> {
+    let x = index % side;
+    let z = index / side;
+    (z.saturating_sub(1)..=(z + 1).min(side - 1)).flat_map(move |nz| {
+        (x.saturating_sub(1)..=(x + 1).min(side - 1)).map(move |nx| &paints[nz * side + nx])
+    })
 }
 
 pub(super) fn compose_terrain_surface_image(
@@ -46,18 +95,24 @@ pub(super) fn compose_terrain_surface_image(
         .map(|coordinate| read_terrain_surface_paint(chunk, asset, edited_chunks, coordinate))
         .collect::<Option<Vec<_>>>()?;
     let side = usize::try_from(composed_cells + 1).ok()?;
+    let biomes = &asset.canonical_terrain_grid().biomes;
     let snapshot = paints.clone();
     for (index, paint) in paints.iter_mut().enumerate() {
-        let x = index % side;
-        let z = index / side;
-        paint.transition = (z.saturating_sub(1)..=(z + 1).min(side - 1)).any(|nz| {
-            (x.saturating_sub(1)..=(x + 1).min(side - 1)).any(|nx| {
-                let other = snapshot[nz * side + nx];
+        paint.water = classify_terrain_surface_water(
+            paint,
+            surrounding_terrain_surface_paints(&snapshot, side, index),
+            biomes,
+        );
+    }
+    let snapshot = paints.clone();
+    for (index, paint) in paints.iter_mut().enumerate() {
+        paint.transition =
+            surrounding_terrain_surface_paints(&snapshot, side, index).any(|other| {
                 other.biome != paint.biome
                     || other.cover != paint.cover
                     || other.linked != paint.linked
-            })
-        });
+                    || other.water != paint.water
+            });
     }
     paints.sort_by_key(|paint| {
         (
@@ -66,6 +121,7 @@ pub(super) fn compose_terrain_surface_image(
             asset.canonical_terrain_grid().biomes[paint.biome].draw_order,
             paint.biome,
             paint.cover,
+            paint.water,
             paint.coordinate.y,
             paint.coordinate.x,
         )
@@ -140,12 +196,35 @@ fn read_terrain_surface_paint(
         .and_then(|edited| edited.ground_cover.get(local).copied())
         .unwrap_or(u8::from(base.has_ground_cover))
         != 0;
+    let grid = asset.canonical_terrain_grid();
+    let height_m = edited
+        .and_then(|edited| edited.heights_cm.get(local))
+        .map_or(
+            base.height_relative_to_base_metres + grid.units.base_height_metres,
+            |height| f32::from(*height) * 0.01,
+        );
+    let water_level_m = match edited {
+        Some(edited) => (*edited.water_styles.get(local)? != 0)
+            .then_some(f32::from(*edited.water_cm.get(local)?) * 0.01),
+        None => (base.water_depth != TerrainWaterDepth::Dry).then(|| {
+            asset
+                .sample_authored_water_region_index(global)
+                .flatten()
+                .and_then(|region| grid.water_regions.get(region))
+                .map_or(height_m, |region| {
+                    grid.units.base_height_metres + region.height_relative_to_base_metres
+                })
+        }),
+    };
     Some(TerrainSurfacePaint {
         coordinate,
         biome,
         cover,
         linked: base.height_is_linked,
         transition: false,
+        height_m,
+        water_level_m,
+        water: TerrainSurfaceWater::Dry,
     })
 }
 
@@ -160,17 +239,26 @@ fn paint_terrain_surface_stamp(
 ) -> Option<()> {
     let biome = asset.canonical_terrain_grid().biomes.get(paint.biome)?;
     let selector = (paint.coordinate.x * 13 + paint.coordinate.y * 7 + 20).rem_euclid(4) as usize;
-    let brush_path = match (paint.transition, paint.cover) {
+    let water_texture = biome
+        .water_presentation
+        .as_ref()
+        .and_then(|water| match paint.water {
+            TerrainSurfaceWater::Dry => None,
+            TerrainSurfaceWater::Shore => water.shore_texture.as_ref(),
+            TerrainSurfaceWater::Submerged => water.submerged_texture.as_ref(),
+        });
+    let cover = paint.cover && water_texture.is_none();
+    let brush_path = match (paint.transition, cover) {
         (false, false) => biome.ground_no_blend_brushes.get(selector),
         (false, true) => biome.cover_no_blend_brushes.get(selector),
         (true, false) => biome.ground_brushes.get(selector),
         (true, true) => biome.cover_brushes.get(selector),
     }?;
-    let texture_path = if paint.cover {
+    let texture_path = water_texture.unwrap_or(if cover {
         &biome.cover_texture
     } else {
         &biome.ground_texture
-    };
+    });
     let brush = images.get(asset.texture_image(brush_path)?)?;
     let texture = images.get(asset.texture_image(texture_path)?)?;
     let brush_extent = read_rgba_image_extent(brush)?;
@@ -275,6 +363,53 @@ fn read_ground_path_mask_coverage(image: &Image, x: u32, y: u32) -> Option<u8> {
     Some(
         ((u16::from(mask[0]) * 54 + u16::from(mask[1]) * 183 + u16::from(mask[2]) * 19) >> 8) as u8,
     )
+}
+
+#[cfg(test)]
+mod shore_classification_tests {
+    use super::*;
+
+    #[test]
+    fn banks_within_the_shore_offset_take_the_shore_texture() {
+        let paint = |height_m, water_level_m| TerrainSurfacePaint {
+            coordinate: IVec2::ZERO,
+            biome: 0,
+            cover: false,
+            linked: false,
+            transition: false,
+            height_m,
+            water_level_m,
+            water: TerrainSurfaceWater::Dry,
+        };
+        let biome = TerrainBiome {
+            name: String::new(),
+            ground_texture: String::new(),
+            cover_texture: String::new(),
+            mix_mask: String::new(),
+            cliff_textures: Default::default(),
+            ground_brushes: Default::default(),
+            cover_brushes: Default::default(),
+            ground_no_blend_brushes: Default::default(),
+            cover_no_blend_brushes: Default::default(),
+            draw_order: 0,
+            shallow_water_depth_mm: None,
+            deep_water_depth_mm: None,
+            water_shore_offset_mm: Some(400),
+            water_presentation: None,
+        };
+        let biomes = [biome];
+        let water = [paint(5.0, Some(6.6))];
+        let classify = |paint: TerrainSurfacePaint| {
+            classify_terrain_surface_water(&paint, water.iter(), &biomes)
+        };
+        assert!(classify(paint(5.0, Some(6.6))) == TerrainSurfaceWater::Submerged);
+        assert!(classify(paint(6.9, None)) == TerrainSurfaceWater::Shore);
+        assert!(classify(paint(7.1, None)) == TerrainSurfaceWater::Dry);
+        assert!(
+            classify_terrain_surface_water(&paint(6.0, None), std::iter::empty(), &biomes)
+                == TerrainSurfaceWater::Dry
+        );
+    }
 }
 
 #[cfg(test)]

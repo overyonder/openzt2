@@ -353,6 +353,12 @@ fn lower_authored_terrain_biome_water_presentation(
             "vertexColorHigh",
         )?)?,
         gloss_map: required_source_node_attribute(water_source_node, "glossMap")?.to_owned(),
+        submerged_texture: water_source_node
+            .attribute("waterSubmerged")
+            .map(str::to_owned),
+        shore_texture: water_source_node
+            .attribute("shoreTexture")
+            .map(str::to_owned),
         texture_animations,
         surface_material: lower_authored_terrain_water_surface_material_presentation(
             source_documents,

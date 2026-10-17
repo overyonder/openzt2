@@ -53,6 +53,10 @@ pub struct TerrainBiomeWaterPresentation {
     pub vertex_colour_medium: [u8; 4],
     pub vertex_colour_high: [u8; 4],
     pub gloss_map: String,
+    /// Terrain texture painted under the water surface.
+    pub submerged_texture: Option<String>,
+    /// Terrain texture painted on banks up to the biome shore offset.
+    pub shore_texture: Option<String>,
     pub texture_animations: [TerrainWaterTextureAnimation; 2],
     pub surface_material: TerrainWaterSurfaceMaterialPresentation,
 }
