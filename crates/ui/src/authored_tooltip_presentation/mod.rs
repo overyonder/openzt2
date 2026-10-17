@@ -282,6 +282,7 @@ fn set_tooltip_text(
             continue;
         };
         let mut font_size_pixels = record.rich_content_presentation.font_size_pixels;
+        let mut font_family = record.rich_content_presentation.font_family.as_deref();
         let mut text_color_rgba = record.rich_content_presentation.text_color_rgba;
         let mut bold_text = record.rich_content_presentation.bold_text;
         let mut italic_text = record.rich_content_presentation.italic_text;
@@ -292,6 +293,10 @@ fn set_tooltip_text(
         {
             font_size_pixels =
                 font_size_pixels.or(parent_record.rich_content_presentation.font_size_pixels);
+            font_family = font_family.or(parent_record
+                .rich_content_presentation
+                .font_family
+                .as_deref());
             text_color_rgba =
                 text_color_rgba.or(parent_record.rich_content_presentation.text_color_rgba);
             bold_text |= parent_record.rich_content_presentation.bold_text;
@@ -300,6 +305,9 @@ fn set_tooltip_text(
             parent_record_index = parent_record.parent_rich_content_node_index;
         }
         let mut font = base_font.clone();
+        if let Some(family) = font_family {
+            font.font = crate::authored_ui_text_layout_presentation::resolve_authored_font_family_to_bevy_font_source(family);
+        }
         if let Some(font_size) = font_size_pixels {
             font.font_size = FontSize::Px(font_size);
         }

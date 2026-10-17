@@ -64,6 +64,86 @@ pub(super) struct BuildOutput {
     pub(super) simulation_paused_visible_nodes: BTreeSet<String>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+        ui::parser::SourceUiDocument,
+    };
+    use crate::ui_document::source::lower::authored_ui_document_lowering::lower_ui_document;
+
+    #[test]
+    fn fading_hover_buttons_resume_on_enter_without_overriding_authored_enter_actions() {
+        let path = "ui/layout/hover.xml";
+        let source = parse_blue_fang_source_document(AssetPath::new(path), br#"
+            <UILayout><UIRegion w="1024" h="768"/><children>
+                <UIHoverButton name="revealer">
+                    <enter><event msg="UI_CHILD" data="UIChildData" name="highlight"><child msg="UI_SHOW"/></event></enter>
+                </UIHoverButton>
+                <UIHoverButton name="highlight">
+                    <UIShowHideAnim time=".01" exitRate=".02"/>
+                    <leave><event msg="UI_CHILD" data="UIChildData" name="highlight"><child msg="UI_HIDE"/></event></leave>
+                </UIHoverButton>
+                <UIHoverButton name="explicit">
+                    <UIShowHideAnim time=".01" exitRate=".02"/>
+                    <enter><event msg="UI_CHILD" data="UIChildData" name="explicit"><child msg="UI_HIDE"/></event></enter>
+                    <leave><event msg="UI_CHILD" data="UIChildData" name="explicit"><child msg="UI_HIDE"/></event></leave>
+                </UIHoverButton>
+            </children></UILayout>"#).expect("hover source parses");
+        let document = lower_ui_document(&AuthoredUiDocument {
+            virtual_path: path.into(),
+            id: AssetId::default(),
+            role: UiDocumentRole::InGameOptions,
+            source: SourceUiDocument::parse(&source),
+            templates: BTreeMap::new(),
+            image_selections: Vec::new(),
+            interaction_cursors: None,
+            placement_preview: None,
+            role_targets: BTreeMap::new(),
+            resolved_dependencies: Default::default(),
+        })
+        .expect("hover source lowers");
+        for (name, visible) in [("highlight", true), ("explicit", false)] {
+            let node = document
+                .nodes
+                .iter()
+                .find(|node| node.name == name)
+                .expect("hover button");
+            let enter_actions: Vec<_> = node
+                .actions
+                .iter()
+                .filter_map(|action| match action {
+                    UiActionRecord::Presentation(record) if record.trigger == UiTrigger::Enter => {
+                        Some(&record.action)
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(
+                enter_actions,
+                vec![&UiPresentationAction::SetTargetNodeVisible {
+                    target_node: node.id,
+                    visible
+                }]
+            );
+        }
+        let revealer = document
+            .nodes
+            .iter()
+            .find(|node| node.name == "revealer")
+            .expect("revealer");
+        assert!(revealer.actions.contains(&UiActionRecord::Presentation(
+            UiPresentationActionRecord {
+                trigger: UiTrigger::Leave,
+                action: UiPresentationAction::HideTargetNodeUnlessHovered {
+                    target_node: UiDocumentRole::InGameOptions.node_id("highlight"),
+                },
+            }
+        )));
+    }
+}
+
 pub(super) fn nearest_tree_element(output: &BuildOutput, mut parent: u32) -> Option<AssetId> {
     while parent != u32::MAX {
         let node = output.nodes.get(parent as usize)?;
@@ -73,6 +153,45 @@ pub(super) fn nearest_tree_element(output: &BuildOutput, mut parent: u32) -> Opt
         parent = node.parent;
     }
     None
+}
+
+pub(super) fn complete_hover_reveal_leave_actions(nodes: &mut [UiNodeDefinition]) {
+    let self_hiding_hover_targets: BTreeSet<_> = nodes
+        .iter()
+        .filter(|node| node.animation.is_some())
+        .filter(|node| {
+            node.actions.iter().any(|action| {
+                matches!(action, UiActionRecord::Presentation(record)
+                if record.trigger == UiTrigger::Leave
+                    && record.action == UiPresentationAction::SetTargetNodeVisible {
+                        target_node: node.id,
+                        visible: false,
+                    })
+            })
+        })
+        .map(|node| node.id.0)
+        .collect();
+    for node in nodes {
+        let leave_actions: Vec<_> = node.actions.iter().filter_map(|action| {
+            let UiActionRecord::Presentation(record) = action else { return None; };
+            let UiPresentationAction::SetTargetNodeVisible { target_node, visible: true } = record.action else { return None; };
+            if record.trigger != UiTrigger::Enter
+                || !self_hiding_hover_targets.contains(&target_node.0)
+                || node.actions.iter().any(|action| {
+                    matches!(action, UiActionRecord::Presentation(record)
+                        if record.trigger == UiTrigger::Leave
+                            && record.action == UiPresentationAction::SetTargetNodeVisible { target_node, visible: false })
+                })
+            {
+                return None;
+            }
+            Some(UiActionRecord::Presentation(UiPresentationActionRecord {
+                trigger: UiTrigger::Leave,
+                action: UiPresentationAction::HideTargetNodeUnlessHovered { target_node },
+            }))
+        }).collect();
+        node.actions.extend(leave_actions);
+    }
 }
 
 pub(super) fn nearest_scroll_receiver(output: &BuildOutput, mut parent: u32) -> Option<AssetId> {
@@ -274,6 +393,41 @@ pub(super) fn lower_node(
         SourceUiWidgetData::Animation(source) => lower_widget_animation(source, input)?,
         _ => lower_animation(effective.show_hide_animation.as_ref(), input)?,
     };
+    if animation.is_some()
+        && matches!(
+            effective.kind,
+            SourceUiWidgetKind::HoverButton
+                | SourceUiWidgetKind::ToggleHoverButton
+                | SourceUiWidgetKind::CompositeHoverButton
+        )
+    {
+        // A fading hover button remains the topmost pointer target. Re-entry
+        // must show it again rather than wait for the button beneath to enter
+        // after the fade has hidden it.
+        let self_visibility_action = |trigger, visible| {
+            UiActionRecord::Presentation(UiPresentationActionRecord {
+                trigger,
+                action: UiPresentationAction::SetTargetNodeVisible {
+                    target_node: id,
+                    visible,
+                },
+            })
+        };
+        let has_authored_enter_visibility = output.actions.iter().any(|action| {
+            matches!(action, UiActionRecord::Presentation(record)
+                if record.trigger == UiTrigger::Enter
+                    && matches!(record.action, UiPresentationAction::SetTargetNodeVisible { target_node, .. } if target_node == id))
+        });
+        if output
+            .actions
+            .contains(&self_visibility_action(UiTrigger::Leave, false))
+            && !has_authored_enter_visibility
+        {
+            output
+                .actions
+                .push(self_visibility_action(UiTrigger::Enter, true));
+        }
+    }
     let name = stable_name.clone();
     let mut flags = node_flags(&effective);
     let obsolete_eight_bit_sound_control = effective

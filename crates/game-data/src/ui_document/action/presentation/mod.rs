@@ -32,6 +32,11 @@ pub enum UiPresentationAction {
         target_node: AssetId,
         visible: bool,
     },
+    /// Finish a hover reveal when the pointer leaves its revealer without
+    /// interrupting a handoff onto the revealed control or its descendants.
+    HideTargetNodeUnlessHovered {
+        target_node: AssetId,
+    },
     SetTargetNodeSelectionAndTimedSequencesActive {
         /// A foreign target remains under the same UI lifecycle owner.
         #[serde(default)]
@@ -159,6 +164,7 @@ impl UiPresentationAction {
             } => [Some(target_node), Some(source_node)],
             Self::ActivateTargetNodeWithPress { target_node }
             | Self::SetTargetNodeVisible { target_node, .. }
+            | Self::HideTargetNodeUnlessHovered { target_node }
             | Self::SetTargetNodeSelectionAndTimedSequencesActive { target_node, .. }
             | Self::SetTargetNodeInteractionEnabled { target_node, .. }
             | Self::SetTargetNodeIntegerValue { target_node, .. }

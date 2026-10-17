@@ -125,6 +125,7 @@ fn spawn_localized_zoopedia_rich_content_text(
     let mut text_font = input.base_text_font.clone();
     let mut physical_font_size_pixels = input.base_physical_font_size_pixels;
     let mut font_size_pixels = None;
+    let mut font_family = None;
     let mut text_color_rgba = None;
     let mut bold = false;
     let mut italic = false;
@@ -134,6 +135,7 @@ fn spawn_localized_zoopedia_rich_content_text(
     while let Some(record) = current_record {
         let presentation = &record.rich_content_presentation;
         font_size_pixels = font_size_pixels.or(presentation.font_size_pixels);
+        font_family = font_family.or(presentation.font_family.as_deref());
         text_color_rgba = text_color_rgba.or(presentation.text_color_rgba);
         bold |= presentation.bold_text;
         italic |= presentation.italic_text;
@@ -142,6 +144,9 @@ fn spawn_localized_zoopedia_rich_content_text(
         current_record = record
             .parent_rich_content_node_index
             .and_then(|parent| input.source_records.get(parent as usize));
+    }
+    if let Some(family) = font_family {
+        text_font.font = openzt2_ui::authored_ui_text_layout_presentation::resolve_authored_font_family_to_bevy_font_source(family);
     }
     if let Some(authored_font_size_pixels) = font_size_pixels {
         physical_font_size_pixels = authored_font_size_pixels;

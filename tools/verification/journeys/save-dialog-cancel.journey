@@ -142,6 +142,9 @@ until visible "In Game Options"
 until simulation_paused == 1 within 120
 move "TextButton Save Hover"
 until visible "TextButton Save"
+capture pause-save-highlight-ready
+wait 2
+capture pause-save-highlight-settled
 click "TextButton Save"
 until visible "Save Game Shell"
 until hidden "In Game Options"

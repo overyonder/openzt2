@@ -265,6 +265,36 @@ mod tests {
     };
 
     #[test]
+    fn localized_font_families_survive_formatting_and_nested_overrides() {
+        let source = parse_blue_fang_source_document(
+            AssetPath::new("lang/1033/ui.xml"),
+            br#"<ZT2Strings><LOC_STRING _locID="shell:ingameoptions_mainmenu"><font name="arial" size="14"><b>Return to Main Menu</b><font name="comic sans ms">Help</font></font></LOC_STRING></ZT2Strings>"#,
+        )
+        .expect("localized fonts parse");
+        let entries = lower_blue_fang_localization_entries(&source).expect("localized fonts lower");
+        let entry = &entries[0];
+        assert_eq!(
+            entry.localized_text_presentation.font_family.as_deref(),
+            Some("arial")
+        );
+        let records = &entry.localized_rich_content_nodes;
+        let inherited_family = |text: &str| {
+            let run = records
+                .iter()
+                .find(|record| record.localized_text == text)
+                .expect("text run");
+            std::iter::successors(Some(run), |record| {
+                record
+                    .parent_rich_content_node_index
+                    .and_then(|index| records.get(index as usize))
+            })
+            .find_map(|record| record.rich_content_presentation.font_family.as_deref())
+        };
+        assert_eq!(inherited_family("Return to Main Menu"), Some("arial"));
+        assert_eq!(inherited_family("Help"), Some("comic sans ms"));
+    }
+
+    #[test]
     fn zoopedia_labels_emphasis_and_breaks_retain_source_order() {
         let source = parse_blue_fang_source_document(AssetPath::new("lang/1033/animal_entries.xml"),
             br#"<ZT2Strings><LOC_STRING _locID="zoopedia_tiger:text"><cell width="284" pady="10"><color r="255" g="255" b="255">Class: Mammals <i>(Mammalia)</i><br/>Order: Carnivores <i>(Carnivora)</i><br/>Family: Cats</color></cell></LOC_STRING></ZT2Strings>"#).expect("authored rich text parses");

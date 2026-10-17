@@ -83,8 +83,8 @@ pub(super) fn lower_animation_values(
         return Err(invalid_at(input, "UI animation timing is invalid"));
     }
     let interpolation = match source_interpolation_name {
-        None | Some("linear") => UiNodeAnimationInterpolation::Linear,
-        Some("sin") => UiNodeAnimationInterpolation::Sinusoidal,
+        Some("linear") => UiNodeAnimationInterpolation::Linear,
+        None | Some("sin") => UiNodeAnimationInterpolation::Sinusoidal,
         Some(value) => {
             return Err(invalid_at(
                 input,

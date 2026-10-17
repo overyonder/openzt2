@@ -27,9 +27,16 @@ pub struct UiShowHideAnimation {
 
 impl UiShowHideAnimation {
     pub fn start_authored_visibility_transition(&mut self, visible: bool) {
+        let reversing = self.running && self.forward != visible;
         self.forward = visible;
-        self.elapsed_ms = if visible { 0.0 } else { self.duration_ms };
-        self.delay_remaining_ms = if visible { self.delay_ms } else { 0.0 };
+        if !reversing {
+            self.elapsed_ms = if visible { 0.0 } else { self.duration_ms };
+        }
+        self.delay_remaining_ms = if visible && !reversing {
+            self.delay_ms
+        } else {
+            0.0
+        };
         self.running = true;
     }
 }
@@ -98,7 +105,7 @@ pub(super) fn advance_ui_animations(
         let amount = match animation.interpolation {
             UiNodeAnimationInterpolation::Linear => linear_amount,
             UiNodeAnimationInterpolation::Sinusoidal => {
-                (linear_amount * std::f32::consts::FRAC_PI_2).sin()
+                (1.0 - (linear_amount * std::f32::consts::PI).cos()) * 0.5
             }
         };
         apply_rect(&mut node, &animation, amount, origin.map(|origin| origin.0));
@@ -245,6 +252,42 @@ mod tests {
         assert_eq!(node.top, px(320.0));
         assert_eq!(node.width, px(100.0));
         assert_eq!(node.height, px(30.0));
+    }
+
+    #[test]
+    fn reversing_a_fade_preserves_its_current_color_and_skips_the_show_delay() {
+        let mut animation = UiShowHideAnimation {
+            elapsed_ms: 4.0,
+            duration_ms: 10.0,
+            exit_rate: 0.02,
+            delay_ms: 50.0,
+            delay_remaining_ms: 0.0,
+            bob_ms: 0.0,
+            interpolation: UiNodeAnimationInterpolation::Linear,
+            forward: false,
+            running: true,
+            base_rect: [0.0; 4],
+            rect_intervals: [None; 4],
+            animates_color: true,
+            affects_text_color: true,
+            start_color: [255, 197, 78, 255],
+            end_color: [255, 255, 201, 255],
+        };
+        let before = lerp_color(animation.start_color, animation.end_color, 0.4);
+        animation.start_authored_visibility_transition(true);
+        assert!(animation.forward && animation.running);
+        assert_eq!(animation.delay_remaining_ms, 0.0);
+        assert_eq!(
+            lerp_color(
+                animation.start_color,
+                animation.end_color,
+                animation.elapsed_ms / animation.duration_ms
+            ),
+            before
+        );
+        animation.start_authored_visibility_transition(false);
+        assert!(!animation.forward);
+        assert_eq!(animation.elapsed_ms, 4.0);
     }
 }
 

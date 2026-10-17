@@ -61,6 +61,7 @@ pub(super) struct UiExclusiveHoverPresentation;
 
 #[derive(SystemParam)]
 pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
+    pointer_capture: Res<'w, openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     scopes: Query<'w, 's, &'static mut UiFocusScope>,
     toggle_groups: Query<
         'w,
@@ -152,6 +153,7 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
 ) {
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
     let UiPresentationActionApplicationQueries {
+        pointer_capture,
         mut scopes,
         toggle_groups,
         mut scroll_positions,
@@ -308,6 +310,28 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                                 trigger: UiTrigger::Press,
                             });
                         });
+                    }
+                }
+                UiPresentationAction::HideTargetNodeUnlessHovered { target_node } => {
+                    for (entity, id, owner, visibility, _, animation, ..) in &mut nodes {
+                        if owner.0 != source_owner.0 || id.id != *target_node {
+                            continue;
+                        }
+                        let hovered = pointer_capture.target.is_some_and(|hovered| {
+                            hovered == entity
+                                || children
+                                    .iter_descendants(entity)
+                                    .any(|child| child == hovered)
+                        });
+                        if hovered {
+                            break;
+                        }
+                        if let Some(mut animation) = animation {
+                            animation.start_authored_visibility_transition(false);
+                        } else if let Some(mut visibility) = visibility {
+                            *visibility = Visibility::Hidden;
+                        }
+                        break;
                     }
                 }
                 UiPresentationAction::SetTargetNodeVisible {

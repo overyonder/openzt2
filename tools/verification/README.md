@@ -101,6 +101,7 @@ also the ownership map for checks combined from older journeys.
 | profile-and-options-lists | Profile rows/name, Escape, close, Continue | Closes dialog |
 | first-person-map-bounds | Second map after return, walking bounds, wheel limits/reversal, camera restoration | Small Alpine fixture; returns to menu |
 | save-dialog-cancel | First Save projection, both Save routes, pause changes, options/controller, gameplay F1 scope | First journey on the shared Freeform map; restores it |
+| pause-menu-hover | Highlight alignment, rapid sweeps, stationary hover and re-entry during a fade | Closes Game Options; restores the shared Freeform map |
 | adoption-first-row | First/repeated selection, genders, food/enrichment preview replacement | Cancels previews |
 | building-lifecycle | Building panel, relocation/cancel, identifying sale/refund | Sells the created building |
 | fixed-function-reflection | Restroom reflection after camera changes | Inverse camera input and construction undo |

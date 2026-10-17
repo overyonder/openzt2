@@ -331,6 +331,8 @@ impl Plugin for GameUiPlugin {
             .add_systems(
                 PostUpdate,
                 (
+                    authored_ui_text_layout_presentation::align_authored_single_line_text_from_measured_glyph_run
+                        .after(bevy::ui::UiSystems::PostLayout),
                     focused_or_selected_node_scroll_reveal::scroll_nearest_ancestor_to_reveal_focused_or_selected_node
                         .after(bevy::ui::UiSystems::Layout),
                     authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels

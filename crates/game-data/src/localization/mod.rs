@@ -81,6 +81,7 @@ pub enum LocalizationRichContentKind {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LocalizationTextPresentation {
     pub text_color_rgba: Option<[u8; 4]>,
+    pub font_family: Option<String>,
     pub font_size_pixels: Option<f32>,
     pub bold_text: bool,
     pub shadow_offset_pixels: Option<[i16; 2]>,
@@ -96,13 +97,14 @@ pub struct LocalizationTextPresentation {
     clippy::struct_excessive_bools,
     reason = "independent authored text flags"
 )]
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct LocalizationRichContentPresentation {
     pub width_pixels: Option<f32>,
     pub height_pixels: Option<f32>,
     pub padding_pixels: Option<[f32; 2]>,
     pub source_rectangle_pixels: Option<[f32; 4]>,
     pub text_color_rgba: Option<[u8; 4]>,
+    pub font_family: Option<String>,
     pub font_size_pixels: Option<f32>,
     pub shadow_offset_pixels: Option<[i16; 2]>,
     pub shadow_alpha: Option<u8>,

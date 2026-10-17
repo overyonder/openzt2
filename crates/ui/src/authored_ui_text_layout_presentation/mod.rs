@@ -5,6 +5,17 @@ use bevy::{
 
 pub(crate) const AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY: &str = "Comic Neue";
 
+/// Resolves authored family names through the same platform bindings as UI fonts.
+pub fn resolve_authored_font_family_to_bevy_font_source(family: &str) -> FontSource {
+    if family.eq_ignore_ascii_case("arial") {
+        FontSource::SansSerif
+    } else if family.eq_ignore_ascii_case("comic sans ms") {
+        FontSource::Family(AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY.into())
+    } else {
+        FontSource::Family(family.into())
+    }
+}
+
 #[derive(Component, Default)]
 pub struct UiSingleLineTextAlignment {
     pub horizontal_offset_pixels: f32,
@@ -60,6 +71,9 @@ pub(super) fn bind_authored_windows_font_roles_to_available_platform_font_famili
 /// the no-wrap contract and use Bevy's measured glyph run to supply the
 /// missing horizontal offset instead of changing line breaking or baking
 /// font-specific positions.
+/// Runs after UI post-layout so both the node extent and measured glyph run
+/// describe the current frame, including the first frame a hidden control shows.
+/// Render extraction consumes the resulting offset in that same frame.
 pub(super) fn align_authored_single_line_text_from_measured_glyph_run(
     mut texts: Query<(
         &ComputedNode,

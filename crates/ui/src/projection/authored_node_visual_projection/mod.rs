@@ -393,15 +393,21 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
         .and_then(|value| value.font_size_pixels)
         .map_or_else(|| style.font_px, |value| value);
     let font_bold = localized_presentation.is_some_and(|value| value.bold_text) || style.font_bold;
-    commands.entity(entity).insert((
-        Text::new(text),
-        TextFont {
-            font: match &style.font {
+    let font_source = localized_presentation
+        .and_then(|value| value.font_family.as_deref())
+        .map_or_else(
+            || match &style.font {
                 UiSystemFont::Arial => FontSource::SansSerif,
                 UiSystemFont::ComicSansMs => {
                     FontSource::Family(AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY.into())
                 }
             },
+            crate::authored_ui_text_layout_presentation::resolve_authored_font_family_to_bevy_font_source,
+        );
+    commands.entity(entity).insert((
+        Text::new(text),
+        TextFont {
+            font: font_source,
             font_size: FontSize::Px(font_size),
             width: FontWidth::NORMAL,
             weight: if font_bold {

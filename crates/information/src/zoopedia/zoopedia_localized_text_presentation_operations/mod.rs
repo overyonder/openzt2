@@ -99,6 +99,9 @@ pub(super) fn apply_localized_text_presentation_to_authored_ui_node(
     if let Some(font_size) = presentation.font_size_pixels {
         input.authored_text_font.font_size = FontSize::Px(font_size);
     }
+    if let Some(family) = presentation.font_family.as_deref() {
+        input.authored_text_font.font = openzt2_ui::authored_ui_text_layout_presentation::resolve_authored_font_family_to_bevy_font_source(family);
+    }
     if presentation.bold_text {
         input.authored_text_font.weight = FontWeight::BOLD;
     }

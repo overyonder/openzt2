@@ -15,6 +15,9 @@ pub(super) fn lower_localized_text_presentation(
     let font_size_pixels = rich_content_nodes
         .iter()
         .find_map(|node| node.rich_content_presentation.font_size_pixels);
+    let font_family = rich_content_nodes
+        .iter()
+        .find_map(|node| node.rich_content_presentation.font_family.clone());
     let shadow_offset_pixels = rich_content_nodes
         .iter()
         .find_map(|node| node.rich_content_presentation.shadow_offset_pixels);
@@ -61,6 +64,7 @@ pub(super) fn lower_localized_text_presentation(
     }
     LocalizationTextPresentation {
         text_color_rgba,
+        font_family,
         font_size_pixels,
         bold_text,
         shadow_offset_pixels,
@@ -107,6 +111,14 @@ pub(super) fn lower_blue_fang_rich_content_presentation(
             .zip(source_width.zip(source_height))
             .map(|((x, y), (width, height))| [x, y, width, height]),
         text_color_rgba,
+        font_family: node
+            .name
+            .eq_ignore_ascii_case("font")
+            .then(|| node.attribute("name"))
+            .flatten()
+            .map(str::trim)
+            .filter(|family| !family.is_empty())
+            .map(str::to_owned),
         font_size_pixels: number("size").map(|size| size * (96.0 / 72.0)),
         shadow_offset_pixels: (shadow_x.is_some() || shadow_y.is_some())
             .then(|| [shadow_x.unwrap_or(0), shadow_y.unwrap_or(0)]),

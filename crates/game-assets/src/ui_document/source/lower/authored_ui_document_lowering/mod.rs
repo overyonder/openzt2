@@ -228,6 +228,7 @@ pub(in crate::ui_document::source) fn lower_ui_document(
         &mut output.nodes,
         input.role,
     );
+    super::authored_ui_node_tree_lowering::complete_hover_reveal_leave_actions(&mut output.nodes);
 
     let gameplay_interaction_cursors = input
         .interaction_cursors

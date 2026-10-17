@@ -1,0 +1,44 @@
+# Keep each revealed text button under a stationary pointer through its fade interval.
+start freeform-map
+key ESCAPE
+until visible "In Game Options"
+move "TextButton Return Hover"
+move "TextButton Save Hover"
+move "TextButton Load Hover"
+move "TextButton Exit Hover"
+move "TextButton Cancel Hover"
+wait 90
+expect-hidden "TextButton Return To MainMenu"
+expect-hidden "TextButton Save"
+expect-hidden "TextButton Load"
+expect-hidden "TextButton Exit"
+expect-visible "TextButton Cancel"
+capture pause-fast-sweep-only-cancel-highlighted
+move "TextButton Save Hover"
+wait 12
+# Re-enter while Save is still fading; its overlay must keep the pointer.
+move "TextButton Return Hover"
+wait 6
+move "TextButton Save"
+wait 90
+expect-visible "TextButton Save"
+capture pause-save-stationary-hover
+move "TextButton Return Hover"
+wait 90
+expect-visible "TextButton Return To MainMenu"
+capture pause-return-stationary-hover
+move "TextButton Load Hover"
+wait 90
+expect-visible "TextButton Load"
+capture pause-load-stationary-hover
+move "TextButton Exit Hover"
+wait 90
+expect-visible "TextButton Exit"
+capture pause-exit-stationary-hover
+move "TextButton Cancel Hover"
+wait 90
+expect-visible "TextButton Cancel"
+capture pause-cancel-stationary-hover
+click "TextButton Cancel"
+until hidden "In Game Options"
+restore freeform-map
