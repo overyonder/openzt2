@@ -62,7 +62,7 @@ pub(super) fn request_open_gates_for_agents_within_authored_trigger_distance(
         return;
     };
     for (gate_entity, gate, mut mechanism, edge, transform, automatic_close) in &mut gates {
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
             continue;
         };
         let policy = &definition.gate_policy;

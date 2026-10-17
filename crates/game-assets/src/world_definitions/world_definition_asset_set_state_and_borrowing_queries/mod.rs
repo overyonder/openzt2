@@ -398,8 +398,21 @@ impl<'a> WorldDefinitionsView<'a> {
         ViewingOpportunityDefinition
     );
     finder!(find_fence, Fence, fences, FenceDefinition);
+    /// The definition whose models and gate policy a gated edge of `fence`
+    /// uses: the fence's own gate variant (`chainlink` -> `chainlinkgate`),
+    /// or the fence itself when it is a gate or has no loaded variant.
+    pub fn find_gate_fence(self, fence: AssetId) -> Option<&'a FenceDefinition> {
+        let definition = self.find_fence(fence)?;
+        Some(
+            (definition.gate != fence)
+                .then(|| self.find_fence(definition.gate))
+                .flatten()
+                .unwrap_or(definition),
+        )
+    }
     /// Loads the actor manifest holding a gate fence's open and close clips.
     pub fn load_fence_gate_animation_set<T: Asset>(self, fence: AssetId) -> Option<Handle<T>> {
+        let fence = self.find_gate_fence(fence)?.id;
         let asset = self
             .assets
             .get(self.records.get(&(DefinitionKind::Fence, fence))?)?;

@@ -8,6 +8,7 @@ use super::{
         select_authored_fence_segment_prefab_for_adjacent_topology,
         select_reciprocal_fence_curve_partners,
     },
+    gate_operation_types::Gate,
     topology_graph_types::{FenceEdge, TopologyGrid, TopologyIndex, TopologyNode},
     topology_grid_geometry::calculate_topology_edge_world_transform,
     topology_presentation_types::{
@@ -28,6 +29,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         &FenceEdge,
         Option<&mut FenceSegmentPrefab>,
         Option<&TopologyPresentation>,
+        Has<Gate>,
     )>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -38,7 +40,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     }
     let segments = fences
         .iter()
-        .filter_map(|(entity, edge, _, _)| {
+        .filter_map(|(entity, edge, _, _, _)| {
             Some((
                 entity,
                 (
@@ -60,11 +62,17 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         .zip(partners)
         .map(|((entity, _), partner)| (*entity, partner))
         .collect::<bevy::platform::collections::HashMap<_, _>>();
-    for (fence_entity, edge, current_prefab, presentation) in &mut fences {
+    for (fence_entity, edge, current_prefab, presentation, gate) in &mut fences {
         let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
             continue;
         };
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        // A gated edge shows its fence's gate variant, e.g. chainlinkgate.
+        let definition = if gate {
+            definitions.find_gate_fence(edge.definition)
+        } else {
+            definitions.find_fence(edge.definition)
+        };
+        let Some(definition) = definition else {
             continue;
         };
         let (first, second, next_cell) = partners.get(&fence_entity).copied().flatten().map_or(

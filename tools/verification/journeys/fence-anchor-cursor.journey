@@ -1,0 +1,15 @@
+# diagnostic
+# #95: fence mode's blank pointer is replaced by the authored anchor post and
+# fence grid on the hovered grid point. Captures are for visual review only.
+start freeform-map
+click "construction"
+click "Fence Tab"
+select-catalogue "brickwall"
+move 840 400
+wait 30
+capture fence-anchor-hover
+wheel 3 3
+wait 30
+capture fence-anchor-hover-close
+key ESCAPE
+until placement_previews == 0

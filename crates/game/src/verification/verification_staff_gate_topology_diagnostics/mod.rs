@@ -799,7 +799,7 @@ fn observe_published_fence_run_boundaries(
         }
         gates += usize::from(gate.is_some());
         let staff_policy = definitions
-            .and_then(|definitions| definitions.find_fence(edge.definition))
+            .and_then(|definitions| definitions.find_gate_fence(edge.definition))
             .map(|fence| {
                 fence.gate_policy.open_for_entity_type == Some(AssetId::from_key("staff"))
             });

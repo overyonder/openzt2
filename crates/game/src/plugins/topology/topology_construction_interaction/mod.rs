@@ -22,7 +22,8 @@ use crate::verification::verification_staff_gate_topology_diagnostics::StaffGate
 
 use super::{
     topology_construction_planning::{
-        calculate_fence_construction_plan, calculate_path_construction_plan,
+        calculate_fence_construction_plan, calculate_gate_replacement_plan,
+        calculate_path_construction_plan, fence_definition_is_gate, GateHostEdges,
     },
     topology_construction_preview_types::{FencePreview, PathPreview, PlaceFence, PlacePath},
     topology_edit_types::{TopologyEdit, TopologySnapshot},
@@ -33,6 +34,7 @@ use super::{
 mod tests {
     use super::*;
     use crate::plugins::economy::money_types::Money;
+    use crate::plugins::topology::topology_graph_types::EdgeKey;
     use openzt2_game_data::AssetId;
 
     #[test]
@@ -100,6 +102,32 @@ mod tests {
             TopologyGrid::default().cell_translation(accepted_endpoint)
         );
     }
+
+    #[test]
+    fn gate_pointer_picks_the_nearest_fence_segment_within_reach() {
+        let grid = TopologyGrid::default();
+        let mut index = TopologyIndex::default();
+        let near = EdgeKey::new(IVec3::ZERO, IVec3::new(4, 0, 0)).unwrap();
+        let far = EdgeKey::new(IVec3::new(0, 3, 0), IVec3::new(4, 3, 0)).unwrap();
+        for edge in [near, far] {
+            index.edges.insert(edge, Entity::PLACEHOLDER);
+        }
+        let above = |cell: IVec3, offset: Vec3| grid.cell_translation(cell) + offset;
+        let beside_near = above(
+            IVec3::new(2, 0, 0),
+            (grid.cell_translation(IVec3::new(2, 1, 0))
+                - grid.cell_translation(IVec3::new(2, 0, 0)))
+                * 0.4,
+        );
+        assert_eq!(
+            hovered_fence_edge(&index, grid, beside_near),
+            Some((near.lo, near.hi))
+        );
+        assert_eq!(
+            hovered_fence_edge(&index, grid, above(IVec3::new(20, 20, 0), Vec3::ZERO)),
+            None
+        );
+    }
 }
 
 pub(super) fn apply_fence_placement_requests_to_construction_previews(
@@ -151,6 +179,7 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     grid: Res<TopologyGrid>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
+    index: Res<TopologyIndex>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
     previews: Query<
@@ -190,9 +219,12 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
     if ground_aligned {
         cell.z = 0;
     }
+    let gate = matches!(*tool, ConstructionTool::Fence(definition)
+        if fence_definition_is_gate(definitions, definition));
     let Ok((preview, fence, path)) = previews.single() else {
-        if primary_pointer.just_pressed && !ui_capture.over_ui {
-            if let ConstructionTool::Fence(definition) = *tool {
+        // A gate has no anchor click; its preview follows the hovered fence.
+        if gate || primary_pointer.just_pressed && !ui_capture.over_ui {
+            if let (ConstructionTool::Fence(definition), false) = (*tool, gate) {
                 anchor_observation.record_initial_anchor_press(
                     root,
                     definition,
@@ -234,7 +266,20 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
         }
         return;
     };
-    if let Some(fence) = fence {
+    if let (Some(fence), true) = (fence, gate) {
+        let (from, to) = hovered_fence_edge(&index, *grid, cursor.world).unwrap_or((cell, cell));
+        if !ui_capture.over_ui && (fence.from, fence.to) != (from, to) {
+            fences.write(PlaceFence {
+                preview,
+                definition,
+                from,
+                to,
+            });
+        }
+        if primary_pointer.just_pressed && !ui_capture.over_ui {
+            commits.write(CommitConstruction { preview });
+        }
+    } else if let Some(fence) = fence {
         if !ui_capture.over_ui && fence.to != cell {
             fences.write(PlaceFence {
                 preview,
@@ -265,6 +310,31 @@ pub(super) fn drive_selected_topology_placement_pointer_sequence(
             commits.write(CommitConstruction { preview });
         }
     }
+}
+
+/// The fence segment nearest the pointer, within reach of a gate click.
+fn hovered_fence_edge(
+    index: &TopologyIndex,
+    grid: TopologyGrid,
+    world: Vec3,
+) -> Option<(IVec3, IVec3)> {
+    // ponytail: linear scan of every edge; a spatial lookup if zoos grow huge.
+    const REACH_M: f32 = 1.5;
+    let point = world.xz();
+    index
+        .edges
+        .keys()
+        .map(|edge| {
+            let (lo, hi) = (
+                grid.cell_translation(edge.lo).xz(),
+                grid.cell_translation(edge.hi).xz(),
+            );
+            let along = (point - lo).dot(hi - lo) / (hi - lo).length_squared().max(f32::EPSILON);
+            (edge, point.distance(lo + (hi - lo) * along.clamp(0.0, 1.0)))
+        })
+        .filter(|(_, distance)| *distance <= REACH_M)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(edge, _)| (edge.lo, edge.hi))
 }
 
 /// Keeps the committed endpoint as the next ground-path anchor. Pointer updates
@@ -375,6 +445,7 @@ pub(super) fn evaluate_topology_construction_preview_validity(
     terrain: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    gate_hosts: GateHostEdges,
     mut previews: Query<
         (
             &mut ConstructionPreview,
@@ -389,6 +460,10 @@ pub(super) fn evaluate_topology_construction_preview_validity(
     };
     for (mut construction, fence, path) in &mut previews {
         let result = match (fence, path) {
+            (Some(fence), None) if fence_definition_is_gate(definitions, fence.definition) => {
+                calculate_gate_replacement_plan(fence, &index, definitions, &gate_hosts)
+                    .map(|(_, cost)| cost)
+            }
             (Some(fence), None) => calculate_fence_construction_plan(
                 fence,
                 &index,

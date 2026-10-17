@@ -1,0 +1,53 @@
+# diagnostic
+# #95: fence joins (#75), curved-wall faces (#76), rope-fence posts (#77) and
+# path curb corners (#66). Captures are for visual review only.
+start freeform-map
+snapshot joins-start
+click "construction"
+click "Fence Tab"
+select-catalogue "brickwall"
+click 840 300
+click 960 300
+until fences > @joins-start
+snapshot fence-step
+click 1020 360                  # turn
+until fences > @fence-step
+snapshot fence-step
+click 1020 450                  # second turn
+until fences > @fence-step
+key ESCAPE
+until placement_previews == 0
+select-catalogue "lowpostrope"
+snapshot fence-step
+click 820 380
+click 920 450
+until fences > @fence-step
+snapshot fence-step
+click 860 520
+until fences > @fence-step
+key ESCAPE
+until placement_previews == 0
+click "Path Tab"
+select-catalogue "asphalt"
+snapshot path-step
+move 700 560
+click 700 560
+move 850 600
+until placement_valid_previews == 1 within 120
+click 850 600
+until paths > @path-step
+snapshot path-step
+move 850 660
+until placement_valid_previews == 1 within 120
+click 850 660
+until paths > @path-step
+key ESCAPE
+until placement_previews == 0
+move 800 200
+capture joins-overview
+wheel 3 3
+wait 30
+capture joins-close
+key Q 40
+wait 30
+capture joins-close-rotated

@@ -109,19 +109,21 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
                 .contains_all(FenceTraversalBlockingFlags::ANIMAL)
         });
         let open_gate_passes_animals = gate.is_some_and(|gate| gate.open)
-            && definition.is_none_or(|definition| {
-                definition
-                    .gate_policy
-                    .open_passage_types
-                    .as_ref()
-                    .is_none_or(|exceptions| {
-                        exceptions.iter().any(|exception| {
-                            exception
-                                .traversal_types
-                                .contains_all(FenceTraversalBlockingFlags::ANIMAL)
+            && world_definitions
+                .find_gate_fence(fence_edge.definition)
+                .is_none_or(|definition| {
+                    definition
+                        .gate_policy
+                        .open_passage_types
+                        .as_ref()
+                        .is_none_or(|exceptions| {
+                            exceptions.iter().any(|exception| {
+                                exception
+                                    .traversal_types
+                                    .contains_all(FenceTraversalBlockingFlags::ANIMAL)
+                            })
                         })
-                    })
-            });
+                });
         let boundary_is_breached = !blocks_animals || open_gate_passes_animals;
         if boundary_is_breached {
             info!(target: "openzt2_gameplay_journey", ?fence_entity,

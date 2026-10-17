@@ -41,7 +41,7 @@ pub(super) fn apply_requested_gate_state(
             continue;
         };
         gate.open = request.open;
-        if let Some(definition) = definitions.find_fence(edge.definition) {
+        if let Some(definition) = definitions.find_gate_fence(edge.definition) {
             let policy = &definition.gate_policy;
             if let Some(mut automatic_close) = automatic_close {
                 automatic_close.0 = request.open.then_some(policy.auto_close_ticks).unwrap_or(0);
@@ -83,7 +83,7 @@ pub(super) fn attach_authored_animation_sets_to_resolved_gate_models(
         else {
             continue;
         };
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
             continue;
         };
         let clip = if gate.open {
@@ -135,7 +135,7 @@ pub(super) fn project_gate_state_to_ready_animation_presentations(
         if !gate.is_changed() && !controller.is_added() {
             continue;
         }
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        let Some(definition) = definitions.find_gate_fence(edge.definition) else {
             continue;
         };
         let clip = if gate.open {

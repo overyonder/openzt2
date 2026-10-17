@@ -30,9 +30,9 @@ struct GroundPathMacroCellCurbPresentationRecord {
     owner: Entity,
     definition: AssetId,
     curb: AssetId,
+    cell: IVec3,
     centre_cell: IVec3,
     width_cells: i32,
-    placement_step: i32,
     tile_centre: Vec2,
 }
 
@@ -174,26 +174,26 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 }
                 let width_cm = definition.width_cm;
                 let cell_size_cm = definitions.topology_cell_size_cm();
-                let (centre_cell, width_cells, placement_step) =
+                let (centre_cell, width_cells, _) =
                     calculate_snapped_ground_path_layout(path.cell, width_cm, cell_size_cm)?;
                 Some(GroundPathMacroCellCurbPresentationRecord {
                     owner: entity,
                     definition: path.definition,
                     curb: AssetId(definition.curb.0),
+                    cell: path.cell,
                     centre_cell,
                     width_cells,
-                    placement_step,
                     tile_centre: transform.translation.xz(),
                 })
             })()
         })
         .collect::<Vec<_>>();
     let mut owners = HashMap::<(AssetId, IVec3), Entity>::new();
-    let mut centres = HashSet::<IVec3>::new();
+    let mut triangles = HashSet::<IVec3>::new();
     for path in &path_rows {
-        centres.insert(path.centre_cell);
+        triangles.extend(ground_path_tile_triangles(path));
         owners
-            .entry((path.definition, path.centre_cell))
+            .entry((path.definition, path.cell))
             .and_modify(|owner| {
                 if path.owner.to_bits() < owner.to_bits() {
                     *owner = path.owner;
@@ -215,39 +215,27 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
         .map(|(definition, key, _, _)| (*definition, *key))
         .collect::<HashSet<_>>();
 
-    let occupied_ground_path_macro_centres = &centres;
-    let authored_curb_edge_keys = &explicit_edges;
     let connected_curb_boundary_segments = path_rows
         .iter()
-        .filter(|path| owners.get(&(path.definition, path.centre_cell)) == Some(&path.owner))
+        .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&path.owner))
         .flat_map(|path| {
-            let centre = path.centre_cell;
-            let width = path.width_cells;
-            let south_west = centre + IVec3::new(-width, -width, 0);
-            let south_east = centre + IVec3::new(width, -width, 0);
-            let north_east = centre + IVec3::new(width, width, 0);
-            let north_west = centre + IVec3::new(-width, width, 0);
-            [
-                (south_west, south_east, -IVec3::Y),
-                (south_east, north_east, IVec3::X),
-                (north_east, north_west, IVec3::Y),
-                (north_west, south_west, -IVec3::X),
-            ]
-            .into_iter()
-            .filter_map(move |(first_cell, second_cell, outward)| {
-                let has_adjacent_path = occupied_ground_path_macro_centres
-                    .contains(&(centre + outward * path.placement_step));
-                let has_authored_curb_edge = EdgeKey::new(first_cell, second_cell)
-                    .is_some_and(|edge| authored_curb_edge_keys.contains(&(path.curb, edge)));
-                (!has_adjacent_path && !has_authored_curb_edge).then_some(
-                    GroundPathConnectedCurbBoundarySegment {
+            ground_path_tile_triangles(path)
+                .flat_map(|triangle| {
+                    ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
+                })
+                .filter(|(first_cell, second_cell)| {
+                    !EdgeKey::new(*first_cell, *second_cell)
+                        .is_some_and(|edge| explicit_edges.contains(&(path.curb, edge)))
+                })
+                .map(
+                    |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
                         owner: path.owner,
                         curb: path.curb,
                         first_cell,
                         second_cell,
                     },
                 )
-            })
+                .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
 
@@ -282,7 +270,7 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 .insert(PathCurbsHydrated { root: None });
             continue;
         }
-        if owners.get(&(path.definition, path.centre_cell)) != Some(&entity) {
+        if owners.get(&(path.definition, path.cell)) != Some(&entity) {
             commands
                 .entity(entity)
                 .insert(PathCurbsHydrated { root: None });
@@ -363,5 +351,88 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             ));
         }
         commands.entity(entity).insert(PathCurbsHydrated { root });
+    }
+}
+
+/// Triangle cells a tile covers: native ground paths store one of the four
+/// triangles between a square's centre and its sides; a tile on the centre
+/// covers the whole square.
+fn ground_path_tile_triangles(
+    path: &GroundPathMacroCellCurbPresentationRecord,
+) -> impl Iterator<Item = IVec3> {
+    let half = path.width_cells / 2;
+    let whole = path.cell.xy() == path.centre_cell.xy();
+    let cell = path.cell;
+    let centre = path.centre_cell;
+    [IVec3::Y, IVec3::X, -IVec3::Y, -IVec3::X]
+        .into_iter()
+        .map(move |side| centre + side * half)
+        .filter(move |triangle| whole || *triangle == cell)
+}
+
+/// Exposed curb edges of one path triangle, ordered with the outside on the
+/// right. A triangle's outer side borders the facing triangle of the next
+/// square. Two adjacent triangles of one square cut it diagonally; the
+/// counter-clockwise one of the pair owns that corner-to-corner curb.
+fn ground_path_triangle_curb_boundary(
+    triangles: &HashSet<IVec3>,
+    centre: IVec3,
+    triangle: IVec3,
+) -> impl Iterator<Item = (IVec3, IVec3)> {
+    let side = (triangle - centre).signum();
+    let half = (triangle - centre).abs().max_element();
+    let width = half * 2;
+    let ccw = IVec3::new(-side.y, side.x, 0);
+    let occupied = |direction: IVec3| triangles.contains(&(centre + direction * half));
+    let outer = (!triangles.contains(&(centre + side * (width * 2 - half))))
+        .then(|| (centre + (side - ccw) * width, centre + (side + ccw) * width));
+    // ponytail: a lone triangle or three of four leave half-diagonals, which
+    // no authored curb fits; they stay open.
+    let diagonal = (occupied(-ccw) && !occupied(ccw) && !occupied(-side))
+        .then(|| (centre + (side + ccw) * width, centre - (side + ccw) * width));
+    outer.into_iter().chain(diagonal)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn boundary(triangles: &[IVec3]) -> HashSet<(IVec3, IVec3)> {
+        let set = triangles.iter().copied().collect::<HashSet<_>>();
+        triangles
+            .iter()
+            .flat_map(|triangle| {
+                ground_path_triangle_curb_boundary(&set, IVec3::new(2, 2, 0), *triangle)
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn whole_square_is_bounded_counter_clockwise() {
+        let c = IVec3::new(2, 2, 0);
+        let all = [IVec3::Y, IVec3::X, -IVec3::Y, -IVec3::X].map(|side| c + side);
+        let sw = IVec3::new(0, 0, 0);
+        let se = IVec3::new(4, 0, 0);
+        let ne = IVec3::new(4, 4, 0);
+        let nw = IVec3::new(0, 4, 0);
+        assert_eq!(
+            boundary(&all),
+            [(sw, se), (se, ne), (ne, nw), (nw, sw)]
+                .into_iter()
+                .collect()
+        );
+    }
+
+    #[test]
+    fn north_and_east_triangles_are_cut_by_one_diagonal() {
+        let c = IVec3::new(2, 2, 0);
+        let nw = IVec3::new(0, 4, 0);
+        let ne = IVec3::new(4, 4, 0);
+        let se = IVec3::new(4, 0, 0);
+        assert_eq!(
+            boundary(&[c + IVec3::Y, c + IVec3::X]),
+            [(ne, nw), (se, ne), (nw, se)].into_iter().collect()
+        );
     }
 }

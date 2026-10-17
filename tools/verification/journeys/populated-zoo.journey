@@ -246,16 +246,24 @@ until fences > @fence-start
 snapshot fence-start
 click 1000 470
 until fences > @fence-start
-# Changing fence type starts a new chain at the clicked grid point, as in the
-# original game; it does not snap to nearby posts. Runs are whole segments, so
-# the last chainlink run ends on the post at 1050 475, short of the 1000 470
-# click. Anchor the staff gates on that post and close on the first anchor.
+# Runs are whole segments, so the last run ends on the post at 1050 475, short
+# of the 1000 470 click. Close the enclosure on the first anchor, then put a
+# staff gate on that side: as in the original game, a gate replaces the
+# hovered fence segment with the fence's own gate variant.
+snapshot fence-start
+click 1000 220
+until fences > @fence-start
+key ESCAPE
+until placement_previews == 0
 select-catalogue "staffgate"
 expect selected_catalogue_entry_available == 1
+move 985 320
+until placement_valid_previews == 1
 capture staff-gate-selected
-click 1050 475
-click 1000 220
+snapshot fence-start
+click 985 320
 until habitat_staff_gates > 0
+expect fences == @fence-start
 expect open_habitat_staff_gates == 0
 until closed_staff_gate_clips > 0
 capture staff-gated-habitat

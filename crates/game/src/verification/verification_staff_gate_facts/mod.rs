@@ -118,7 +118,7 @@ impl VerificationStaffGateQueries<'_, '_> {
         self.gates
             .get(gate)
             .ok()
-            .and_then(|(_, _, edge, _)| self.types.definitions()?.find_fence(edge.definition))
+            .and_then(|(_, _, edge, _)| self.types.definitions()?.find_gate_fence(edge.definition))
             .is_some_and(|definition| {
                 definition.gate_policy.open_for_entity_type == Some(AssetId::from_key("staff"))
             })
@@ -259,7 +259,7 @@ pub(super) fn collect_staff_gate_verification_facts(
         let Some(definition) = world
             .types
             .definitions()
-            .and_then(|definitions| definitions.find_fence(edge.definition))
+            .and_then(|definitions| definitions.find_gate_fence(edge.definition))
         else {
             continue;
         };

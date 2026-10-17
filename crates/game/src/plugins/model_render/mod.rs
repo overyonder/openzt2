@@ -4,6 +4,7 @@ pub(crate) mod authored_effect_technique_pass_submission_order;
 pub(crate) mod authored_model_material_pass_projection;
 mod gltf_model_scene_instantiation;
 mod material_render_view_invalidation;
+mod mirrored_model_primitive_winding;
 mod model_scene_visibility_and_shadow_projection;
 mod placed_object_relocation_model_presentation;
 mod prefab_ambient_light_projection;
@@ -32,6 +33,7 @@ use gltf_model_scene_instantiation::{
     complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
     instantiate_visible_gltf_model_scenes, request_hidden_prefab_model_asset_release,
 };
+use mirrored_model_primitive_winding::reverse_triangle_winding_of_mirrored_model_primitives;
 use model_scene_visibility_and_shadow_projection::{
     invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
     project_model_scene_visibility_and_shadow_policy,
@@ -64,6 +66,11 @@ impl Plugin for ModelRenderPlugin {
                     .after(TransformSystems::Propagate)
                     .before(VisibilitySystems::VisibilityPropagate),
                 instantiate_visible_gltf_model_scenes.after(VisibilitySystems::VisibilityPropagate),
+                reverse_triangle_winding_of_mirrored_model_primitives
+                    .after(instantiate_visible_gltf_model_scenes)
+                    .before(project_authored_model_material_passes)
+                    .before(project_model_scene_visibility_and_shadow_policy_onto_late_primitives)
+                    .before(project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors),
                 (
                     complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
                     request_hidden_prefab_model_asset_release,

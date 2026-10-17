@@ -435,7 +435,12 @@ pub(super) fn apply_committed_topology_edit(
                     if let Some(gate) = gate {
                         commands.entity(entity).insert(gate);
                     }
-                    if let Some(fence) = definitions.find_fence(definition) {
+                    let fence = if gate.is_some() {
+                        definitions.find_gate_fence(definition)
+                    } else {
+                        definitions.find_fence(definition)
+                    };
+                    if let Some(fence) = fence {
                         let next = find_adjacent_added_fence_cell(b, a, add, &resolved, &topology);
                         let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
                             fence, a_cell, b_cell, next,
