@@ -101,6 +101,14 @@ def bundle_macos_shared_libraries(binary, destination, original_binary):
 
 def bundle_windows_shared_libraries(binary, destination):
     """Follow Windows imports; retain system libraries on their owning OS."""
+    target = release_target(os.environ["OPENZT2_RELEASE_TARGET"])
+    architecture = "x64" if target["architecture"] == "amd64" else "arm64"
+    redist = Path(os.environ["VCToolsRedistDir"]) / architecture
+    runtime_libraries = {
+        path.name.lower(): path
+        for directory in redist.glob("Microsoft.VC*.CRT")
+        for path in directory.glob("*.dll")
+    }
     pending = [binary]
     copied = set()
     while pending:
@@ -108,7 +116,11 @@ def bundle_windows_shared_libraries(binary, destination):
         imports = subprocess.check_output([os.environ.get("OPENZT2_OBJDUMP", "objdump"), "-p", str(current)], text=True)
         for name in re.findall(r"DLL Name:\s*(\S+)", imports):
             staged = destination / name
-            source = str(staged) if staged.is_file() else shutil.which(name, mode=os.F_OK)
+            runtime = runtime_libraries.get(name.lower())
+            if name.lower().startswith(("vcruntime", "msvcp", "concrt")) and runtime is None:
+                raise RuntimeError(f"Missing Visual C++ redistributable: {name} in {redist}")
+            source = (str(staged) if staged.is_file() else
+                      str(runtime) if runtime else shutil.which(name, mode=os.F_OK))
             windows_directory = Path(os.environ["SystemRoot"]).resolve()
             if not source and not name.lower().startswith(("api-ms-", "ext-ms-")):
                 raise RuntimeError(f"Missing Windows runtime library: {name}")

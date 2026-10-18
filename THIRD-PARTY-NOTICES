@@ -21,3 +21,8 @@ LGPL-2.1-or-later. Its shared library may be replaced with an ABI-compatible
 modified version. Modification and reverse engineering for debugging such
 modifications are permitted. Keep the library's filename and exported ABI when
 replacing it; rebuild and re-sign an application bundle locally if required.
+
+Windows MSVC packages include Microsoft Visual C++ Runtime files from Visual
+Studio's redistributable directory. Microsoft Corporation retains its rights
+to these components. Distribution follows the Visual Studio license terms:
+https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution
