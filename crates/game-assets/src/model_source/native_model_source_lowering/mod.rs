@@ -15,7 +15,8 @@ use super::{
     native_model_source_lowering_types::{LoweredNativeModel, LoweredNativeModelMaterial},
     native_scene::{
         automatic_placement_bounds_lowering::{
-            lower_blue_fang_automatic_placement_bounds, lower_netimmerse_automatic_placement_bounds,
+            lower_blue_fang_automatic_placement_bounds, lower_blue_fang_footprint_collision_hull,
+            lower_netimmerse_automatic_placement_bounds, lower_netimmerse_footprint_collision_hull,
         },
         bfb_scene_prefab_lowering::lower_blue_fang_scene_prefab,
         nif_scene_prefab_lowering::lower_netimmerse_scene_prefab,
@@ -131,6 +132,7 @@ pub fn lower_native_model_source(
                 &selected_bone_level_of_detail,
                 native_model_asset_path,
                 None,
+                lower_netimmerse_footprint_collision_hull(&netimmerse_document)?,
             )?;
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_netimmerse_automatic_placement_bounds(&netimmerse_document)?;
@@ -158,8 +160,12 @@ pub fn lower_native_model_source(
                     ))
                 },
             )?;
-            let mut scene_prefab_document =
-                lower_blue_fang_scene_prefab(&blue_fang_document, native_model_asset_path, None)?;
+            let mut scene_prefab_document = lower_blue_fang_scene_prefab(
+                &blue_fang_document,
+                native_model_asset_path,
+                None,
+                lower_blue_fang_footprint_collision_hull(&blue_fang_document)?,
+            )?;
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_blue_fang_automatic_placement_bounds(&blue_fang_document)?;
             Ok(LoweredNativeModel {
@@ -239,6 +245,76 @@ mod globe_material_regression_tests {
                         )
                     })
         }));
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod footprint_collision_regression_tests {
+    use std::path::Path;
+
+    use openzt2_game_data::scene_prefab::PrefabColliderSource;
+
+    use super::lower_native_model_source;
+
+    /// Lowers one model and returns the horizontal extent of its collision.
+    fn collision_extent_xz(
+        archives: &z2f::ArchiveSet,
+        path: &str,
+    ) -> anyhow::Result<[[f32; 2]; 2]> {
+        let lowered =
+            lower_native_model_source(path, &archives.read(Path::new(path))?, |reference| {
+                archives
+                    .resolve_model_texture_reference(Path::new(path), reference)
+                    .map(|resolved| resolved.to_string_lossy().into_owned())
+            })?;
+        let colliders = lowered
+            .scene_prefab_document
+            .entities
+            .iter()
+            .flat_map(|entity| &entity.colliders)
+            .collect::<Vec<_>>();
+        let [collider] = colliders[..] else {
+            anyhow::bail!("{path}: expected one hull, got {colliders:?}");
+        };
+        let PrefabColliderSource::ConvexHull { points_m } = &collider.source else {
+            anyhow::bail!("{path}: expected a hull, got {collider:?}");
+        };
+        Ok(points_m.iter().fold(
+            [[f32::INFINITY; 2], [f32::NEG_INFINITY; 2]],
+            |[minimum, maximum], point| {
+                [
+                    [minimum[0].min(point[0]), minimum[1].min(point[2])],
+                    [maximum[0].max(point[0]), maximum[1].max(point[2])],
+                ]
+            },
+        ))
+    }
+
+    #[test]
+    #[ignore = "requires the locally installed original Z2F"]
+    fn placeable_objects_collide_through_their_own_shape() -> anyhow::Result<()> {
+        let directory = std::path::PathBuf::from(std::env::var("OPENZT2_Z2F_PATH")?);
+        let archives = z2f::ArchiveSet::open(
+            ["x300_000.z2f", "x301_000.z2f", "x302_000.z2f"].map(|name| directory.join(name)),
+        )?;
+        // Authored volumes were a 2.25 m sphere and a footprint-sized box.
+        for (path, half_width_m) in [
+            ("entities/objects/foliage/Birch/Birch_Temperate.bfb", 0.5),
+            (
+                "entities/objects/scenery/drinkingfountain_mm/DrinkingFountain_mm.nif",
+                0.7,
+            ),
+        ] {
+            let extent = collision_extent_xz(&archives, path)?;
+            assert!(
+                extent
+                    .iter()
+                    .flatten()
+                    .all(|value| value.abs() < half_width_m),
+                "{path}: {extent:?}"
+            );
+        }
         Ok(())
     }
 }

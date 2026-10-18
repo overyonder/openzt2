@@ -33,6 +33,7 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
     document: &BlueFangBfbDocument,
     source: &str,
     animation_manifest: Option<&str>,
+    footprint_collision_hull: Option<Vec<[f32; 3]>>,
 ) -> Result<ScenePrefabDocument> {
     let model_path = source.to_owned();
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
@@ -217,5 +218,6 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             ScenePrefabAssetDependencyKind::Animation,
         );
     }
+    builder.replace_colliders_with_footprint_collision_hull(footprint_collision_hull)?;
     builder.finish()
 }

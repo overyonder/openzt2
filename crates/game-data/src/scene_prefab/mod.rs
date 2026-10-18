@@ -184,18 +184,19 @@ pub struct PrefabRenderableMaterialOverride {
 #[repr(transparent)]
 pub struct ScenePrefabColliderLayerFlags(pub u16);
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
 pub struct PrefabCollider {
     pub source: PrefabColliderSource,
     pub layer: ScenePrefabColliderLayerFlags,
     pub mask: ScenePrefabColliderLayerFlags,
 }
 
-#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
 pub enum PrefabColliderSource {
     Model { model: AssetId, index: u16 },
     Box { half_extent_m: [f32; 3] },
     Capsule { radius_m: f32, half_height_m: f32 },
+    ConvexHull { points_m: Vec<[f32; 3]> },
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
