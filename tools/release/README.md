@@ -69,6 +69,7 @@ Tagged releases require the configured credentials.
 
 Windows packages include `openzt2-windows.cer`. Install this public certificate
 in the local computer's Trusted People store before installing the MSIX.
+MSIX installers require Windows 10 build 19041 or newer.
 
 Windows installer versions preserve prerelease ordering. For `alpha.N`,
 `beta.N` and `rc.N`, the revision is respectively `N`, `200 + N` and `400 + N`.

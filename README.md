@@ -7,22 +7,21 @@
 
 OpenZT2 is an open-source engine reimplementation of Zoo Tycoon 2 Ultimate
 Collection, a game about building and managing zoos and aquariums. It's written
-in Rust with Bevy and is in early alpha, with gameplay still in development.
+in Rust with Bevy and is in early beta, with gameplay still in development.
 
 ## Downloads
 
 Download a package from [GitHub Releases](https://github.com/overyonder/openzt2/releases).
 You'll need your own Zoo Tycoon 2 Ultimate Collection game files to play.
 
-✅ marks a built release package. The new CI targets await their first builds
-and installation checks. The [packaging guide](tools/release/README.md) covers
-their installation and signing settings.
+✅ marks a built release package. The [packaging guide](tools/release/README.md)
+covers installation and signing.
 
 | OS | Architecture | Package | Built | Install with |
 | --- | --- | --- | :---: | --- |
-| Windows | x86-64 (MSVC) | `.zip` | ✅ | Extract and run |
+| Windows | x86-64 | `.zip` | ✅ | Extract and run |
 | Windows | x86-64 | `.msi` | [CI configured][release-builds] | Windows Installer |
-| Windows | x86-64 | `.msix` | [CI configured][release-builds] | App Installer |
+| Windows | x86-64 | `.msix` | [CI configured][release-builds] | [App Installer](tools/release/README.md#signing) |
 | Windows | ARM64 | `.zip` | [CI configured][release-builds] | Extract and run |
 | macOS | ARM64 (Apple Silicon) | `.dmg` | ✅ | Finder |
 | macOS | x86-64 (Intel) | `.dmg` | [CI configured][release-builds] | Finder |
@@ -31,14 +30,19 @@ their installation and signing settings.
 | Linux | x86-64 (glibc) | `.pkg.tar.zst` | ✅ | pacman |
 | Linux | x86-64 (glibc) | `.AppImage` | ✅ | Run directly |
 | Linux | x86-64 (Freedesktop runtime) | `.flatpak` | ✅ | Flatpak |
-| Linux | ARM64 (glibc) | DEB, RPM, Arch, AppImage, Flatpak | [CI configured][release-builds] | See installation guide |
-| Alpine Linux | x86-64 (musl) | `.apk` | [CI configured][release-builds] | apk |
-| NixOS / Linux with Nix | x86-64 | Flake / `.nar.zst` | [CI configured][release-builds] | Nix |
+| Linux | ARM64 (glibc) | `.deb` | ✅ | APT / dpkg |
+| Linux | ARM64 (glibc) | `.rpm` | ✅ | DNF / Zypper / rpm |
+| Linux | ARM64 (glibc) | `.pkg.tar.zst` | ✅ | pacman |
+| Linux | ARM64 (glibc) | `.AppImage` | ✅ | Run directly |
+| Linux | ARM64 (Freedesktop runtime) | `.flatpak` | ✅ | Flatpak |
+| Alpine Linux | x86-64 (musl) | `.apk` | ✅ | [apk](tools/release/README.md#alpine) |
+| NixOS / Linux with Nix | x86-64 | Flake / `.nar.zst` | ✅ | [Nix](tools/release/README.md#nix) |
 
-The seven built packages are published with
-[v0.7.0-alpha](https://github.com/overyonder/openzt2/releases/tag/v0.7.0-alpha).
 Listings for winget, Chocolatey, Scoop, Homebrew, AUR, nixpkgs and Flathub can
 also be requested in [Discussions][discussions].
+
+MSIX users need to [install the supplied certificate](tools/release/README.md#signing)
+before installing the package.
 
 Native Linux packages and AppImage require glibc 2.39 or newer. Flatpak
 supplies its own runtime. The [Linux installation guide](tools/release/linux/README.md)

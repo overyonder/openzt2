@@ -5,7 +5,7 @@ cd "$workspace"
 apk add --no-cache alpine-sdk abuild bash curl git python3 perl-json \
     autoconf automake libtool flex bison cmake ninja pkgconf spirv-headers vulkan-headers \
     alsa-lib-dev eudev-dev wayland-dev libxkbcommon-dev fontconfig-dev \
-    patchelf openssl zstd wine-dev
+    patchelf openssl zstd wine-dev vulkan-loader
 export CARGO_HOME="$RUNNER_TEMP/cargo-home"
 export RUSTUP_HOME="$RUNNER_TEMP/rustup-home"
 curl --fail --location https://sh.rustup.rs -o "$RUNNER_TEMP/rustup.sh"

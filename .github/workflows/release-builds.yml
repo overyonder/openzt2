@@ -39,7 +39,7 @@ jobs:
     env:
       OPENZT2_RELEASE_HOST: '1'
       OPENZT2_RUST_VERSION: ${{ needs.targets.outputs.rust }}
-      CARGO_BUILD_JOBS: '2'
+      CARGO_BUILD_JOBS: ${{ matrix.id == 'darwin-arm64' && '2' || '4' }}
       CARGO_INCREMENTAL: '0'
       DOTNET_ROLL_FORWARD: Major
       OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 }}
@@ -110,6 +110,7 @@ jobs:
           $target = '${{ matrix.rust_target }}'.ToUpper().Replace('-', '_')
           "CARGO_TARGET_${target}_LINKER=$linker" >> $env:GITHUB_ENV
       - uses: msys2/setup-msys2@v2
+        id: msys2
         if: matrix.platform == 'windows'
         with:
           msystem: ${{ matrix.msystem }}
@@ -164,7 +165,16 @@ jobs:
           $env:DIRENV_BASH = "$env:ProgramFiles/Git/bin/bash.exe".Replace('\', '/')
           $env:OPENZT2_NATIVE_DEPENDENCY_DIR = $env:OPENZT2_NATIVE_DEPENDENCY_DIR.Replace('\', '/')
           $env:KAI_CARGO_TARGET_ROOT = $env:KAI_CARGO_TARGET_ROOT.Replace('\', '/')
-          $env:PATH = '${{ matrix.mingw_bin }};' + $env:PATH
+          $mingwBin = Join-Path '${{ steps.msys2.outputs.msys2-location }}' '${{ matrix.mingw_bin }}'
+          if (-not (Test-Path $mingwBin)) { throw "Missing MSYS2 tool directory: $mingwBin" }
+          $env:PATH = "$mingwBin;" + $env:PATH
+          if ('${{ matrix.id }}' -eq 'windows-amd64') {
+            foreach ($tool in @('rsvg-convert.exe', 'wix.exe', 'makeappx.exe', 'signtool.exe')) {
+              Get-Command $tool -ErrorAction Stop | Select-Object Name, Source
+            }
+            rsvg-convert.exe --version
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
           if ('${{ matrix.architecture }}' -eq 'arm64') { $env:OPENZT2_OBJDUMP = 'llvm-objdump' }
           direnv allow .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -190,8 +200,8 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            max-jobs = 2
-            cores = 2
+            max-jobs = 1
+            cores = 4
       - name: Package Nix closure
         if: matrix.platform == 'nix'
         run: |
@@ -200,6 +210,14 @@ jobs:
           bash tools/release/nix/export-package.sh
       - name: Stage declared release artifacts
         run: python3 tools/release/release_targets.py stage '${{ matrix.id }}'
+      - name: Preserve Windows packages after installer failure
+        if: failure() && matrix.platform == 'windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-package-${{ matrix.id }}
+          path: build/releases/${{ matrix.id }}/*.zip
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: OpenZT2-${{ matrix.id }}
@@ -232,10 +250,10 @@ jobs:
         run: |
           options=()
           if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease --latest=false); fi
-          cat > release-notes.md <<'EOF'
-          OpenZT2 is in early development. Requires your own Zoo Tycoon 2 Ultimate Collection game files.
+          cat > release-notes.md <<EOF
+          OpenZT2 is in early development and requires your own Zoo Tycoon 2 Ultimate Collection game files.
 
-          Packages cover Windows x86-64 and ARM64, macOS Apple Silicon and Intel, Linux x86-64 and ARM64, Alpine Linux and Nix. Installation instructions and runtime requirements are in README.md and tools/release/README.md.
+          The [package guide](https://github.com/$GH_REPO/blob/$RELEASE_TAG/tools/release/README.md) covers installation and runtime requirements.
           EOF
           gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
             --notes-file release-notes.md "${options[@]}" release/*
