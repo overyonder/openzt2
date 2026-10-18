@@ -11,11 +11,13 @@ use openzt2_world_state::{
         animation_graph_playback_state_types::AnimationGraphEnabled,
     },
     animation_playback::animation_playback_controller_types::{
-        AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
+        AnimationPlaybackController, AnimationPlaybackRepetitionPolicy, AnimationPlaybackState,
     },
 };
 use openzt2_zoo_state::{
-    behavior_task_execution_types::PendingBehaviorAnimationClipCompletion,
+    behavior_task_execution_types::{
+        BehaviorTaskExecutionState, PendingBehaviorAnimationClipCompletion,
+    },
     guests::guest_simulation_types::Guest,
     locomotion::locomotion_types::{Destination, DirectLocomotion},
     staff::staff_employment_types::Staff,
@@ -49,6 +51,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             Has<Destination>,
             Has<DirectLocomotion>,
             Has<PendingBehaviorAnimationClipCompletion>,
+            Has<BehaviorTaskExecutionState>,
             Option<&NavAgent>,
             Option<&LocomotionAnimationSource>,
         ),
@@ -63,10 +66,21 @@ pub(super) fn project_person_motion_to_walk_animation(
         else {
             continue;
         };
-        let Ok((navigating, direct, task_animation, agent, source)) = people.get(person) else {
+        let Ok((navigating, direct, task_animation, in_task, agent, source)) = people.get(person)
+        else {
             continue;
         };
         let moving = navigating || direct;
+        // A standing task may play its own clip outside an Animate action,
+        // such as the keeper lifting a bucket to attach it. Standing would
+        // replace that clip before its attach key fires.
+        let task_animation = task_animation
+            || (!moving
+                && in_task
+                && controller.explicit_clip_request_id.is_some()
+                && controller.playback_state == AnimationPlaybackState::Playing
+                && ![WALK_CLIP, STAND_CLIP]
+                    .contains(&controller.animation_clip_asset_key.as_str()));
         if !moving || task_animation || enabled.is_some_and(|enabled| !enabled.0) {
             if source.is_some_and(|source| source.controller == controller_entity) {
                 commands
@@ -245,6 +259,35 @@ mod tests {
             .animation_clip_asset_key = WALK_CLIP.to_owned();
         assert!(requested(&mut app).is_empty());
         app.world_mut().entity_mut(guest).remove::<Destination>();
+        assert_eq!(requested(&mut app), [STAND_CLIP]);
+
+        // A standing task's own clip, such as lifting a bucket, keeps playing.
+        let mut controller_state = app
+            .world_mut()
+            .get_mut::<AnimationPlaybackController>(controller)
+            .unwrap();
+        controller_state.animation_clip_asset_key = "Stand_2StandItem".to_owned();
+        controller_state.explicit_clip_request_id = Some(7);
+        let task = BehaviorTaskExecutionState {
+            execution_id: 1,
+            program: default(),
+            target: None,
+            document: default(),
+            declaration: 0,
+            phase:
+                openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase::Set,
+            action: 0,
+            repetitions: 0,
+            next_action_tick: 0,
+            object: None,
+            interaction_slot: None,
+            stack: default(),
+        };
+        app.world_mut().entity_mut(guest).insert(task);
+        assert!(requested(&mut app).is_empty());
+        app.world_mut()
+            .entity_mut(guest)
+            .remove::<BehaviorTaskExecutionState>();
         assert_eq!(requested(&mut app), [STAND_CLIP]);
     }
 }

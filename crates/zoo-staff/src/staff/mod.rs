@@ -65,6 +65,7 @@ impl Plugin for StaffPlugin {
                 Update,
                 (
                     authored_initial_staff_animation_projection::request_authored_initial_staff_animation_for_newly_resolved_prefab_models,
+                    authored_initial_staff_animation_projection::project_staff_animation_owners,
                     staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice,
                     staff_placement_interaction::validate_staff_placement_preview_against_world_and_zoo_cash
                         .after(staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice),
