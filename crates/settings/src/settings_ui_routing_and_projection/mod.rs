@@ -73,7 +73,7 @@ fn information_setting_matches_current_draft(
 ) -> bool {
     match authored_setting {
         InformationSettingAction::HighestDetail => {
-            draft_settings.graphics == GraphicsSettings::from_source_highest_detail_preset()
+            draft_settings.graphics == GraphicsSettings::default()
         }
         InformationSettingAction::HighDetail => {
             draft_settings.graphics == GraphicsSettings::from_source_high_detail_preset()
@@ -82,7 +82,7 @@ fn information_setting_matches_current_draft(
             draft_settings.graphics == GraphicsSettings::from_source_medium_detail_preset()
         }
         InformationSettingAction::CustomDetail => {
-            draft_settings.graphics != GraphicsSettings::from_source_highest_detail_preset()
+            draft_settings.graphics != GraphicsSettings::default()
                 && draft_settings.graphics != GraphicsSettings::from_source_high_detail_preset()
                 && draft_settings.graphics != GraphicsSettings::from_source_medium_detail_preset()
         }
@@ -114,7 +114,7 @@ pub fn apply_authored_setting_action(
             targets.draft_settings.dirty_graphics = false;
         }
         InformationSettingAction::HighestDetail => {
-            targets.draft_settings.graphics = GraphicsSettings::from_source_highest_detail_preset();
+            targets.draft_settings.graphics = GraphicsSettings::default();
             targets.draft_settings.dirty_graphics = true;
         }
         InformationSettingAction::HighDetail => {

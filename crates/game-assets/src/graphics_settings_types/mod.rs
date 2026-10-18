@@ -168,10 +168,16 @@ impl GraphicsSettings {
 
 impl Default for GraphicsSettings {
     fn default() -> Self {
-        // The shipped profile selects `graphicsDetail="med"` with
-        // `detailLevel="2"`. Profile persistence may subsequently override
-        // this complete typed resource.
-        Self::from_source_high_detail_preset()
+        // Use every detail setting's maximum, including features which the
+        // original high preset left disabled. Saved player choices override it.
+        Self {
+            multisample_count: 8,
+            specular_effects: true,
+            detail_objects: EnvironmentalDetailObjectDensity::High,
+            screen_detail: true,
+            water_reflections: true,
+            ..Self::from_source_highest_detail_preset()
+        }
     }
 }
 
