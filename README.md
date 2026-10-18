@@ -20,11 +20,11 @@ covers installation and signing.
 | OS | Architecture | Package | Built | Install with |
 | --- | --- | --- | :---: | --- |
 | Windows | x86-64 | `.zip` | ✅ | Extract and run |
-| Windows | x86-64 | `.msi` | [CI configured][release-builds] | Windows Installer |
-| Windows | x86-64 | `.msix` | [CI configured][release-builds] | [App Installer](tools/release/README.md#signing) |
-| Windows | ARM64 | `.zip` | [CI configured][release-builds] | Extract and run |
+| Windows | x86-64 | `.msi` | ✅ | Windows Installer |
+| Windows | x86-64 | `.msix` | ✅ | [App Installer](tools/release/README.md#signing) |
+| Windows | ARM64 | `.zip` | ✅ | Extract and run |
 | macOS | ARM64 (Apple Silicon) | `.dmg` | ✅ | Finder |
-| macOS | x86-64 (Intel) | `.dmg` | [CI configured][release-builds] | Finder |
+| macOS | x86-64 (Intel) | `.dmg` | ✅ | Finder |
 | Linux | x86-64 (glibc) | `.deb` | ✅ | APT / dpkg |
 | Linux | x86-64 (glibc) | `.rpm` | ✅ | DNF / Zypper / rpm |
 | Linux | x86-64 (glibc) | `.pkg.tar.zst` | ✅ | pacman |
@@ -49,7 +49,6 @@ supplies its own runtime. The [Linux installation guide](tools/release/linux/REA
 covers dependencies, installation and game-file locations.
 
 [discussions]: https://github.com/overyonder/openzt2/discussions
-[release-builds]: .github/workflows/release-builds.yml
 
 ## Features
 

@@ -20,7 +20,6 @@ The workflow, packager, artifact staging and publication checks read that file.
 Native Linux packages and AppImage require glibc 2.39 or newer. Flatpak uses
 its own runtime. The musl package is built for Alpine. macOS packages declare
 macOS 14 as their minimum version and build native libraries with that target.
-These new targets await their first builds and installation checks.
 
 ## Local packaging
 
