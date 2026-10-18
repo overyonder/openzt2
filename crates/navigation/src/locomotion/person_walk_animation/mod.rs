@@ -222,6 +222,7 @@ mod tests {
                     animation_set_asset: set,
                     animation_clip_asset_key: STAND_CLIP.to_owned(),
                     elapsed_milliseconds: 0,
+                    fractional_milliseconds: default(),
                     playback_speed_permille: 1000,
                     playback_state: AnimationPlaybackState::Playing,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,

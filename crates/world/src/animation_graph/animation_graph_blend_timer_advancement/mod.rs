@@ -6,7 +6,6 @@ pub(crate) fn advance_animation_graph_blend_timers(
     fixed_time: Res<Time<Fixed>>,
     mut animation_graph_playback_states: Query<&mut AnimationGraphPlaybackState>,
 ) {
-    let elapsed_milliseconds = fixed_time.delta().as_millis().min(u128::from(u32::MAX)) as u32;
     for mut animation_graph_playback_state in &mut animation_graph_playback_states {
         let Some(active_animation_graph_blend) = animation_graph_playback_state
             .active_animation_graph_blend
@@ -14,6 +13,9 @@ pub(crate) fn advance_animation_graph_blend_timers(
         else {
             continue;
         };
+        let elapsed_milliseconds = active_animation_graph_blend
+            .fractional_milliseconds
+            .advance(fixed_time.delta(), 1.0);
         active_animation_graph_blend.elapsed_milliseconds = active_animation_graph_blend
             .elapsed_milliseconds
             .saturating_add(elapsed_milliseconds);

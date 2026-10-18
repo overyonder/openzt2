@@ -46,6 +46,7 @@ pub struct AnimationGraphTransition {
 
 #[derive(Clone, Copy, Debug)]
 pub struct AnimationGraphBlend {
+    pub fractional_milliseconds: crate::animation_playback::fractional_animation_milliseconds::FractionalAnimationMilliseconds,
     pub elapsed_milliseconds: u32,
     pub duration_milliseconds: u32,
 }

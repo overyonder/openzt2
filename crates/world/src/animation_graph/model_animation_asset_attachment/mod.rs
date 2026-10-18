@@ -187,6 +187,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
                 animation_set_asset: initial_animation_set_asset_handle,
                 animation_clip_asset_key: initial_animation_clip_asset_key,
                 elapsed_milliseconds: 0,
+                fractional_milliseconds: default(),
                 playback_speed_permille: 1000,
                 playback_state: AnimationPlaybackState::Playing,
                 playback_repetition_policy:

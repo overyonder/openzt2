@@ -31,6 +31,7 @@ fn a_rotated_scaled_model_follows_the_requested_world_direction(
         animation_set_asset: Handle::default(),
         animation_clip_asset_key: "walk".to_owned(),
         elapsed_milliseconds: 250,
+        fractional_milliseconds: default(),
         playback_speed_permille: 1000,
         playback_state: AnimationPlaybackState::Playing,
         playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,

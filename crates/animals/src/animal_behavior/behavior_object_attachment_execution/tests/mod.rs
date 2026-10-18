@@ -122,6 +122,7 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             animation_set_asset: Handle::default(),
             animation_clip_asset_key: "idle".into(),
             elapsed_milliseconds: 0,
+                    fractional_milliseconds: default(),
             playback_speed_permille: 1000,
             playback_state: Default::default(),
             playback_repetition_policy: Default::default(),

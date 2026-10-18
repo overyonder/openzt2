@@ -174,6 +174,7 @@ mod tests {
             animation_set_asset: Handle::default(),
             animation_clip_asset_key: "idle".to_owned(),
             elapsed_milliseconds: 0,
+            fractional_milliseconds: default(),
             playback_speed_permille: 1000,
             playback_state: AnimationPlaybackState::default(),
             playback_repetition_policy: AnimationPlaybackRepetitionPolicy::default(),

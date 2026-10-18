@@ -153,6 +153,7 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             replacement_animation_graph_playback_state.active_animation_graph_blend =
                 (animation_clip_request.blend_duration_milliseconds != 0).then_some(
                     AnimationGraphBlend {
+                        fractional_milliseconds: default(),
                         elapsed_milliseconds: 0,
                         duration_milliseconds: animation_clip_request.blend_duration_milliseconds,
                     },
@@ -189,6 +190,9 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
                 .animation_clip_asset_key
                 .clone_from(&animation_clip_request.animation_clip_asset_key);
             animation_playback_controller.elapsed_milliseconds = 0;
+            animation_playback_controller
+                .fractional_milliseconds
+                .clear();
             animation_playback_controller.playback_speed_permille =
                 animation_clip_request.playback_speed_permille;
             animation_playback_controller.playback_state = AnimationPlaybackState::Playing;

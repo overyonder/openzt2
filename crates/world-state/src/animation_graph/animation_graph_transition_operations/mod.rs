@@ -210,6 +210,9 @@ fn begin_authored_animation_graph_edge_transition(
             .animation_clip_asset_key
             .clone_from(&authored_transition_animation_clip.animation_clip_asset_key);
         animation_playback_controller.elapsed_milliseconds = 0;
+        animation_playback_controller
+            .fractional_milliseconds
+            .clear();
         animation_playback_controller.playback_state = AnimationPlaybackState::Playing;
         animation_playback_controller.playback_repetition_policy =
             AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy;
@@ -249,6 +252,9 @@ pub fn enter_animation_graph_node_playback(
         .wrapping_add(1);
     animation_playback_controller.explicit_clip_request_id = None;
     animation_playback_controller.elapsed_milliseconds = 0;
+    animation_playback_controller
+        .fractional_milliseconds
+        .clear();
     animation_playback_controller.playback_state = AnimationPlaybackState::Playing;
     animation_playback_controller.playback_repetition_policy =
         AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy;
@@ -267,6 +273,7 @@ fn begin_animation_graph_blend_timer(
 ) {
     animation_graph_playback_state.active_animation_graph_blend =
         (blend_duration_milliseconds != 0).then_some(AnimationGraphBlend {
+            fractional_milliseconds: default(),
             elapsed_milliseconds: 0,
             duration_milliseconds: blend_duration_milliseconds,
         });

@@ -20,10 +20,15 @@ pub(super) fn advance_simulation_clock_animation_playback_controllers(
     )>,
     mut completed_animations: MessageWriter<AnimationCompleted>,
 ) {
-    let elapsed_milliseconds = convert_duration_to_saturating_u32_milliseconds(fixed_time.delta());
     for (animation_playback_controller_entity, mut animation_playback_controller, consumed) in
         &mut animation_playback_controllers
     {
+        let elapsed_milliseconds = advance_scaled_animation_clock(
+            &mut animation_playback_controller,
+            fixed_time.delta(),
+            &animation_set_assets,
+            AnimationPlaybackClock::Simulation,
+        );
         if let Some(mut consumed) = consumed {
             consumed.clear_sample();
             if animation_playback_controller.playback_clock == AnimationPlaybackClock::Simulation {
@@ -58,10 +63,15 @@ pub(super) fn advance_real_time_clock_animation_playback_controllers(
     mut animation_playback_controllers: Query<(Entity, &mut AnimationPlaybackController)>,
     mut completed_animations: MessageWriter<AnimationCompleted>,
 ) {
-    let elapsed_milliseconds = convert_duration_to_saturating_u32_milliseconds(real_time.delta());
     for (animation_playback_controller_entity, mut animation_playback_controller) in
         &mut animation_playback_controllers
     {
+        let elapsed_milliseconds = advance_scaled_animation_clock(
+            &mut animation_playback_controller,
+            real_time.delta(),
+            &animation_set_assets,
+            AnimationPlaybackClock::RealTime,
+        );
         if animation_playback_controller.playback_clock == AnimationPlaybackClock::RealTime
             && advance_one_animation_playback_controller_and_report_clip_completion(
                 &mut animation_playback_controller,
@@ -98,12 +108,7 @@ fn advance_one_animation_playback_controller_and_report_clip_completion(
     else {
         return false;
     };
-    let scaled_elapsed_milliseconds = scale_animation_playback_elapsed_milliseconds(
-        elapsed_milliseconds,
-        animation_playback_controller.playback_speed_permille,
-        animation_clip.authored_playback_rate(),
-    );
-    if scaled_elapsed_milliseconds == 0 {
+    if elapsed_milliseconds == 0 {
         return false;
     }
     let animation_playback_loops = match animation_playback_controller.playback_repetition_policy {
@@ -119,7 +124,7 @@ fn advance_one_animation_playback_controller_and_report_clip_completion(
         return false;
     }
     let forward = animation_playback_controller.playback_speed_permille > 0;
-    let advance = i64::from(scaled_elapsed_milliseconds);
+    let advance = i64::from(elapsed_milliseconds);
     let next = i64::from(animation_playback_controller.elapsed_milliseconds)
         + if forward { advance } else { -advance };
     let completed = !animation_playback_loops && if forward { next >= duration } else { next <= 0 };
@@ -166,11 +171,7 @@ fn sample_consumed_animation_motion(
     if duration == 0 {
         return;
     }
-    let advance = i64::from(scale_animation_playback_elapsed_milliseconds(
-        elapsed_milliseconds,
-        controller.playback_speed_permille,
-        record.authored_playback_rate(),
-    ));
+    let advance = i64::from(elapsed_milliseconds);
     let next = i64::from(controller.elapsed_milliseconds)
         + if controller.playback_speed_permille < 0 {
             -advance
@@ -199,20 +200,23 @@ fn sample_consumed_animation_motion(
     );
 }
 
-fn convert_duration_to_saturating_u32_milliseconds(elapsed_duration: std::time::Duration) -> u32 {
-    u32::try_from(elapsed_duration.as_millis()).unwrap_or(u32::MAX)
-}
-
-fn scale_animation_playback_elapsed_milliseconds(
-    elapsed: u32,
-    speed_permille: i16,
-    authored_rate: f32,
+fn advance_scaled_animation_clock(
+    controller: &mut AnimationPlaybackController,
+    delta: std::time::Duration,
+    sets: &Assets<AnimationSetAsset>,
+    clock: AnimationPlaybackClock,
 ) -> u32 {
-    let seconds = std::time::Duration::from_millis(u64::from(elapsed)).as_secs_f64()
-        * f64::from(speed_permille.unsigned_abs())
-        * f64::from(authored_rate)
-        / 1000.0;
-    let duration =
-        std::time::Duration::try_from_secs_f64(seconds).unwrap_or(std::time::Duration::MAX);
-    u32::try_from((duration.as_micros() + 500) / 1000).unwrap_or(u32::MAX)
+    if controller.playback_clock != clock
+        || controller.playback_state != AnimationPlaybackState::Playing
+    {
+        return 0;
+    }
+    let Some(record) = sets.get(&controller.animation_set_asset).and_then(|set| {
+        set.find_animation_clip_record_by_asset_key(&controller.animation_clip_asset_key)
+    }) else {
+        return 0;
+    };
+    let rate = f64::from(controller.playback_speed_permille.unsigned_abs()) / 1000.0
+        * f64::from(record.authored_playback_rate());
+    controller.fractional_milliseconds.advance(delta, rate)
 }

@@ -71,6 +71,8 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                 })
                 .and_then(|index| u32::try_from(index).ok());
             if let Some(requested_animation_graph_node_index) = requested_current_graph_node_index {
+                let previous_fractional_milliseconds =
+                    animation_playback_controller.fractional_milliseconds;
                 let previous_elapsed_milliseconds =
                     animation_playback_controller.elapsed_milliseconds;
                 match begin_requested_animation_graph_node_transition(
@@ -88,6 +90,8 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                         if animation_graph_node_playback_request.preserves_current_playback_time {
                             animation_playback_controller.elapsed_milliseconds =
                                 previous_elapsed_milliseconds;
+                            animation_playback_controller.fractional_milliseconds =
+                                previous_fractional_milliseconds;
                         }
                     }
                 }
@@ -128,6 +132,8 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                 .expect("target graph was resolved from the loaded animation asset library");
             let mut replacement_animation_graph_playback_state =
                 AnimationGraphPlaybackState::default();
+            let previous_fractional_milliseconds =
+                animation_playback_controller.fractional_milliseconds;
             let previous_elapsed_milliseconds = animation_playback_controller.elapsed_milliseconds;
             match enter_animation_graph_node_playback(
                 requested_animation_set_asset,
@@ -145,6 +151,8 @@ pub(crate) fn execute_animation_graph_node_playback_requests(
                     if animation_graph_node_playback_request.preserves_current_playback_time {
                         animation_playback_controller.elapsed_milliseconds =
                             previous_elapsed_milliseconds;
+                        animation_playback_controller.fractional_milliseconds =
+                            previous_fractional_milliseconds;
                     }
                     animation_playback_controller.animation_set_asset = animation_set_asset_handle;
                     *animation_graph_playback_state = replacement_animation_graph_playback_state;

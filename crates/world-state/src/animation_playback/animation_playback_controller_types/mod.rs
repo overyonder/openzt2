@@ -11,6 +11,8 @@ pub struct AnimationPlaybackController {
     pub animation_set_asset: Handle<AnimationSetAsset>,
     pub animation_clip_asset_key: String,
     pub elapsed_milliseconds: u32,
+    pub fractional_milliseconds:
+        super::fractional_animation_milliseconds::FractionalAnimationMilliseconds,
     pub playback_speed_permille: i16,
     pub playback_state: AnimationPlaybackState,
     pub playback_repetition_policy: AnimationPlaybackRepetitionPolicy,
