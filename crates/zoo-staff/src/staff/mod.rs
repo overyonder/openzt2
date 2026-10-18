@@ -5,6 +5,7 @@ use openzt2_zoo_state::staff::StaffJobRequestCreation;
 mod authored_disease_cure_execution;
 
 mod authored_initial_staff_animation_projection;
+mod idle_staff_task_selection;
 mod spawned_staff_identification;
 mod staff_animal_health_job_execution;
 mod staff_assignment_cleanup;
@@ -97,6 +98,8 @@ impl Plugin for StaffPlugin {
                     staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval,
                     staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff,
                     staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs,
+                    idle_staff_task_selection::start_idle_staff_wander_tasks,
+                    idle_staff_task_selection::exit_tank_gates_immediately,
                 )
                     .chain()
                     .in_set(FixedGameSet::Think),

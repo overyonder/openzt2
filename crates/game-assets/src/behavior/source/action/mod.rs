@@ -111,6 +111,11 @@ pub(super) fn lower_one_behavior_action_source_node(
         return Ok(action);
     }
     if let Some(action) =
+        move_action_lowering::lower_exit_tank_gate_action_source_node(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
+    if let Some(action) =
         move_action_lowering::lower_move_action_source_node(behavior_action_source_node)?
     {
         return Ok(action);

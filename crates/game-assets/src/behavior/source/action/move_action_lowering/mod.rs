@@ -137,6 +137,20 @@ pub(super) fn lower_move_action_source_node(
     })))
 }
 
+pub(super) fn lower_exit_tank_gate_action_source_node(
+    source_node: &DataNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if source_node.name != "ZTBehExitTankGate" {
+        return Ok(None);
+    }
+    if !source_node.attributes.is_empty() || source_node.element_children().next().is_some() {
+        return Err(invalid_behavior_source_data(
+            "ZTBehExitTankGate has unsupported authored policy",
+        ));
+    }
+    Ok(Some(BehaviorAction::ExitTankGate))
+}
+
 fn validate_supported_bfbehmove_default_policies(source_node: &DataNode) -> io::Result<()> {
     if read_optional_float_attribute(source_node, "pathRadius")?.is_some_and(|value| value != 0.0) {
         return Err(invalid_behavior_source_data(

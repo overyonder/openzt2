@@ -29,6 +29,7 @@ use openzt2_zoo_state::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, LocomotionMode, NavAgent,
         NavFlags, NavigateTo, NavigationFailed, NavigationRequestSequence, Route,
     },
+    staff::staff_employment_types::Staff,
     topology::topology_graph_types::TopologyGrid,
 };
 
@@ -117,8 +118,9 @@ fn execute_current_wander_actions(
             Has<WorldEntityIsCrated>,
             Has<Tranquilized>,
             Has<Dead>,
+            Has<Staff>,
         ),
-        With<Animal>,
+        Or<(With<Animal>, With<Staff>)>,
     >,
 ) {
     for (
@@ -134,6 +136,7 @@ fn execute_current_wander_actions(
         crated,
         tranquilized,
         dead,
+        staff,
     ) in &mut animals
     {
         let mut task = task;
@@ -186,7 +189,9 @@ fn execute_current_wander_actions(
         else {
             continue;
         };
-        if mode != Some(&LocomotionMode::Ground)
+        // Staff walk without a locomotion mode of their own.
+        if !(staff && mode.is_none())
+            && mode != Some(&LocomotionMode::Ground)
             && !(mode == Some(&LocomotionMode::Swim)
                 && agent.capabilities.contains(NavFlags::AMPHIBIOUS))
         {
@@ -274,7 +279,12 @@ fn execute_current_wander_actions(
                     let Some(node) = navigation.find_navigation_node(index) else {
                         continue;
                     };
-                    if !node.eligibility_flags.contains(NavFlags::ANIMAL)
+                    let walker = if staff {
+                        NavFlags::STAFF
+                    } else {
+                        NavFlags::ANIMAL
+                    };
+                    if !node.eligibility_flags.contains(walker)
                         || node
                             .eligibility_flags
                             .contains(NavFlags::DISABLED_BY_DEFAULT)

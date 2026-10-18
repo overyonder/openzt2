@@ -27,6 +27,8 @@ pub enum BehaviorAction {
     Dock(action::docking::BehaviorDockAction),
     DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),
+    /// `ZTBehExitTankGate`: leave a tank through its gate before wandering.
+    ExitTankGate,
     WaitInteractionQueue(action::queue::BehaviorQueueWaitAction),
     DockQueue(action::queue::BehaviorDockQueueAction),
     SynchronizedSets(action::synchronized_sets::BehaviorSynchronizedSetsAction),
