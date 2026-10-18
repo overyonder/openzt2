@@ -388,7 +388,11 @@ fn align_subject_attachment_with_target_dock(
         Quat::from_rotation_y(horizontal_forward.x.atan2(horizontal_forward.y))
     };
     let (actor_scale, _, _) = actor_transform.to_scale_rotation_translation();
-    let world_offset = rotation * (actor_scale * subject_node_local_position);
+    let mut world_offset = rotation * (actor_scale * subject_node_local_position);
+    // Only the horizontal reach moves the dock: the actor stays on its ground,
+    // so subtracting a raised mouth's height buried the dock (a camel's is
+    // 1.45 m up) and the animal walked in place, never arriving.
+    world_offset.y = 0.0;
     local_point - target_affine.inverse().transform_vector3(world_offset)
 }
 
@@ -409,6 +413,22 @@ mod tests {
             align_subject_attachment_with_target_dock(socket, Vec3::Z, Vec3::Z, &actor, &target);
         let subject_attachment_world = target.transform_point(point) + Vec3::X * 0.5;
         assert!(subject_attachment_world.abs_diff_eq(target.transform_point(socket), 1.0e-5));
+    }
+
+    #[test]
+    fn raised_subject_attachment_keeps_the_dock_at_the_target_height() {
+        let target = GlobalTransform::from_translation(Vec3::new(10.0, 2.0, 20.0));
+        let mouth = Vec3::new(0.0, 1.45, 2.0);
+        let point = align_subject_attachment_with_target_dock(
+            Vec3::ZERO,
+            Vec3::Z,
+            mouth,
+            &GlobalTransform::IDENTITY,
+            &target,
+        );
+        assert!(target
+            .transform_point(point)
+            .abs_diff_eq(Vec3::new(10.0, 2.0, 18.0), 1.0e-5));
     }
 
     #[test]
