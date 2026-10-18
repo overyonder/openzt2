@@ -26,7 +26,7 @@ def run(*arguments, **options):
 
 def require_binary_architecture(binary, target):
     if target["platform"] == "darwin":
-        run("lipo", "-verify_arch", target["architecture"], str(binary))
+        run("lipo", str(binary), "-verify_arch", target["architecture"])
         commands = subprocess.check_output(["otool", "-l", str(binary)], text=True)
         minimums = re.findall(r"\bminos (\d+(?:\.\d+)+)", commands)
         minimums += re.findall(r"cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version (\d+(?:\.\d+)+)", commands)

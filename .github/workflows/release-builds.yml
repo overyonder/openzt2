@@ -78,7 +78,7 @@ jobs:
           prefix-key: release-${{ matrix.id }}
           shared-key: ${{ hashFiles('flake.lock', 'tools/release/targets.toml', 'patches/**') }}
           workspaces: . -> ${{ env.OPENZT2_CARGO_CACHE_TARGET }}
-          cache-on-failure: true
+          cache-on-failure: false
       - name: Linux native tools
         if: matrix.platform == 'linux' && matrix.libc == 'glibc'
         run: |
