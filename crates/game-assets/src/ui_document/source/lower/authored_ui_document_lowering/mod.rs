@@ -29,6 +29,8 @@ pub(super) const SELECTED_ENTITY_INVENTORY_ROW_DOCUMENT: &str =
 pub(super) const SELECTED_ANIMAL_NEED_ROW_DOCUMENT: &str = "ui/fragment/ui/layout/needsitem.xml";
 pub(in crate::ui_document::source) const DISPLAY_RESOLUTION_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/resolution.xml";
+pub(in crate::ui_document::source) const GRAPHICS_DETAIL_SETTING_ROW_DOCUMENT: &str =
+    "ui/fragment/ui/layout/optionsslider.xml";
 pub(in crate::ui_document::source) const LOAD_SLOT_ROW_DOCUMENT: &str =
     "ui/fragment/ui/layout/loadentry.xml";
 pub(in crate::ui_document::source) const PROFILE_ROW_DOCUMENT: &str =

@@ -5,7 +5,6 @@ use openzt2_game_data::world_definitions::camera_definitions::CameraTuningDefini
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
-use openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
@@ -15,7 +14,7 @@ use super::super::camera_runtime_state_types::OverheadRig;
 use super::super::camera_runtime_state_types::ZooCamera;
 use super::super::fixed_aspect_perspective_projection::FixedAspectPerspectiveProjection;
 use super::super::math::clamp_rig;
-use super::overhead_camera_zoom_policy::maximum_overhead_camera_zoom_for_graphics_detail;
+use super::overhead_camera_zoom_policy::select_three_level_graphics_detail_value;
 use crate::camera::camera_execution_types::CameraBounds;
 use crate::camera::camera_execution_types::CameraTuning;
 
@@ -48,11 +47,7 @@ pub(crate) fn apply_authored_camera_definition_to_runtime_components(
             continue;
         };
         let Some((next_projection, next_tuning, _, next_bounds)) =
-            camera_runtime_components_from_authored_definition(
-                definition,
-                world_bounds,
-                graphics.max_overhead_zoom,
-            )
+            camera_runtime_components_from_authored_definition(definition, world_bounds, &graphics)
         else {
             continue;
         };
@@ -63,13 +58,45 @@ pub(crate) fn apply_authored_camera_definition_to_runtime_components(
     }
 }
 
+/// Moves the far plane of the live zoo cameras when the view distance option
+/// changes, leaving the rest of the authored projection untouched.
+pub(in crate::camera) fn apply_view_distance_graphics_setting_to_zoo_camera_far_planes(
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    graphics: Res<GraphicsSettings>,
+    mut cameras: Query<(&CameraDefinition, &mut Projection), With<ZooCamera>>,
+) {
+    if !graphics.is_changed() {
+        return;
+    }
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for (selected, mut projection) in &mut cameras {
+        let Some(definition) = definitions.find_camera(selected.0) else {
+            continue;
+        };
+        let far =
+            select_three_level_graphics_detail_value(definition.far_m, graphics.view_distance);
+        match &mut *projection {
+            Projection::Custom(custom) => {
+                if let Some(perspective) = custom.get_mut::<FixedAspectPerspectiveProjection>() {
+                    perspective.set_far(far);
+                }
+            }
+            Projection::Orthographic(orthographic) => orthographic.far = far,
+            Projection::Perspective(perspective) => perspective.far = far,
+        }
+    }
+}
+
 pub(super) fn camera_runtime_components_from_authored_definition(
     definition: &CameraTuningDefinition,
     world: &WorldTerrainHorizontalBounds,
-    maximum_zoom_detail: ThreeLevelGraphicsDetail,
+    graphics: &GraphicsSettings,
 ) -> Option<(Projection, CameraTuning, OverheadRig, CameraBounds)> {
     let near = f32::from(definition.near_m);
-    let far = f32::from(definition.far_m);
+    let far = select_three_level_graphics_detail_value(definition.far_m, graphics.view_distance);
     let fov = f32::from(definition.fov_y_radians);
     let initial_zoom = f32::from(definition.initial_zoom_m);
     let projection = match definition.projection {
@@ -104,9 +131,9 @@ pub(super) fn camera_runtime_components_from_authored_definition(
     };
     let minimum_zoom = f32::from(definition.minimum_zoom_m);
     let maximum_distance_by_detail = definition.maximum_zoom_m.map(f32::from);
-    let maximum_zoom = maximum_overhead_camera_zoom_for_graphics_detail(
+    let maximum_zoom = select_three_level_graphics_detail_value(
         maximum_distance_by_detail,
-        maximum_zoom_detail,
+        graphics.max_overhead_zoom,
     );
     let tuning = CameraTuning {
         distance: minimum_zoom..=maximum_zoom,

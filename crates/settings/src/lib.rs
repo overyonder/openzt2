@@ -8,6 +8,9 @@ mod display_resolution_ui_presentation;
 mod display_settings_application;
 use openzt2_interface_state::settings::display_settings_types;
 mod display_settings_validation;
+mod graphics_detail_setting_types;
+mod graphics_detail_setting_ui_presentation;
+mod graphics_settings_presentation_types;
 mod graphics_settings_application;
 mod graphics_settings_validation;
 use openzt2_interface_state::settings::online_message_policy_types;
@@ -112,6 +115,12 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
+                graphics_settings_application::apply_accepted_ui_text_shadow_setting
+                    .after(UiSet::Projection)
+                    .in_set(GameSet::Ui),
+            )
+            .add_systems(
+                Update,
                 (
                     display_resolution_ui_presentation::
                         set_authored_display_resolution_list_row_count,
@@ -124,9 +133,24 @@ impl Plugin for SettingsPlugin {
                 )
                     .chain()
                     .in_set(GameSet::Ui),
+            )
+            .add_systems(
+                Update,
+                (
+                    graphics_detail_setting_ui_presentation::
+                        set_authored_graphics_detail_setting_list_row_count,
+                    graphics_detail_setting_ui_presentation::
+                        copy_changed_graphics_detail_slider_levels_into_settings_draft,
+                    graphics_detail_setting_ui_presentation::
+                        project_drafted_graphics_detail_settings_into_authored_rows,
+                )
+                    .chain()
+                    .in_set(GameSet::Ui),
             );
     }
 }
 
 #[cfg(test)]
 mod display_and_graphics_settings_tests;
+#[cfg(test)]
+mod graphics_detail_setting_tests;

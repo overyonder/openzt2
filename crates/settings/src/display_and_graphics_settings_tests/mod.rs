@@ -31,6 +31,9 @@ fn representative_graphics_settings() -> GraphicsSettings {
 fn settings_test_application() -> App {
     let mut app = App::new();
     app.init_resource::<Assets<UiDocumentAsset>>()
+        .init_resource::<Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>>()
+        .init_resource::<openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>()
+        .init_resource::<bevy::light::DirectionalLightShadowMap>()
         .add_message::<
             openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated,
         >()
@@ -108,4 +111,22 @@ fn accepted_values_map_to_actual_bevy_components() {
             .shadow_maps_enabled
     );
     assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
+
+    app.world_mut()
+        .write_message(ReplaceGraphicsSettingsRequest(
+            GraphicsSettings::from_source_highest_detail_preset(),
+        ));
+    app.update();
+    assert!(
+        app.world()
+            .get::<DirectionalLight>(light)
+            .unwrap()
+            .shadow_maps_enabled
+    );
+    assert_eq!(
+        app.world()
+            .resource::<bevy::light::DirectionalLightShadowMap>()
+            .size,
+        4096
+    );
 }

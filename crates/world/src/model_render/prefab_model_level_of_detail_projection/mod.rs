@@ -2,6 +2,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::ecs::entity::EntityHashMap;
 use bevy::math::Affine3A;
 use bevy::prelude::*;
+use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
 
@@ -9,6 +10,7 @@ use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_
 
 pub(super) fn project_prefab_model_level_of_detail_visibility(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
+    graphics: Res<GraphicsSettings>,
     groups: Query<Ref<GlobalTransform>>,
     hierarchy: Query<(
         Option<&ChildOf>,
@@ -44,9 +46,16 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                 .get(range.group)
                 .map_or_else(|_| transform.is_changed(), |group| group.is_changed())
     });
-    if !camera_changed && !level_of_detail_changed {
+    if !camera_changed && !level_of_detail_changed && !graphics.is_changed() {
         return;
     }
+    // ponytail: the source object detail tiers publish no LOD bias. Medium, the
+    // default preset, keeps the authored ranges; the others halve or stretch them.
+    let object_detail_range_scale = match graphics.object_detail {
+        ThreeLevelGraphicsDetail::Low => 0.5,
+        ThreeLevelGraphicsDetail::Medium => 1.0,
+        ThreeLevelGraphicsDetail::High => 1.5,
+    };
     let level_of_detail_range_matches = lods
         .iter()
         .map(|(entity, transform, range, _)| {
@@ -62,7 +71,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                     if range.active_without_range {
                         return true;
                     }
-                    let (origin, authored_range_scale) = groups.get(range.group).map_or_else(
+                    let (origin, group_range_scale) = groups.get(range.group).map_or_else(
                         |_| (transform.translation(), 1.0),
                         |value| {
                             let (scale, _, _) = value.to_scale_rotation_translation();
@@ -75,6 +84,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
                     // NiRangeLODData selects from camera-space Z depth, not
                     // radial camera distance. Its ranges are half-open and
                     // the first matching authored range owns the group.
+                    let authored_range_scale = group_range_scale * object_detail_range_scale;
                     let camera_space_depth = camera_transform
                         .forward()
                         .dot(origin - camera_transform.translation());

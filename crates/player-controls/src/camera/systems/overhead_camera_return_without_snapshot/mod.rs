@@ -77,7 +77,7 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
                 camera_runtime_components_from_authored_definition(
                     definition,
                     world_bounds,
-                    graphics.max_overhead_zoom,
+                    &graphics,
                 )
             else {
                 continue;

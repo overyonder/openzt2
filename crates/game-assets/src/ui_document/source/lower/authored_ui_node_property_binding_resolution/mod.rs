@@ -374,6 +374,22 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             output.bindings.push(binding);
         }
     }
+    // The source options mode writes these two texts into each row it
+    // creates; the row document leaves them empty.
+    if input.virtual_path == "ui/layout/optionsslider.xml"
+        && matches!(&node.widget, SourceUiWidgetData::Text(_))
+    {
+        let source = match normalized_name.as_str() {
+            "label" => Some(UiTextPropertyBindingSource::GraphicsDetailSettingLabel),
+            "setting" => Some(UiTextPropertyBindingSource::GraphicsDetailSettingLevel),
+            _ => None,
+        };
+        if let Some(source) = source {
+            output
+                .bindings
+                .push(UiNodePropertyBinding::TextContent(source));
+        }
+    }
     if role == UiDocumentRole::ZooStatus {
         if normalized_name == "openzooselection"
             && matches!(&node.widget, SourceUiWidgetData::Text(_))

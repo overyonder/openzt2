@@ -1,0 +1,27 @@
+# Advanced Settings lists the source detail sliders and applies them (#48).
+start main-menu
+# Verification uses a fresh profile. Fail rather than overwrite an unexpected baseline.
+expect settings_default_detail == 1
+click "Game Options Button"
+until visible "Back"
+click "Custom Detail"
+wait 120                        # the advanced panels finish their show animation
+expect settings_draft_clean == 1
+capture custom-detail-opened    # labels, levels and slider positions of the default preset
+click 1377 195                  # Environment Detail: Medium to High
+wait 10
+expect settings_draft_clean == 0
+click "Apply"
+until hidden "Settings Panel"
+until visible "Game Options Button"
+expect settings_default_detail == 0
+click "Game Options Button"
+until visible "Back"
+wait 120
+capture custom-detail-reopened  # Advanced Settings and its panels stay open for a custom profile
+# Restore the fresh-profile preset through the same controls.
+click "Medium Detail"           # authored "high detail", the fresh-profile preset
+click "Apply"
+until hidden "Settings Panel"
+until visible "Game Options Button"
+expect settings_default_detail == 1

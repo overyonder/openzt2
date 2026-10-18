@@ -93,11 +93,7 @@ pub(crate) fn spawn_zoo_camera(
             continue;
         };
         let Some((projection, tuning, mut rig, bounds)) =
-            camera_runtime_components_from_authored_definition(
-                definition,
-                world_bounds,
-                graphics.max_overhead_zoom,
-            )
+            camera_runtime_components_from_authored_definition(definition, world_bounds, &graphics)
         else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,

@@ -33,6 +33,7 @@ pub(super) fn apply_photo_camera_zoom(
     axes: Res<DeviceControlAxes>,
     active_input: Res<ActiveInputDevice>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
+    graphics: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
     active_definitions: Res<WorldDefinitions>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
@@ -148,7 +149,10 @@ pub(super) fn apply_photo_camera_zoom(
                 fov,
                 definition.fixed_aspect_ratio,
                 definition.near_m,
-                definition.far_m,
+                super::systems::overhead_camera_zoom_policy::select_three_level_graphics_detail_value(
+                    definition.far_m,
+                    graphics.view_distance,
+                ),
             ));
         }
         if needs_initialization {

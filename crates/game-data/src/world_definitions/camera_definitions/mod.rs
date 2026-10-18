@@ -25,7 +25,9 @@ pub struct CameraTuningDefinition {
     /// Perspective cameras leave this at zero.
     pub vertical_view_per_zoom: f32,
     pub near_m: f32,
-    pub far_m: f32,
+    /// Far plane for the low, medium, and high `viewDistance` settings.
+    /// Definitions without tiered source values repeat their one far plane.
+    pub far_m: [f32; 3],
     pub offset_m: [f32; 3],
     pub pitch_radians: [f32; 2],
     pub yaw_radians: [f32; 2],

@@ -1,3 +1,4 @@
+use openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::AssetId;
 
@@ -48,6 +49,7 @@ pub(super) fn encode_profile_index_for_test(
             bindings: GameActionInputBindings::default(),
             display: DisplaySettings::default(),
             graphics: GraphicsSettings::default(),
+            online_messages: OnlineMessagePolicy::default(),
             record: profile_record,
         })
         .collect();
@@ -153,7 +155,11 @@ pub(super) fn encode_stored_profile_index(
                 .options
                 .controller_input_enabled,
         ));
-        profile_index_bytes.push(0);
+        // Formerly reserved and always zero, so older profiles keep the
+        // message of the day enabled.
+        profile_index_bytes.push(u8::from(
+            !stored_profile_record_and_settings.online_messages.enabled,
+        ));
         for challenge_completion_count in [
             stored_profile_record_and_settings.challenge_progress.all,
             stored_profile_record_and_settings.challenge_progress.photo,
@@ -296,9 +302,13 @@ pub(super) fn decode_stored_profile_index(
             _ => return Err(ProfileFailure::CorruptIndex),
         };
         profile_index_byte_cursor += 1;
-        if profile_index_bytes[profile_index_byte_cursor] != 0 {
-            return Err(ProfileFailure::CorruptIndex);
-        }
+        let online_messages = OnlineMessagePolicy {
+            enabled: match profile_index_bytes[profile_index_byte_cursor] {
+                0 => true,
+                1 => false,
+                _ => return Err(ProfileFailure::CorruptIndex),
+            },
+        };
         profile_index_byte_cursor += 1;
         let profile_challenge_completion_counts = if profile_index_format_version == 1 {
             ProfileChallengeCompletionCounts::default()
@@ -412,6 +422,7 @@ pub(super) fn decode_stored_profile_index(
             bindings: game_action_input_bindings,
             display: display_settings,
             graphics: graphics_settings,
+            online_messages,
         });
         profile_index_byte_cursor = profile_display_name_end_byte_offset;
     }

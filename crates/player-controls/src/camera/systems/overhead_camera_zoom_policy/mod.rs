@@ -21,7 +21,7 @@ pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
         if *mode != CameraMode::Overhead {
             continue;
         }
-        let maximum = maximum_overhead_camera_zoom_for_graphics_detail(
+        let maximum = select_three_level_graphics_detail_value(
             tuning.maximum_distance_by_detail,
             graphics.max_overhead_zoom,
         );
@@ -31,7 +31,8 @@ pub(crate) fn apply_overhead_camera_zoom_graphics_setting(
     }
 }
 
-pub(super) const fn maximum_overhead_camera_zoom_for_graphics_detail(
+/// Picks the authored low, medium, or high tier of a setting-dependent value.
+pub(in crate::camera) const fn select_three_level_graphics_detail_value(
     maximums: [f32; 3],
     detail: ThreeLevelGraphicsDetail,
 ) -> f32 {
