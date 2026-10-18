@@ -1,5 +1,6 @@
 //! Fence, path, gate, and portal facts stored directly in the live ECS.
 
+mod fence_anchor_cursor_presentation;
 pub mod fence_anchor_press_diagnostic_types;
 mod fence_construction_preview_presentation;
 mod fence_segment_prefab_refresh;
@@ -24,6 +25,7 @@ mod topology_index_hydration;
 mod topology_prefab_presentation;
 pub mod topology_presentation_types;
 
+use crate::topology::fence_anchor_cursor_presentation::present_fence_anchor_cursor;
 use crate::topology::fence_construction_preview_presentation::project_fence_construction_preview_validity_onto_prefab_model_tints;
 use crate::topology::fence_construction_preview_presentation::reconcile_fence_construction_preview_presentation_segments;
 use crate::topology::fence_segment_prefab_refresh::refresh_fence_segment_prefabs_after_topology_index_changes;
@@ -38,10 +40,10 @@ use crate::topology::path_curb_presentation::invalidate_path_curb_presentations_
 use crate::topology::path_support_hydration::hydrate_authored_path_supports_at_sampled_terrain_height;
 use crate::topology::path_support_hydration::invalidate_path_supports_after_topology_or_terrain_changes;
 use crate::topology::path_support_hydration::remove_path_supports_after_their_owning_path_is_removed;
+use crate::topology::path_surface_presentation::ElevatedPathSurfacePresentationAssets;
 use crate::topology::path_surface_presentation::fit_ground_path_tiles_to_authored_terrain;
 use crate::topology::path_surface_presentation::hydrate_elevated_path_surface_mesh_and_material_presentations;
 use crate::topology::path_surface_presentation::invalidate_ground_path_terrain_fitting_after_terrain_changes;
-use crate::topology::path_surface_presentation::ElevatedPathSurfacePresentationAssets;
 use crate::topology::tank_boundary_projection::remove_tank_boundary_relationship_entities_with_missing_endpoints;
 use crate::topology::tank_boundary_projection::synchronize_tank_boundary_relationships_after_habitat_region_changes;
 use crate::topology::topology_construction_interaction::apply_fence_placement_requests_to_construction_previews;
@@ -57,6 +59,7 @@ use crate::topology::topology_definition_hydration::hydrate_save_loaded_topology
 use crate::topology::topology_deletion_transaction_preparation::prepare_topology_deletion_transaction;
 use crate::topology::topology_edit_application::apply_committed_topology_edit;
 use crate::topology::topology_index_hydration::index_loaded_topology_and_remove_duplicate_or_invalid_entities;
+use crate::topology::topology_prefab_presentation::attach_fence_posts_to_hydrated_segment_models;
 use crate::topology::topology_prefab_presentation::hydrate_topology_prefab_presentations;
 use openzt2_zoo_state::topology::gate_operation_types::GateOperationSet;
 use openzt2_zoo_state::topology::gate_operation_types::SetGateState;
@@ -116,6 +119,7 @@ impl Plugin for TopologyPlugin {
                 (
                     hydrate_save_loaded_topology_definition_facts,
                     reconcile_fence_construction_preview_presentation_segments,
+                    present_fence_anchor_cursor,
                     invalidate_ground_path_terrain_fitting_after_terrain_changes,
                     fit_ground_path_tiles_to_authored_terrain,
                     hydrate_elevated_path_surface_mesh_and_material_presentations,
@@ -123,6 +127,8 @@ impl Plugin for TopologyPlugin {
                     hydrate_authored_path_curb_prefab_presentations,
                     refresh_fence_segment_prefabs_after_topology_index_changes,
                     hydrate_topology_prefab_presentations,
+                    fence_construction_preview_presentation::synchronize_fence_preview_visibility_with_pointer_capture,
+                    attach_fence_posts_to_hydrated_segment_models,
                     attach_authored_animation_sets_to_resolved_gate_models,
                     fit_fence_presentations_to_terrain_endpoint_heights,
                     project_fence_construction_preview_validity_onto_prefab_model_tints,

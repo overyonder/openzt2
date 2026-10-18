@@ -1,16 +1,15 @@
 use super::world_definition_source_value_reading_and_conversion::simple_error;
 use crate::source_document::resolved_source_record_index::BindError;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_shows_and_training::ShowPlatformUpgradePolicy;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::environment::EnvironmentDefinition;
 use openzt2_game_data::world_definitions::facilities_and_maintenance::CleanlinessPolicy;
-use openzt2_game_data::world_definitions::fences_and_gates::FenceGatePolicy;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestViewingPolicy;
 use openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::{
     TourCategoryScore, TourRatingRange,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -235,11 +234,10 @@ impl WorldDefinitionLoweringTables {
             if fence.gate == AssetId::default() {
                 continue;
             }
+            // Each fence file lowers on its own, so the gate variant usually
+            // lives in another document; keep its id for the merged view.
             if let Some(policy) = gate_presentations.get(&fence.gate) {
                 fence.gate_policy.clone_from(policy);
-            } else {
-                fence.gate = AssetId::default();
-                fence.gate_policy = FenceGatePolicy::default();
             }
         }
         sort!(fences);

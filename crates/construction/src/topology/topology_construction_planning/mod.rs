@@ -1,8 +1,8 @@
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::paths_and_tile_surfaces::GuestPathDefinition;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
-use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -21,6 +21,7 @@ use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapp
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
+use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyProtected};
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_heading_quantized_fence_segment_cells_between_endpoints;
 
@@ -102,6 +103,42 @@ pub(super) fn calculate_fence_construction_plan(
         .checked_mul(segments)
         .ok_or(PlacementFailure::InvalidTopology)?;
     Ok((cells, Money(cost), gate))
+}
+
+/// Existing fence edges a gate can replace, with their gate and protection state.
+pub(super) type GateHostEdges<'w, 's> =
+    Query<'w, 's, (&'static FenceEdge, Has<Gate>, Has<TopologyProtected>)>;
+
+pub(super) fn fence_definition_is_gate(definitions: WorldDefinitionsView<'_>, id: AssetId) -> bool {
+    read_fence_construction_facts(definitions, id).is_some_and(|(_, gate, _)| gate.is_some())
+}
+
+/// A gate is not drawn as a run: it replaces the existing fence segment
+/// between `from` and `to`, which keeps its fence and gains its gate variant.
+pub(super) fn calculate_gate_replacement_plan(
+    preview: &FencePreview,
+    index: &TopologyIndex,
+    definitions: WorldDefinitionsView<'_>,
+    hosts: &GateHostEdges,
+) -> Result<(Entity, Money), PlacementFailure> {
+    let (price, ..) = read_fence_construction_facts(definitions, preview.definition)
+        .ok_or(PlacementFailure::InvalidTopology)?;
+    let edge = EdgeKey::new(preview.from, preview.to)
+        .and_then(|key| index.edges.get(&key).copied())
+        .ok_or(PlacementFailure::InvalidTopology)?;
+    let (fence, has_gate, protected) = hosts
+        .get(edge)
+        .map_err(|_| PlacementFailure::InvalidTopology)?;
+    if has_gate || protected {
+        return Err(PlacementFailure::Occupied);
+    }
+    if definitions
+        .find_fence(fence.definition)
+        .is_none_or(|host| host.gate == AssetId::default())
+    {
+        return Err(PlacementFailure::InvalidTopology);
+    }
+    Ok((edge, Money(price)))
 }
 
 pub(super) fn calculate_path_construction_plan(

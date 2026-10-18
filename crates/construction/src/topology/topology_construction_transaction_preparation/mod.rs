@@ -16,9 +16,13 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
 use crate::topology::topology_construction_planning::calculate_path_construction_plan;
+use crate::topology::topology_construction_planning::{
+    GateHostEdges, calculate_gate_replacement_plan, fence_definition_is_gate,
+};
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_construction_preview_types::PathPreview;
 use crate::topology::topology_edit_outcome_messages::write_topology_edit_preparation_rejection;
+use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPreparationRejected;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
@@ -88,6 +92,50 @@ fn prepare_fence_construction_snapshots(
     Ok((snapshots, cost))
 }
 
+/// Swaps the fence segment under a gate preview for the same segment with a
+/// closed gate, so undo restores the plain fence.
+fn prepare_gate_replacement_snapshots(
+    preview: &FencePreview,
+    index: &TopologyIndex,
+    definitions: WorldDefinitionsView<'_>,
+    hosts: &GateHostEdges,
+    persistent: &Query<&PersistentId>,
+    ids: &mut PersistentIdAllocator,
+    root: Entity,
+) -> Result<(TopologySnapshot, TopologySnapshot, Money), PlacementFailure> {
+    let (edge, cost) = calculate_gate_replacement_plan(preview, index, definitions, hosts)?;
+    let (fence, ..) = hosts
+        .get(edge)
+        .map_err(|_| PlacementFailure::InvalidTopology)?;
+    let id = |entity| {
+        persistent
+            .get(entity)
+            .copied()
+            .map_err(|_| PlacementFailure::InvalidTopology)
+    };
+    let (a, b) = (id(fence.a)?, id(fence.b)?);
+    let removed = TopologySnapshot::Fence {
+        id: id(edge)?,
+        definition: fence.definition,
+        a,
+        b,
+        gate: None,
+    };
+    let created = TopologySnapshot::Fence {
+        id: ids
+            .allocate(root)
+            .map_err(|_| PlacementFailure::InvalidTopology)?,
+        definition: fence.definition,
+        a,
+        b,
+        gate: Some(Gate {
+            open: false,
+            locked: false,
+        }),
+    };
+    Ok((created, removed, cost))
+}
+
 fn prepare_path_construction_snapshots(
     preview: &PathPreview,
     index: &TopologyIndex,
@@ -139,8 +187,11 @@ pub(super) fn prepare_topology_construction_transaction(
     >,
     transactions: Query<&WorldMember>,
     persistent: Query<&PersistentId>,
-    mut prepared: MessageWriter<TopologyEditPrepared>,
-    mut rejected: MessageWriter<TopologyEditPreparationRejected>,
+    gate_hosts: GateHostEdges,
+    (mut prepared, mut rejected): (
+        MessageWriter<TopologyEditPrepared>,
+        MessageWriter<TopologyEditPreparationRejected>,
+    ),
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
@@ -167,6 +218,18 @@ pub(super) fn prepare_topology_construction_transaction(
         }
 
         let result = match (fence, path) {
+            (Some(preview), None) if fence_definition_is_gate(definitions, preview.definition) => {
+                prepare_gate_replacement_snapshots(
+                    preview,
+                    &index,
+                    definitions,
+                    &gate_hosts,
+                    &persistent,
+                    &mut ids,
+                    member.root,
+                )
+                .map(|(created, removed, cost)| (vec![created], vec![removed], cost))
+            }
             (Some(preview), None) => prepare_fence_construction_snapshots(
                 preview,
                 &index,
@@ -178,7 +241,8 @@ pub(super) fn prepare_topology_construction_transaction(
                 &terrain_chunks,
                 &mut ids,
                 member.root,
-            ),
+            )
+            .map(|(created, cost)| (created, Vec::new(), cost)),
             (None, Some(preview)) => prepare_path_construction_snapshots(
                 preview,
                 &index,
@@ -189,14 +253,15 @@ pub(super) fn prepare_topology_construction_transaction(
                 &terrain_chunks,
                 &mut ids,
                 member.root,
-            ),
+            )
+            .map(|(created, cost)| (created, Vec::new(), cost)),
             _ => Err(PlacementFailure::InvalidTopology),
         };
         match result {
-            Ok((snapshots, cost)) => {
+            Ok((created, removed, cost)) => {
                 commands.entity(request.transaction).insert(TopologyEdit {
-                    created: snapshots.into_boxed_slice(),
-                    removed: Box::new([]),
+                    created: created.into_boxed_slice(),
+                    removed: removed.into_boxed_slice(),
                 });
                 prepared.write(TopologyEditPrepared {
                     transaction: request.transaction,

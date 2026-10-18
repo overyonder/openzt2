@@ -97,7 +97,12 @@ impl FenceNavigationPolicy<'_, '_> {
             return true;
         };
         if let Some(gate) = gate {
-            let policy = &definition.gate_policy;
+            let policy = &self
+                .actor_types
+                .definitions()
+                .and_then(|definitions| definitions.find_gate_fence(edge.definition))
+                .unwrap_or(definition)
+                .gate_policy;
             let passes_open_gate = policy.open_passage_types.as_ref().is_none_or(|types| {
                 types
                     .iter()

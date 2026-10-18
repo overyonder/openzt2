@@ -20,7 +20,6 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditAcknowledged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
-use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -29,6 +28,7 @@ use openzt2_zoo_state::topology::topology_graph_types::TileSurface;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
+use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_cell_bounds;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 use openzt2_zoo_state::topology::topology_grid_geometry::merge_topology_changed_cell_bounds;
@@ -441,7 +441,12 @@ pub(super) fn apply_committed_topology_edit(
                     if let Some(gate) = gate {
                         commands.entity(entity).insert(gate);
                     }
-                    if let Some(fence) = definitions.find_fence(definition) {
+                    let fence = if gate.is_some() {
+                        definitions.find_gate_fence(definition)
+                    } else {
+                        definitions.find_fence(definition)
+                    };
+                    if let Some(fence) = fence {
                         let next = find_adjacent_added_fence_cell(b, a, add, &resolved, &topology);
                         let prefab = select_authored_fence_segment_prefab_for_adjacent_topology(
                             fence, a_cell, b_cell, next,

@@ -8,6 +8,7 @@ use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_cur
 use crate::topology::topology_presentation_types::TopologyPresentation;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
+use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
@@ -27,6 +28,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         &FenceEdge,
         Option<&mut FenceSegmentPrefab>,
         Option<&TopologyPresentation>,
+        Has<Gate>,
     )>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -37,7 +39,7 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
     }
     let segments = fences
         .iter()
-        .filter_map(|(entity, edge, _, _)| {
+        .filter_map(|(entity, edge, _, _, _)| {
             Some((
                 entity,
                 (
@@ -59,11 +61,17 @@ pub(super) fn refresh_fence_segment_prefabs_after_topology_index_changes(
         .zip(partners)
         .map(|((entity, _), partner)| (*entity, partner))
         .collect::<bevy::platform::collections::HashMap<_, _>>();
-    for (fence_entity, edge, current_prefab, presentation) in &mut fences {
+    for (fence_entity, edge, current_prefab, presentation, gate) in &mut fences {
         let (Ok(first_node), Ok(second_node)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
             continue;
         };
-        let Some(definition) = definitions.find_fence(edge.definition) else {
+        // A gated edge shows its fence's gate variant, e.g. chainlinkgate.
+        let definition = if gate {
+            definitions.find_gate_fence(edge.definition)
+        } else {
+            definitions.find_fence(edge.definition)
+        };
+        let Some(definition) = definition else {
             continue;
         };
         let (first, second, next_cell) = partners.get(&fence_entity).copied().flatten().map_or(

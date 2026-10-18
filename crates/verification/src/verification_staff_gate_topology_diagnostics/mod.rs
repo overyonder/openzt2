@@ -23,6 +23,9 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
+use openzt2_zoo_state::construction::FixedConstructionSet;
+use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
@@ -31,9 +34,6 @@ use openzt2_zoo_state::construction::construction_transaction_types::Constructio
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
-use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
-use openzt2_zoo_state::construction::FixedConstructionSet;
-use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceEndpointFittingReports;
@@ -867,7 +867,7 @@ fn observe_published_fence_run_boundaries(
         }
         gates += usize::from(gate.is_some());
         let staff_policy = definitions
-            .and_then(|definitions| definitions.find_fence(edge.definition))
+            .and_then(|definitions| definitions.find_gate_fence(edge.definition))
             .map(|fence| {
                 fence.gate_policy.open_for_entity_type == Some(AssetId::from_key("staff"))
             });

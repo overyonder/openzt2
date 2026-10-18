@@ -19,6 +19,9 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
+use crate::topology::topology_construction_planning::{
+    GateHostEdges, calculate_gate_replacement_plan, fence_definition_is_gate,
+};
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_presentation_types::TopologyPresentation;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
@@ -38,6 +41,23 @@ pub(super) struct FenceConstructionPreviewPresentationSegment {
     segment_index: usize,
 }
 
+pub(super) fn synchronize_fence_preview_visibility_with_pointer_capture(
+    capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
+    cursors: Query<
+        &openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor,
+    >,
+    mut segments: Query<&mut Visibility, With<FenceConstructionPreviewPresentationSegment>>,
+) {
+    let visible = !capture.over_ui && cursors.single().is_ok_and(|cursor| cursor.over_terrain);
+    for mut visibility in &mut segments {
+        visibility.set_if_neq(if visible {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     mut commands: Commands,
@@ -50,6 +70,7 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     previews: Query<(Entity, Ref<FencePreview>, &WorldMember), With<ConstructionPreview>>,
     fences: Query<&FenceEdge>,
+    gate_hosts: GateHostEdges,
     nodes: Query<&TopologyNode>,
     all_previews: Query<(), With<FencePreview>>,
     presentation_segments: Query<(
@@ -75,18 +96,32 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
         if !preview.is_changed() && !index.is_changed() {
             continue;
         }
-        let cells = calculate_fence_construction_plan(
-            &preview,
-            &index,
-            *grid,
-            definitions,
-            &terrain,
-            &terrain_assets,
-            &terrain_chunks,
-        )
-        .map(|(cells, _, _)| cells)
+        let gate = fence_definition_is_gate(definitions, preview.definition);
+        // A gate previews as the gate variant of the fence it replaces.
+        let mut definition = definitions.find_fence(preview.definition);
+        let cells = if gate {
+            calculate_gate_replacement_plan(&preview, &index, definitions, &gate_hosts).map(
+                |(edge, _)| {
+                    definition = gate_hosts
+                        .get(edge)
+                        .ok()
+                        .and_then(|(host, ..)| definitions.find_gate_fence(host.definition));
+                    vec![preview.from, preview.to]
+                },
+            )
+        } else {
+            calculate_fence_construction_plan(
+                &preview,
+                &index,
+                *grid,
+                definitions,
+                &terrain,
+                &terrain_assets,
+                &terrain_chunks,
+            )
+            .map(|(cells, _, _)| cells)
+        }
         .unwrap_or_default();
-        let definition = definitions.find_fence(preview.definition);
         let mut segments = cells
             .windows(2)
             .map(|pair| (preview.definition, pair[0], pair[1]))
