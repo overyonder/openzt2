@@ -12,7 +12,7 @@ use super::authored_model_material_pass_projection::{
 };
 
 #[derive(Component)]
-struct ModelPrimitiveWindingProjected;
+pub(super) struct ModelPrimitiveWindingProjected;
 
 pub(super) fn project_mirrored_model_primitive_winding(
     mut commands: Commands,
@@ -30,9 +30,8 @@ pub(super) fn project_mirrored_model_primitive_winding(
     mut meshes: ResMut<Assets<Mesh>>,
     mut reflected_meshes: Local<HashMap<AssetId<Mesh>, AssetId<Mesh>>>,
 ) {
-    reflected_meshes.retain(|source, reflected| {
-        meshes.contains(*source) && meshes.contains(*reflected)
-    });
+    reflected_meshes
+        .retain(|source, reflected| meshes.contains(*source) && meshes.contains(*reflected));
     for root in &roots {
         for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
             let Ok(source) = primitives.get(entity) else {
@@ -74,7 +73,9 @@ pub(super) fn project_mirrored_model_primitive_winding(
                 };
                 commands.entity(entity).insert(Mesh3d(reflected));
             }
-            commands.entity(entity).insert(ModelPrimitiveWindingProjected);
+            commands
+                .entity(entity)
+                .insert(ModelPrimitiveWindingProjected);
         }
     }
 }

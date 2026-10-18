@@ -14,3 +14,6 @@ impl PrefabAuthoredBillboardOrientationMode {
         }
     }
 }
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PrefabBillboardProjection;

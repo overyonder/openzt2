@@ -51,12 +51,6 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
         else {
             continue;
         };
-        // nodeStartHeight is already retained as the water height-grid origin.
-        let terrain_start_height_metres = terrain
-            .canonical_terrain_grid()
-            .presentation
-            .water_editing
-            .height_snap_base_metres;
         if lights.is_empty() {
             if !definition.light_keyframes.is_empty() {
                 let light_entity = commands
@@ -138,7 +132,7 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
             world_member,
             definitions,
             definition,
-            terrain_start_height_metres,
+            terrain.canonical_terrain_grid(),
             &mut meshes,
             &mut materials,
         );

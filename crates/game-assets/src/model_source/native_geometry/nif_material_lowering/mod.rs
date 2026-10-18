@@ -87,7 +87,7 @@ pub(super) fn lower_netimmerse_native_material(
     let alpha_cutoff = alpha
         .filter(|value| value.flags & 0x0200 != 0)
         .map(|value| f32::from(value.threshold) / 255.0);
-    let base_color = material.map_or([1.0; 4], |value| {
+    let base_color = material.map_or([0.5, 0.5, 0.5, 1.0], |value| {
         [
             value.diffuse[0],
             value.diffuse[1],
@@ -121,10 +121,17 @@ pub(super) fn lower_netimmerse_native_material(
         name: material.map_or_else(String::new, |value| value.object.name.clone()),
         decal_0_texture,
         base_color,
-        ambient: material.map_or([1.0; 3], |value| value.ambient),
+        ambient: material.map_or([0.5; 3], |value| value.ambient),
         specular: material.map_or([0.0; 3], |value| value.specular),
+        specular_enabled: properties
+            .iter()
+            .find_map(|block| match &block.payload {
+                NetImmerseNifBlockPayload::NiSpecularProperty(value) => Some(value.flags & 1 != 0),
+                _ => None,
+            })
+            .unwrap_or(false),
         emissive,
-        glossiness: material.map_or(0.0, |value| value.glossiness),
+        glossiness: material.map_or(4.0, |value| value.glossiness),
         base_texture,
         detail_texture,
         glow_texture,

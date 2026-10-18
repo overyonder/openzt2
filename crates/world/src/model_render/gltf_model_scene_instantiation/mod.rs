@@ -186,6 +186,7 @@ fn release_hidden_prefab_model_assets_and_render_components(
         MeshMaterial3d<EffectPassMaterial>,
         GltfMaterialName,
         ModelExpanded,
+        super::mirrored_model_primitive_winding::ModelPrimitiveWindingProjected,
         AuthoredModelMaterialPassesProjected,
         // The re-expanded scene spawns new primitives, which need their
         // render layers and shadow policy projected again.

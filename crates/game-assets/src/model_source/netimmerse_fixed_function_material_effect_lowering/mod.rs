@@ -49,6 +49,9 @@ pub(crate) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
         ),
         material_state(4, [material.glossiness, 0.0, 0.0, 0.0]),
         effect_state(48, 1),
+        effect_state(15, u32::from(material.specular_enabled)),
+        effect_state(52, 1),
+        effect_state(55, 0),
     ];
 
     if material.lighting_mode > 1 {

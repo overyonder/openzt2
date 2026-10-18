@@ -1,12 +1,7 @@
 //! Source transform and collider-axis math shared by native scene lowerers.
 
+use bevy::math::Mat4;
 use openzt2_game_data::scene_prefab::PrefabTransform;
-
-use crate::source_coordinate_conversion::{
-    conjugate_source_z_up_rotation_into_bevy_y_up_basis,
-    convert_row_major_rotation_matrix_to_xyzw_quaternion,
-    convert_source_z_up_vector_to_bevy_y_up_coordinates,
-};
 
 pub(super) fn source_vector_length(value: [f32; 3]) -> f32 {
     value
@@ -32,30 +27,17 @@ pub(super) fn rotation_from_source_positive_y_axis(axis: [f32; 3]) -> [f32; 4] {
 pub(super) fn convert_blue_fang_scene_matrix_to_prefab_transform(
     m: [[f32; 4]; 4],
 ) -> Option<PrefabTransform> {
-    let mut r = [
-        m[0][0], m[1][0], m[2][0], m[0][1], m[1][1], m[2][1], m[0][2], m[1][2], m[2][2],
-    ];
-    let s = [
-        source_vector_length([r[0], r[3], r[6]]),
-        source_vector_length([r[1], r[4], r[7]]),
-        source_vector_length([r[2], r[5], r[8]]),
-    ];
-    if s.into_iter().any(|v| !v.is_finite() || v <= 0.000_001) {
+    let matrix = Mat4::from_cols_array(
+        &super::super::native_geometry::source_transform_conversion::convert_blue_fang_source_matrix_to_gltf_matrix(m),
+    );
+    if !matrix.is_finite() || matrix.determinant() == 0.0 {
         return None;
     }
-    for row in 0..3 {
-        for col in 0..3 {
-            r[row * 3 + col] /= s[col];
-        }
-    }
+    let (scale, rotation, translation) = matrix.to_scale_rotation_translation();
     Some(PrefabTransform {
-        translation_m: convert_source_z_up_vector_to_bevy_y_up_coordinates([
-            m[3][0], m[3][1], m[3][2],
-        ]),
-        rotation_xyzw: convert_row_major_rotation_matrix_to_xyzw_quaternion(
-            conjugate_source_z_up_rotation_into_bevy_y_up_basis(r),
-        ),
-        scale: [s[0], s[2], s[1]],
+        translation_m: translation.to_array(),
+        rotation_xyzw: rotation.to_array(),
+        scale: scale.to_array(),
     })
 }
 pub(super) fn translated_prefab_transform(translation_m: [f32; 3]) -> PrefabTransform {

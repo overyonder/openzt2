@@ -323,7 +323,10 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         Ref<ViewVisibility>,
         Ref<EnvironmentLight>,
     )>,
-    wind: Single<Ref<AuthoredWindShaderPresentationState>>,
+    wind: Single<
+        Ref<AuthoredWindShaderPresentationState>,
+        With<openzt2_zoo_state::environment::environment_state_types::WorldEnvironment>,
+    >,
     mut effect_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     renderables: Query<

@@ -11,3 +11,7 @@ pub struct EnvironmentLight {
     /// and back respectively.
     pub kind_rank: u8,
 }
+
+/// Current authored specular contribution, independent of diffuse light colour.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct EnvironmentSpecularLightColor(pub Color);

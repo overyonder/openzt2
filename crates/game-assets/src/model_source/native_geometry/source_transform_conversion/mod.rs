@@ -11,7 +11,7 @@ use crate::source_coordinate_conversion::{
 
 use super::super::netimmerse_nif_source::transform_and_skin_source_types::NetImmerseNiTransform;
 
-pub(super) fn convert_blue_fang_source_matrix_to_gltf_matrix(
+pub(in crate::model_source) fn convert_blue_fang_source_matrix_to_gltf_matrix(
     blue_fang_source_matrix: [[f32; 4]; 4],
 ) -> [f32; 16] {
     let source_axis_for_bevy_axis = [0_usize, 2, 1, 3];

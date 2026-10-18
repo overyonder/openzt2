@@ -7,19 +7,19 @@ use bevy::{asset::LoadContext, image::ImageLoaderSettings, prelude::*, shader::S
 use super::{
     d3d9_shader_and_vertex_layout_mapping::map_d3d9_shader_input_to_bevy_vertex_attribute,
     effect_pass_gpu_data::{
-        D3d9BooleanShaderRegisters, D3d9FixedFunctionRegisters, D3d9FixedFunctionTransforms,
-        D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9ProgrammableShaderStage,
-        DynamicEffectParameterRegisterBinding, EFFECT_SHADER_BINDING_LAYOUT, EffectPassMaterial,
-        EffectPassPipelineSpecializationKey, EffectPassTextureAssets,
-        EffectPassUniformBufferAssets, FIXED_FUNCTION_SHADER,
         fixed_function_transform_binding::DynamicFixedFunctionTransformBinding,
         material_configuration::fixed_function_ambient_colour_from_argb,
         uniform_buffer_upload::{
             pack_programmable_shader_registers, shader_buffer_from_packed_registers,
             shader_buffer_from_uniform_value,
         },
+        D3d9BooleanShaderRegisters, D3d9FixedFunctionRegisters, D3d9FixedFunctionTransforms,
+        D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9ProgrammableShaderStage,
+        DynamicEffectParameterRegisterBinding, EffectPassMaterial,
+        EffectPassPipelineSpecializationKey, EffectPassTextureAssets,
+        EffectPassUniformBufferAssets, EFFECT_SHADER_BINDING_LAYOUT, FIXED_FUNCTION_SHADER,
     },
-    evaluated_d3d9_pass_state::{EvaluatedD3d9PassState, collect_evaluated_d3d9_pass_states},
+    evaluated_d3d9_pass_state::{collect_evaluated_d3d9_pass_states, EvaluatedD3d9PassState},
     programmable_vertex_fixed_function_fragment_interface::create_fixed_function_fragment_shader_for_programmable_vertex_outputs,
     resolved_effect_transform_bindings::ResolvedEffectTransformSemantic,
 };
@@ -323,6 +323,13 @@ fn create_effect_pass_material_asset(
                 0.0,
             ),
             48 => fixed_function_ambient_colour_from_argb(state.effect_states[49]),
+            49 => UVec4::new(
+                state.effect_states[15],
+                state.effect_states[55],
+                state.effect_states[52],
+                0,
+            )
+            .as_vec4(),
             _ => unreachable!("fixed function register index is bounded by its array"),
         }),
     };

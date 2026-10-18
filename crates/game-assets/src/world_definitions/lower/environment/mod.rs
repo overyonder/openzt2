@@ -396,6 +396,14 @@ pub(super) fn bind_environment(
         for (layer_index, layer) in sky_layers.element_children().enumerate() {
             let flags = [
                 (
+                    element_bool(&layer, &["moveWithCamera"], true)?,
+                    EnvironmentVisualFlags::MOVE_WITH_CAMERA,
+                ),
+                (
+                    element_bool(&layer, &["positionAtCenter"], false)?,
+                    EnvironmentVisualFlags::POSITION_AT_CENTER,
+                ),
+                (
                     element_bool(&layer, &["clearZBufferAfter"], false)?,
                     EnvironmentVisualFlags::CLEAR_DEPTH,
                 ),
@@ -416,6 +424,8 @@ pub(super) fn bind_environment(
             );
             match canonicalize_source_document_record_key(layer.name.as_str()).as_str() {
                 "bfcolorinterpolateskylayer" => {
+                    let flags = flags
+                        .with_additional_flags(EnvironmentVisualFlags::INTERPOLATE_VERTEX_COLORS);
                     let models = child_named(layer, "interpModels").ok_or_else(|| {
                         BindError::record(record, "interpolated sky layer is missing models")
                     })?;

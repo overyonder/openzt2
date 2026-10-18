@@ -48,7 +48,7 @@ pub(in super::super) struct NetImmerseNiNode {
 #[derive(Debug, Clone, PartialEq)]
 pub(in super::super) struct NetImmerseNiBillboardNode {
     pub(in super::super) node: NetImmerseNiNode,
-    pub(in super::super) billboard_mode: Option<u32>,
+    pub(in super::super) billboard_mode: u32,
 }
 #[derive(Debug, Clone, PartialEq)]
 pub(in super::super) struct NetImmerseNiSwitchNode {

@@ -1,6 +1,8 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentSpecularLightColor;
 
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightContexts;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightRegisters;
@@ -104,6 +106,7 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
 }
 
 pub(super) fn update_fixed_function_world_light_buffer(
+    graphics: Res<GraphicsSettings>,
     ambient_light: Res<GlobalAmbientLight>,
     camera_ambient_lights: Query<(&Camera, &AmbientLight, Option<&RenderLayers>), With<Camera3d>>,
     directional_lights: Query<(
@@ -111,6 +114,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
         &GlobalTransform,
         Option<&RenderLayers>,
         &ViewVisibility,
+        Option<&EnvironmentSpecularLightColor>,
     )>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut previous_contexts: Local<Option<D3d9FixedFunctionWorldLightContexts>>,
@@ -122,6 +126,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
                 &camera_ambient_lights,
                 &directional_lights,
                 &RenderLayers::layer(layer),
+                graphics.specular_effects,
             )
         }),
     };
@@ -143,10 +148,15 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
         &GlobalTransform,
         Option<&RenderLayers>,
         &ViewVisibility,
+        Option<&EnvironmentSpecularLightColor>,
     )>,
     render_layers: &RenderLayers,
+    specular_enabled: bool,
 ) -> D3d9FixedFunctionWorldLightRegisters {
-    let mut registers = D3d9FixedFunctionWorldLightRegisters::default();
+    let mut registers = D3d9FixedFunctionWorldLightRegisters {
+        specular_enabled: Vec4::new(f32::from(u8::from(specular_enabled)), 0.0, 0.0, 0.0),
+        ..default()
+    };
     let camera_ambient_light = camera_ambient_lights.iter().find_map(
         |(camera, camera_ambient_light, camera_render_layers)| {
             (camera.is_active
@@ -166,7 +176,7 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
     registers.ambient_color_and_directional_light_count =
         Vec4::from_array(ambient_color.to_srgba().to_f32_array()) * ambient_brightness;
     let mut directional_light_count = 0;
-    for (light, transform, light_layers, view_visibility) in directional_lights {
+    for (light, transform, light_layers, view_visibility, specular) in directional_lights {
         if !view_visibility.get()
             || !light_layers.unwrap_or_default().intersects(render_layers)
             || directional_light_count == D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS
@@ -177,6 +187,12 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
             Vec3::from(transform.back()).extend(0.0);
         registers.directional_light_colors[directional_light_count] =
             Vec4::from_array(light.color.to_srgba().to_f32_array()) * light.illuminance;
+        registers.directional_specular_colors[directional_light_count] = Vec4::from_array(
+            specular
+                .map_or(light.color, |color| color.0)
+                .to_srgba()
+                .to_f32_array(),
+        ) * light.illuminance;
         directional_light_count += 1;
     }
     registers.ambient_color_and_directional_light_count.w = directional_light_count as f32;

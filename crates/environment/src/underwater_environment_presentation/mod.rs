@@ -60,9 +60,9 @@ pub(crate) fn sample_water_environment_map(
     let Some(definition) = definitions.find_environment(environment.definition) else {
         return;
     };
-    let Some(time) = super::daylight_curve_sampling::calculate_daylight_fraction(
-        clock.tick_in_day,
-        definitions.timing().ticks_per_day,
+    let Some(time) = super::daylight_curve_sampling::calculate_environment_month_fraction(
+        &clock,
+        definitions.timing(),
     ) else {
         return;
     };
@@ -131,9 +131,9 @@ pub(crate) fn apply_camera_underwater_fog(
             .surface_material
             .configuration;
         let definitions = active.get(&assets)?;
-        let time = super::daylight_curve_sampling::calculate_daylight_fraction(
-            clock.tick_in_day,
-            definitions.timing().ticks_per_day,
+        let time = super::daylight_curve_sampling::calculate_environment_month_fraction(
+            &clock,
+            definitions.timing(),
         )?;
         let quality = match settings.view_distance {
             ThreeLevelGraphicsDetail::Low => EnvironmentFogQuality::Low,
@@ -221,9 +221,9 @@ pub(crate) fn update_water_ray_environment_light_samples(
     let Some(definitions) = active.get(&assets) else {
         return;
     };
-    let Some(time) = super::daylight_curve_sampling::calculate_daylight_fraction(
-        clock.tick_in_day,
-        definitions.timing().ticks_per_day,
+    let Some(time) = super::daylight_curve_sampling::calculate_environment_month_fraction(
+        &clock,
+        definitions.timing(),
     ) else {
         return;
     };
@@ -288,9 +288,9 @@ pub(crate) fn update_region_water_light_samples(
 ) {
     let definitions = active.get(&assets);
     let fraction = definitions.as_ref().and_then(|definitions| {
-        super::daylight_curve_sampling::calculate_daylight_fraction(
-            clock.tick_in_day,
-            definitions.timing().ticks_per_day,
+        super::daylight_curve_sampling::calculate_environment_month_fraction(
+            &clock,
+            definitions.timing(),
         )
     });
     let water_ambient = definitions.as_ref().zip(fraction).and_then(|(definitions, fraction)| {

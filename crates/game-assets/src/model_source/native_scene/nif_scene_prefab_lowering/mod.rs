@@ -250,9 +250,7 @@ fn visit_netimmerse_scene_block(
         NetImmerseNifBlockPayload::NiBillboardNode(node) => builder.billboard(
             entity,
             PrefabBillboard {
-                // NiBillboardNode did not serialize its mode before NIF 10.1.
-                // Gamebryo constructs those nodes as ROTATE_ABOUT_UP.
-                mode: node.billboard_mode.unwrap_or(1),
+                mode: node.billboard_mode,
             },
         ),
         NetImmerseNifBlockPayload::NiLODNode(node) => {

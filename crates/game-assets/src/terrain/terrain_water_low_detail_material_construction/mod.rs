@@ -73,6 +73,7 @@ fn create_terrain_water_fixed_detail_materials(
             base_color: [0.0, 0.0, 0.0, color[3]],
             ambient: [color[0] * 0.5, color[1] * 0.5, color[2] * 0.5],
             specular: [0.0; 3],
+            specular_enabled: false,
             emissive: [0.0; 3],
             glossiness: 4.0,
             base_texture: Some(NativeTextureSource {

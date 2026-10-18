@@ -51,7 +51,7 @@ pub(super) struct D3d9BooleanShaderRegisters {
 
 #[derive(Clone, Copy, Debug, PartialEq, ShaderType)]
 pub(super) struct D3d9FixedFunctionRegisters {
-    pub(super) values: [Vec4; 49],
+    pub(super) values: [Vec4; 50],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, ShaderType)]
@@ -67,6 +67,8 @@ pub struct D3d9FixedFunctionWorldLightRegisters {
     pub ambient_color_and_directional_light_count: Vec4,
     pub directional_light_directions: [Vec4; D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS],
     pub directional_light_colors: [Vec4; D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS],
+    pub directional_specular_colors: [Vec4; D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS],
+    pub specular_enabled: Vec4,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, ShaderType)]

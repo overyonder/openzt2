@@ -5,6 +5,9 @@ impl EnvironmentVisualFlags {
     pub const CLEAR_DEPTH: Self = Self(1 << 0);
     pub const USE_WORLD_LIGHTS: Self = Self(1 << 1);
     pub const SMOOTH_UPDATE: Self = Self(1 << 2);
+    pub const MOVE_WITH_CAMERA: Self = Self(1 << 3);
+    pub const POSITION_AT_CENTER: Self = Self(1 << 4);
+    pub const INTERPOLATE_VERTEX_COLORS: Self = Self(1 << 5);
 
     #[must_use]
     pub const fn with_additional_flags(self, additional_flags: Self) -> Self {

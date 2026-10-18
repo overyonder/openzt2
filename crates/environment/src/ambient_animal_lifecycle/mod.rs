@@ -25,7 +25,7 @@ use super::{
     ambient_animal_spawn_rules::ambient_animal_population_is_below_authored_maximum,
     ambient_animal_types::{AmbientAnimal, AmbientAnimalSpawner},
     daylight_curve_sampling::{
-        calculate_daylight_fraction, daylight_fraction_unit_is_within_inclusive_window,
+        calculate_environment_month_fraction, daylight_fraction_unit_is_within_inclusive_window,
         encode_daylight_fraction_as_u16,
     },
     environment_random_sampling::{
@@ -77,8 +77,7 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
         }
 
         let daylight_fraction_unit = encode_daylight_fraction_as_u16(
-            calculate_daylight_fraction(clock.tick_in_day, definitions.timing().ticks_per_day)
-                .unwrap_or(0.0),
+            calculate_environment_month_fraction(&clock, definitions.timing()).unwrap_or(0.0),
         );
         if !daylight_fraction_unit_is_within_inclusive_window(
             daylight_fraction_unit,

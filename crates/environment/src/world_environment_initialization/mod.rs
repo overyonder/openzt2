@@ -22,7 +22,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
     ambient_animal_types::AmbientAnimalSpawner,
-    daylight_curve_sampling::calculate_daylight_fraction,
+    daylight_curve_sampling::calculate_environment_month_fraction,
     environment_presentation_types::EnvironmentPresentationPending,
     environment_random_sampling::sample_inclusive_u32_range,
     environment_state_types::{Daylight, EnvironmentRandom},
@@ -92,8 +92,8 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             warn!(environment = ?environment_id, weather = ?initial_weather_id, "native environment has no initial weather definition");
             continue;
         }
-        let ticks_per_day = definitions.timing().ticks_per_day;
-        let Some(fraction) = calculate_daylight_fraction(clock.tick_in_day, ticks_per_day) else {
+        let Some(fraction) = calculate_environment_month_fraction(&clock, definitions.timing())
+        else {
             continue;
         };
         let wind_range = initial_weather.map_or(

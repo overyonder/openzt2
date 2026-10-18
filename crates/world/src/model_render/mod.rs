@@ -1,3 +1,5 @@
+mod environment_layer_rendering;
+mod mirrored_model_primitive_winding;
 mod prefab_render_layer_camera_matching;
 // Instantiation and presentation policy for ordinary glTF model scenes.
 
@@ -58,6 +60,33 @@ impl Plugin for ModelRenderPlugin {
         app.add_observer(
             invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
         );
+        app.add_plugins(ExtractInstancesPlugin::<
+            environment_layer_rendering::EnvironmentPrimitiveLayer,
+        >::new());
+        app.sub_app_mut(RenderApp)
+            .init_resource::<environment_layer_rendering::PreparedEnvironmentLayers>()
+            .add_systems(
+                Render,
+                environment_layer_rendering::restore_environment_phase_items_before_queueing
+                    .before(RenderSystems::Queue),
+            )
+            .add_systems(
+                Render,
+                environment_layer_rendering::separate_prepared_environment_layers
+                    .after(RenderSystems::Prepare)
+                    .before(RenderSystems::Render),
+            )
+            .add_systems(
+                bevy::core_pipeline::schedule::Core3d,
+                environment_layer_rendering::render_environment_layers_before_world
+                    .in_set(bevy::core_pipeline::schedule::Core3dSystems::MainPass)
+                    .before(bevy::core_pipeline::core_3d::main_opaque_pass_3d),
+            );
+        app.add_systems(
+            PostUpdate,
+            environment_layer_rendering::project_environment_layers_to_model_primitives
+                .after(ModelRenderPresentationSet::PassTransforms),
+        );
         app.configure_sets(
             PostUpdate,
             (
@@ -69,6 +98,11 @@ impl Plugin for ModelRenderPlugin {
                 .after(TransformSystems::Propagate)
                 .before(VisibilitySystems::VisibilityPropagate),
         );
+        app.add_systems(PostUpdate,
+            orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers
+                .after(bevy::app::AnimationSystems)
+                .in_set(openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabBillboardProjection)
+                .before(TransformSystems::Propagate));
         app.add_systems(
             PostUpdate,
             (
@@ -88,6 +122,10 @@ impl Plugin for ModelRenderPlugin {
                     .after(project_model_scene_visibility_and_shadow_policy)
                     .before(project_authored_model_material_passes)
                     .in_set(ModelRenderPresentationSet::MaterialProjection),
+                mirrored_model_primitive_winding::project_mirrored_model_primitive_winding
+                    .in_set(ModelRenderPresentationSet::MaterialProjection)
+                    .before(project_authored_model_material_passes)
+                    .before(project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors),
                 project_authored_model_material_passes
                     .after(project_model_scene_visibility_and_shadow_policy)
                     .in_set(ModelRenderPresentationSet::MaterialProjection),
@@ -121,7 +159,6 @@ impl Plugin for ModelRenderPlugin {
                 crate::model_render::authored_effect_technique_pass_submission_order::project_authored_effect_opaque_base_pass_order
                     .after(project_authored_model_material_passes)
                     .after(project_prefab_fixed_function_world_lighting_policies),
-                orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers,
                 project_prefab_texture_replacements_onto_effect_pass_materials
                     .after(project_authored_model_material_passes)
                     .before(project_prefab_fixed_function_world_lighting_policies)

@@ -32,6 +32,7 @@ struct VertexOutput {
     @location(3) color: vec4<f32>,
     @location(4) lit_diffuse: vec4<f32>,
     @location(5) camera_reflection: vec3<f32>,
+    @location(6) lit_specular: vec3<f32>,
 };
 
 struct FixedFunctionFragmentInputs {
@@ -39,6 +40,7 @@ struct FixedFunctionFragmentInputs {
     normal: vec3<f32>,
     diffuse: vec4<f32>,
     camera_reflection: vec3<f32>,
+    specular: vec3<f32>,
 };
 
 @vertex
@@ -63,6 +65,8 @@ fn vertex(input: VertexInput) -> VertexOutput {
     output.color = vec4(1.0);
 #endif
     output.lit_diffuse = fixed_function_lit_diffuse(output.normal, output.color);
+    output.lit_specular = fixed_function_lit_specular(output.normal, output.color,
+        (world_from_local * vec4(input.position, 1.0)).xyz);
     let camera_position = (view.view_from_world * world_from_local * vec4(input.position, 1.0)).xyz;
     let camera_normal = normalize((view.view_from_world * vec4(output.normal, 0.0)).xyz);
     output.camera_reflection = reflect(normalize(camera_position), camera_normal);
@@ -96,12 +100,14 @@ fn vertex(input: VertexInput) -> VertexOutput {
 // Bit N is set when stage N has a cube texture bound.
 @group(#{MATERIAL_BIND_GROUP}) @binding(46) var<uniform> cube_texture_stages: vec4<u32>;
 
-struct FixedFunctionState { values: array<vec4<f32>, 49> };
+struct FixedFunctionState { values: array<vec4<f32>, 50> };
 struct FixedTransforms { values: array<mat4x4<f32>, 8> };
 struct FixedFunctionWorldLights {
     ambient_color_and_directional_light_count: vec4<f32>,
     directional_light_directions: array<vec4<f32>, 8>,
     directional_light_colors: array<vec4<f32>, 8>,
+    directional_specular_colors: array<vec4<f32>, 8>,
+    specular_enabled: vec4<f32>,
 };
 @group(#{MATERIAL_BIND_GROUP}) @binding(1) var<uniform> fixed: FixedFunctionState;
 @group(#{MATERIAL_BIND_GROUP}) @binding(36) var<uniform> transforms: FixedTransforms;
@@ -249,6 +255,32 @@ fn fixed_function_lit_diffuse(normal: vec3<f32>, vertex_color: vec4<f32>) -> vec
     return vec4(clamp(color, vec3(0.0), vec3(1.0)), diffuse.a);
 }
 
+fn fixed_function_lit_specular(normal: vec3<f32>, vertex_color: vec4<f32>, world_position: vec3<f32>) -> vec3<f32> {
+    let specular_state = fixed.values[49];
+    let lights = world_light_contexts[u32(fixed.values[47].x)];
+    if (fixed.values[46].x == 0.0 || specular_state.x == 0.0 || lights.specular_enabled.x == 0.0) {
+        return vec3(0.0);
+    }
+    let material = fixed_function_material_source(u32(specular_state.y), fixed.values[42], vertex_color);
+    let to_view = select(view.world_from_view[2].xyz, view.world_position - world_position,
+        specular_state.z != 0.0);
+    let viewer = normalize(to_view);
+    let world_normal = normalize(normal);
+    var color = vec3(0.0);
+    for (var index = 0u; index < u32(lights.ambient_color_and_directional_light_count.w); index += 1u) {
+        let light_direction = lights.directional_light_directions[index].xyz;
+        if (dot(world_normal, light_direction) <= 0.0) { continue; }
+        let sum = light_direction + viewer;
+        let halfway = sum / max(length(sum), 0.000001);
+        let power = max(fixed.values[44].x, 0.0);
+        let strength = select(pow(max(dot(world_normal, halfway), 0.000001), power), 1.0, power == 0.0);
+        color += material.rgb * lights.directional_specular_colors[index].rgb
+            / D3D9_DIRECTIONAL_LIGHT_REFERENCE_ILLUMINANCE
+            * strength;
+    }
+    return clamp(color, vec3(0.0), vec3(1.0));
+}
+
 @fragment
 fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     var fragment_inputs: FixedFunctionFragmentInputs;
@@ -257,6 +289,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     fragment_inputs.normal = input.normal;
     fragment_inputs.diffuse = input.lit_diffuse;
     fragment_inputs.camera_reflection = input.camera_reflection;
+    fragment_inputs.specular = input.lit_specular;
     return evaluate_fixed_function_texture_stages(fragment_inputs, false);
 }
 
@@ -280,6 +313,9 @@ fn evaluate_fixed_function_texture_stages(input: FixedFunctionFragmentInputs, pr
             result.a = operation(alpha_op, alpha_first, alpha_second, texture, current).a;
         }
         current = clamp(result, vec4(0.0), vec4(1.0));
+    }
+    if (fixed.values[49].x != 0.0 && world_light_contexts[u32(fixed.values[47].x)].specular_enabled.x != 0.0) {
+        current = vec4(clamp(current.rgb + input.specular, vec3(0.0), vec3(1.0)), current.a);
     }
     let alpha_test = fixed.values[45];
     if (u32(alpha_test.x) != 0u && !compare(u32(alpha_test.z), current.a, alpha_test.y / 255.0)) {

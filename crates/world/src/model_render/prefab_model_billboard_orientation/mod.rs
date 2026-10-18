@@ -1,145 +1,122 @@
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::entity::EntityHashSet;
-use bevy::math::Affine3A;
 use bevy::prelude::*;
-
-use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
+use bevy::transform::helper::TransformHelper;
 
 use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
+use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 
 pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers(
-    cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
+    cameras: Query<(Entity, &Camera, Option<&RenderLayers>), With<Camera3d>>,
     hierarchy: Query<(
         Option<&ChildOf>,
         Option<&RenderLayers>,
         Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
     )>,
-    global_transforms: Query<Ref<GlobalTransform>>,
-    children: Query<&Children>,
-    changed_transform_sources: Query<
-        Entity,
-        (
-            Changed<Transform>,
-            Without<PrefabAuthoredBillboardOrientationMode>,
-        ),
-    >,
-    directly_changed_billboards: Query<
-        Entity,
-        Or<(
-            Added<PrefabAuthoredBillboardOrientationMode>,
-            Changed<PrefabAuthoredBillboardOrientationMode>,
-            Changed<ChildOf>,
+    parents: Query<&ChildOf>,
+    mut transforms: ParamSet<(
+        TransformHelper,
+        Query<(
+            Entity,
+            &PrefabAuthoredBillboardOrientationMode,
+            &Transform,
+            Option<&ChildOf>,
         )>,
-    >,
-    mut billboards: Query<(
-        Entity,
-        &PrefabAuthoredBillboardOrientationMode,
-        Option<&ChildOf>,
-        &mut Transform,
+        Query<&mut Transform>,
     )>,
-    mut camera_state_buffers: Local<(
-        Vec<(Entity, bool, Affine3A, RenderLayers)>,
-        Vec<(Entity, bool, Affine3A, RenderLayers)>,
-    )>,
-    mut billboards_requiring_projection: Local<EntityHashSet>,
+    mut ordered_billboards: Local<Vec<(usize, Entity)>>,
 ) {
-    let (previous_camera_states, current_camera_states) = &mut *camera_state_buffers;
-    current_camera_states.clear();
-    current_camera_states.extend(cameras.iter().map(|(entity, camera, transform, layers)| {
-        (
-            entity,
-            camera.is_active,
-            transform.affine(),
-            layers.cloned().unwrap_or_default(),
-        )
-    }));
-    let camera_changed = *previous_camera_states != *current_camera_states;
-    std::mem::swap(previous_camera_states, current_camera_states);
-    billboards_requiring_projection.clear();
-    if camera_changed {
-        billboards_requiring_projection.extend(billboards.iter().map(|(entity, _, _, _)| entity));
-    } else {
-        billboards_requiring_projection.extend(&directly_changed_billboards);
-        for changed_transform in &changed_transform_sources {
-            billboards_requiring_projection.extend(
-                children
-                    .iter_descendants_depth_first::<Children>(changed_transform)
-                    .filter(|entity| billboards.contains(*entity)),
-            );
-        }
-    }
-    for entity in billboards_requiring_projection.drain() {
-        let Ok((entity, mode, parent, mut transform)) = billboards.get_mut(entity) else {
+    ordered_billboards.clear();
+    ordered_billboards.extend(
+        transforms
+            .p1()
+            .iter()
+            .map(|(entity, ..)| (parents.iter_ancestors(entity).count(), entity)),
+    );
+    ordered_billboards.sort_unstable();
+    // Parent billboards must settle before their children's authored world bases
+    // are calculated. Publish local rotations before Bevy propagates the tree.
+    for &(_, entity) in ordered_billboards.iter() {
+        let (mode, transform, parent) = {
+            let query = transforms.p1();
+            let Ok((_, mode, transform, parent)) = query.get(entity) else {
+                continue;
+            };
+            (*mode, *transform, parent.map(ChildOf::parent))
+        };
+        let layers = render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
+        let Some((camera, ..)) = cameras.iter().find(|(_, camera, camera_layers)| {
+            camera.is_active && camera_layers.unwrap_or_default().intersects(&layers)
+        }) else {
             continue;
         };
-        let parent_transform =
-            parent.and_then(|parent| global_transforms.get(parent.parent()).ok());
-        let billboard_layers =
-            render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
-        let Some((_, _, camera_transform, _)) =
-            cameras.iter().find(|(_, camera, _, camera_layers)| {
-                camera.is_active
-                    && camera_layers
-                        .unwrap_or_default()
-                        .intersects(&billboard_layers)
-            })
-        else {
+        let helper = transforms.p0();
+        let Ok(camera) = helper.compute_global_transform(camera) else {
             continue;
         };
-        let camera = camera_transform.translation();
-        // Billboard normals face the camera view plane, opposite the camera's
-        // forward travel direction. The source SDK describes these vectors as
-        // "in line" and the shipped one-sided foliage establishes the sign.
-        let camera_facing_direction = -camera_transform.forward().as_vec3();
-        let parent_from_world = parent_transform.map(|parent| parent.affine().inverse());
-        let target = parent_from_world
-            .map(|parent_from_world| parent_from_world.transform_point3(camera))
-            .unwrap_or(camera);
-        let to_center = target - transform.translation;
-        if mode.mode == 1 {
-            // Rotate about the authored up axis toward the camera position.
-            // Source local Y becomes Bevy local Z after coordinate conversion.
-            let authored_local_direction = mode.authored_local_rotation.inverse() * to_center;
-            let direction_in_billboard_rotation_plane =
-                Vec2::new(authored_local_direction.x, authored_local_direction.y);
-            if direction_in_billboard_rotation_plane.length_squared() > f32::EPSILON {
-                let direction = direction_in_billboard_rotation_plane.normalize();
-                let radians = (-direction.x).atan2(direction.y);
-                transform.rotation = mode.authored_local_rotation * Quat::from_rotation_z(radians);
+        let parent = match parent {
+            Some(parent) => {
+                let Ok(parent) = helper.compute_global_transform(parent) else {
+                    continue;
+                };
+                parent.affine()
             }
-            continue;
-        }
-        let parent_local_camera_up = parent_from_world
-            .map(|parent_from_world| {
-                parent_from_world.transform_vector3(camera_transform.up().as_vec3())
-            })
-            .unwrap_or(camera_transform.up().as_vec3());
-        let direction = if matches!(mode.mode, 3 | 4) {
-            to_center
-        } else {
-            parent_from_world
-                .map(|parent_from_world| {
-                    parent_from_world.transform_vector3(camera_facing_direction)
-                })
-                .unwrap_or(camera_facing_direction)
+            None => bevy::math::Affine3A::IDENTITY,
         };
-        if direction.length_squared() <= f32::EPSILON {
-            continue;
-        }
-        let direction = direction.normalize();
-        if mode.mode == 2 || mode.mode == 4 {
-            let up = parent_local_camera_up.reject_from_normalized(direction);
-            if up.length_squared() > f32::EPSILON {
-                let up = up.normalize();
-                let right = direction.cross(up).normalize();
-                // Source billboard Z (normal) and Y (up) become Bevy local Y
-                // and Z after the one native-coordinate conversion.
-                transform.rotation = Quat::from_mat3(&Mat3::from_cols(right, direction, up));
+        let authored = Transform {
+            rotation: mode.authored_local_rotation,
+            ..transform
+        };
+        let authored_world = parent * authored.compute_affine();
+        let local_from_world = authored_world.inverse();
+        let view_normal = -camera.forward().as_vec3();
+        let center_direction = camera.translation() - Vec3::from(authored_world.translation);
+        let rotation = if mode.mode == 1 {
+            let direction = local_from_world.transform_vector3(center_direction).xy();
+            if direction.length_squared() <= f32::EPSILON {
+                continue;
             }
+            mode.authored_local_rotation * Quat::from_rotation_z((-direction.x).atan2(direction.y))
+        } else if matches!(mode.mode, 0 | 2 | 3 | 4) {
+            let world_direction = if matches!(mode.mode, 3 | 4) {
+                if center_direction.length_squared() < 0.001 {
+                    continue;
+                }
+                center_direction.normalize()
+            } else {
+                view_normal
+            };
+            let direction = local_from_world
+                .transform_vector3(world_direction)
+                .normalize();
+            let up = if matches!(mode.mode, 2 | 4) {
+                let camera_up = if mode.mode == 4 {
+                    Quat::from_rotation_arc(view_normal, world_direction) * camera.up().as_vec3()
+                } else {
+                    camera.up().as_vec3()
+                };
+                local_from_world.transform_vector3(camera_up)
+            } else {
+                // Non-rigid facing retains the authored up axis's projection.
+                Vec3::Z
+            };
+            let up = up.reject_from_normalized(direction);
+            let right = if up.length_squared() > f32::EPSILON {
+                direction.cross(up.normalize()).normalize()
+            } else {
+                -local_from_world
+                    .transform_vector3(camera.up().as_vec3())
+                    .normalize()
+            };
+            let up = right.cross(direction).normalize();
+            mode.authored_local_rotation * Quat::from_mat3(&Mat3::from_cols(right, direction, up))
         } else {
-            let authored_normal = mode.authored_local_rotation * Vec3::Y;
-            transform.rotation =
-                Quat::from_rotation_arc(authored_normal, direction) * mode.authored_local_rotation;
+            mode.authored_local_rotation
+        };
+        let mut query = transforms.p2();
+        if let Ok(mut target) = query.get_mut(entity) {
+            if target.rotation != rotation {
+                target.rotation = rotation;
+            }
         }
     }
 }

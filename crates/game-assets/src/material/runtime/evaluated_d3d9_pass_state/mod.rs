@@ -72,6 +72,7 @@ impl Default for EvaluatedD3d9PassState {
         // passes which do not author the state themselves. Blue Fang's Base
         // effects deliberately leave Lighting outside the material pass.
         effect_states[48] = 1; // D3DRS_LIGHTING = TRUE
+        effect_states[52] = 1; // D3DRS_LOCALVIEWER = TRUE
         effect_states[51] = 1; // D3DRS_COLORVERTEX = TRUE
         effect_states[54] = 1; // D3DRS_DIFFUSEMATERIALSOURCE = COLOR1
         effect_states[55] = 2; // D3DRS_SPECULARMATERIALSOURCE = COLOR2

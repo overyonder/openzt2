@@ -70,7 +70,12 @@ pub(super) fn calculate_environment_visual_sample_projection(
             scale: 1.0,
         };
     };
-    let selected = if curve.interpolation_fraction < 0.5 {
+    let selected = if current
+        .flags
+        .contains_all(EnvironmentVisualFlags::INTERPOLATE_VERTEX_COLORS)
+    {
+        0
+    } else if curve.interpolation_fraction < 0.5 {
         curve.left_keyframe_index
     } else {
         curve.right_keyframe_index

@@ -66,6 +66,7 @@ pub struct NativeMaterialSource {
     pub base_color: [f32; 4],
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
+    pub specular_enabled: bool,
     pub emissive: [f32; 3],
     pub glossiness: f32,
     pub base_texture: Option<NativeTextureSource>,

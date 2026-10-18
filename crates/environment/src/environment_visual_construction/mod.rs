@@ -1,8 +1,11 @@
 use bevy::prelude::*;
+use openzt2_game_data::terrain::TerrainGrid;
+use openzt2_game_data::world_definitions::environment::EnvironmentVisualFlags;
 use openzt2_game_data::{
     world_definitions::environment::{EnvironmentDefinition, EnvironmentVisualKind},
     AssetId,
 };
+use openzt2_world_state::model_render::environment_render_layer::EnvironmentRenderLayer;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
@@ -27,7 +30,7 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
     member: &WorldMember,
     catalogue: WorldDefinitionsView<'_>,
     definition: &EnvironmentDefinition,
-    terrain_start_height_metres: f32,
+    terrain: &TerrainGrid,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
@@ -36,7 +39,19 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
         let id = sample.asset;
         let mut transform = Transform::from_scale(Vec3::splat(sample.scale));
         if matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
-            transform.translation.y = terrain_start_height_metres;
+            transform.translation.y = terrain.presentation.water_editing.height_snap_base_metres;
+        } else if matches!(&sample.kind, EnvironmentVisualKind::Sky)
+            && !sample
+                .flags
+                .contains_all(EnvironmentVisualFlags::MOVE_WITH_CAMERA)
+            && sample
+                .flags
+                .contains_all(EnvironmentVisualFlags::POSITION_AT_CENTER)
+        {
+            transform.translation.x =
+                (terrain.width - 1) as f32 * terrain.units.cell_size_metres * 0.5;
+            transform.translation.z =
+                (terrain.height - 1) as f32 * terrain.units.cell_size_metres * 0.5;
         }
         if let Some(source) = catalogue.scene(id) {
             let color = Color::srgb(
@@ -59,7 +74,19 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
                 Visibility::Inherited,
                 *member,
             ));
-            if matches!(&sample.kind, EnvironmentVisualKind::Sky) {
+            if !matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
+                child_commands.insert(EnvironmentRenderLayer {
+                    layer: sample.layer,
+                    clear_depth_after: sample
+                        .flags
+                        .contains_all(EnvironmentVisualFlags::CLEAR_DEPTH),
+                });
+            }
+            if matches!(&sample.kind, EnvironmentVisualKind::Sky)
+                && sample
+                    .flags
+                    .contains_all(EnvironmentVisualFlags::MOVE_WITH_CAMERA)
+            {
                 child_commands.insert(EnvironmentCameraRelativeVisual::sky_layer(sample.scale));
             }
             if !sample.flags.contains_all(
@@ -107,7 +134,19 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
             Visibility::Inherited,
             *member,
         ));
-        if matches!(&sample.kind, EnvironmentVisualKind::Sky) {
+        if !matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
+            child_commands.insert(EnvironmentRenderLayer {
+                layer: sample.layer,
+                clear_depth_after: sample
+                    .flags
+                    .contains_all(EnvironmentVisualFlags::CLEAR_DEPTH),
+            });
+        }
+        if matches!(&sample.kind, EnvironmentVisualKind::Sky)
+            && sample
+                .flags
+                .contains_all(EnvironmentVisualFlags::MOVE_WITH_CAMERA)
+        {
             child_commands.insert(EnvironmentCameraRelativeVisual::sky_layer(sample.scale));
         }
         if matches!(&sample.kind, EnvironmentVisualKind::Sun) {

@@ -12,6 +12,7 @@ mod environment_presentation_types;
 mod environment_random_sampling;
 mod environment_state_types;
 mod environment_visual_construction;
+mod sky_vertex_color_interpolation;
 mod underwater_environment_presentation;
 mod weather_animal_welfare;
 mod weather_rules;
@@ -54,7 +55,18 @@ impl Plugin for EnvironmentPlugin {
             )
             .add_systems(
                 PostUpdate,
+                (
+                    sky_vertex_color_interpolation::retain_sky_vertex_color_keyframe_models,
+                    sky_vertex_color_interpolation::interpolate_sky_model_vertex_colors,
+                )
+                    .chain()
+                    .before(TransformSystems::Propagate)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                PostUpdate,
                 daylight_environment_presentation::center_camera_relative_environment_visuals_on_active_zoo_camera
+                    .before(openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabBillboardProjection)
                     .before(TransformSystems::Propagate)
                     .run_if(in_state(GamePhase::InGame)),
             )

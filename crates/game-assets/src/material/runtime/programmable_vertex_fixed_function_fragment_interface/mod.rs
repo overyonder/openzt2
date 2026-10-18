@@ -52,10 +52,13 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
                 "    fixed.texture_coordinates[{index}] = input.varying_{};",
                 output.location,
             ),
-            // The existing fixed-function fragment implementation does not
-            // apply secondary specular colour or vertex fog yet. Declare
-            // these outputs with their real types without repurposing them.
-            ("COLOR", 1) | ("FOG", 0 | 1) => Ok(()),
+            ("COLOR", 1) => writeln!(
+                source,
+                "    fixed.specular = input.varying_{}.rgb;",
+                output.location
+            ),
+            // Vertex fog is retained in the interface for its separate fog owner.
+            ("FOG", 0 | 1) => Ok(()),
             (semantic, index) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,

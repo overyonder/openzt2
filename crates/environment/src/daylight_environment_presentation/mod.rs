@@ -5,6 +5,7 @@ use bevy::{
 };
 use openzt2_game_data::world_definitions::environment::EnvironmentLightTarget;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
+use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentSpecularLightColor;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -16,7 +17,7 @@ use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 
 use super::{
     daylight_curve_sampling::{
-        calculate_daylight_fraction, interpolate_signed_normalized_direction,
+        calculate_environment_month_fraction, interpolate_signed_normalized_direction,
         interpolate_unsigned_normalized_u16, select_cyclic_daylight_curve_sample,
     },
     daylight_environment_sampling::{
@@ -161,8 +162,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         let Some(definition) = definitions.find_environment(environment.definition) else {
             continue;
         };
-        let Some(fraction) =
-            calculate_daylight_fraction(clock.tick_in_day, definitions.timing().ticks_per_day)
+        let Some(fraction) = calculate_environment_month_fraction(&clock, definitions.timing())
         else {
             continue;
         };
@@ -233,6 +233,9 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                     }
                     marker.keyframe = sample.left_keyframe_index as u16;
                     light.color = color;
+                    commands
+                        .entity(child)
+                        .insert(EnvironmentSpecularLightColor(color));
                     light.illuminance = illuminance;
                     if direction != Vec3::ZERO {
                         transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, direction);
@@ -303,6 +306,25 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                     * light_multiplier;
                 marker.keyframe = sampled_directional_light.left_keyframe_index as u16;
                 light.color = color;
+                commands
+                    .entity(child)
+                    .insert(EnvironmentSpecularLightColor(Color::srgb(
+                        interpolate_f32(
+                            left_keyframe.specular[0],
+                            right_keyframe.specular[0],
+                            interpolation_fraction,
+                        ),
+                        interpolate_f32(
+                            left_keyframe.specular[1],
+                            right_keyframe.specular[1],
+                            interpolation_fraction,
+                        ),
+                        interpolate_f32(
+                            left_keyframe.specular[2],
+                            right_keyframe.specular[2],
+                            interpolation_fraction,
+                        ),
+                    )));
                 light.illuminance = illuminance;
                 // The authored object rig has one shadow factor shared by
                 // its lights. Only its sun casts the map; side and back are

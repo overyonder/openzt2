@@ -199,10 +199,22 @@ pub(super) fn parse_billboard_node(
     source_path: &str,
     encoded_version: u32,
 ) -> Result<NetImmerseNiBillboardNode> {
-    let node = parse_grouping_node(source_bytes, cursor, source_path)?;
-    let billboard_mode = (encoded_version >= NETIMMERSE_VERSION_10_1_0_0)
-        .then(|| read_u32_little_endian(source_bytes, cursor, source_path, "NiBillboardNode mode"))
-        .transpose()?;
+    let mut node = parse_grouping_node(source_bytes, cursor, source_path)?;
+    // Pre-4.2.0.3 streams place the upper AV flags one bit earlier.
+    if encoded_version < 0x0402_0003 {
+        node.av_object.flags =
+            ((node.av_object.flags & 0xe000) << 1) | (node.av_object.flags & 0x1fff);
+    }
+    let billboard_mode = if encoded_version >= NETIMMERSE_VERSION_10_1_0_0 {
+        u32::from(read_u16_little_endian(
+            source_bytes,
+            cursor,
+            source_path,
+            "NiBillboardNode mode",
+        )?)
+    } else {
+        u32::from((node.av_object.flags >> 8) & 7)
+    };
     Ok(NetImmerseNiBillboardNode {
         node,
         billboard_mode,

@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_definitions::environment::WeatherDefinition};
+use openzt2_game_data::{world_definitions::environment::WeatherDefinition, AssetId};
 use openzt2_zoo_state::environment::environment_state_types::Wind;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
@@ -14,7 +14,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use super::{
     daylight_curve_sampling::{
-        calculate_daylight_fraction, daylight_fraction_unit_is_within_inclusive_window,
+        calculate_environment_month_fraction, daylight_fraction_unit_is_within_inclusive_window,
         encode_daylight_fraction_as_u16,
     },
     environment_random_sampling::{
@@ -88,8 +88,7 @@ pub(super) fn apply_requested_weather_transitions(
             continue;
         };
         let daylight_fraction_unit = encode_daylight_fraction_as_u16(
-            calculate_daylight_fraction(clock.tick_in_day, definitions.timing().ticks_per_day)
-                .unwrap_or(0.0),
+            calculate_environment_month_fraction(&clock, definitions.timing()).unwrap_or(0.0),
         );
         let Some(authored_transition_rule) =
             environment_definition.transitions.iter().find(|rule| {
@@ -251,8 +250,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
             continue;
         };
         let daylight_fraction_unit = encode_daylight_fraction_as_u16(
-            calculate_daylight_fraction(clock.tick_in_day, definitions.timing().ticks_per_day)
-                .unwrap_or(0.0),
+            calculate_environment_month_fraction(&clock, definitions.timing()).unwrap_or(0.0),
         );
         let selected_transition = environment_definition.transitions.iter().find(|rule| {
             rule.from.0 == weather.definition.0

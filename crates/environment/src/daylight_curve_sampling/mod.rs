@@ -2,6 +2,25 @@ use bevy::prelude::Vec3;
 
 const DAY_FRACTION_UNITS: f32 = u16::MAX as f32;
 
+pub(super) fn calculate_environment_month_fraction(
+    clock: &openzt2_world_state::simulation_time::simulation_clock_types::ZooClock,
+    timing: &openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition,
+) -> Option<f32> {
+    use openzt2_world_state::simulation_time::zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day;
+    let day_fraction = calculate_daylight_fraction(clock.tick_in_day, timing.ticks_per_day)?;
+    let calendar = calculate_zoo_calendar_for_absolute_day(&timing.calendar, clock.absolute_day);
+    let month_days = timing.calendar.month_lengths[usize::from(calendar.month - 1)];
+    // Environment time advances through the month, with a tenth-cycle phase
+    // offset. Its calendar sampling has minute precision.
+    let minutes = (day_fraction * 1440.0).floor();
+    let fraction = (f32::from(calendar.day) + minutes / 1440.0) / f32::from(month_days) + 0.1;
+    Some(if fraction > 1.0 {
+        fraction - 1.0
+    } else {
+        fraction
+    })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(super) struct CyclicDaylightCurveSample {
     pub(super) left_keyframe_index: usize,
