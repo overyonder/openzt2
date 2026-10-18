@@ -13,6 +13,9 @@ pub(super) fn deliver_behavior_object_spawns(
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
     joints: Query<(&AnimationJointTarget, &GlobalTransform)>,
+    children: Query<&Children>,
+    named_nodes: super::super::behavior_docking_execution::NamedNodeTransforms,
+    actor_transforms: Query<&GlobalTransform, With<BehaviorTaskExecutionState>>,
     mut actors: Query<
         (
             &mut BehaviorTaskExecutionState,
@@ -66,10 +69,31 @@ pub(super) fn deliver_behavior_object_spawns(
         let spawn = (|| {
             let view = definitions.get(&definition_assets)?;
             let object = view.find_object(*entity)?;
-            let (_, transform) = joints.iter().find(|(joint, _)| {
-                joint.animation_playback_controller_entity == event.controller
-                    && joint.joint_asset_key == *subject_node
-            })?;
+            // Many models carry the spawn node (an animal's `Poop`) as a plain
+            // named node rather than an animated joint, and some lack it; the
+            // object then drops at the actor's position.
+            let transform = joints
+                .iter()
+                .find(|(joint, _)| {
+                    joint.animation_playback_controller_entity == event.controller
+                        && joint.joint_asset_key == *subject_node
+                })
+                .map(|(_, transform)| transform.compute_transform())
+                .or_else(|| {
+                    super::super::behavior_docking_execution::find_named_descendant_global_transform(
+                        actor,
+                        subject_node,
+                        &children,
+                        &named_nodes,
+                    )
+                    .map(GlobalTransform::compute_transform)
+                })
+                .or_else(|| {
+                    actor_transforms
+                        .get(actor)
+                        .ok()
+                        .map(|actor| Transform::from_translation(actor.translation()))
+                })?;
             let presentation = if object.prefab == AssetId::default() {
                 None
             } else {
@@ -77,9 +101,8 @@ pub(super) fn deliver_behavior_object_spawns(
                 Some((handle, prefabs.get(handle)?))
             };
             let id = ids.allocate(world.root).ok()?;
-            let transform = transform
-                .compute_transform()
-                .mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
+            let transform =
+                transform.mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
             let spawned = if let Some((handle, prefab)) = presentation {
                 spawn_loaded_scene_prefab_as_world_instance(
                     &mut commands,

@@ -78,8 +78,17 @@ pub(super) fn request_staff_emptying_for_full_waste_containers(
         if emptying_threshold_units != 0
             && waste_container.contained_waste_units >= emptying_threshold_units
         {
-            // Controller tokens are not parsed yet; leave this request's token unset.
-            let token = None;
+            // The bin's own authored controller names the worker task:
+            // `t_EmptyTrash` for trash cans, `t_EmptyRecyclingBin` for recycling.
+            let token = world_definitions
+                .staff_request_rows(definition_id.0)
+                .into_iter()
+                .flatten()
+                .filter_map(|row| row.request.token)
+                .find(|token| {
+                    *token == AssetId::from_key("t_emptytrash")
+                        || *token == AssetId::from_key("t_emptyrecyclingbin")
+                });
             staff_job_requests.write(StaffJobRequest {
                 kind: StaffJobKind::EmptyBin,
                 target: waste_container_entity,

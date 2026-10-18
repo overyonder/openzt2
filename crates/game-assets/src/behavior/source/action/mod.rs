@@ -48,6 +48,11 @@ pub(super) fn lower_one_behavior_action_source_node(
         return Ok(action);
     }
     if let Some(action) =
+        wander_action_lowering::lower_typed_evasion_action(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
+    if let Some(action) =
         show_event_action_lowering::lower_animal_show_event_action(behavior_action_source_node)?
     {
         return Ok(action);

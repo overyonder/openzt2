@@ -56,7 +56,10 @@ pub(super) fn lower_wander_action(
             "duplicate wander avoidance types",
         ));
     }
-    let radius = read_optional_float_attribute(node, "avoidEntityRadius")?;
+    // ponytail: a type list without a radius keeps two metres away, as the
+    // native default is unrecovered; `animal:Poop` and `animal:Pee` rely on it.
+    let radius = read_optional_float_attribute(node, "avoidEntityRadius")?
+        .or_else(|| type_list.map(|_| 2.0));
     let avoided_entities = match (radius, type_list) {
         (None, None) => None,
         (Some(radius_m), Some(types)) if radius_m.is_finite() && radius_m >= 0.0 => {
@@ -112,5 +115,58 @@ pub(super) fn lower_wander_action(
         locomotion_speed,
         avoid_water: read_boolean_attribute_or_false(node, "avoidWater")?,
         avoided_entities,
+    })))
+}
+
+/// `BFBehEvasion` away from listed entity types for a fixed time, such as an
+/// animal stepping away from its food before relieving itself, is a wander
+/// that keeps outside the evasion radius of those types. Evasion from the
+/// task target (no type list) has no live mapping yet.
+pub(super) fn lower_typed_evasion_action(
+    node: &OrderedSourceDocumentNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if node.name != "BFBehEvasion" {
+        return Ok(None);
+    }
+    let mut type_lists = node.element_children();
+    let (Some(types), None) = (type_lists.next(), type_lists.next()) else {
+        return Err(invalid_behavior_source_data(
+            "BFBehEvasion from its target has no live mapping",
+        ));
+    };
+    if types.name != "avoidEntityTypes"
+        || !types.attributes.is_empty()
+        || types
+            .element_children()
+            .any(|entry| !entry.attributes.is_empty() || entry.element_children().next().is_some())
+        || node.attributes.iter().any(|attribute| {
+            !matches!(
+                attribute.name(),
+                "evasionRadius" | "evasionTime" | "avoidWater"
+            )
+        })
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehEvasion has unmapped policy",
+        ));
+    }
+    let radius_m = read_optional_float_attribute(node, "evasionRadius")?
+        .filter(|radius| radius.is_finite() && *radius >= 0.0)
+        .ok_or_else(|| invalid_behavior_source_data("BFBehEvasion requires evasionRadius"))?;
+    let duration = read_optional_float_attribute(node, "evasionTime")?
+        .and_then(|seconds| Duration::try_from_secs_f64(f64::from(seconds)).ok())
+        .ok_or_else(|| invalid_behavior_source_data("BFBehEvasion requires evasionTime"))?;
+    Ok(Some(BehaviorAction::Wander(BehaviorWanderAction {
+        minimum_duration: duration,
+        maximum_duration: duration,
+        locomotion_speed: BehaviorGroundLocomotionSpeed::Slow,
+        avoid_water: read_boolean_attribute_or_false(node, "avoidWater")?,
+        avoided_entities: Some(BehaviorWanderAvoidedEntities {
+            radius_m,
+            types: types
+                .element_children()
+                .map(|entry| openzt2_game_data::AssetId::from_key(&entry.name))
+                .collect(),
+        }),
     })))
 }
