@@ -51,7 +51,11 @@ struct Spawner {
 
     // Keep this field here separate from auto-padding below, so that the WGSL and Rust
     // struct definitions match.
-    unused: u32,
+    spawn_point_offset: u32,
+    particle_size_scale: f32,
+    properties_array_index: u32,
+    spawn_padding_one: f32,
+    spawn_padding_two: f32,
 
     {{SPAWNER_PADDING}}
 }

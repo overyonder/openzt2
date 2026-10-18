@@ -1,4 +1,5 @@
 pub mod deterministic_random_stream;
+pub mod native_visual_random_stream;
 pub mod simulation_clock_types;
 pub mod simulation_control_queries;
 pub mod simulation_control_types;

@@ -80,6 +80,25 @@ pub struct EffectRenderViewTransforms {
 }
 
 impl EffectRenderViewTransforms {
+    pub fn fog_shader_registers(
+        &self,
+        fog: &bevy::pbr::DistanceFog,
+        projection: &Projection,
+    ) -> Option<[Vec4; 2]> {
+        let bevy::pbr::FogFalloff::Linear { start, end } = fog.falloff else {
+            return None;
+        };
+        let direction = -self.view_to_world.z_axis.truncate().normalize();
+        let far = match projection {
+            Projection::Perspective(projection) => projection.far,
+            Projection::Orthographic(projection) => projection.far,
+            Projection::Custom(_) => end,
+        };
+        Some([
+            Vec4::new(start, (end - start).recip(), end, far),
+            direction.extend(self.camera_position.dot(direction)),
+        ])
+    }
     pub fn view_to_world_components(&self) -> [f32; 16] {
         self.view_to_world.to_cols_array()
     }

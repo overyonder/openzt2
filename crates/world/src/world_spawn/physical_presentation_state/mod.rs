@@ -169,6 +169,7 @@ mod tests {
             states: ["idle", "used", "extra"]
                 .map(|name| WorldObjectPresentationAttachmentDefinition {
                     state: AssetId::from_key(name),
+                    child_binder: AssetId::from_key(name),
                     parent_attachment: AssetId::from_key("link_sign"),
                     inherit_parent_rotation: true,
                     prefab: AssetId::from_key(name),

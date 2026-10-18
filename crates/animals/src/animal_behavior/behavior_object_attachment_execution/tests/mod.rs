@@ -10,6 +10,8 @@ use openzt2_world_state::animation_playback::animation_event_message_types::Anim
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        surface_effect_strength: None,
+        presentation_caustic_policies: Vec::new(),
         id,
         kind: WorldObjectKind::Scenery,
         supports_show_tricks: false,

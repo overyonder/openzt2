@@ -7,18 +7,19 @@ use bevy::{asset::LoadContext, image::ImageLoaderSettings, prelude::*, shader::S
 use super::{
     d3d9_shader_and_vertex_layout_mapping::map_d3d9_shader_input_to_bevy_vertex_attribute,
     effect_pass_gpu_data::{
+        D3d9BooleanShaderRegisters, D3d9FixedFunctionRegisters, D3d9FixedFunctionTransforms,
+        D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9ProgrammableShaderStage,
+        DynamicEffectParameterRegisterBinding, EFFECT_SHADER_BINDING_LAYOUT, EffectPassMaterial,
+        EffectPassPipelineSpecializationKey, EffectPassTextureAssets,
+        EffectPassUniformBufferAssets, FIXED_FUNCTION_SHADER,
         fixed_function_transform_binding::DynamicFixedFunctionTransformBinding,
+        material_configuration::fixed_function_ambient_colour_from_argb,
         uniform_buffer_upload::{
             pack_programmable_shader_registers, shader_buffer_from_packed_registers,
             shader_buffer_from_uniform_value,
         },
-        D3d9BooleanShaderRegisters, D3d9FixedFunctionRegisters, D3d9FixedFunctionTransforms,
-        D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9ProgrammableShaderStage,
-        DynamicEffectParameterRegisterBinding, EffectPassMaterial,
-        EffectPassPipelineSpecializationKey, EffectPassTextureAssets,
-        EffectPassUniformBufferAssets, EFFECT_SHADER_BINDING_LAYOUT, FIXED_FUNCTION_SHADER,
     },
-    evaluated_d3d9_pass_state::{collect_evaluated_d3d9_pass_states, EvaluatedD3d9PassState},
+    evaluated_d3d9_pass_state::{EvaluatedD3d9PassState, collect_evaluated_d3d9_pass_states},
     programmable_vertex_fixed_function_fragment_interface::create_fixed_function_fragment_shader_for_programmable_vertex_outputs,
     resolved_effect_transform_bindings::ResolvedEffectTransformSemantic,
 };
@@ -35,6 +36,7 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
     texture_coordinate_animations: &std::sync::Arc<
         [super::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
+    reflection_projections: &[(usize, usize, [f32; 16])],
 ) -> io::Result<Box<[Handle<EffectPassMaterial>]>> {
     collect_evaluated_d3d9_pass_states(technique)?
         .iter()
@@ -48,6 +50,7 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
                 labelled_asset_prefix,
                 index,
                 texture_coordinate_animations,
+                reflection_projections,
             )
         })
         .collect()
@@ -67,6 +70,7 @@ fn create_effect_pass_material_asset(
     texture_coordinate_animations: &std::sync::Arc<
         [super::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
+    reflection_projections: &[(usize, usize, [f32; 16])],
 ) -> io::Result<Handle<EffectPassMaterial>> {
     let (vertex, fragment) = match (
         state.vertex_shader.as_deref(),
@@ -312,7 +316,14 @@ fn create_effect_pass_material_asset(
                 state.effect_states[57],
             )
             .as_vec4(),
-            _ => Vec4::ZERO,
+            47 => Vec4::new(
+                0.0,
+                f32::from(u8::from(state.ambient_state_is_authored)),
+                0.0,
+                0.0,
+            ),
+            48 => fixed_function_ambient_colour_from_argb(state.effect_states[49]),
+            _ => unreachable!("fixed function register index is bounded by its array"),
         }),
     };
     let fixed_transform_bindings = state
@@ -327,6 +338,24 @@ fn create_effect_pass_material_asset(
     let fixed_transform_dependencies = fixed_transform_bindings
         .iter()
         .fold(0, |mask, binding| mask | binding.input_dependencies());
+    let mut model_reflection_projections = [None; 8];
+    for &(pass, stage, matrix) in reflection_projections {
+        if pass == index {
+            let target = model_reflection_projections.get_mut(stage).ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "reflection texture stage exceeds eight",
+                )
+            })?;
+            *target = Some(Mat4::from_cols_array(&matrix));
+        }
+    }
+    let reflection_dependencies = if model_reflection_projections.iter().any(Option::is_some) {
+        super::resolved_effect_transform_bindings::MODEL_INPUT
+            | super::resolved_effect_transform_bindings::VIEW_INPUT
+    } else {
+        0
+    };
     let material = EffectPassMaterial {
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),
         lighting_state_is_authored: state.lighting_state_is_authored || material_lighting.is_some(),
@@ -334,6 +363,7 @@ fn create_effect_pass_material_asset(
         fixed_transforms: D3d9FixedFunctionTransforms {
             values: state.texture_transforms,
         },
+        model_reflection_projections,
         vertex_floats: D3d9FloatShaderRegisters {
             values: state.vertex_floats,
         },
@@ -433,14 +463,14 @@ fn create_effect_pass_material_asset(
             blend_state: blend,
             color_writes: state.color_writes,
         },
-        parameter_input_dependencies: dynamic_parameter_register_bindings
-            .iter()
-            .fold(fixed_transform_dependencies, |mask, binding| {
-                mask | binding.transform_semantic.input_dependencies()
-            }),
+        parameter_input_dependencies: dynamic_parameter_register_bindings.iter().fold(
+            fixed_transform_dependencies | reflection_dependencies,
+            |mask, binding| mask | binding.transform_semantic.input_dependencies(),
+        ),
         dirty_float_register_stages: 0,
         fixed_transform_bindings,
         dirty_fixed_transforms: false,
+        dirty_fixed_function: false,
         fixed_transform_render_view: None,
         fixed_transform_evaluations: 0,
         fixed_transform_evaluation_failures: 0,

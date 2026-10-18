@@ -353,6 +353,8 @@ fn evaluates_shipped_water_and_terrain_effect_states() -> Result<(), Box<dyn std
     for name in [
         "effects/waterblit.fx",
         "effects/waterflat.fx",
+        "effects/waterray.fx",
+        "effects/waterdisk.fx",
         "effects/terrain.fx",
         "effects/base_wind.fx",
     ] {
@@ -917,6 +919,56 @@ fn retained_matrix_expression_preserves_swizzle_and_isolates_evaluation_inputs(
         }])?,
         first_expected
     );
+    Ok(())
+}
+
+#[test]
+fn ambient_states_preserve_packed_argb_defaults_and_parameter_updates(
+) -> Result<(), D3d9EffectProcessingError> {
+    // Foreign compiler/evaluator agreement: these bytes are packed A,R,G,B,
+    // not a floating-point intensity or a scalar broadcast to four channels.
+    let source = br"
+        dword ambientColor : AmbientColor = 0xff123456;
+        technique T {
+            pass Parameter { Ambient = (ambientColor); }
+            pass Literal { Ambient = 0xfe010203; }
+        }
+    ";
+    for (assignment, expected) in [
+        (None, 0xff12_3456_u32),
+        (Some(("AmbientColor", 0x8123_4567_u32)), 0x8123_4567),
+        (Some(("ambientColor", 0xff12_3456_u32)), 0xff12_3456),
+    ] {
+        let assignments =
+            assignment.map(|(parameter_name, packed)| D3d9EffectParameterAssignment {
+                parameter_name,
+                parameter_value: D3d9EffectParameterValue::Integer {
+                    integer_value: packed.cast_signed(),
+                },
+            });
+        let effect = compile_and_evaluate_d3d9_effect_source(
+            Path::new("effects/packed-ambient.fx"),
+            source,
+            &mut NoIncludes,
+            assignments.as_slice(),
+        )?;
+        for (pass, packed) in effect.evaluated_techniques[0]
+            .evaluated_passes
+            .iter()
+            .zip([expected, 0xfe01_0203])
+        {
+            assert!(
+                pass.evaluated_commands
+                    .iter()
+                    .any(|command| matches!(command,
+                EvaluatedD3d9EffectCommand::UnmappedD3d9EffectState {
+                    state_type: 49, state_index: 0, state_value,
+                }
+                    if *state_value == packed)),
+                "{pass:?}"
+            );
+        }
+    }
     Ok(())
 }
 

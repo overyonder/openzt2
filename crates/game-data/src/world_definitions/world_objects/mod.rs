@@ -117,6 +117,9 @@ pub struct WorldObjectTextureReplacement {
 pub struct WorldObjectPresentationAttachmentDefinition {
     /// Named physical-animation state selecting this attachment.
     pub state: AssetId,
+    /// Physical binder selected by this state, independent of its model asset.
+    #[serde(default)]
+    pub child_binder: AssetId,
     /// Authored attachment-node identity in the primary prefab.
     pub parent_attachment: AssetId,
     pub inherit_parent_rotation: bool,
@@ -219,6 +222,13 @@ const fn named_physical_presentation_is_initially_visible() -> bool {
     true
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct WorldObjectPresentationCausticPolicy {
+    pub binder: AssetId,
+    pub no_caustics: bool,
+    pub is_decal: bool,
+}
+
 #[allow(
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
@@ -258,6 +268,9 @@ pub struct WorldObjectDefinition {
     pub presentation_attachments: Vec<WorldObjectPresentationControllerDefinition>,
     #[serde(default)]
     pub named_physical_presentations: Vec<WorldObjectNamedPhysicalPresentationDefinition>,
+    /// Caustic eligibility belongs to physical binders, independently of shared models.
+    #[serde(default)]
+    pub presentation_caustic_policies: Vec<WorldObjectPresentationCausticPolicy>,
     /// Authored `BFGEntityContainerSlot` interactions, grouped by their named
     /// reservation binder and retaining the model node used for docking.
     #[serde(default)]
@@ -272,6 +285,9 @@ pub struct WorldObjectDefinition {
     /// world records carry their resolved instance scale directly; this value
     /// supplies the same transform when gameplay creates a new instance.
     pub prefab_scale: f32,
+    /// Authored splash strength of the main physical presentation.
+    #[serde(default)]
+    pub surface_effect_strength: Option<f32>,
     pub icon: AssetId,
     pub biomes: Vec<AssetId>,
     pub location: AssetId,

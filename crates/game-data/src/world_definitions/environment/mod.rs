@@ -64,6 +64,8 @@ pub enum EnvironmentLightKind {
 pub struct EnvironmentLightSample {
     pub target: EnvironmentLightTarget,
     pub kind: EnvironmentLightKind,
+    #[serde(default)]
+    pub child_index: u16,
     pub quality: u8,
     pub key: AssetId,
     pub model: AssetId,

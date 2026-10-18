@@ -22,11 +22,18 @@ use super::hanabi_custom_particle_modifiers::{
 pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
     authored_particle_system_emitter: &AuthoredParticleSystemEmitter,
     collision_spawn_initialization: Option<CollisionSpawnParticleInitialization>,
+    wave_surface: bool,
 ) -> HanabiEffectAsset {
     let expression_writer = ExprWriter::new();
     let mut particle_initialization_modifiers: Vec<BoxedModifier> = Vec::new();
     let mut particle_update_modifiers: Vec<BoxedModifier> = Vec::new();
     let mut particle_render_modifiers: Vec<Box<dyn RenderModifier>> = Vec::new();
+    if wave_surface {
+        particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
+            Attribute::F32_0,
+            expression_writer.lit(0.0_f32).expr(),
+        )));
+    }
     match authored_particle_system_emitter.shape {
         AuthoredParticleEmitterShape::Point
         | AuthoredParticleEmitterShape::Decal
@@ -57,7 +64,11 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 .rand(ValueType::Vector(VectorType::VEC3F))
                 * expression_writer.lit(2.0)
                 - expression_writer.lit(Vec3::ONE))
-                * expression_writer.lit(Vec3::from_array(half_extents));
+                * expression_writer.lit(Vec3::from_array([
+                    half_extents[0],
+                    half_extents[2],
+                    half_extents[1],
+                ]));
             particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
                 Attribute::POSITION,
                 randomized_box_position.expr(),
@@ -77,13 +88,13 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             let randomized_cone_radius = expression_writer.lit(min_radius)
                 + randomized_cone_axis_fraction.clone()
                     * expression_writer.lit(max_radius - min_radius);
-            let randomized_cone_position = expression_writer.lit(Vec3::from_array(origin))
-                + expression_writer.lit(Vec3::from_array(direction))
+            let randomized_cone_position = expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(origin)))
+                + expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(direction)))
                     * randomized_cone_axis_fraction
-                + expression_writer.lit(Vec3::from_array(up))
+                + expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(up)))
                     * randomized_cone_rotation_radians.clone().cos()
                     * randomized_cone_radius.clone()
-                + expression_writer.lit(Vec3::from_array(out))
+                + expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(out)))
                     * randomized_cone_rotation_radians.sin()
                     * randomized_cone_radius;
             particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
@@ -117,13 +128,13 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             AuthoredParticleSystemModifier::InitialVelocity { velocity } => {
                 particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
                     Attribute::VELOCITY,
-                    expression_writer.lit(Vec3::from_array(*velocity)).expr(),
+                    expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*velocity))).expr(),
                 )))
             }
             AuthoredParticleSystemModifier::Acceleration { acceleration } => {
                 particle_update_modifiers.push(Box::new(AccelModifier::new(
                     expression_writer
-                        .lit(Vec3::from_array(*acceleration))
+                        .lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*acceleration)))
                         .expr(),
                 )))
             }
@@ -158,7 +169,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 kill_inside,
             } => particle_update_modifiers.push(Box::new(
                 KillSphereModifier::new(
-                    expression_writer.lit(Vec3::from_array(*center)).expr(),
+                    expression_writer.lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*center))).expr(),
                     expression_writer.lit(radius.powi(2)).expr(),
                 )
                 .with_kill_inside(*kill_inside),
@@ -187,8 +198,8 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 max_speed,
                 ..
             } => {
-                let central_velocity_direction = Vec3::from_array(*direction).normalize_or_zero();
-                let horizontal_spread_direction = Vec3::from_array(*base).normalize_or_zero();
+                let central_velocity_direction = Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*direction)).normalize_or_zero();
+                let horizontal_spread_direction = Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*base)).normalize_or_zero();
                 let vertical_spread_direction = central_velocity_direction
                     .cross(horizontal_spread_direction)
                     .normalize_or_zero();
@@ -223,7 +234,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 acceleration,
             } => particle_update_modifiers.push(Box::new(AccelModifier::new(
                 expression_writer
-                    .lit(Vec3::from_array(*direction).normalize_or_zero() * *acceleration)
+                    .lit(Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*direction)).normalize_or_zero() * *acceleration)
                     .expr(),
             ))),
             AuthoredParticleSystemModifier::PointGravity {
@@ -231,7 +242,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 force,
                 decay,
             } => particle_update_modifiers.push(Box::new(PointGravityParticleUpdateModifier {
-                gravity_position: Vec3::from_array(*position),
+                gravity_position: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*position)),
                 gravity_force: *force,
                 distance_decay: *decay,
             })),
@@ -274,13 +285,13 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             }
             AuthoredParticleSystemModifier::Drift { velocity } => {
                 particle_update_modifiers.push(Box::new(AuthoredParticleUpdateModifier::Drift {
-                    velocity: Vec3::from_array(*velocity),
+                    velocity: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*velocity)),
                 }))
             }
             AuthoredParticleSystemModifier::KillPlane { normal, distance } => {
                 particle_update_modifiers.push(Box::new(
                     AuthoredParticleUpdateModifier::KillPlane {
-                        normal: Vec3::from_array(*normal),
+                        normal: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*normal)),
                         distance: *distance,
                     },
                 ))
@@ -295,7 +306,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             } => {
                 particle_update_modifiers.push(Box::new(
                     AuthoredParticleUpdateModifier::SpawnOnPlane {
-                        normal: Vec3::from_array(*normal),
+                        normal: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*normal)),
                         distance: *distance,
                         probability: *probability,
                         min_count: *min_count,
@@ -320,6 +331,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 }));
             }
             AuthoredParticleSystemModifier::DecalUv { minimum } => {
+                if wave_surface { continue; }
                 particle_initialization_modifiers.push(Box::new(SetAttributeModifier::new(
                     Attribute::SPRITE_INDEX,
                     (expression_writer.rand(ScalarType::Float)
@@ -371,7 +383,44 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
             SpawnerSettings::once(1.0_f32.into()).with_starts_active(false)
         }
     };
-    let expression_module = expression_writer.finish();
+    if wave_surface {
+        for name in [
+            "wave_frequency",
+            "wave_phase",
+            "wave_amplitude",
+            "wave_pos_x",
+            "wave_pos_y",
+            "wave_k",
+            "wave_ramp_offset",
+            "wave_ramp_scale",
+            "wave_depth_offset",
+            "wave_depth_scale",
+            "wave_fog_range",
+            "wave_fog_plane",
+            "wave_fog_colour",
+        ] {
+            expression_writer.add_property(name, Vec4::ZERO.into());
+        }
+        let minimum_uv = authored_particle_system_emitter
+            .modifiers
+            .iter()
+            .find_map(|modifier| {
+                if let AuthoredParticleSystemModifier::DecalUv { minimum } = modifier {
+                    Some(*minimum)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(1.0);
+        particle_render_modifiers.push(Box::new(
+            super::particle_wave_surface::WaveSurfaceRenderModifier { minimum_uv },
+        ));
+    }
+    let mut expression_module = expression_writer.finish();
+    if wave_surface {
+        expression_module.add_texture_slot_with_clamp_linear("wave_ripple", true);
+        expression_module.add_texture_slot_with_clamp_linear("wave_mask", true);
+    }
     let mut hanabi_effect_asset = HanabiEffectAsset::new(
         authored_particle_system_emitter.capacity.max(1),
         authored_spawner_settings,

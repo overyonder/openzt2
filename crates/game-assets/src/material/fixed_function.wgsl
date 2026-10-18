@@ -4,6 +4,7 @@
     mesh_functions::{get_world_from_local, mesh_normal_local_to_world, mesh_position_local_to_clip}
 }
 #import bevy_render::color_operations::srgb_to_linear
+#import bevy_pbr::mesh_view_bindings::view
 #ifdef SKINNED
 #import bevy_pbr::skinning::{skin_model, skin_normals}
 #endif
@@ -14,7 +15,9 @@ struct VertexInput {
     @location(1) normal: vec3<f32>,
     @location(2) primary_texture_coordinates: vec2<f32>,
     @location(3) secondary_texture_coordinates: vec2<f32>,
+#ifdef VERTEX_COLORS
     @location(5) color: vec4<f32>,
+#endif
 #ifdef SKINNED
     @location(6) joint_indices: vec4<u32>,
     @location(7) joint_weights: vec4<f32>,
@@ -28,12 +31,14 @@ struct VertexOutput {
     @location(2) normal: vec3<f32>,
     @location(3) color: vec4<f32>,
     @location(4) lit_diffuse: vec4<f32>,
+    @location(5) camera_reflection: vec3<f32>,
 };
 
 struct FixedFunctionFragmentInputs {
     texture_coordinates: array<vec4<f32>, 8>,
     normal: vec3<f32>,
     diffuse: vec4<f32>,
+    camera_reflection: vec3<f32>,
 };
 
 @vertex
@@ -52,8 +57,15 @@ fn vertex(input: VertexInput) -> VertexOutput {
 #else
     output.normal = mesh_normal_local_to_world(input.normal, input.instance_index);
 #endif
+#ifdef VERTEX_COLORS
     output.color = input.color;
+#else
+    output.color = vec4(1.0);
+#endif
     output.lit_diffuse = fixed_function_lit_diffuse(output.normal, output.color);
+    let camera_position = (view.view_from_world * world_from_local * vec4(input.position, 1.0)).xyz;
+    let camera_normal = normalize((view.view_from_world * vec4(output.normal, 0.0)).xyz);
+    output.camera_reflection = reflect(normalize(camera_position), camera_normal);
     return output;
 }
 
@@ -84,7 +96,7 @@ fn vertex(input: VertexInput) -> VertexOutput {
 // Bit N is set when stage N has a cube texture bound.
 @group(#{MATERIAL_BIND_GROUP}) @binding(46) var<uniform> cube_texture_stages: vec4<u32>;
 
-struct FixedFunctionState { values: array<vec4<f32>, 48> };
+struct FixedFunctionState { values: array<vec4<f32>, 49> };
 struct FixedTransforms { values: array<mat4x4<f32>, 8> };
 struct FixedFunctionWorldLights {
     ambient_color_and_directional_light_count: vec4<f32>,
@@ -111,7 +123,7 @@ fn coordinates(stage: u32, input: FixedFunctionFragmentInputs, programmable_vert
     if programmable_vertex { return value; }
     switch index & 0xffff0000u {
         case 0x00010000u: { value = vec4(input.normal, 1.0); }
-        case 0x00030000u: { value = vec4(reflect(vec3(0.0, 0.0, -1.0), input.normal), 1.0); }
+        case 0x00030000u: { value = vec4(input.camera_reflection, 1.0); }
         default: {}
     }
     let flags = state(stage, 16u);
@@ -223,8 +235,9 @@ fn fixed_function_lit_diffuse(normal: vec3<f32>, vertex_color: vec4<f32>) -> vec
     let emissive = fixed_function_material_source(u32(lighting.w), fixed.values[43], vertex_color);
     let world_lights = world_light_contexts[u32(fixed.values[47].x)];
     let world_normal = normalize(normal);
-    var color = emissive.rgb
-        + ambient.rgb * world_lights.ambient_color_and_directional_light_count.rgb;
+    let ambient_light = select(world_lights.ambient_color_and_directional_light_count.rgb,
+        fixed.values[48].rgb, fixed.values[47].y != 0.0);
+    var color = emissive.rgb + ambient.rgb * ambient_light;
     let directional_light_count =
         u32(world_lights.ambient_color_and_directional_light_count.w);
     for (var index = 0u; index < directional_light_count; index += 1u) {
@@ -243,6 +256,7 @@ fn fragment(input: VertexOutput) -> @location(0) vec4<f32> {
     fragment_inputs.texture_coordinates[1] = vec4(input.secondary_texture_coordinates, 0.0, 1.0);
     fragment_inputs.normal = input.normal;
     fragment_inputs.diffuse = input.lit_diffuse;
+    fragment_inputs.camera_reflection = input.camera_reflection;
     return evaluate_fixed_function_texture_stages(fragment_inputs, false);
 }
 

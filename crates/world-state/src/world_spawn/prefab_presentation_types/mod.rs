@@ -40,6 +40,23 @@ pub struct PrefabRenderable;
 #[derive(Component, Debug, Clone)]
 pub struct PrefabMaterialOverrides(pub Box<[PrefabMaterialOverride]>);
 
+/// Material selected for a source primitive, before additional technique passes.
+#[derive(Component, Debug, Clone)]
+pub struct PrefabPrimitiveMaterial(pub Handle<MaterialAsset>);
+
+/// Eligibility of one physical presentation for projected caustic light.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PrefabCausticPolicy {
+    pub receives: bool,
+}
+
+/// Authored local-space render bound, independent of mesh upload or material passes.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct PrefabLocalRenderBound(pub openzt2_game_data::scene_prefab::PrefabBoundingSphere);
+
+#[derive(Component, Debug, Clone)]
+pub struct PrefabSkinRenderBound(pub openzt2_game_data::scene_prefab::PrefabSkinRenderBound);
+
 #[derive(Debug, Clone)]
 pub struct PrefabMaterialOverride {
     pub material: AssetId,

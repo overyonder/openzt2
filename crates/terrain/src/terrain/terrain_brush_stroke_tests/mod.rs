@@ -54,6 +54,8 @@ fn stepped_terrain_asset(destination_height_cm: i16) -> TerrainAsset {
             base_height_metres: 0.0,
         },
         presentation: TerrainPresentation {
+            water_distance_fade: Default::default(),
+            water_editing: Default::default(),
             detail_texture: String::new(),
             detail_texture_repetition: 1.0,
             cliff_rise_per_metre: [0.0; 2],
@@ -271,11 +273,12 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
         *app.world_mut().resource_mut::<PrimaryPointerInputState>() = default();
         app.update();
         *app.world_mut().resource_mut::<PrimaryPointerInputState>() = PrimaryPointerInputState {
-            pressed: true,
             just_pressed: true,
+            just_released: true,
             ..default()
         };
         app.update();
+        assert_eq!(app.world().resource::<Messages<TerrainStroke>>().len(), 1);
         assert_eq!(
             app.world()
                 .get::<EditedTerrainSamples>(chunk)

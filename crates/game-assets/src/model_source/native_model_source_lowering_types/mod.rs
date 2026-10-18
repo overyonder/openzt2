@@ -13,6 +13,7 @@ pub struct LoweredNativeModelMaterial {
     pub labelled_asset_path: String,
     pub evaluated_d3d9_effect: d3d9_effects::effect_types::EvaluatedD3d9Effect,
     pub texture_asset_paths: Vec<(String, String)>,
+    pub reflection_projections: Box<[(usize, usize, [f32; 16])]>,
 }
 
 pub struct LoweredNativeModel {

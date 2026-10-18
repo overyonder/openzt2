@@ -7,14 +7,15 @@ use d3d9_effects::effect_types::{
     EvaluatedD3d9EffectTechnique,
 };
 
-use super::model::NativeMaterialSource;
+use super::model::{NativeMaterialSource, NativeTextureEffectSource};
 
-pub(super) struct LoweredNetImmerseFixedFunctionMaterial {
-    pub(super) evaluated_effect: EvaluatedD3d9Effect,
-    pub(super) texture_asset_paths: Vec<(String, String)>,
+pub(crate) struct LoweredNetImmerseFixedFunctionMaterial {
+    pub(crate) evaluated_effect: EvaluatedD3d9Effect,
+    pub(crate) texture_asset_paths: Vec<(String, String)>,
+    pub(crate) reflection_projections: Box<[(usize, usize, [f32; 16])]>,
 }
 
-pub(super) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
+pub(crate) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
     material: &NativeMaterialSource,
 ) -> io::Result<LoweredNetImmerseFixedFunctionMaterial> {
     let mut commands = vec![
@@ -193,6 +194,73 @@ pub(super) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
         render_state(22, d3d_cull_mode(material.cull_mode)?),
     ]);
 
+    let mut passes = vec![EvaluatedD3d9EffectPass {
+        pass_name: "NetImmerseFixedFunction".to_owned(),
+        evaluated_commands: commands.into_boxed_slice(),
+    }];
+    let mut reflection_projections = Vec::new();
+    if let Some(NativeTextureEffectSource::SphereEnvironment {
+        texture,
+        clamp_mode,
+        filter_mode,
+        model_to_effect_rotation: rotation,
+    }) = &material.texture_effect
+    {
+        let parameter = "NetImmerseEnvironmentTexture".to_owned();
+        if let Some(texture) = texture {
+            texture_asset_paths.push((parameter.clone(), texture.clone()));
+        }
+        let mut environment = vec![
+            render_state(27, 1),
+            render_state(19, 2),
+            render_state(20, 2),
+            EvaluatedD3d9EffectCommand::D3d9TextureBinding {
+                texture_stage: 0,
+                parameter_name: texture.as_ref().map(|_| parameter),
+            },
+            texture_stage_state(0, 1, 2),
+            texture_stage_state(0, 2, 2),
+            texture_stage_state(0, 3, 1),
+            texture_stage_state(0, 4, 3),
+            texture_stage_state(0, 5, 2),
+            texture_stage_state(0, 6, 1),
+            texture_stage_state(0, 14, 0x30000),
+            texture_stage_state(0, 17, 2),
+        ];
+        let sampling = super::model::NativeTextureSource {
+            asset_path: String::new(),
+            uv_set: 0,
+            clamp_mode: *clamp_mode,
+            filter_mode: *filter_mode,
+        };
+        environment.extend(netimmerse_sampler_states(0, &sampling)?);
+        if let Some(gloss) = &material.gloss_texture {
+            let parameter = "NetImmerseGlossTexture".to_owned();
+            texture_asset_paths.push((parameter.clone(), gloss.asset_path.clone()));
+            environment.extend([
+                texture_binding(1, parameter),
+                texture_stage_state(1, 1, 4),
+                texture_stage_state(1, 2, 2),
+                texture_stage_state(1, 3, 1),
+                texture_stage_state(1, 4, 3),
+                texture_stage_state(1, 5, 2),
+                texture_stage_state(1, 6, 1),
+                texture_stage_state(1, 14, gloss.uv_set),
+                texture_stage_state(1, 17, 0),
+                texture_stage_state(2, 1, 1),
+            ]);
+            environment.extend(netimmerse_sampler_states(1, gloss)?);
+        } else {
+            environment.push(texture_stage_state(1, 1, 1));
+        }
+        let matrix = sphere_environment_projection_from_model_rotation(rotation);
+        reflection_projections.push((passes.len(), 0, matrix));
+        passes.push(EvaluatedD3d9EffectPass {
+            pass_name: "NetImmerseEnvironment".to_owned(),
+            evaluated_commands: environment.into_boxed_slice(),
+        });
+    }
+
     Ok(LoweredNetImmerseFixedFunctionMaterial {
         evaluated_effect: EvaluatedD3d9Effect {
             parameter_descriptions: Box::default(),
@@ -200,14 +268,63 @@ pub(super) fn lower_netimmerse_material_into_evaluated_d3d9_effect(
                 technique_name: "NetImmerseFixedFunction".to_owned(),
                 is_valid: true,
                 quality_annotation: None,
-                evaluated_passes: Box::new([EvaluatedD3d9EffectPass {
-                    pass_name: "NetImmerseFixedFunction".to_owned(),
-                    evaluated_commands: commands.into_boxed_slice(),
-                }]),
+                evaluated_passes: passes.into_boxed_slice(),
             }]),
         },
         texture_asset_paths,
+        reflection_projections: reflection_projections.into_boxed_slice(),
     })
+}
+
+fn sphere_environment_projection_from_model_rotation(rotation: &[f32; 9]) -> [f32; 16] {
+    // Sphere projection uses the effect's source Y and negative source X.
+    [
+        0.5 * rotation[3],
+        -0.5 * rotation[0],
+        0.0,
+        0.0,
+        0.5 * rotation[4],
+        -0.5 * rotation[1],
+        0.0,
+        0.0,
+        0.5 * rotation[5],
+        -0.5 * rotation[2],
+        0.0,
+        0.0,
+        0.5,
+        0.5,
+        0.0,
+        1.0,
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sphere_environment_projection_from_model_rotation;
+    use bevy::math::{Mat4, Vec3, Vec4};
+
+    #[test]
+    fn sphere_environment_cardinal_directions_survive_camera_and_source_basis_changes() {
+        let projection =
+            Mat4::from_cols_array(&sphere_environment_projection_from_model_rotation(&[
+                1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+            ]));
+        let world_from_model = Mat4::from_cols(Vec4::X, -Vec4::Z, Vec4::Y, Vec4::W);
+        let camera_to_world = Mat4::from_rotation_y(std::f32::consts::FRAC_PI_2);
+        let camera_projection = projection * world_from_model.inverse() * camera_to_world;
+        for (source_direction, expected) in [
+            (Vec3::Y, Vec4::new(1.0, 0.5, 0.0, 1.0)),
+            (-Vec3::Y, Vec4::new(0.0, 0.5, 0.0, 1.0)),
+            (Vec3::X, Vec4::new(0.5, 0.0, 0.0, 1.0)),
+            (-Vec3::X, Vec4::new(0.5, 1.0, 0.0, 1.0)),
+            (Vec3::Z, Vec4::new(0.5, 0.5, 0.0, 1.0)),
+        ] {
+            let camera_direction =
+                camera_to_world.inverse() * world_from_model * source_direction.extend(0.0);
+            let actual = camera_projection * camera_direction.truncate().extend(1.0);
+            assert!((actual - expected).abs().max_element() < 0.00001);
+        }
+    }
 }
 
 fn material_state(index: u32, values: [f32; 4]) -> EvaluatedD3d9EffectCommand {

@@ -23,6 +23,7 @@ openzt2_zoo_state.workspace = true
 
 avian3d.workspace = true
 bevy.workspace = true
+wgpu = { version = "29.0.3", default-features = false }
 
 [dev-dependencies]
 openzt2_game_assets = { workspace = true, features = ["testing"] }

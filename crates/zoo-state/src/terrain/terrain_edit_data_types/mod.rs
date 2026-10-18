@@ -2,6 +2,14 @@ use bevy::prelude::*;
 
 use crate::terrain::terrain_chunk_identity_type::TerrainChunkId;
 
+/// Stable affiliation carried by the terrain transaction, independently of style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerrainWaterAffiliation {
+    SourceRow(u32),
+    Edited(Entity),
+    Unresolved,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TerrainEditDelta {
     pub chunk: TerrainChunkId,
@@ -21,4 +29,5 @@ pub struct TerrainSample {
     /// Water configuration selected by the brush, independent of ground blending.
     pub water_biome_channel: u8,
     pub water_cm: i16,
+    pub water_affiliation: Option<TerrainWaterAffiliation>,
 }

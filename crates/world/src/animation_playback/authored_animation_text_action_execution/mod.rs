@@ -46,6 +46,7 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
             AuthoredAnimationTextAction::AttachPendingObject
             | AuthoredAnimationTextAction::SpawnObject
             | AuthoredAnimationTextAction::AttachNamedObject { .. }
+            | AuthoredAnimationTextAction::TriggerSurfaceEffect { .. }
             | AuthoredAnimationTextAction::DetachObject => {
                 self.object_commands.write(
                     openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand {
@@ -143,7 +144,6 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
             AuthoredAnimationTextAction::ExitAnimation
             | AuthoredAnimationTextAction::SendArtificialIntelligenceCommand(_)
             | AuthoredAnimationTextAction::ApplyWhapImpulse { .. }
-            | AuthoredAnimationTextAction::TriggerSurfaceEffect { .. }
             | AuthoredAnimationTextAction::SetGroundFit(_)
             | AuthoredAnimationTextAction::SetDockControllerEnabled(_)
             | AuthoredAnimationTextAction::GoToDockControllerNode(_) => {}

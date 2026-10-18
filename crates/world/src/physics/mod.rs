@@ -3,6 +3,7 @@ pub mod collider_hydration;
 pub(crate) mod fitting_surface_operations;
 pub(crate) mod interaction_execution;
 pub(crate) mod interaction_types;
+mod water_surface_disturbance_projection;
 
 use crate::physics::authored_water_surface_impact_projection::project_authored_body_water_surface_crossings_into_impact_waves;
 use crate::physics::collider_hydration::hydrate_world_boundary_colliders;
@@ -30,6 +31,11 @@ impl Plugin for ZooPhysicsPlugin {
         app.add_message::<ApplyPhysicsImpulseRequest>()
             .add_message::<PhysicsContactFact>()
             .add_message::<PhysicsInteractionFailure>()
+            .add_systems(
+                PostUpdate,
+                water_surface_disturbance_projection::project_animation_surface_effects_into_water_disturbances
+                    .after(TransformSystems::Propagate),
+            )
             .configure_sets(
                 FixedPostUpdate,
                 (

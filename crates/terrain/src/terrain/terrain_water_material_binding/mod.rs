@@ -3,7 +3,6 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMate
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::terrain::TerrainBiomeWaterPresentation;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
-use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_RENDER_TARGET_SIDE;
 
 pub(super) fn bind_authored_water_surface_textures(
     pass: &mut EffectPassMaterial,
@@ -17,15 +16,19 @@ pub(super) fn bind_authored_water_surface_textures(
         pass.replace_texture_asset_for_effect_semantic("EnvRefract", targets.refraction.clone());
     let reflection_was_bound =
         pass.replace_texture_asset_for_effect_semantic("EnvReflect", targets.reflection.clone());
-    if !bump_map_was_bound || !(refraction_was_bound || reflection_was_bound) {
-        return false;
-    }
     // A declared texture need not be sampled by the selected technique.
     // The shipped FlatSpec passes use bump and environment maps only.
-    if let Some(texture) = terrain_asset.texture_image(&presentation.gloss_map) {
-        pass.replace_texture_asset_for_effect_semantic("ScumMap", texture.clone());
-    }
-    true
+    let scum_map = presentation
+        .surface_material
+        .configuration
+        .scum
+        .as_ref()
+        .and_then(|scum| scum.image.as_deref())
+        .and_then(|image| terrain_asset.texture_image(image));
+    let scum_was_bound = scum_map.is_some_and(|texture| {
+        pass.replace_texture_asset_for_effect_semantic("ScumMap", texture.clone())
+    });
+    (bump_map_was_bound && (refraction_was_bound || reflection_was_bound)) || scum_was_bound
 }
 
 pub(super) fn bind_authored_water_material_values(
@@ -35,6 +38,8 @@ pub(super) fn bind_authored_water_material_values(
 ) {
     let reflection = presentation.surface_material.reflection;
     let refraction = presentation.surface_material.refraction;
+    let reflection_falloff = reflection.falloff_metres.clamp(1.0, 100_000.0);
+    let refraction_falloff = refraction.falloff_metres.clamp(1.0, 100_000.0);
     let rgb = |colour: [u8; 3]| Vec3::from_array(colour.map(|value| f32::from(value) / 255.0));
     let percent = |value: f32| value / 100.0;
     pass.bind_float_vector_effect_semantic(
@@ -43,7 +48,8 @@ pub(super) fn bind_authored_water_material_values(
     );
     pass.bind_float_vector_effect_semantic(
         "ReflectSpecTint",
-        rgb(reflection.tint_colour_rgb255).extend(percent(reflection.strength_percent)),
+        rgb(reflection.tint_colour_rgb255)
+            .extend(percent(reflection.strength_percent).clamp(0.0, 1.0)),
     );
     pass.bind_float_vector_effect_semantic(
         "RefractBaseTint",
@@ -56,8 +62,8 @@ pub(super) fn bind_authored_water_material_values(
     pass.bind_float_vector_effect_semantic(
         "ReflectSpecAtten",
         Vec4::new(
-            -reflection.falloff_metres,
-            -2.0 / reflection.falloff_metres.max(f32::EPSILON),
+            -reflection_falloff,
+            -2.0 / reflection_falloff,
             percent(reflection.bumpiness_percent).clamp(0.0, 1.0) * 0.95 + 0.05,
             reflection.map_size_metres.clamp(1.0, 100.0).recip(),
         ),
@@ -65,8 +71,8 @@ pub(super) fn bind_authored_water_material_values(
     pass.bind_float_vector_effect_semantic(
         "RefractSpecAtten",
         Vec4::new(
-            -refraction.falloff_metres,
-            -2.0 / refraction.falloff_metres.max(f32::EPSILON),
+            -refraction_falloff,
+            -2.0 / refraction_falloff,
             percent(refraction.bumpiness_percent).clamp(0.0, 1.0) * 0.95 + 0.05,
             refraction.map_size_metres.clamp(1.0, 100.0).recip(),
         ),
@@ -76,17 +82,56 @@ pub(super) fn bind_authored_water_material_values(
         above_water_reflection_opacity_coefficients(reflection.fresnel_percent),
     );
     pass.bind_float_vector_effect_semantic("RefractOpacity", Vec4::new(1.0, 1.0, 0.0, 0.0));
-    let reciprocal_target_side = (WATER_RENDER_TARGET_SIDE as f32).recip();
-    pass.bind_float_vector_effect_semantic("ReflectSize", Vec4::splat(reciprocal_target_side));
-    pass.bind_float_vector_effect_semantic("RefractSize", Vec4::splat(reciprocal_target_side));
     pass.bind_float_vector_effect_semantic("DepthOffset", Vec4::new(0.0, 0.0, 0.0, water_height));
 }
 
 fn above_water_reflection_opacity_coefficients(fresnel_percent: f32) -> Vec4 {
-    // Native water initializes the angular intercept to one and updates the
-    // slope from Fresnel. Strength scales ReflectSpecTint, not this slope.
-    // The shader evaluates saturate(intercept + abs(normal.dot(eye)) * slope).
-    Vec4::new(1.0, 0.5 - 1.5 * (fresnel_percent / 100.0), 0.0, 0.0)
+    // The effect subtracts x from y when computing angular attenuation.
+    // Strength scales ReflectSpecTint independently of these endpoints.
+    Vec4::new(1.0, 0.5 - 1.5 * (fresnel_percent / 100.0), 0.0, 0.05)
+}
+
+pub(super) fn bind_authored_water_frame_base_tints(
+    pass: &mut EffectPassMaterial,
+    presentation: &TerrainBiomeWaterPresentation,
+    ambient_colour: Vec3,
+    underwater: bool,
+    capture_fraction: Option<f32>,
+    below_plane_capture_fraction: Option<f32>,
+) {
+    let rgb = |colour: [u8; 3]| {
+        Vec3::from_array(colour.map(|value| f32::from(value) / 255.0)) * ambient_colour
+    };
+    let refraction = rgb(presentation
+        .surface_material
+        .refraction
+        .ambient_colour_rgb255);
+    let reflection = rgb(presentation
+        .surface_material
+        .reflection
+        .ambient_colour_rgb255);
+    let alpha = capture_fraction.unwrap_or(1.0);
+    pass.bind_float_vector_effect_semantic("RefractBaseTint", refraction.extend(alpha));
+    pass.bind_float_vector_effect_semantic(
+        "ReflectBaseTint",
+        if underwater {
+            reflection.max(refraction)
+        } else {
+            reflection
+        }
+        .extend(alpha),
+    );
+    let mut opacity = above_water_reflection_opacity_coefficients(
+        presentation.surface_material.reflection.fresnel_percent,
+    );
+    if let Some(fraction) = below_plane_capture_fraction {
+        opacity.y = if fraction >= 1.0 {
+            1.0
+        } else {
+            (1.0 - opacity.y) * fraction + opacity.y
+        };
+    }
+    pass.bind_float_vector_effect_semantic("ReflectOpacity", opacity);
 }
 
 #[cfg(test)]
@@ -97,11 +142,12 @@ mod tests {
     fn authored_fresnel_reduces_reflection_when_viewing_from_above() {
         for (fresnel, expected_slope) in [(0.0, 0.5), (50.0, -0.25), (100.0, -1.0)] {
             let coefficients = above_water_reflection_opacity_coefficients(fresnel);
-            assert_eq!(coefficients, Vec4::new(1.0, expected_slope, 0.0, 0.0));
+            assert_eq!(coefficients, Vec4::new(1.0, expected_slope, 0.0, 0.05));
         }
         let coefficients = above_water_reflection_opacity_coefficients(100.0);
         let grazing_attenuation = coefficients.x.clamp(0.0, 1.0);
-        let overhead_attenuation = (coefficients.x + coefficients.y).clamp(0.0, 1.0);
+        let overhead_attenuation =
+            (coefficients.x + coefficients.y - coefficients.x).clamp(0.0, 1.0);
         assert_eq!(grazing_attenuation.to_bits(), 1.0_f32.to_bits());
         assert_eq!(overhead_attenuation.to_bits(), 0.0_f32.to_bits());
     }

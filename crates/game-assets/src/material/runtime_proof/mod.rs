@@ -118,7 +118,7 @@ fn spawn_material_runtime_proof_scene_and_exit_after_gpu_preparation(
             loaded_bound_textures = material
                 .bound_texture_assets
                 .iter()
-                .filter(|texture| images.get(*texture).is_some())
+                .filter(|binding| images.get(&binding.texture).is_some())
                 .count(),
             first_pass_textures = passes
                 .get(pass)

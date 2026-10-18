@@ -49,6 +49,7 @@ pub(super) struct EvaluatedD3d9PassState {
     pub(super) material: [Vec4; 5],
     pub(super) effect_states: [u32; 103],
     pub(super) lighting_state_is_authored: bool,
+    pub(super) ambient_state_is_authored: bool,
     pub(super) cull: Option<Face>,
     pub(super) polygon: PolygonMode,
     pub(super) depth_write: bool,
@@ -100,6 +101,7 @@ impl Default for EvaluatedD3d9PassState {
             material: [Vec4::ZERO; 5],
             effect_states,
             lighting_state_is_authored: false,
+            ambient_state_is_authored: false,
             cull: Some(Face::Back),
             polygon: PolygonMode::Fill,
             depth_write: true,
@@ -133,6 +135,9 @@ impl EvaluatedD3d9PassState {
             } => {
                 if *state_type == 48 {
                     self.lighting_state_is_authored = true;
+                }
+                if *state_type == 49 {
+                    self.ambient_state_is_authored = true;
                 }
                 if *state_index != 0 {
                     return Err(invalid("effect state index", *state_index));
@@ -308,6 +313,10 @@ impl EvaluatedD3d9PassState {
             }
             23 => self.depth_compare = compare(value)?,
             27 => self.blend_enabled = value != 0,
+            139 => {
+                self.effect_states[49] = value;
+                self.ambient_state_is_authored = true;
+            }
             168 => {
                 self.color_writes = ColorWrites::from_bits(value)
                     .ok_or_else(|| invalid("color write mask", value))?;

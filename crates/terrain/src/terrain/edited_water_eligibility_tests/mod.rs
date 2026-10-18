@@ -30,6 +30,8 @@ fn saved_water_asset() -> TerrainAsset {
             base_height_metres: 0.0,
         },
         presentation: TerrainPresentation {
+            water_distance_fade: Default::default(),
+            water_editing: Default::default(),
             detail_texture: String::new(),
             detail_texture_repetition: 1.0,
             cliff_rise_per_metre: [0.0; 2],
@@ -101,6 +103,7 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
                 water_styles: vec![0; 17 * 17].into_boxed_slice(),
                 water_biome_channels: vec![0; 17 * 17].into_boxed_slice(),
                 water_cm: vec![100; 17 * 17].into_boxed_slice(),
+                water_affiliations: vec![None; 17 * 17].into_boxed_slice(),
             },
         ))
         .id();

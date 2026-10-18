@@ -262,6 +262,8 @@ fn create_rail_camera_scene_prefab_entity(
         stable_id: AssetId::from_key(key),
         attachment_id: AssetId::from_key(key),
         model_joint_binding: None,
+        local_render_bound: None,
+        skin_render_bound: None,
         parent,
         transform,
         children: Vec::new(),

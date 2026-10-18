@@ -36,10 +36,32 @@ pub(super) fn stop_effect_instances_attached_to_requested_entities(
 
 pub(super) fn bind_loaded_material_textures_to_pending_effect_instances(
     mut commands: Commands,
-    pending_material_bindings: Query<(Entity, &PendingEffectMaterialBinding)>,
+    pending_material_bindings: Query<(
+        Entity,
+        &PendingEffectMaterialBinding,
+        Has<super::particle_wave_surface::ParticleEffectWaveSurface>,
+    )>,
     material_assets: Res<Assets<MaterialAsset>>,
 ) {
-    for (effect_entity, pending_material_binding) in &pending_material_bindings {
+    for (effect_entity, pending_material_binding, wave_surface) in &pending_material_bindings {
+        if wave_surface {
+            let Some(material) = material_assets.get(&pending_material_binding.0) else {
+                continue;
+            };
+            let Some(ripple) = material.bound_texture_asset("Texture0") else {
+                continue;
+            };
+            let Some(mask) = material.bound_texture_asset("Texture1") else {
+                continue;
+            };
+            commands
+                .entity(effect_entity)
+                .remove::<PendingEffectMaterialBinding>()
+                .insert(EffectMaterial {
+                    images: vec![ripple.clone(), mask.clone()],
+                });
+            continue;
+        }
         let Some(effect_image) = material_assets
             .get(&pending_material_binding.0)
             .and_then(MaterialAsset::first_bound_texture_asset)

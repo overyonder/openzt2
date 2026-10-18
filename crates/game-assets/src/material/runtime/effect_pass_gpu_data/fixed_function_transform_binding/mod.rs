@@ -11,8 +11,8 @@ use d3d9_effects::{
 };
 
 use super::super::resolved_effect_transform_bindings::{
-    EffectDrawTransforms, EffectRenderViewTransforms, ResolvedEffectTransformSemantic, FOG_INPUT,
-    LIGHT_INPUT, MODEL_INPUT, VIEW_INPUT, WIND_INPUT,
+    EffectDrawTransforms, EffectRenderViewTransforms, FOG_INPUT, LIGHT_INPUT, MODEL_INPUT,
+    ResolvedEffectTransformSemantic, VIEW_INPUT, WIND_INPUT,
 };
 use super::EffectPassMaterial;
 use crate::material::authored_material_parameter_lowering::{
@@ -35,6 +35,10 @@ struct ResolvedFixedFunctionTransformParameter {
 }
 
 impl DynamicFixedFunctionTransformBinding {
+    pub(in crate::material::runtime) fn stage(&self) -> usize {
+        self.stage
+    }
+
     pub(in crate::material::runtime) fn resolve(
         stage: usize,
         expression: &RetainedD3d9TransformExpression,
@@ -169,6 +173,71 @@ fn parameter_input<'a>(
 }
 
 impl EffectPassMaterial {
+    /// Updates authored matrix parameters used by retained texture-stage expressions.
+    ///
+    /// # Errors
+    /// Returns an error if the native expression cannot evaluate the supplied value.
+    pub fn bind_fixed_function_matrix_effect_semantic(
+        &mut self,
+        semantic_name: &str,
+        matrix: Mat4,
+    ) -> io::Result<bool> {
+        let mut matched = false;
+        for binding in &mut self.fixed_transform_bindings {
+            let mut changed = false;
+            for parameter in &mut binding.parameters {
+                if !parameter
+                    .assignment
+                    .parameter_name
+                    .eq_ignore_ascii_case(semantic_name)
+                {
+                    continue;
+                }
+                matched = true;
+                changed |= binding.failed;
+                let input = FixedTransformParameterInput::Matrix(matrix.to_cols_array());
+                if !input.matches(&parameter.assignment.parameter_value) {
+                    parameter.assignment.parameter_value = input.into_owned();
+                    changed = true;
+                }
+            }
+            if !changed {
+                continue;
+            }
+            let assignments: Vec<_> = binding
+                .parameters
+                .iter()
+                .filter(|parameter| {
+                    !matches!(
+                        &parameter.assignment.parameter_value,
+                        MaterialEffectParameterValue::FloatVector(values) if values.is_empty()
+                    )
+                })
+                .map(|parameter| {
+                    parameter
+                        .assignment
+                        .borrowed_d3d9_effect_parameter_assignment()
+                })
+                .collect();
+            self.fixed_transform_evaluations += 1;
+            let components = binding.expression.evaluate(&assignments).map_err(|error| {
+                binding.failed = true;
+                self.fixed_transform_evaluation_failures += 1;
+                io::Error::other(error)
+            })?;
+            binding.failed = false;
+            if self.fixed_transforms.values[binding.stage]
+                .to_cols_array()
+                .map(f32::to_bits)
+                != components.map(f32::to_bits)
+            {
+                self.fixed_transforms.values[binding.stage] = Mat4::from_cols_array(&components);
+                self.dirty_fixed_transforms = true;
+            }
+        }
+        Ok(matched)
+    }
+
     #[allow(
         clippy::too_many_arguments,
         reason = "each evaluation consumes the existing draw and environment input owners"
@@ -190,6 +259,27 @@ impl EffectPassMaterial {
             | u8::from(light.is_some()) * LIGHT_INPUT
             | u8::from(fog.is_some()) * FOG_INPUT;
         let transforms = EffectDrawTransforms::new(model_to_world, view);
+        let has_reflection_projection = self
+            .model_reflection_projections
+            .iter()
+            .any(Option::is_some);
+        if has_reflection_projection {
+            // Direction generation is in camera space. Remove model scale before
+            // rotating those directions into the texture effect's mesh-local frame.
+            let (_, rotation, _) = model_to_world.to_scale_rotation_translation();
+            let model_from_world = Mat4::from_quat(rotation.conjugate());
+            let view_to_world = Mat4::from_mat3(Mat3::from_mat4(view.view_to_world));
+            for (stage, projection) in self.model_reflection_projections.iter().enumerate() {
+                let Some(projection) = projection else {
+                    continue;
+                };
+                let next = *projection * model_from_world * view_to_world;
+                if self.fixed_transforms.values[stage] != next {
+                    self.fixed_transforms.values[stage] = next;
+                    self.dirty_fixed_transforms = true;
+                }
+            }
+        }
         for binding in &mut self.fixed_transform_bindings {
             if binding.input_dependencies() == 0
                 || (binding.initialized && binding.input_dependencies() & changed == 0)
@@ -251,7 +341,7 @@ impl EffectPassMaterial {
                 }
             }
         }
-        if !self.fixed_transform_bindings.is_empty()
+        if (has_reflection_projection || !self.fixed_transform_bindings.is_empty())
             && self
                 .fixed_transform_bindings
                 .iter()

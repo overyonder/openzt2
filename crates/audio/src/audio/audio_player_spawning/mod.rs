@@ -72,6 +72,9 @@ pub(super) fn spawn_audio_player_or_deferred_playback(
     } else {
         playback_entity.insert((AudioPlayer(clip), playback_settings));
     }
+    if request.emitter.is_some() {
+        playback_entity.insert(Transform::IDENTITY);
+    }
     let playback_entity = playback_entity.id();
     if let Some(emitter) = request.emitter {
         commands.entity(emitter).add_child(playback_entity);

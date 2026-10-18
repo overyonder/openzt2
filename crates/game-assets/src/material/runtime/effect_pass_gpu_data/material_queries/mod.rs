@@ -10,8 +10,16 @@ impl EffectPassTextureAssets {
     pub(in crate::material::runtime) fn from_ordered_texture_assets(
         texture_assets: [Option<Handle<Image>>; 8],
     ) -> Self {
-        let [texture0, texture1, texture2, texture3, texture4, texture5, texture6, texture7] =
-            texture_assets;
+        let [
+            texture0,
+            texture1,
+            texture2,
+            texture3,
+            texture4,
+            texture5,
+            texture6,
+            texture7,
+        ] = texture_assets;
         Self {
             texture0,
             texture1,
@@ -77,6 +85,10 @@ impl EffectPassMaterial {
 
     pub fn has_dynamic_effect_parameter_bindings(&self) -> bool {
         !self.dynamic_parameter_register_bindings.is_empty()
+            || self
+                .model_reflection_projections
+                .iter()
+                .any(Option::is_some)
             || self
                 .fixed_transform_bindings
                 .iter()

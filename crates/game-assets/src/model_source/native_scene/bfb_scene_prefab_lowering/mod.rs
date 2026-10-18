@@ -49,8 +49,25 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             true,
         )?;
         match &node.kind {
-            BlueFangBfbNodeKind::MeshLink { material_name, .. }
-            | BlueFangBfbNodeKind::Billboard { material_name, .. } => {
+            BlueFangBfbNodeKind::MeshLink {
+                material_name,
+                mesh_block_id,
+            }
+            | BlueFangBfbNodeKind::Billboard {
+                material_name,
+                mesh_block_id,
+                ..
+            } => {
+                if let Some(mesh) = document
+                    .mesh_blocks()
+                    .find(|mesh| mesh.block_id == *mesh_block_id)
+                {
+                    builder.local_render_bound(
+                        entity,
+                        convert_source_z_up_vector_to_bevy_y_up_coordinates(mesh.bounds_center),
+                        mesh.bounds_radius,
+                    );
+                }
                 let scene = blue_fang_geometry_virtual_path(document, index);
                 builder.renderable_from(entity, &model_path, scene);
                 builder.blue_fang_model_material_override(material_name);

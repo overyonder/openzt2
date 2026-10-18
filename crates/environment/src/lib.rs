@@ -12,6 +12,7 @@ mod environment_presentation_types;
 mod environment_random_sampling;
 mod environment_state_types;
 mod environment_visual_construction;
+mod underwater_environment_presentation;
 mod weather_animal_welfare;
 mod weather_rules;
 mod weather_transition_lifecycle;
@@ -33,7 +34,8 @@ pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<SetWeather>()
+        app.init_resource::<openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample>()
+            .add_message::<SetWeather>()
             .add_message::<WeatherRequestApplied>()
             .add_message::<WeatherRequestRejected>()
             .add_message::<WeatherChanged>()
@@ -64,8 +66,15 @@ impl Plugin for EnvironmentPlugin {
                     environment_visual_construction::attach_environment_sun_visuals_to_loaded_animation_joints,
                     environment_fog_attachment::attach_neutral_environment_fog_to_new_zoo_cameras,
                     daylight_environment_presentation::project_current_daylight_weather_and_sky_into_bevy_renderer,
+                    underwater_environment_presentation::update_region_water_light_samples,
+                    underwater_environment_presentation::current::update_water_region_currents,
+                    underwater_environment_presentation::apply_camera_underwater_fog,
+                    underwater_environment_presentation::update_water_particle_wave_fog,
+                    underwater_environment_presentation::update_water_ray_environment_light_samples,
+                    underwater_environment_presentation::sample_water_environment_map,
                 )
                     .chain()
+                    .in_set(openzt2_world_state::application_schedule::WaterPresentationSet::Environment)
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
             )

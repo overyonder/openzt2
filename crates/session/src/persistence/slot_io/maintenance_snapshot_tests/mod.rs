@@ -308,6 +308,8 @@ fn restored_prefab_preserves_saved_root_pose_and_removes_its_children_with_waste
         stable_id: AssetId([3; 16]),
         attachment_id: AssetId([4; 16]),
         model_joint_binding: None,
+        local_render_bound: None,
+        skin_render_bound: None,
         parent: 0,
         transform: PrefabTransform {
             translation_m: [3.0; 3],

@@ -5,6 +5,7 @@ use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
@@ -41,6 +42,12 @@ pub fn spawn_prefab_render_tree(
                     Visibility::Hidden
                 },
             ));
+            if let Some(bound) = row.local_render_bound {
+                entity.insert(PrefabLocalRenderBound(bound));
+            }
+            if let Some(bound) = &row.skin_render_bound {
+                entity.insert(openzt2_world_state::world_spawn::prefab_presentation_types::PrefabSkinRenderBound(bound.clone()));
+            }
             if let Some(cycle) = row.rotation_cycles.first() {
                 entity.insert(PrefabAuthoredRotationCycle::from_authored_rotation_cycle(
                     cycle,

@@ -17,6 +17,7 @@ pub fn materialize_complete_edited_terrain_sample_overlay(
     let mut water_styles = Vec::with_capacity(count);
     let mut water_biome_channels = Vec::with_capacity(count);
     let mut water = Vec::with_capacity(count);
+    let mut affiliations = Vec::with_capacity(count);
     for terrain_sample_z in 0..terrain_chunk.side as usize {
         for terrain_sample_x in 0..terrain_chunk.side as usize {
             let sample = read_materialized_terrain_sample(
@@ -33,6 +34,7 @@ pub fn materialize_complete_edited_terrain_sample_overlay(
             water_styles.push(sample.water_style);
             water_biome_channels.push(sample.water_biome_channel);
             water.push(sample.water_cm);
+            affiliations.push(sample.water_affiliation);
         }
     }
     EditedTerrainSamples {
@@ -42,6 +44,7 @@ pub fn materialize_complete_edited_terrain_sample_overlay(
         water_styles: water_styles.into_boxed_slice(),
         water_biome_channels: water_biome_channels.into_boxed_slice(),
         water_cm: water.into_boxed_slice(),
+        water_affiliations: affiliations.into_boxed_slice(),
     }
 }
 
@@ -64,6 +67,7 @@ pub fn apply_terrain_sample_rectangle(
             overlay.water_styles[destination] = sample.water_style;
             overlay.water_biome_channels[destination] = sample.water_biome_channel;
             overlay.water_cm[destination] = sample.water_cm;
+            overlay.water_affiliations[destination] = sample.water_affiliation;
             source += 1;
         }
     }
@@ -85,4 +89,5 @@ pub fn terrain_sample_overlay_has_expected_lengths(
         && samples.water_styles.len() == expected
         && samples.water_biome_channels.len() == expected
         && samples.water_cm.len() == expected
+        && samples.water_affiliations.len() == expected
 }

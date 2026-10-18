@@ -13,10 +13,15 @@ pub fn terrain_test_asset(grid: TerrainGrid) -> TerrainAsset {
         terrain_effect_material: Default::default(),
         water_bump_combination_effect_material: Default::default(),
         water_surface_effect_material: Default::default(),
+        water_low_detail_materials: Default::default(),
+        water_medium_detail_materials: Default::default(),
         waterfall_decal_effect_material: Default::default(),
         texture_images_by_normalized_source_path: Default::default(),
         waterfall_scene_prefab: None,
         waterfall_audio: None,
+        water_scene_prefabs_by_normalized_system: Default::default(),
+        water_materials_by_normalized_source_path: Default::default(),
+        water_particle_effects_by_normalized_system: Default::default(),
     }
 }
 

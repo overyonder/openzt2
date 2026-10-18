@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::environment::{
-    EnvironmentDefinition, EnvironmentFogQuality, EnvironmentLightKind, EnvironmentLightTarget,
-    EnvironmentVisualFlags, EnvironmentVisualKind,
+    EnvironmentDefinition, EnvironmentFogQuality, EnvironmentLightKind, EnvironmentLightSample,
+    EnvironmentLightTarget, EnvironmentVisualFlags, EnvironmentVisualKind,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -137,22 +137,59 @@ pub(super) fn sample_environment_directional_light_at_daylight_fraction<'a>(
     definition: &'a EnvironmentDefinition,
     target: EnvironmentLightTarget,
     kind_rank: u8,
+    child_index: Option<u16>,
     fraction: f32,
 ) -> Option<SampledEnvironmentDirectionalLight<'a>> {
     let rows = iterate_environment_and_inherited_family_light_samples(catalogue, definition)
-        .filter(|row| row.target == target && environment_light_kind_rank(&row.kind) == kind_rank);
-    let count = rows.clone().count();
-    let sample = select_cyclic_daylight_curve_sample(fraction, count, |index| {
-        rows.clone()
-            .nth(index)
-            .map(|row| encode_daylight_fraction_as_u16(row.day_fraction))
-            .unwrap_or(0)
-    })?;
+        .filter(|row| {
+            row.target == target
+                && environment_light_kind_rank(&row.kind) == kind_rank
+                && child_index.is_none_or(|child_index| row.child_index == child_index)
+        });
+    sample_directional_light_curve(rows, fraction)
+}
+
+pub(super) fn sample_directional_light_curve<'a>(
+    rows: impl Iterator<Item = &'a EnvironmentLightSample>,
+    fraction: f32,
+) -> Option<SampledEnvironmentDirectionalLight<'a>> {
+    if !fraction.is_finite() {
+        return None;
+    }
+    let mut before: Option<(usize, &EnvironmentLightSample)> = None;
+    let mut after: Option<(usize, &EnvironmentLightSample)> = None;
+    let mut first: Option<(usize, &EnvironmentLightSample)> = None;
+    let mut last: Option<(usize, &EnvironmentLightSample)> = None;
+    for (index, row) in rows.enumerate() {
+        if first.is_none_or(|(_, old)| row.day_fraction < old.day_fraction) {
+            first = Some((index, row));
+        }
+        if last.is_none_or(|(_, old)| row.day_fraction > old.day_fraction) {
+            last = Some((index, row));
+        }
+        if row.day_fraction <= fraction
+            && before.is_none_or(|(_, old)| row.day_fraction > old.day_fraction)
+        {
+            before = Some((index, row));
+        }
+        if row.day_fraction > fraction
+            && after.is_none_or(|(_, old)| row.day_fraction < old.day_fraction)
+        {
+            after = Some((index, row));
+        }
+    }
+    let (left_keyframe_index, left_keyframe) = before.or(first)?;
+    let (_, right_keyframe) = after.or(last)?;
+    let duration = right_keyframe.day_fraction - left_keyframe.day_fraction;
     Some(SampledEnvironmentDirectionalLight {
-        left_keyframe_index: sample.left_keyframe_index,
-        left_keyframe: rows.clone().nth(sample.left_keyframe_index)?,
-        right_keyframe: rows.clone().nth(sample.right_keyframe_index)?,
-        interpolation_fraction: sample.interpolation_fraction,
+        left_keyframe_index,
+        left_keyframe,
+        right_keyframe,
+        interpolation_fraction: if duration > 0.0 {
+            ((fraction - left_keyframe.day_fraction) / duration).clamp(0.0, 1.0)
+        } else {
+            0.0
+        },
     })
 }
 

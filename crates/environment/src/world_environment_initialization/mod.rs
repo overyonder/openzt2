@@ -101,8 +101,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             |weather| [weather.wind_mps[0], weather.wind_mps[1]],
         );
         let wind = generate_deterministic_wind_from_speed_range(wind_range, &mut random);
-        let wind_shader_presentation =
-            AuthoredWindShaderPresentationState::from_wind(wind, random.next_u32());
+        let wind_shader_presentation = AuthoredWindShaderPresentationState::from_wind(wind);
         let weather = initial_weather.map(|initial_weather| Weather {
             definition: initial_weather.id,
             elapsed_ticks: 0,

@@ -1,5 +1,7 @@
 //! Resolves source inheritance and lowers world-definition records.
 
+pub mod authored_presentation_physics_source_lowering;
+
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument as DataDocument,
     OrderedSourceDocumentSpan as DocumentSpan,

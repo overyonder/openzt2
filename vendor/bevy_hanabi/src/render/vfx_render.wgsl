@@ -17,6 +17,7 @@ struct ParticleBuffer {
 }
 
 struct VertexOutput {
+{{VERTEX_OUTPUT_FIELDS}}
     @builtin(position) position: vec4<f32>,
     @location(0) color: vec4<f32>,
 #ifdef NEEDS_UV
@@ -192,7 +193,7 @@ fn find_location_from_particle(slab_particle_index: u32) -> EffectLocation {
 var<private> effect_location : EffectLocation;
 
 var<private> effect_metadata_index: u32;
-// var<private> properties_array_index: u32;
+var<private> properties_array_index: u32;
 
 @vertex
 fn vertex(
@@ -216,6 +217,7 @@ fn vertex(
     effect_location = find_location_from_particle(slab_particle_index);
     let spawner = &spawners[batch_info.base_effect + effect_location.effect_index];
     effect_metadata_index = (*spawner).effect_metadata_index;
+    properties_array_index = (*spawner).properties_array_index;
     let base_particle = effect_location.base_particle;
 
     // Fetch particle
@@ -276,7 +278,7 @@ fn vertex(
 
     // Expand particle mesh vertex based on particle position ("origin"), and local
     // orientation and size of the particle mesh.
-    let vpos = vertex_position * size;
+    let vpos = vertex_position * size * (*spawner).particle_size_scale;
     let sim_position = position + axis_x * vpos.x + axis_y * vpos.y + axis_z * vpos.z;
     out.position = transform_position_simulation_to_clip(sim_position);
 

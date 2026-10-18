@@ -11,8 +11,6 @@ use openzt2_game_data::AssetId;
 
 use crate::verification_journey_state_types::VerificationJourneySession;
 use openzt2_construction::topology::path_curb_presentation::PathCurbsHydrated;
-use openzt2_construction::topology::topology_presentation_types::FenceSegmentPrefab;
-use openzt2_construction::topology::topology_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_construction::topology::topology_presentation_types::FenceTerrainEndpointSkewPresentation;
 use openzt2_construction::topology::topology_presentation_types::TopologyPresentation;
 use openzt2_game_assets::{
@@ -46,6 +44,8 @@ use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurface
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;

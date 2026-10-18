@@ -20,9 +20,9 @@ use crate::topology::fence_segment_prefab_selection::select_authored_fence_segme
 use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
 use crate::topology::topology_construction_preview_types::FencePreview;
-use crate::topology::topology_presentation_types::FenceSegmentPrefab;
-use crate::topology::topology_presentation_types::FenceTerrainEndpointPresentationCells;
 use crate::topology::topology_presentation_types::TopologyPresentation;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;

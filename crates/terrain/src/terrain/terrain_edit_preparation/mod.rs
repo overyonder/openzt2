@@ -25,6 +25,10 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
     mut requests: MessageReader<PrepareConstruction>,
     index: Res<TerrainIndex>,
     assets: Res<Assets<TerrainAsset>>,
+    water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
+    water_membership: Query<
+        &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex,
+    >,
     chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -134,13 +138,75 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
         }
         candidates.sort_unstable_by_key(|candidate| candidate.0);
 
-        let water_surface_heights_cm: Vec<_> = dabs.iter().map(|dab| {
+        let mut water_surface_heights_cm: Vec<_> = dabs.iter().map(|dab| {
             crate::terrain::terrain_brush_sample_mutation::resolve_painted_water_surface_height_centimetres(
                 preview, dab, candidates.iter().filter_map(|(_, chunk, edited)| {
                     Some((*chunk, assets.get(&chunk.asset)?, *edited))
                 }),
             )
         }).collect();
+
+        let water_plan = if matches!(
+            preview.kind,
+            TerrainBrushKind::PaintWater { .. }
+                | TerrainBrushKind::AddWater
+                | TerrainBrushKind::RemoveWater
+        ) {
+            let Some((root, chunk, _, _)) = chunks
+                .iter()
+                .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
+            else {
+                rejected.write(TerrainEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::OutsideMap,
+                });
+                continue;
+            };
+            let Some(asset) = assets.get(&chunk.asset) else {
+                rejected.write(TerrainEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::OutsideMap,
+                });
+                continue;
+            };
+            let Ok(membership) = water_membership.single() else {
+                rejected.write(TerrainEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::OutsideMap,
+                });
+                continue;
+            };
+            let samples: Vec<_> = chunks.iter().filter(|(_, candidate, _, _)| candidate.asset == chunk.asset && candidates.iter().any(|(_, brush_chunk, _)| brush_chunk.source_coord == candidate.source_coord)).flat_map(|(_, candidate, edited, _)| {
+                (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
+                    Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
+                }))
+            }).collect();
+            let Some(initial_height) = water_surface_heights_cm.first().copied().flatten() else {
+                rejected.write(TerrainEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::OutsideMap,
+                });
+                continue;
+            };
+            let Some(plan) = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(&mut commands, preview, &chunk.asset, asset, root, samples.into_iter(), &water_regions, membership, initial_height, dabs.iter().map(|dab| dab.seconds).sum()) else {
+                rejected.write(TerrainEditPreparationRejected { transaction: request.transaction, reason: PlacementFailure::OutsideMap });
+                continue;
+            };
+            water_surface_heights_cm.fill(plan.ground_reference_height_cm(asset));
+            let extra: Vec<_> = chunks
+                .iter()
+                .filter_map(|(_, candidate, edited, persistent)| {
+                    (candidate.asset == chunk.asset && plan.affects_chunk(candidate, membership))
+                        .then_some((persistent.0, candidate, edited))
+                })
+                .collect();
+            candidates.extend(extra);
+            candidates.sort_unstable_by_key(|candidate| candidate.0);
+            candidates.dedup_by_key(|candidate| candidate.0);
+            Some(plan)
+        } else {
+            None
+        };
 
         let mut deltas = Vec::with_capacity(candidates.len());
         let mut failure = None;
@@ -174,6 +240,10 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 preview,
                 dabs,
                 &water_surface_heights_cm,
+                water_plan
+                    .as_ref()
+                    .zip(water_membership.single().ok())
+                    .map(|(plan, membership)| (plan, &water_regions, membership)),
             ) {
                 Some(delta) => deltas.push(delta),
                 None => {}
@@ -194,9 +264,29 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
             continue;
         }
 
-        commands
-            .entity(request.transaction)
-            .insert(TerrainEdit { deltas });
+        let mut owner_changes = water_plan.map_or_else(Vec::new, |plan| plan.changes);
+        if let Ok(membership) = water_membership.single() {
+            let split = assets.get(membership.terrain()).and_then(|asset| {
+                let parent = chunks.iter().find_map(|(entity, chunk, _, _)| (chunk.source_coord == IVec2::ZERO && chunk.asset.id() == membership.terrain()).then_some(entity))?;
+                crate::terrain::terrain_brush_sample_mutation::water_affiliation::splitting::split_disconnected_water_affiliations(
+                    &mut commands, asset, parent, membership, &water_regions,
+                    chunks.iter().map(|(_, chunk, edited, persistent)| (chunk, edited, *persistent)),
+                    &mut deltas, &mut owner_changes,
+                )
+            });
+            if split.is_none() {
+                rejected.write(TerrainEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::OutsideMap,
+                });
+                continue;
+            }
+        }
+
+        commands.entity(request.transaction).insert(TerrainEdit {
+            deltas,
+            water_regions: owner_changes,
+        });
         prepared.write(TerrainEditPrepared {
             transaction: request.transaction,
             cost,

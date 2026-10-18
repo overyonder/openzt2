@@ -20,6 +20,8 @@ fn policy_document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("viewing-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            surface_effect_strength: None,
+            presentation_caustic_policies: Vec::new(),
             id,
             kind: WorldObjectKind::Scenery,
             supports_show_tricks: false,

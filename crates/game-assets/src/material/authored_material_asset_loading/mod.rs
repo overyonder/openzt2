@@ -1,21 +1,24 @@
 use std::io;
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
 use super::{
     authored_material_parameter_lowering::{
-        lower_authored_material_effect_parameter, MaterialEffectParameterValue,
-        OwnedMaterialEffectParameter,
+        MaterialEffectParameterValue, OwnedMaterialEffectParameter,
+        lower_authored_material_effect_parameter,
     },
     d3d9_effect_program_evaluation::{
-        read_and_repair_winning_d3d9_effect_source, resolve_blue_fang_d3d9_effect_source_path,
-        LiveD3d9EffectIncludeSourceCollector,
+        LiveD3d9EffectIncludeSourceCollector, read_and_repair_winning_d3d9_effect_source,
+        resolve_blue_fang_d3d9_effect_source_path,
     },
     d3d9_effect_source_asset_loading::D3d9EffectSourceAsset,
-    material_asset_types::{EvaluatedTechniquePassMaterialAssets, MaterialAsset},
+    material_asset_types::{
+        EvaluatedTechniquePassMaterialAssets, MaterialAsset, MaterialModeAsset, MaterialModeTarget,
+        MaterialTextureAssetBinding,
+    },
     runtime::effect_pass_material_asset_construction::create_effect_pass_material_assets_from_evaluated_technique,
     source::BlueFangMaterialSourceDocument,
 };
@@ -72,6 +75,21 @@ impl AssetLoader for MaterialAssetLoader {
                 .filter(|effect_source| !effect_source.is_empty())
                 .unwrap_or("Base"),
         );
+        let mut modes = authored_material_source
+            .modes
+            .into_iter()
+            .filter(|mode| !mode.name.is_empty() && !mode.material.is_empty())
+            .map(|mode| MaterialModeAsset {
+                name: mode.name.to_ascii_lowercase(),
+                target: load_material_mode_target(&mode.material, load_context),
+            })
+            .collect::<Vec<_>>();
+        if effect_source_path.to_string_lossy().contains("_wind") {
+            modes.push(MaterialModeAsset {
+                name: "caustic".to_owned(),
+                target: load_material_mode_target("caustic_wind", load_context),
+            });
+        }
         let repaired_effect_source_bytes =
             read_and_repair_winning_d3d9_effect_source(&self.asset_archives, &effect_source_path)?;
         let borrowed_parameter_assignments = material_effect_parameters
@@ -101,6 +119,7 @@ impl AssetLoader for MaterialAssetLoader {
                     load_context,
                     &format!("technique-{technique_index}-effect-pass"),
                     &std::sync::Arc::default(),
+                    &[],
                 )
                 .map(
                     |pass_material_assets| EvaluatedTechniquePassMaterialAssets {
@@ -120,7 +139,10 @@ impl AssetLoader for MaterialAssetLoader {
             .iter()
             .filter_map(|parameter| match &parameter.parameter_value {
                 MaterialEffectParameterValue::TextureAssetPath(Some(texture_asset_path)) => {
-                    Some(load_context.load(texture_asset_path.clone()))
+                    Some(MaterialTextureAssetBinding {
+                        parameter_name: parameter.parameter_name.clone(),
+                        texture: load_context.load(texture_asset_path.clone()),
+                    })
                 }
                 _ => None,
             })
@@ -146,11 +168,26 @@ impl AssetLoader for MaterialAssetLoader {
             _source_dependencies: source_dependencies,
             evaluated_technique_pass_material_assets,
             bound_texture_assets,
+            modes: modes.into_boxed_slice(),
         })
     }
 
     fn extensions(&self) -> &[&str] {
         &["bfmat"]
+    }
+}
+
+fn load_material_mode_target(reference: &str, context: &mut LoadContext<'_>) -> MaterialModeTarget {
+    let path = std::path::Path::new("Materials")
+        .join(reference)
+        .with_extension("bfmat");
+    if path
+        .to_string_lossy()
+        .eq_ignore_ascii_case(&context.path().path().to_string_lossy())
+    {
+        MaterialModeTarget::ThisMaterial
+    } else {
+        MaterialModeTarget::Material(context.load(path))
     }
 }
 

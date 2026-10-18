@@ -11,7 +11,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use crate::topology::topology_edit_outcome_messages::write_topology_edit_acknowledgement;
-use crate::topology::topology_presentation_types::FenceTerrainEndpointPresentationCells;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
 use openzt2_zoo_state::topology::gate_operation_types::GateMechanism;

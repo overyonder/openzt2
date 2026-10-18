@@ -14,6 +14,13 @@ struct ParticleBuffer {
     particles: array<Particle>,
 }
 
+struct ExplicitSpawnPoint {
+    position: vec4<f32>,
+    velocity: vec4<f32>,
+}
+
+@group(0) @binding(1) var<storage, read> explicit_spawn_points: array<ExplicitSpawnPoint>;
+
 #ifdef READ_PARENT_PARTICLE
 
 struct ParentParticle {

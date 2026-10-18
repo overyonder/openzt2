@@ -485,9 +485,20 @@ impl Module {
     ///
     /// [`EffectMaterial`]: crate::EffectMaterial
     pub fn add_texture_slot(&mut self, name: impl Into<String>) -> TextureHandle {
+        self.add_texture_slot_with_clamp_linear(name, false)
+    }
+
+    /// Add a texture slot with an optional linear clamp sampler override.
+    pub fn add_texture_slot_with_clamp_linear(
+        &mut self,
+        name: impl Into<String>,
+        clamp_linear: bool,
+    ) -> TextureHandle {
         let name = name.into();
         assert!(!self.texture_layout.layout.iter().any(|t| t.name == name));
-        self.texture_layout.layout.push(TextureSlot { name });
+        self.texture_layout
+            .layout
+            .push(TextureSlot { name, clamp_linear });
         // SAFETY - We just pushed a new slot into the array, so its length is non-zero.
         #[allow(unsafe_code)]
         unsafe {

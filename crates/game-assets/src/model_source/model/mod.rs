@@ -71,6 +71,8 @@ pub struct NativeMaterialSource {
     pub base_texture: Option<NativeTextureSource>,
     pub detail_texture: Option<NativeTextureSource>,
     pub glow_texture: Option<NativeTextureSource>,
+    pub gloss_texture: Option<NativeTextureSource>,
+    pub texture_effect: Option<NativeTextureEffectSource>,
     pub texture_apply_mode: u32,
     pub vertex_color_mode: u32,
     pub lighting_mode: u32,
@@ -91,6 +93,17 @@ pub struct NativeTextureSource {
     pub uv_set: u32,
     pub clamp_mode: u32,
     pub filter_mode: u32,
+}
+
+#[derive(Clone, Debug)]
+pub enum NativeTextureEffectSource {
+    SphereEnvironment {
+        texture: Option<String>,
+        clamp_mode: u32,
+        filter_mode: u32,
+        /// Row-major rotation from mesh-local directions into effect source axes.
+        model_to_effect_rotation: [f32; 9],
+    },
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]

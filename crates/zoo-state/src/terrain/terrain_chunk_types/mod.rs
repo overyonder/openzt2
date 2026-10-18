@@ -27,6 +27,8 @@ pub struct EditedTerrainSamples {
     pub water_styles: Box<[u16]>,
     pub water_biome_channels: Box<[u8]>,
     pub water_cm: Box<[i16]>,
+    pub water_affiliations:
+        Box<[Option<crate::terrain::terrain_edit_data_types::TerrainWaterAffiliation>]>,
 }
 
 #[derive(Resource, Debug, Default)]

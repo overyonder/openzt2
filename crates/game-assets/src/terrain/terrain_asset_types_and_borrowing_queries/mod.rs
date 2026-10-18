@@ -3,8 +3,9 @@
 use std::{collections::HashMap, io};
 
 use bevy::{audio::AudioSource, gltf::Gltf, prelude::*};
-use openzt2_game_data::terrain::TerrainGrid;
+use openzt2_game_data::terrain::{TerrainBiome, TerrainGrid};
 
+use crate::effect::ParticleEffectDocumentAsset;
 use crate::material::material_asset_types::MaterialAsset;
 use crate::scene_prefab::ScenePrefabAsset;
 
@@ -17,13 +18,73 @@ pub struct TerrainAsset {
     pub(in crate::terrain) terrain_effect_material: Handle<MaterialAsset>,
     pub(in crate::terrain) water_bump_combination_effect_material: Handle<MaterialAsset>,
     pub(in crate::terrain) water_surface_effect_material: Handle<MaterialAsset>,
+    pub(in crate::terrain) water_low_detail_materials: Box<[Option<Handle<MaterialAsset>>]>,
+    pub(in crate::terrain) water_medium_detail_materials: Box<[Option<Handle<MaterialAsset>>]>,
     pub(in crate::terrain) waterfall_decal_effect_material: Handle<MaterialAsset>,
     pub(in crate::terrain) texture_images_by_normalized_source_path: HashMap<String, Handle<Image>>,
     pub(in crate::terrain) waterfall_scene_prefab: Option<Handle<ScenePrefabAsset>>,
     pub(in crate::terrain) waterfall_audio: Option<Handle<AudioSource>>,
+    pub(in crate::terrain) water_scene_prefabs_by_normalized_system:
+        HashMap<String, Handle<ScenePrefabAsset>>,
+    pub(in crate::terrain) water_materials_by_normalized_source_path:
+        HashMap<String, Handle<MaterialAsset>>,
+    pub(in crate::terrain) water_particle_effects_by_normalized_system:
+        HashMap<String, Handle<ParticleEffectDocumentAsset>>,
 }
 
 impl TerrainAsset {
+    /// Resolves the saved configuration key through the DAT's biome-name order.
+    /// An unknown key uses the first resolved configuration, as the source reader does.
+    pub fn water_biome_for_region(&self, region_index: usize) -> Option<&TerrainBiome> {
+        let grid = &self.canonical_terrain_grid;
+        let region = grid.water_regions.get(region_index)?;
+        usize::try_from(region.water_style_index)
+            .ok()
+            .and_then(|index| grid.biomes.get(index))
+            .or_else(|| grid.biomes.first())
+    }
+
+    pub fn water_low_detail_material(
+        &self,
+        biome: &TerrainBiome,
+    ) -> Option<&Handle<MaterialAsset>> {
+        let index = self
+            .canonical_terrain_grid
+            .biomes
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, biome))?;
+        self.water_low_detail_materials.get(index)?.as_ref()
+    }
+
+    pub fn water_medium_detail_material(
+        &self,
+        biome: &TerrainBiome,
+    ) -> Option<&Handle<MaterialAsset>> {
+        let index = self
+            .canonical_terrain_grid
+            .biomes
+            .iter()
+            .position(|candidate| std::ptr::eq(candidate, biome))?;
+        self.water_medium_detail_materials.get(index)?.as_ref()
+    }
+
+    pub fn water_scene_prefab(&self, system: &str) -> Option<&Handle<ScenePrefabAsset>> {
+        self.water_scene_prefabs_by_normalized_system
+            .get(&system.to_ascii_lowercase())
+    }
+    pub fn water_material(&self, source_path: &str) -> Option<&Handle<MaterialAsset>> {
+        self.water_materials_by_normalized_source_path
+            .get(&source_path.to_ascii_lowercase())
+    }
+
+    pub fn water_particle_effect(
+        &self,
+        system: &str,
+    ) -> Option<&Handle<ParticleEffectDocumentAsset>> {
+        self.water_particle_effects_by_normalized_system
+            .get(&system.to_ascii_lowercase())
+    }
+
     pub(in crate::terrain) fn index_authored_water_region_membership(
         grid: &TerrainGrid,
     ) -> io::Result<Box<[u32]>> {

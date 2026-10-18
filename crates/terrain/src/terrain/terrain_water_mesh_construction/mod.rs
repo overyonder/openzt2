@@ -3,19 +3,22 @@ use bevy::mesh::Indices;
 use bevy::mesh::Mesh;
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
-use openzt2_game_data::terrain::TerrainBiomeWaterPresentation;
-use openzt2_game_data::terrain::TerrainGrid;
 use openzt2_game_data::terrain::TerrainWaterfall;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
+use super::terrain_water_shoreline_geometry::stitch_geometry::construct_terrain_water_geometric_wake_tile;
+use super::terrain_water_shoreline_geometry::stitch_geometry::construct_terrain_water_stitch_tile;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterMembershipIndex, TerrainWaterRegionView,
+};
+use openzt2_zoo_state::terrain::terrain_water_shoreline_geometry_types::TerrainWaterStitchGeometry;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 
 pub(super) struct ConstructedTerrainWaterMeshGroup {
-    pub(super) biome_index: u8,
+    pub(super) region_owner: Entity,
     pub(super) surface_plane_height: f32,
     pub(super) horizontal_minimum: Vec2,
     pub(super) horizontal_maximum: Vec2,
@@ -29,13 +32,85 @@ pub(super) struct ConstructedTerrainWaterfallMeshGroup {
     pub(super) local_anchor_translation: Vec3,
 }
 
+pub(super) struct ConstructedTerrainWaterLowDetailMeshGroup {
+    pub(super) region_owner: Entity,
+    pub(super) mesh: Mesh,
+}
+
+/// Both fixed-function detail levels retain every authored texture coordinate
+/// set; their material selects the active texture layers.
+pub(super) fn construct_terrain_water_low_detail_mesh_groups(
+    chunk: &TerrainChunk,
+    terrain_asset: &TerrainAsset,
+    _edited_samples: Option<&EditedTerrainSamples>,
+    membership: &TerrainWaterMembershipIndex,
+    sources: &[(Entity, TerrainWaterRegionView<'_>)],
+) -> Option<Vec<ConstructedTerrainWaterLowDetailMeshGroup>> {
+    if membership.terrain() != chunk.asset.id() {
+        return None;
+    }
+    let cells_per_chunk = u32::from(terrain_asset.terrain_chunk_cells_per_side()?);
+    if cells_per_chunk == 0 || cells_per_chunk % 4 != 0 {
+        return None;
+    }
+    let mut groups = Vec::new();
+    for (owner, source) in sources {
+        let owner = *owner;
+        if source.terrain().id() != chunk.asset.id() {
+            continue;
+        }
+        let presentation = source.biome(terrain_asset)?.water_presentation.as_ref()?;
+        let mut positions = Vec::new();
+        let mut indices = Vec::new();
+        for tile in membership.render_tiles(owner) {
+            if (tile * 4 / cells_per_chunk).as_ivec2() != chunk.source_coord {
+                continue;
+            }
+            let patch = construct_terrain_water_stitch_tile(
+                terrain_asset,
+                membership,
+                owner,
+                source,
+                tile,
+            )?;
+            let base = u32::try_from(positions.len()).ok()?;
+            positions.extend(patch.positions);
+            indices.extend(patch.indices.into_iter().map(|index| base + index));
+        }
+        if indices.is_empty() {
+            continue;
+        }
+        let uvs = presentation.texture_animations.each_ref().map(|animation| {
+            let scale = Vec2::from_array(animation.grid_dimensions) * 3.0;
+            positions
+                .iter()
+                .map(|position: &[f32; 3]| (Vec2::new(position[0], position[1]) / scale).to_array())
+                .collect::<Vec<_>>()
+        });
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(
+            Mesh::ATTRIBUTE_NORMAL,
+            vec![Vec3::Z.to_array(); positions.len()],
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+        let [uv0, uv1] = uvs;
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uv0);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uv1);
+        mesh.insert_indices(Indices::U32(indices));
+        groups.push(ConstructedTerrainWaterLowDetailMeshGroup {
+            region_owner: owner,
+            mesh,
+        });
+    }
+    Some(groups)
+}
+
 struct TerrainWaterMeshBuffers {
-    water_style: u16,
-    biome_index: u8,
+    region_owner: Entity,
     surface_positions: Vec<[f32; 3]>,
-    surface_normals: Vec<[f32; 3]>,
-    surface_texture_coordinates: Vec<[f32; 2]>,
-    surface_colours: Vec<[f32; 4]>,
     surface_indices: Vec<u32>,
     surface_plane_height: f32,
     horizontal_minimum: Vec2,
@@ -49,16 +124,17 @@ mod water_source_world_position_tests {
     use super::*;
 
     #[test]
-    fn translated_chunks_supply_world_positions_to_the_authored_shader() {
-        let mut buffers = TerrainWaterMeshBuffers::new(0, 0, 3.0);
-        buffers.add_horizontal_water_cell(
-            [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y],
-            [3.0; 4],
-            Vec2::new(32.0, 64.0),
-            [1.0; 4],
-        );
-        assert_eq!(buffers.surface_positions[0], [32.0, 64.0, 3.0]);
-        assert_eq!(buffers.surface_positions[2], [33.0, 65.0, 3.0]);
+    fn surface_patch_masks_remain_independent_of_plane_height() {
+        let mut buffers = TerrainWaterMeshBuffers::new(Entity::PLACEHOLDER, 3.0);
+        assert!(buffers
+            .add_horizontal_water_patch(TerrainWaterStitchGeometry {
+                positions: vec![[32.0, 64.0, 0.0], [33.0, 64.0, 1.0], [33.0, 65.0, 1.0]],
+                indices: vec![0, 1, 2],
+            })
+            .is_some());
+        assert_eq!(buffers.surface_positions[0], [32.0, 64.0, 0.0]);
+        assert_eq!(buffers.surface_positions[2], [33.0, 65.0, 1.0]);
+        assert_eq!(buffers.maximum_absolute_input_height, 1.0);
     }
 }
 
@@ -71,14 +147,10 @@ struct TerrainWaterfallStrip {
 }
 
 impl TerrainWaterMeshBuffers {
-    fn new(water_style: u16, biome_index: u8, surface_plane_height: f32) -> Self {
+    fn new(region_owner: Entity, surface_plane_height: f32) -> Self {
         Self {
-            water_style,
-            biome_index,
+            region_owner,
             surface_positions: Vec::new(),
-            surface_normals: Vec::new(),
-            surface_texture_coordinates: Vec::new(),
-            surface_colours: Vec::new(),
             surface_indices: Vec::new(),
             surface_plane_height,
             horizontal_minimum: Vec2::splat(f32::INFINITY),
@@ -110,57 +182,40 @@ impl TerrainWaterMeshBuffers {
         });
     }
 
-    fn add_horizontal_water_cell(
-        &mut self,
-        local_corners: [Vec2; 4],
-        surface_heights: [f32; 4],
-        chunk_world_origin: Vec2,
-        colour: [f32; 4],
-    ) {
-        let Ok(first_vertex_index) = u32::try_from(self.surface_positions.len()) else {
-            return;
-        };
-        for (corner, surface_height) in local_corners.into_iter().zip(surface_heights) {
-            self.horizontal_minimum = self.horizontal_minimum.min(chunk_world_origin + corner);
-            self.horizontal_maximum = self.horizontal_maximum.max(chunk_world_origin + corner);
+    fn add_horizontal_water_patch(&mut self, patch: TerrainWaterStitchGeometry) -> Option<()> {
+        let first_vertex_index = u32::try_from(self.surface_positions.len()).ok()?;
+        for position in &patch.positions {
+            let world_corner = Vec2::new(position[0], -position[1]);
+            self.horizontal_minimum = self.horizontal_minimum.min(world_corner);
+            self.horizontal_maximum = self.horizontal_maximum.max(world_corner);
             self.maximum_absolute_input_height =
-                self.maximum_absolute_input_height.max(surface_height.abs());
-            // waterflat.fx evaluates waves, eye rays and fog in source world
-            // space before applying WorldToNDC; no model matrix is consumed.
-            let world_corner = chunk_world_origin + corner;
-            self.surface_positions
-                .push([world_corner.x, world_corner.y, surface_height]);
-            self.surface_normals.push(Vec3::Z.to_array());
-            self.surface_texture_coordinates
-                .push((chunk_world_origin + corner).to_array());
-            self.surface_colours.push(colour);
+                self.maximum_absolute_input_height.max(position[2].abs());
         }
-        self.surface_indices.extend_from_slice(&[
-            first_vertex_index,
-            first_vertex_index + 2,
-            first_vertex_index + 1,
-            first_vertex_index,
-            first_vertex_index + 3,
-            first_vertex_index + 2,
-        ]);
+        self.surface_positions.extend(patch.positions);
+        self.surface_indices.extend(
+            patch
+                .indices
+                .into_iter()
+                .map(|index| first_vertex_index + index),
+        );
+        Some(())
     }
 
     fn finish(
         self,
         waterfall_presentation: Option<&TerrainWaterfall>,
     ) -> ConstructedTerrainWaterMeshGroup {
-        let surface_mesh = create_triangle_mesh(
-            self.surface_positions,
-            self.surface_normals,
-            self.surface_texture_coordinates,
-            Some(self.surface_colours),
-            self.surface_indices,
+        let mut surface_mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
         );
+        surface_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.surface_positions);
+        surface_mesh.insert_indices(Indices::U32(self.surface_indices));
         let waterfall_mesh_groups = waterfall_presentation.map_or_else(Vec::new, |presentation| {
             construct_contiguous_terrain_waterfall_mesh_groups(self.waterfall_strips, presentation)
         });
         ConstructedTerrainWaterMeshGroup {
-            biome_index: self.biome_index,
+            region_owner: self.region_owner,
             surface_plane_height: self.surface_plane_height,
             horizontal_minimum: self.horizontal_minimum,
             horizontal_maximum: self.horizontal_maximum,
@@ -175,79 +230,67 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
     chunk: &TerrainChunk,
     terrain_asset: &TerrainAsset,
     edited_samples: Option<&EditedTerrainSamples>,
-) -> Vec<ConstructedTerrainWaterMeshGroup> {
+    membership: &TerrainWaterMembershipIndex,
+    sources: &[(Entity, TerrainWaterRegionView<'_>)],
+) -> Option<Vec<ConstructedTerrainWaterMeshGroup>> {
+    if membership.terrain() != chunk.asset.id() {
+        return None;
+    }
     let cell_count_per_side = usize::from(chunk.side.saturating_sub(1));
-    let mut mesh_buffers_by_water_style = Vec::<TerrainWaterMeshBuffers>::new();
+    let mut mesh_buffers_by_region = Vec::<TerrainWaterMeshBuffers>::new();
+    let cells_per_chunk = u32::from(terrain_asset.terrain_chunk_cells_per_side()?);
+    if cells_per_chunk == 0 || cells_per_chunk % 4 != 0 {
+        return None;
+    }
+    for (owner, source) in sources {
+        let owner = *owner;
+        if source.terrain().id() != chunk.asset.id() {
+            continue;
+        }
+        let mut buffers =
+            TerrainWaterMeshBuffers::new(owner, source.surface_height(terrain_asset)?);
+        for tile in membership.render_tiles(owner) {
+            if (tile * 4 / cells_per_chunk).as_ivec2() != chunk.source_coord {
+                continue;
+            }
+            let patch = construct_terrain_water_geometric_wake_tile(
+                terrain_asset,
+                membership,
+                owner,
+                source,
+                tile,
+            )?;
+            buffers.add_horizontal_water_patch(patch)?;
+        }
+        if !buffers.surface_indices.is_empty() {
+            mesh_buffers_by_region.push(buffers);
+        }
+    }
     for z in 0..cell_count_per_side {
         for x in 0..cell_count_per_side {
             let local_minimum = Vec2::new(x as f32, z as f32) * chunk.spacing_m;
             let local_maximum = local_minimum + Vec2::splat(chunk.spacing_m);
             let cell_center = chunk.origin + (local_minimum + local_maximum) * 0.5;
-            let Some(authored_sample) =
-                sample_authored_terrain(chunk, terrain_asset, edited_samples, cell_center)
+            let Some(Some(region_owner)) = membership.owner_at_world_xz(cell_center, terrain_asset)
             else {
                 continue;
             };
-            let (Some(water), Some(center_water_height)) = (
-                authored_sample.water,
-                authored_sample.geometry.water_height_m,
-            ) else {
-                continue;
-            };
+            let (_, source) = sources.iter().find(|(owner, source)| {
+                *owner == region_owner && source.terrain().id() == chunk.asset.id()
+            })?;
+            let center_water_height = source.surface_height(terrain_asset)?;
             let local_corners = [
                 local_minimum,
                 Vec2::new(local_maximum.x, local_minimum.y),
                 local_maximum,
                 Vec2::new(local_minimum.x, local_maximum.y),
             ];
-            let corner_samples = local_corners.map(|corner| {
-                sample_terrain(chunk, terrain_asset, edited_samples, chunk.origin + corner)
-            });
-            let surface_heights = corner_samples.map(|corner_sample| {
-                corner_sample
-                    .and_then(|sample| sample.water_height_m)
-                    .unwrap_or(center_water_height)
-            });
-            let mesh_buffer_index = mesh_buffers_by_water_style
+            let Some(mesh_buffer_index) = mesh_buffers_by_region
                 .iter()
-                .position(|mesh_buffers| {
-                    mesh_buffers.water_style == water.style
-                        && mesh_buffers.biome_index == water.biome_channel
-                        && mesh_buffers.surface_plane_height.to_bits()
-                            == center_water_height.to_bits()
-                })
-                .unwrap_or_else(|| {
-                    mesh_buffers_by_water_style.push(TerrainWaterMeshBuffers::new(
-                        water.style,
-                        water.biome_channel,
-                        center_water_height,
-                    ));
-                    mesh_buffers_by_water_style.len() - 1
-                });
-            let water_depth_ratio = terrain_water_depth_ratio_for_cell(
-                terrain_asset.canonical_terrain_grid(),
-                chunk,
-                x,
-                z,
-                water.style,
-            );
-            let surface_colour = terrain_asset
-                .canonical_terrain_grid()
-                .biomes
-                .get(usize::from(water.biome_channel))
-                .and_then(|biome| biome.water_presentation.as_ref())
-                .map_or([1.0; 4], |presentation| {
-                    interpolate_authored_terrain_water_vertex_colour(
-                        presentation,
-                        water_depth_ratio,
-                    )
-                });
-            mesh_buffers_by_water_style[mesh_buffer_index].add_horizontal_water_cell(
-                local_corners,
-                surface_heights,
-                chunk.origin,
-                surface_colour,
-            );
+                .position(|mesh_buffers| mesh_buffers.region_owner == region_owner)
+            else {
+                continue;
+            };
             for (neighbour_offset, edge, outward_normal) in [
                 (
                     IVec2::new(-1, 0),
@@ -280,14 +323,15 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
                 }
                 let neighbour_center =
                     chunk.origin + (neighbour_cell.as_vec2() + Vec2::splat(0.5)) * chunk.spacing_m;
-                let Some(neighbour_sample) =
-                    sample_terrain(chunk, terrain_asset, edited_samples, neighbour_center)
+                let Some(Some(neighbour_owner)) =
+                    membership.owner_at_world_xz(neighbour_center, terrain_asset)
                 else {
                     continue;
                 };
-                let Some(bottom_height) = neighbour_sample.water_height_m else {
-                    continue;
-                };
+                let (_, neighbour_source) = sources.iter().find(|(owner, source)| {
+                    *owner == neighbour_owner && source.terrain().id() == chunk.asset.id()
+                })?;
+                let bottom_height = neighbour_source.surface_height(terrain_asset)?;
                 if center_water_height <= bottom_height + 0.01 {
                     continue;
                 }
@@ -307,7 +351,7 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
                         })
                         .unwrap_or(center_water_height)
                 });
-                mesh_buffers_by_water_style[mesh_buffer_index].add_waterfall_edge(
+                mesh_buffers_by_region[mesh_buffer_index].add_waterfall_edge(
                     edge,
                     top_heights,
                     bottom_height,
@@ -316,76 +360,15 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
             }
         }
     }
-    mesh_buffers_by_water_style
-        .into_iter()
-        .filter(|mesh_buffers| !mesh_buffers.surface_indices.is_empty())
-        .map(|mesh_buffers| {
-            mesh_buffers.finish(terrain_asset.canonical_terrain_grid().waterfall.as_ref())
-        })
-        .collect()
-}
-
-fn terrain_water_depth_ratio_for_cell(
-    terrain_grid: &TerrainGrid,
-    chunk: &TerrainChunk,
-    local_x: usize,
-    local_z: usize,
-    water_style: u16,
-) -> f32 {
-    let cells_per_chunk = i64::from(chunk.side.saturating_sub(1));
-    let Some(global_x) = i64::from(chunk.source_coord.x)
-        .checked_mul(cells_per_chunk)
-        .and_then(|origin| i64::try_from(local_x).ok()?.checked_add(origin))
-    else {
-        return if water_style <= 1 { 0.0 } else { 1.0 };
-    };
-    let Some(global_z) = i64::from(chunk.source_coord.y)
-        .checked_mul(cells_per_chunk)
-        .and_then(|origin| {
-            usize::try_from(cells_per_chunk)
-                .ok()?
-                .checked_sub(local_z + 1)
-                .and_then(|source_local_z| i64::try_from(source_local_z).ok())
-                .and_then(|source_local_z| origin.checked_add(source_local_z))
-        })
-    else {
-        return if water_style <= 1 { 0.0 } else { 1.0 };
-    };
-    let row_major_cell_index = (global_x >= 0 && global_z >= 0)
-        .then(|| {
-            u32::try_from(global_z)
-                .ok()?
-                .checked_mul(terrain_grid.width)?
-                .checked_add(u32::try_from(global_x).ok()?)
-        })
-        .flatten();
-    row_major_cell_index
-        .and_then(|cell_index| {
-            terrain_grid
-                .water_regions
-                .iter()
-                .find(|region| region.row_major_cell_indices.contains(&cell_index))
-                .map(|region| region.depth_ratio)
-        })
-        .unwrap_or_else(|| if water_style <= 1 { 0.0 } else { 1.0 })
-        .clamp(0.0, 1.0)
-}
-
-fn interpolate_authored_terrain_water_vertex_colour(
-    presentation: &TerrainBiomeWaterPresentation,
-    water_depth_ratio: f32,
-) -> [f32; 4] {
-    let normalize = |colour: [u8; 4]| colour.map(|channel| f32::from(channel) / 255.0);
-    let low = Vec4::from_array(normalize(presentation.vertex_colour_low));
-    let medium = Vec4::from_array(normalize(presentation.vertex_colour_medium));
-    let high = Vec4::from_array(normalize(presentation.vertex_colour_high));
-    if water_depth_ratio <= 0.5 {
-        low.lerp(medium, water_depth_ratio * 2.0).to_array()
-    } else {
-        medium
-            .lerp(high, (water_depth_ratio - 0.5) * 2.0)
-            .to_array()
-    }
+    Some(
+        mesh_buffers_by_region
+            .into_iter()
+            .filter(|mesh_buffers| !mesh_buffers.surface_indices.is_empty())
+            .map(|mesh_buffers| {
+                mesh_buffers.finish(terrain_asset.canonical_terrain_grid().waterfall.as_ref())
+            })
+            .collect(),
+    )
 }
 
 fn construct_contiguous_terrain_waterfall_mesh_groups(

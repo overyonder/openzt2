@@ -100,6 +100,8 @@ impl ScenePrefabDocumentAssembler {
             stable_id: AssetId::from_key(stable_key),
             attachment_id: AssetId::from_key(&normalized_authored_attachment_key),
             model_joint_binding: None,
+            local_render_bound: None,
+            skin_render_bound: None,
             parent,
             transform,
             children: Vec::new(),
@@ -158,6 +160,17 @@ impl ScenePrefabDocumentAssembler {
     pub(super) fn renderable(&mut self, entity: u32, scene_name: String) {
         let model_path = self.model_path.clone();
         self.renderable_from(entity, &model_path, scene_name);
+    }
+    pub(super) fn local_render_bound(&mut self, entity: u32, center: [f32; 3], radius: f32) {
+        self.entities[entity as usize].local_render_bound =
+            Some(openzt2_game_data::scene_prefab::PrefabBoundingSphere { center, radius });
+    }
+    pub(super) fn skin_render_bound(
+        &mut self,
+        entity: u32,
+        bound: openzt2_game_data::scene_prefab::PrefabSkinRenderBound,
+    ) {
+        self.entities[entity as usize].skin_render_bound = Some(bound);
     }
     pub(super) fn renderable_from(&mut self, entity: u32, model_path: &str, scene_name: String) {
         let model = AssetId::from_virtual_path(&AssetPath::new(model_path).key());

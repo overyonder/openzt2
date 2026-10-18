@@ -46,6 +46,10 @@ pub struct PrefabEntity {
     /// Named model joint whose world transform owns this attachment.
     #[serde(default)]
     pub model_joint_binding: Option<String>,
+    #[serde(default)]
+    pub local_render_bound: Option<PrefabBoundingSphere>,
+    #[serde(default)]
+    pub skin_render_bound: Option<PrefabSkinRenderBound>,
     pub parent: u32,
     pub transform: PrefabTransform,
     pub children: Vec<u32>,
@@ -60,6 +64,26 @@ pub struct PrefabEntity {
     pub billboards: Vec<PrefabBillboard>,
     pub lights: Vec<PrefabLight>,
     pub effects: Vec<PrefabEffect>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]
+pub struct PrefabBoundingSphere {
+    pub center: [f32; 3],
+    pub radius: f32,
+}
+
+/// Bone-local spheres in authored bone order, using the model's existing joints.
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabSkinRenderBound {
+    pub skeleton_root: String,
+    pub skin_transform: [f32; 16],
+    pub bones: Vec<PrefabSkinBoneRenderBound>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone, Debug, PartialEq)]
+pub struct PrefabSkinBoneRenderBound {
+    pub joint: String,
+    pub sphere: PrefabBoundingSphere,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]

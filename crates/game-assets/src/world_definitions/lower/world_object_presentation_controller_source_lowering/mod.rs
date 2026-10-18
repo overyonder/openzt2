@@ -115,6 +115,7 @@ pub(super) fn lower_authored_world_object_presentation_controller_states(
             };
             states.push(WorldObjectPresentationAttachmentDefinition {
                 state: id(active_state.name.as_str()),
+                child_binder: id(child),
                 parent_attachment: id(parent_attachment),
                 inherit_parent_rotation: active_state
                     .attribute_named_any(&["rottype"])

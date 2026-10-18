@@ -30,6 +30,7 @@ pub(super) fn prepare_particle_document_as_hanabi_effect_asset(
                 prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                     authored_particle_system_emitter,
                     collision_spawn_initialization,
+                    false,
                 )
             }),
     }

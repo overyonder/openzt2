@@ -2,7 +2,8 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::fences_and_gates::FenceDefinition;
 use openzt2_game_data::AssetId;
 
-use crate::topology::topology_presentation_types::FenceSegmentPrefab;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentShape;
 
 /// Finds the reciprocal, unambiguous corner pairing used by the authored
 /// half-curve meshes. Both meshes run from their outer endpoint to the shared
@@ -118,6 +119,31 @@ pub(super) fn select_authored_fence_segment_prefab_for_adjacent_topology(
             .is_some_and(|next| current_direction.dot((next - second_cell).xy().signum()) > 0);
     FenceSegmentPrefab {
         asset: selected_curve_prefab.unwrap_or(straight_prefab),
+        shape: selected_curve_prefab
+            .and_then(|_| {
+                next_cell.and_then(|next| {
+                    authored_fence_segment_turn(
+                        current_direction,
+                        (next - second_cell).xy().signum(),
+                    )
+                })
+            })
+            .map_or(FenceSegmentShape::Straight, |turn| {
+                match (current_segment_is_diagonal, turn) {
+                    (false, AuthoredFenceSegmentTurn::NinetyDegrees) => {
+                        FenceSegmentShape::CardinalCurve90
+                    }
+                    (true, AuthoredFenceSegmentTurn::NinetyDegrees) => {
+                        FenceSegmentShape::DiagonalCurve90
+                    }
+                    (false, AuthoredFenceSegmentTurn::OneHundredThirtyFiveDegrees) => {
+                        FenceSegmentShape::CardinalCurve135
+                    }
+                    (true, AuthoredFenceSegmentTurn::OneHundredThirtyFiveDegrees) => {
+                        FenceSegmentShape::DiagonalCurve135
+                    }
+                }
+            }),
         mirror_source_y: selected_curve_prefab.is_some()
             && if diagonal_135 {
                 turn_cross > 0
@@ -227,6 +253,7 @@ mod tests {
 
     fn fence_definition_with_six_distinct_segment_prefabs() -> FenceDefinition {
         FenceDefinition {
+            fitting_curves: Vec::new(),
             id: AssetId::from_virtual_path("test/fence"),
             object: AssetId::default(),
             segment_length_cm: 300,

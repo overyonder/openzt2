@@ -107,9 +107,10 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         if deltas.is_empty() {
             continue;
         }
-        commands
-            .entity(request.transaction)
-            .insert(TerrainEdit { deltas });
+        commands.entity(request.transaction).insert(TerrainEdit {
+            deltas,
+            water_regions: Vec::new(),
+        });
         prepared.write(TerrainEditPrepared {
             transaction: request.transaction,
             cost: Money(0),

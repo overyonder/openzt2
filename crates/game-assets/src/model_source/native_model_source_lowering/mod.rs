@@ -118,6 +118,7 @@ pub fn lower_native_model_source(
                         ),
                         evaluated_d3d9_effect: lowered.evaluated_effect,
                         texture_asset_paths: lowered.texture_asset_paths,
+                        reflection_projections: lowered.reflection_projections,
                     })
                 })
                 .collect::<Result<Vec<_>>>()?;

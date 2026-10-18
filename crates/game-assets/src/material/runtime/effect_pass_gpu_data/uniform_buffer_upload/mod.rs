@@ -1,15 +1,15 @@
 //! Packing and uploading effect shader registers.
 
 use super::{
-    parameter_register_binding::shader_stage_dirty_bit, D3d9BooleanShaderRegisters,
-    D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9PackedShaderRegisters,
-    D3d9ProgrammableShaderStage, EffectPassMaterial, EffectPassUniformBufferAssets,
+    D3d9BooleanShaderRegisters, D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters,
+    D3d9PackedShaderRegisters, D3d9ProgrammableShaderStage, EffectPassMaterial,
+    EffectPassUniformBufferAssets, parameter_register_binding::shader_stage_dirty_bit,
 };
 use bevy::{
     asset::RenderAssetUsages,
     prelude::*,
     render::{
-        render_resource::{encase::UniformBuffer, BufferUsages, ShaderType},
+        render_resource::{BufferUsages, ShaderType, encase::UniformBuffer},
         storage::ShaderBuffer,
     },
 };
@@ -45,6 +45,7 @@ impl EffectPassMaterial {
         };
         self.dirty_float_register_stages = 0;
         self.dirty_fixed_transforms = false;
+        self.dirty_fixed_function = false;
     }
 
     /// Allocates independent mutable register and fixed-transform buffers for a draw/view.
@@ -52,6 +53,10 @@ impl EffectPassMaterial {
         &mut self,
         buffers: &mut Assets<ShaderBuffer>,
     ) {
+        if self.pipeline_specialization_key.vertex_shader == super::FIXED_FUNCTION_SHADER {
+            self.uniform_buffer_assets.fixed_function =
+                buffers.add(shader_buffer_from_uniform_value(&self.fixed_function));
+        }
         for (stage, handle, values, order) in [
             (
                 D3d9ProgrammableShaderStage::Vertex,
@@ -84,17 +89,35 @@ impl EffectPassMaterial {
                 ));
             }
         }
-        if self
-            .fixed_transform_bindings
-            .iter()
-            .any(|binding| binding.input_dependencies() != 0)
+        if !self.fixed_transform_bindings.is_empty()
             || !self.texture_coordinate_animations.is_empty()
+            || self
+                .model_reflection_projections
+                .iter()
+                .any(Option::is_some)
         {
             self.uniform_buffer_assets.fixed_transforms =
                 buffers.add(shader_buffer_from_uniform_value(&self.fixed_transforms));
         }
         self.dirty_float_register_stages = 0;
         self.dirty_fixed_transforms = false;
+        self.dirty_fixed_function = false;
+    }
+
+    pub fn write_changed_fixed_function_registers_to_persistent_buffer(
+        &mut self,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) {
+        if self.dirty_fixed_function
+            && buffers.contains(self.uniform_buffer_assets.fixed_function.id())
+        {
+            write_uniform_value_to_shader_buffer(
+                &self.uniform_buffer_assets.fixed_function,
+                &self.fixed_function,
+                buffers,
+            );
+            self.dirty_fixed_function = false;
+        }
     }
 
     pub fn write_programmable_float_registers_to_persistent_buffers(

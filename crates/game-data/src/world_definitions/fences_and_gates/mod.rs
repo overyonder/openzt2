@@ -8,7 +8,7 @@ mod fence_traversal_flag_operations;
 #[serde(transparent)]
 pub struct FenceTraversalBlockingFlags(u16);
 
-#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct FenceDefinition {
     pub id: AssetId,
     pub object: AssetId,
@@ -20,6 +20,15 @@ pub struct FenceDefinition {
     pub post_prefab: AssetId,
     pub segments: FenceSegmentPrefabs,
     pub gate_policy: FenceGatePolicy,
+    #[serde(default)]
+    pub fitting_curves: Vec<FenceFittingCurve>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct FenceFittingCurve {
+    pub binder: AssetId,
+    /// Local source coordinates, in authored segment order.
+    pub points: Vec<[f32; 3]>,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FenceSegmentPrefabs {

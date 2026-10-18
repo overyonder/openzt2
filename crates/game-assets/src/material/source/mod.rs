@@ -9,6 +9,16 @@ pub(super) struct BlueFangMaterialSourceDocument {
     pub(super) effect_source: Option<String>,
     #[serde(rename = "param", default)]
     pub(super) parameter_assignments: Vec<D3d9EffectParameterAssignment>,
+    #[serde(rename = "mode", default)]
+    pub(super) modes: Vec<BlueFangMaterialModeSource>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct BlueFangMaterialModeSource {
+    #[serde(rename = "@name", default)]
+    pub(super) name: String,
+    #[serde(rename = "@material", default)]
+    pub(super) material: String,
 }
 
 #[derive(Debug, Deserialize)]

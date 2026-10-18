@@ -711,6 +711,9 @@ pub struct EffectMaterial {
 pub struct TextureSlot {
     /// Unique slot name.
     pub name: String,
+    /// Use a linear clamp sampler instead of the image's sampler.
+    #[serde(default)]
+    pub clamp_linear: bool,
 }
 
 /// Texture layout.
@@ -751,6 +754,61 @@ pub struct EffectMesh(pub Handle<Mesh>);
 /// one clock can select the effective delta independently for each effect.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Component, Reflect)]
 pub struct EffectDeltaTime(pub f32);
+
+/// Multiplies the authored render size for one effect instance.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct EffectParticleSizeScale(pub f32);
+
+/// Explicit local-space initialization for a CPU-requested particle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ParticleSpawnPoint {
+    /// Initial particle position in effect-local coordinates.
+    pub position: Vec3,
+    /// Initial particle velocity in effect-local coordinates.
+    pub velocity: Vec3,
+}
+
+/// Initialization points consumed by the next rendered simulation frame.
+/// Set the effect spawner's count to this slice's length after ticking spawners.
+#[derive(Component, Clone, Debug, Default)]
+pub struct ParticleSpawnBatch {
+    /// Initial conditions for the particles requested in this batch.
+    pub points: Vec<ParticleSpawnPoint>,
+    /// Submission identifier used to match GPU particle-count readbacks.
+    pub submission: u32,
+}
+
+/// Opt-in, asynchronous GPU live-particle count. No value is available before
+/// the first completed readback. The latest sample can precede the current frame.
+#[derive(Component, Clone, Debug, Default)]
+pub struct ParticleAliveCount {
+    value: std::sync::Arc<ParticleCountReadback>,
+}
+
+#[derive(Debug, Default)]
+struct ParticleCountReadback {
+    sample: std::sync::atomic::AtomicU64,
+    sampled: std::sync::atomic::AtomicBool,
+    pending: std::sync::atomic::AtomicBool,
+}
+
+impl PartialEq for ParticleAliveCount {
+    fn eq(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.value, &other.value)
+    }
+}
+
+impl ParticleAliveCount {
+    /// Returns the live count when the latest readback matches this submission.
+    pub fn sampled_count_after(&self, submission: u32) -> Option<u32> {
+        use std::sync::atomic::Ordering;
+        if !self.value.sampled.load(Ordering::Acquire) {
+            return None;
+        }
+        let value = self.value.sample.load(Ordering::Acquire);
+        ((value >> 32) as u32 == submission).then_some(value as u32)
+    }
+}
 
 /// Effect shaders.
 ///
@@ -1045,6 +1103,12 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                 }
             }
 
+            if particle_layout.contains(Attribute::POSITION) {
+                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.position = explicit_spawn_points[(*spawner).spawn_point_offset + location.update_index].position.xyz; }\n");
+            }
+            if particle_layout.contains(Attribute::VELOCITY) {
+                init_context.main_code.push_str("if ((*spawner).spawn_point_offset != 0u) { particle.velocity = explicit_spawn_points[(*spawner).spawn_point_offset + location.update_index].velocity.xyz; }\n");
+            }
             let sim_space_transform_code =
                 asset.simulation_space.eval(&init_context).map_err(|err| {
                     error!("Failed to compile effect's simulation space: {}", err);
@@ -1145,6 +1209,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             vertex_code,
             fragment_code,
             render_extra,
+            vertex_output_fields,
             alpha_cutoff_code,
             flipbook_scale_code,
             flipbook_row_count_code,
@@ -1221,6 +1286,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                 render_context.vertex_code,
                 render_context.fragment_code,
                 render_context.render_extra,
+                render_context.vertex_output_fields,
                 alpha_cutoff_code,
                 flipbook_scale_code,
                 flipbook_row_count_code,
@@ -1325,6 +1391,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             .replace("{{VERTEX_MODIFIERS}}", &vertex_code)
             .replace("{{FRAGMENT_MODIFIERS}}", &fragment_code)
             .replace("{{RENDER_EXTRA}}", &render_extra)
+            .replace("{{VERTEX_OUTPUT_FIELDS}}", &vertex_output_fields)
             .replace("{{ALPHA_CUTOFF}}", &alpha_cutoff_code)
             .replace("{{FLIPBOOK_SCALE}}", &flipbook_scale_code)
             .replace("{{FLIPBOOK_ROW_COUNT}}", &flipbook_row_count_code);

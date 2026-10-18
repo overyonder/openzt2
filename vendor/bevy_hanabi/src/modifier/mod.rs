@@ -369,6 +369,8 @@ impl EvalContext for ShaderWriter<'_> {
 /// Particle rendering shader code generation context.
 #[derive(Debug, PartialEq)]
 pub struct RenderContext<'a> {
+    pub(crate) vertex_output_fields: String,
+    varying_count: u32,
     /// Layout of properties for the current effect.
     pub property_layout: &'a PropertyLayout,
     /// Layout of attributes of a particle for the current effect.
@@ -412,6 +414,8 @@ impl<'a> RenderContext<'a> {
         texture_layout: &'a TextureLayout,
     ) -> Self {
         Self {
+            vertex_output_fields: String::new(),
+            varying_count: 0,
             property_layout,
             particle_layout,
             vertex_code: String::new(),
@@ -429,6 +433,19 @@ impl<'a> RenderContext<'a> {
             expr_cache: Default::default(),
             is_attribute_pointer: false,
         }
+    }
+
+    /// Allocate a perspective-interpolated `vec4<f32>` vertex output.
+    /// The returned field name is available on `out` and fragment input `in`.
+    pub fn add_vec4_varying(&mut self) -> String {
+        let name = format!("modifier_varying_{}", self.varying_count);
+        self.vertex_output_fields += &format!(
+            "    @location({}) {}: vec4<f32>,\n",
+            self.varying_count + 4,
+            name
+        );
+        self.varying_count += 1;
+        name
     }
 
     /// Mark the rendering shader as needing UVs.

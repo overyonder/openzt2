@@ -171,9 +171,12 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     if began {
         commands.entity(entity).insert(ActiveTerrainBrush { kind });
     }
-    if is_active && primary_pointer.pressed {
+    if is_active && (primary_pointer.pressed || began) {
         let seconds = time.delta_secs();
         if seconds.is_finite() && seconds > 0.0 {
+            if began && primary_pointer.just_released && !primary_pointer.pressed {
+                info!(target: "openzt2_terrain_brush", preview = ?entity, ?kind, seconds, "coalesced pointer click emitted one terrain dab");
+            }
             strokes.write(TerrainStroke {
                 preview: entity,
                 center: cursor.world.xz(),

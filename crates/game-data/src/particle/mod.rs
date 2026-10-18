@@ -9,6 +9,7 @@ use self::{
 
 pub mod authored_particle_system;
 pub mod legacy_nif_particle_effect;
+pub mod particle_emission_point;
 
 /// The one particle-effect asset shape accepted by Bevy for embedded NIF
 /// particle objects and standalone authored PSYS documents.

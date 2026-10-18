@@ -8,6 +8,7 @@ use bevy::render::render_phase::PhaseItem;
 use bevy::render::render_phase::ViewSortedRenderPhases;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
+use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
 
 pub(super) fn project_authored_effect_opaque_base_pass_order(
     materials: Res<Assets<EffectPassMaterial>>,
@@ -59,9 +60,14 @@ pub(super) fn sort_authored_effect_invocations_before_bevy_mesh_batch_preparatio
             // Bevy assigns its instance ranges and indirect draw parameters.
             // Opaque bases must precede depth-writing transparent shells.
             // Keep every pass of an invocation in the base pass's group.
-            right_distance
-                .0
-                .cmp(&left_distance.0)
+            let stage = |order: Option<&AuthoredEffectTechniquePassSubmissionOrder>| {
+                order.map_or(AuthoredEffectTransparentRenderStage::Scene, |order| {
+                    order.render_stage()
+                })
+            };
+            stage(left_order)
+                .cmp(&stage(right_order))
+                .then_with(|| right_distance.0.cmp(&left_distance.0))
                 .then_with(|| left_distance.1.total_cmp(&right_distance.1))
                 .then_with(|| match (left_order, right_order) {
                     (Some(left), Some(right)) => left.compare_hierarchy_order(right),
@@ -84,12 +90,16 @@ mod authored_effect_ordering_tests {
     use bevy::render::view::RetainedViewEntity;
 
     #[test]
-    fn retained_mesh_placeholders_preserve_authored_pass_order() {
+    fn retained_mesh_placeholders_preserve_effect_stages_and_authored_pass_order() {
         let mut world = World::new();
         let near_base = world.spawn_empty().id();
         let near_overlay = world.spawn_empty().id();
         let far_base = world.spawn_empty().id();
         let far_overlay = world.spawn_empty().id();
+        let caustic = world.spawn_empty().id();
+        let terrain = world.spawn_empty().id();
+        let water_base = world.spawn_empty().id();
+        let water_overlay = world.spawn_empty().id();
         let view = RetainedViewEntity::new(world.spawn_empty().id().into(), None, 0);
         let mut orders =
             ExtractedInstances::<AuthoredEffectTechniquePassSubmissionOrder>::default();
@@ -106,12 +116,50 @@ mod authored_effect_ordering_tests {
                 order
             });
         }
+        for (entity, invocation, index, stage) in [
+            (
+                terrain,
+                terrain,
+                0,
+                AuthoredEffectTransparentRenderStage::TerrainEffects,
+            ),
+            (
+                caustic,
+                caustic,
+                0,
+                AuthoredEffectTransparentRenderStage::TerrainCaustics,
+            ),
+            (
+                water_base,
+                water_base,
+                0,
+                AuthoredEffectTransparentRenderStage::WaterSurface,
+            ),
+            (
+                water_overlay,
+                water_base,
+                1,
+                AuthoredEffectTransparentRenderStage::WaterSurface,
+            ),
+        ] {
+            orders.insert(entity.into(), {
+                let mut order = AuthoredEffectTechniquePassSubmissionOrder::new(invocation, index)
+                    .unwrap()
+                    .with_render_stage(stage);
+                order.update_opaque_base_pass(entity == water_base);
+                order
+            });
+        }
         let mut phase = SortedRenderPhase::default();
         for (entity, distance) in [
             (near_overlay, -1.0),
             (far_overlay, -20.0),
             (near_base, -1.0),
             (far_base, -20.0),
+            (water_overlay, -1000.0),
+            (water_base, -1000.0),
+            (caustic, -0.1),
+            (terrain, 10.0),
         ] {
             phase.add_retained(Transparent3d {
                 sorting_info: TransparentSortingInfo3d::AlwaysOnTop,
@@ -138,7 +186,16 @@ mod authored_effect_ordering_tests {
                 .values()
                 .map(|item| item.main_entity().id())
                 .collect::<Vec<_>>(),
-            [far_base, far_overlay, near_base, near_overlay]
+            [
+                terrain,
+                caustic,
+                water_base,
+                water_overlay,
+                far_base,
+                far_overlay,
+                near_base,
+                near_overlay
+            ]
         );
     }
 }

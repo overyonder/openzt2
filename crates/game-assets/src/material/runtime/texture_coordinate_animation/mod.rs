@@ -101,6 +101,9 @@ fn sample_track(keys: &[(f32, CubicSegment<f32>)], time: f32, default: f32) -> f
 #[derive(Resource, Default)]
 pub(super) struct AnimatedTextureCoordinateMaterials(HashMap<AssetId<EffectPassMaterial>, f32>);
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct TextureCoordinateAnimationSet;
+
 #[allow(
     clippy::needless_pass_by_value,
     reason = "Bevy systems receive Res system parameters by value"

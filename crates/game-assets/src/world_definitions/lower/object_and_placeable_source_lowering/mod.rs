@@ -105,6 +105,10 @@ pub(super) fn bind_object(
         .transpose()?
         .unwrap_or_default()
         .map(|metres| (metres * 100.0).round() as i16);
+    let (presentation_caustic_policies, surface_effect_strength) =
+        super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
+            record,
+        )?;
     output.document.objects.push(WorldObjectDefinition {
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -135,6 +139,8 @@ pub(super) fn bind_object(
             super::container_quantity_source_lowering::lower_authored_container_quantity(record)?,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,
         prefab_scale: 1.0,
+        surface_effect_strength,
+        presentation_caustic_policies,
         icon: asset(record, &["icon", "iconPath", "purchaseIcon"]),
         biomes,
         location: biome_data

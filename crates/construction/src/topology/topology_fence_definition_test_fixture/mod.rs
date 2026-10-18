@@ -20,6 +20,8 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
     let object = AssetId([42; 16]);
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            surface_effect_strength: None,
+            presentation_caustic_policies: Vec::new(),
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),
             view_data: Vec::new(),
@@ -55,6 +57,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
             destruction: None,
         }],
         fences: vec![FenceDefinition {
+            fitting_curves: Vec::new(),
             id: definition,
             object,
             segment_length_cm: 100,

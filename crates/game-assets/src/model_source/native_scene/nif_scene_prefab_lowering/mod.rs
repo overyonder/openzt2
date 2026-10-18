@@ -148,6 +148,76 @@ fn visit_netimmerse_scene_block(
             .selected_or_authored_scene_block_visibility(block_ref, object.flags & 1 == 0),
     )?;
     builder.remember_netimmerse_entity(block_ref, entity);
+    let geometry = match &block.payload {
+        NetImmerseNifBlockPayload::NiTriShape(shape) => Some(&shape.geometry),
+        NetImmerseNifBlockPayload::NiTriStrips(strips) => Some(&strips.geometry),
+        _ => None,
+    };
+    if let Some(data) = geometry.and_then(|geometry| document.block(geometry.data_ref)) {
+        let bound = match &data.payload {
+            NetImmerseNifBlockPayload::NiTriShapeData(data) => Some(&data.geometry),
+            NetImmerseNifBlockPayload::NiTriStripsData(data) => Some(&data.geometry),
+            _ => None,
+        };
+        if let Some(bound) = bound {
+            builder.local_render_bound(
+                entity,
+                convert_source_z_up_vector_to_bevy_y_up_coordinates(bound.center),
+                bound.radius,
+            );
+        }
+    }
+    if let Some(instance) = geometry
+        .and_then(|geometry| document.block(geometry.skin_instance_ref))
+        .and_then(|block| match &block.payload {
+            NetImmerseNifBlockPayload::NiSkinInstance(instance) => Some(instance),
+            _ => None,
+        })
+    {
+        let data = document
+            .block(instance.data_ref)
+            .and_then(|block| match &block.payload {
+                NetImmerseNifBlockPayload::NiSkinData(data) => Some(data),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                NativeSceneLoweringError::new(
+                    &document.source_path,
+                    "skin bound references missing skin data",
+                )
+            })?;
+        if data.bones.len() != instance.bone_refs.len() {
+            return Err(NativeSceneLoweringError::new(
+                &document.source_path,
+                "skin bound bone counts differ",
+            ));
+        }
+        let joint_name = |reference| {
+            document
+                .block(reference)
+                .and_then(|block| block.payload.av_object())
+                .map(|object| object.object.name.clone())
+                .ok_or_else(|| {
+                    NativeSceneLoweringError::new(
+                        &document.source_path,
+                        "skin bound references a missing joint",
+                    )
+                })
+        };
+        builder.skin_render_bound(entity, openzt2_game_data::scene_prefab::PrefabSkinRenderBound {
+            skeleton_root: joint_name(instance.skeleton_root_ref)?,
+            skin_transform: super::super::native_geometry::source_transform_conversion::convert_netimmerse_transform_to_gltf_matrix(&data.skin_transform),
+            bones: instance.bone_refs.iter().zip(&data.bones).map(|(reference, bone)| {
+                Ok(openzt2_game_data::scene_prefab::PrefabSkinBoneRenderBound {
+                    joint: joint_name(*reference)?,
+                    sphere: openzt2_game_data::scene_prefab::PrefabBoundingSphere {
+                        center: convert_source_z_up_vector_to_bevy_y_up_coordinates(bone.bounding_sphere.center),
+                        radius: bone.bounding_sphere.radius,
+                    },
+                })
+            }).collect::<Result<Vec<_>>>()?,
+        });
+    }
     if selected_bone_level_of_detail.scene_block_is_visible(block_ref)
         && matches!(
             &block.payload,

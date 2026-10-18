@@ -45,6 +45,7 @@ pub fn read_materialized_terrain_sample(
             water_style: *value.water_styles.get(local)?,
             water_biome_channel: *value.water_biome_channels.get(local)?,
             water_cm: *value.water_cm.get(local)?,
+            water_affiliation: *value.water_affiliations.get(local)?,
         });
     }
     let source = read_authored_terrain_sample(chunk, asset, x, z)?;
@@ -71,6 +72,18 @@ pub fn read_materialized_terrain_sample(
         },
         water_cm,
         water_biome_channel: source.biome_index,
+        water_affiliation: match asset
+            .sample_authored_water_region_index(authored_terrain_sample_index(chunk, asset, x, z)?)
+        {
+            Some(row) => row.map(|row| {
+                crate::terrain::terrain_edit_data_types::TerrainWaterAffiliation::SourceRow(
+                    row as u32,
+                )
+            }),
+            None => {
+                Some(crate::terrain::terrain_edit_data_types::TerrainWaterAffiliation::Unresolved)
+            }
+        },
     })
 }
 

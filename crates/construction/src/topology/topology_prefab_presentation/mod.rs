@@ -7,9 +7,9 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentat
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 
 use crate::topology::path_support_hydration::PathSupportPrefab;
-use crate::topology::topology_presentation_types::FenceSegmentPrefab;
 use crate::topology::topology_presentation_types::FenceTerrainEndpointSkewPresentation;
 use crate::topology::topology_presentation_types::TopologyPresentation;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;

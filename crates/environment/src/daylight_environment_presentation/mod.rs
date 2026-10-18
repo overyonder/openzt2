@@ -251,6 +251,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                         definition,
                         marker.target,
                         marker.kind_rank,
+                        None,
                         fraction,
                     )
                 else {

@@ -37,6 +37,35 @@ impl MaterialAsset {
     }
 
     pub fn first_bound_texture_asset(&self) -> Option<&Handle<Image>> {
-        self.bound_texture_assets.first()
+        self.bound_texture_assets
+            .first()
+            .map(|binding| &binding.texture)
+    }
+
+    /// Resolves an authored texture parameter by its name or effect semantic.
+    pub fn bound_texture_asset(&self, name: &str) -> Option<&Handle<Image>> {
+        let parameter = self
+            .evaluated_d3d9_effect
+            .parameter_descriptions
+            .iter()
+            .find(|parameter| {
+                parameter.parameter_name.eq_ignore_ascii_case(name)
+                    || parameter
+                        .semantic_name
+                        .as_deref()
+                        .is_some_and(|semantic| semantic.eq_ignore_ascii_case(name))
+            });
+        self.bound_texture_assets
+            .iter()
+            .rev()
+            .find(|binding| {
+                binding.parameter_name.eq_ignore_ascii_case(name)
+                    || parameter.is_some_and(|parameter| {
+                        binding
+                            .parameter_name
+                            .eq_ignore_ascii_case(&parameter.parameter_name)
+                    })
+            })
+            .map(|binding| &binding.texture)
     }
 }

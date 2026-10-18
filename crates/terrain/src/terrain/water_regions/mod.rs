@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+pub(super) mod authored_membership;
+
 use bevy::math::DVec3;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -11,8 +13,39 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegion;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegionCells;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionsProjected;
+use openzt2_zoo_state::terrain::terrain_water_view_state::{
+    TerrainWaterRegionFade, TerrainWaterRegionVisibility,
+};
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_authored_terrain;
+
+/// Retired edited owners survive only while an undo transaction references them.
+pub(super) fn cleanup_unreferenced_retired_water_region_entities(
+    mut commands: Commands,
+    retired: Query<Entity, (With<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired>, Without<TerrainWaterRegionSource>)>,
+    edits: Query<(
+        &openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit,
+        Option<
+            &openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress,
+        >,
+    )>,
+) {
+    use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
+    for owner in &retired {
+        let retained = edits.iter().any(|(edit, progress)| {
+            progress.is_none_or(|progress| progress.phase != EditCommitPhase::Failed)
+                && edit
+                    .water_regions
+                    .iter()
+                    .any(|change| change.owner == owner)
+        });
+        if !retained {
+            commands.entity(owner).despawn();
+        }
+    }
+}
 
 /// Projects each authored DAT water-region row into one focused ECS entity.
 pub(super) fn project_natural_water_regions(
@@ -25,13 +58,27 @@ pub(super) fn project_natural_water_regions(
             continue;
         };
         let cells_per_chunk = u32::from(chunk.side.saturating_sub(1));
-        for region in &asset.canonical_terrain_grid().water_regions {
+        if cells_per_chunk == 0 {
+            continue;
+        }
+        for (source_region_index, region) in asset
+            .canonical_terrain_grid()
+            .water_regions
+            .iter()
+            .enumerate()
+        {
             let Some(&first_cell) = region.row_major_cell_indices.first() else {
                 continue;
             };
             let x = first_cell % asset.canonical_terrain_grid().width;
             let z = first_cell / asset.canonical_terrain_grid().width;
-            let owner = UVec2::new(x / cells_per_chunk, z / cells_per_chunk);
+            let owner = UVec2::new(x / cells_per_chunk, z / cells_per_chunk).min(UVec2::new(
+                asset
+                    .canonical_terrain_grid()
+                    .sector_columns
+                    .saturating_sub(1),
+                asset.canonical_terrain_grid().sector_rows.saturating_sub(1),
+            ));
             if owner.as_ivec2() != chunk.source_coord {
                 continue;
             }
@@ -49,6 +96,9 @@ pub(super) fn project_natural_water_regions(
             emitter /= region.row_major_cell_indices.len() as f32;
             let local = emitter - Vec3::new(chunk.origin.x, 0.0, chunk.origin.y);
             commands.spawn((
+                TerrainWaterRegionSource::new(chunk.asset.clone(), source_region_index),
+                TerrainWaterRegionFade::default(),
+                TerrainWaterRegionVisibility::default(),
                 NaturalWaterRegionCells {
                     cell_size_m: asset.canonical_terrain_grid().units.cell_size_metres,
                     centres: region
@@ -97,21 +147,33 @@ struct LiveWaterCell {
     owner_origin: Vec2,
 }
 
-/// Rebuilds only the compact connected-region projection after a committed
-/// water edit. Authoritative sample/style state remains in the terrain
-/// overlays; this transient flood fill is discarded before the system exits.
+/// Rebuilds spatial-audio emitters after a committed water edit. These connected
+/// audio regions do not supply water-effect affiliation. Sample/style state
+/// remains in the terrain overlays.
 pub(super) fn rebuild_edited_water_regions(
     mut commands: Commands,
     mut changes: MessageReader<TerrainWaterChanged>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
-    regions: Query<Entity, With<NaturalWaterRegion>>,
+    regions: Query<(Entity, Option<&TerrainWaterRegionSource>), With<NaturalWaterRegion>>,
+    membership_indexes: Query<Entity, With<TerrainWaterMembershipIndex>>,
 ) {
     if changes.read().count() == 0 {
         return;
     }
-    for entity in &regions {
-        commands.entity(entity).despawn();
+    for (entity, source) in &regions {
+        if source.is_some() {
+            commands
+                .entity(entity)
+                .remove::<(NaturalWaterRegion, NaturalWaterRegionCells)>();
+        } else {
+            commands.entity(entity).despawn();
+        }
+    }
+    for entity in &membership_indexes {
+        commands
+            .entity(entity)
+            .remove::<TerrainWaterMembershipIndex>();
     }
 
     let mut assets = Vec::<Handle<TerrainAsset>>::new();

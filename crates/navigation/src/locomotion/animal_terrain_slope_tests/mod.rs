@@ -44,6 +44,8 @@ fn terrain_with_ridge(rows: std::ops::RangeInclusive<usize>) -> TerrainGrid {
             base_height_metres: 0.0,
         },
         presentation: TerrainPresentation {
+            water_distance_fade: Default::default(),
+            water_editing: Default::default(),
             detail_texture: String::new(),
             detail_texture_repetition: 1.0,
             cliff_rise_per_metre: [0.0; 2],

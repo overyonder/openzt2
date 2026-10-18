@@ -3,7 +3,7 @@
 use std::io;
 
 use bevy::{
-    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
+    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
     gltf::{Gltf, GltfLoader, GltfLoaderSettings},
     prelude::*,
 };
@@ -92,6 +92,7 @@ impl AssetLoader for NativeModelAssetLoader {
                 &evaluated_pass_label_prefix,
                 native_model_load_context,
                 &lowered_material.texture_coordinate_animations,
+                &lowered_material.reflection_projections,
             )?;
             material.netimmerse_texture_binding = Some(lowered_material.texture_binding);
             native_model_load_context.add_labeled_asset(label, material);

@@ -60,6 +60,8 @@ fn document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("donationbox-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            surface_effect_strength: None,
+            presentation_caustic_policies: Vec::new(),
             id,
             kind: WorldObjectKind::DonationBox,
             supports_show_tricks: false,
@@ -162,6 +164,8 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         stable_id: AssetId::from_key(attachment),
         attachment_id: AssetId::from_key(attachment),
         model_joint_binding: None,
+        local_render_bound: None,
+        skin_render_bound: None,
         parent: 0,
         transform: PrefabTransform {
             translation_m: translation,

@@ -8,14 +8,12 @@ use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::Ter
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
-use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
-use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterSurfaceEffectPass;
-use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::ActivateTerrainWaterImpactWave;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery};
+use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::{ActivateTerrainWaterImpactWave, WaterSurfaceSpraySample, WaterSurfaceWakeSample};
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use openzt2_world_state::physics::fitting_surface_types::AuthoredWaterSurfaceCrossingProjectionState;
@@ -31,11 +29,8 @@ pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
     terrain_index: Option<Res<TerrainIndex>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    water_surface_passes: Query<(
-        Entity,
-        &AuthoredTerrainWaterSurfaceEffectPass,
-        &AuthoredEffectTechniquePassSubmissionOrder,
-    )>,
+    memberships: Query<&TerrainWaterMembershipIndex>,
+    regions: TerrainWaterRegionQuery,
     mut bodies: Query<(
         Entity,
         &DefinitionId,
@@ -45,6 +40,8 @@ pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
         Option<&mut AuthoredWaterSurfaceCrossingProjectionState>,
     )>,
     mut impacts: MessageWriter<ActivateTerrainWaterImpactWave>,
+    mut spray: MessageWriter<WaterSurfaceSpraySample>,
+    mut wakes: MessageWriter<WaterSurfaceWakeSample>,
 ) {
     let (Some(definitions), Some(terrain_index)) =
         (active_definitions.get(&definition_assets), terrain_index)
@@ -60,12 +57,15 @@ pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
             continue;
         };
         let current_body_bottom = transform.translation - Vec3::Y * authored_impact.shape_radius_m;
-        let current_water_height = sample_water_height(
+        let current_water_sample = sample_accepted_water_surface(
             &terrain_index,
             &terrain_assets,
             &terrain_chunks,
+            &memberships,
+            &regions,
             current_body_bottom.xz(),
         );
+        let current_water_height = current_water_sample.map(|(height, _)| height);
         let Some(mut crossing_state) = crossing_state else {
             commands
                 .entity(entity)
@@ -109,21 +109,28 @@ pub(super) fn project_authored_body_water_surface_crossings_into_impact_waves(
             1.0
         };
         let crossing_position = previous_body_bottom.lerp(current_body_bottom, crossing_fraction);
-        for (surface, bounds, pass_order) in &water_surface_passes {
-            if pass_order.is_first_authored_pass()
-                && (bounds.surface_plane_height - water_height).abs() <= 0.01
-                && crossing_position.x >= bounds.horizontal_minimum.x
-                && crossing_position.x <= bounds.horizontal_maximum.x
-                && crossing_position.z >= bounds.horizontal_minimum.y
-                && crossing_position.z <= bounds.horizontal_maximum.y
-            {
-                impacts.write(ActivateTerrainWaterImpactWave {
-                    surface,
-                    source_position: crossing_position.xz(),
-                    native_strength,
-                });
-            }
-        }
+        let Some((_, surface)) = current_water_sample else {
+            continue;
+        };
+        let source_position = Vec2::new(crossing_position.x, -crossing_position.z);
+        spray.write(WaterSurfaceSpraySample {
+            surface,
+            source_position,
+            direction: Vec3::Y,
+            normal: Vec3::Y,
+            native_strength,
+        });
+        wakes.write(WaterSurfaceWakeSample {
+            surface,
+            source_position,
+            direction: Vec2::new(velocity.0.x, -velocity.0.z),
+            native_strength,
+        });
+        impacts.write(ActivateTerrainWaterImpactWave {
+            surface,
+            source_position,
+            native_strength,
+        });
     }
 }
 
@@ -138,14 +145,20 @@ fn authored_water_impact_definition<'a>(
         .and_then(|object| object.real_physics_water_impact.as_ref())
 }
 
-fn sample_water_height(
+pub(super) fn sample_accepted_water_surface(
     terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    memberships: &Query<&TerrainWaterMembershipIndex>,
+    regions: &TerrainWaterRegionQuery,
     horizontal_position: Vec2,
-) -> Option<f32> {
+) -> Option<(f32, Entity)> {
     let chunk_entity = terrain_chunk_at(terrain_index, horizontal_position)?;
-    let (chunk, edited) = terrain_chunks.get(chunk_entity).ok()?;
+    let (chunk, _) = terrain_chunks.get(chunk_entity).ok()?;
     let asset = terrain_assets.get(&chunk.asset)?;
-    sample_terrain(chunk, asset, edited, horizontal_position)?.water_height_m
+    let membership = memberships
+        .iter()
+        .find(|membership| membership.terrain() == chunk.asset.id())?;
+    let region = membership.owner_at_world_xz(horizontal_position, asset)??;
+    Some((regions.get(region)?.surface_height(asset)?, region))
 }

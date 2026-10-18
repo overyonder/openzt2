@@ -6,6 +6,7 @@ pub mod terrain_asset_types_and_borrowing_queries;
 pub mod terrain_source_asset_loading;
 #[cfg(any(test, feature = "testing"))]
 pub mod terrain_test_asset;
+mod terrain_water_low_detail_material_construction;
 
 use bevy::prelude::*;
 

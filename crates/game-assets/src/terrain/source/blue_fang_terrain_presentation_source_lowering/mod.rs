@@ -49,6 +49,12 @@ pub fn lower_authored_terrain_presentation_and_biomes_and_waterfall(
         surface_resolution: 256,
         surface_margin_cells: 4,
         full_alpha_composition: true,
+        water_distance_fade: super::water_configuration::lower_water_distance_fade(
+            &terrain_source_document.root,
+        )?,
+        water_editing: super::water_configuration::lower_water_editing(
+            &terrain_source_document.root,
+        )?,
     };
     let terrain_biomes = biome_names
         .iter()
@@ -358,6 +364,7 @@ fn lower_authored_terrain_biome_water_presentation(
             source_documents,
             water_source_node,
         )?,
+        shoreline: super::water_configuration::lower_biome_shoreline(water_source_node)?,
     })
 }
 
@@ -397,6 +404,10 @@ fn lower_authored_terrain_water_surface_material_presentation(
     let geometric_wave_source_node = required_material_child("geometric")?;
     let ripple_wave_source_node = required_material_child("ripple")?;
     Ok(TerrainWaterSurfaceMaterialPresentation {
+        configuration: super::water_configuration::lower_water_configuration(
+            &material_source_document.root,
+            source_documents,
+        )?,
         reflection: TerrainWaterReflectionPresentation {
             strength_percent: required_source_node_number(reflection_source_node, "strength")?,
             ambient_colour_rgb255: parse_authored_rgb255(required_source_node_attribute(
@@ -575,7 +586,7 @@ fn lower_authored_water_depth_to_canonical_millimetres(
     Ok(Some(depth_millimetres))
 }
 
-fn normalize_particle_source_document_name(source_name: &str) -> String {
+pub(in crate::terrain) fn normalize_particle_source_document_name(source_name: &str) -> String {
     source_name
         .chars()
         .filter(|character| character.is_ascii_alphanumeric())

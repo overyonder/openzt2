@@ -150,6 +150,7 @@ pub(super) fn bind_environment_lights(
                 environment.light_samples.push(EnvironmentLightSample {
                     target,
                     kind: EnvironmentLightKind::Ambient,
+                    child_index: 0,
                     quality: 0,
                     key: id(name),
                     model: id(value),
@@ -198,6 +199,7 @@ pub(super) fn bind_environment_lights(
                     environment.light_samples.push(EnvironmentLightSample {
                         target: EnvironmentLightTarget::Water,
                         kind: EnvironmentLightKind::Ambient,
+                        child_index: 0,
                         quality: quality_code,
                         key: id(name),
                         model: id(value),
@@ -237,6 +239,7 @@ pub(super) fn bind_environment_lights(
                     environment.light_samples.push(EnvironmentLightSample {
                         target,
                         kind: EnvironmentLightKind::Ambient,
+                        child_index: 0,
                         quality: 0,
                         key: id(sample.name.as_str()),
                         model: AssetId::default(),
@@ -253,7 +256,9 @@ pub(super) fn bind_environment_lights(
             if let Some(lights) = target_node.element_children().find(|child| {
                 canonicalize_source_document_record_key(child.name.as_str()) == "lights"
             }) {
-                for light in lights.element_children() {
+                for (child_index, light) in lights.element_children().enumerate() {
+                    let child_index = u16::try_from(child_index)
+                        .map_err(|_| simple_error("environment light child count exceeds u16"))?;
                     let kind = match canonicalize_source_document_record_key(light.name.as_str())
                         .as_str()
                     {
@@ -281,6 +286,7 @@ pub(super) fn bind_environment_lights(
                         environment.light_samples.push(EnvironmentLightSample {
                             target,
                             kind,
+                            child_index,
                             quality: 0,
                             key: id(sample.name.as_str()),
                             model: AssetId::default(),
@@ -334,6 +340,7 @@ pub(super) fn bind_environment_lights(
             environment.light_samples.push(EnvironmentLightSample {
                 target,
                 kind: EnvironmentLightKind::Ambient,
+                child_index: 0,
                 quality: 0,
                 key: id(sample.name.as_str()),
                 model: AssetId::default(),

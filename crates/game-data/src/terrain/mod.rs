@@ -25,6 +25,49 @@ pub struct TerrainPresentation {
     pub surface_resolution: u16,
     pub surface_margin_cells: u8,
     pub full_alpha_composition: bool,
+    pub water_distance_fade: TerrainWaterDistanceFadeConfiguration,
+    #[serde(default)]
+    pub water_editing: TerrainWaterEditingConfiguration,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterEditingConfiguration {
+    pub height_snap_interval_metres: f32,
+    pub height_snap_base_metres: f32,
+    pub plane_merge_tolerance_metres: f32,
+}
+
+impl Default for TerrainWaterEditingConfiguration {
+    fn default() -> Self {
+        Self {
+            height_snap_interval_metres: 0.5,
+            height_snap_base_metres: 5.0,
+            plane_merge_tolerance_metres: 0.5,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterDistanceFadeConfiguration {
+    pub time_seconds: f32,
+    pub minimum_distance: f32,
+    pub maximum_distance: f32,
+    pub search: f32,
+    pub minimum_fresnel: f32,
+    pub maximum_fresnel: f32,
+}
+
+impl Default for TerrainWaterDistanceFadeConfiguration {
+    fn default() -> Self {
+        Self {
+            time_seconds: 1.5,
+            minimum_distance: 2.0,
+            maximum_distance: 35.0,
+            search: 0.5,
+            minimum_fresnel: 0.8,
+            maximum_fresnel: 0.0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -55,6 +98,7 @@ pub struct TerrainBiomeWaterPresentation {
     pub gloss_map: String,
     pub texture_animations: [TerrainWaterTextureAnimation; 2],
     pub surface_material: TerrainWaterSurfaceMaterialPresentation,
+    pub shoreline: TerrainBiomeShorelineConfiguration,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -63,6 +107,156 @@ pub struct TerrainWaterSurfaceMaterialPresentation {
     pub refraction: TerrainWaterRefractionPresentation,
     pub geometric_waves: TerrainWaterGeometricWavePresentation,
     pub ripple_waves: TerrainWaterRippleWavePresentation,
+    pub configuration: TerrainWaterConfiguration,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainBiomeShorelineConfiguration {
+    pub submerged_texture: Option<String>,
+    pub shore_texture: Option<String>,
+    pub ripple_system: Option<String>,
+    pub ripple_maximum_percent: Option<f32>,
+    pub ripple_period: Option<f32>,
+    pub ripple_maximum_percent_per_period: Option<f32>,
+}
+
+/// Authored water settings. Missing values remain absent until their defaults are known.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterConfiguration {
+    pub shore: Option<TerrainWaterShoreConfiguration>,
+    pub scum: Option<TerrainWaterScumConfiguration>,
+    pub side: Option<TerrainWaterSideConfiguration>,
+    pub wake_systems: Vec<String>,
+    pub wake_maximum_counts: Vec<f32>,
+    pub high_wake_systems: Vec<String>,
+    pub high_wake_maximum_counts: Vec<f32>,
+    pub high_wake_instance_count: u32,
+    pub spray: Vec<TerrainWaterSprayDetail>,
+    pub spray_fallback: Vec<TerrainWaterSprayVariant>,
+    pub bubbles: Vec<TerrainWaterBubbleDetail>,
+    pub bubbles_fallback: TerrainWaterBubbleDetail,
+    pub suspension: Option<TerrainWaterSuspensionConfiguration>,
+    pub current: Option<TerrainWaterCurrentConfiguration>,
+    pub fog: Vec<TerrainWaterFogDetail>,
+    pub light: Vec<crate::scene_prefab::PrefabEnvironmentKey>,
+    #[serde(default)]
+    pub directional_lights: Vec<crate::world_definitions::environment::EnvironmentLightSample>,
+    pub caustics: TerrainWaterCausticsConfiguration,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterCausticsConfiguration {
+    pub bottom_map: String,
+    pub top_map: String,
+    pub height_lookup: String,
+    pub bottom_rate: [f32; 2],
+    pub top_rate: [f32; 2],
+    pub bottom_tile: f32,
+    pub top_tile: f32,
+    pub fade_start: f32,
+    pub fade_distance: f32,
+    pub tint_rgba: [f32; 4],
+    pub terrain_tint_rgba: [f32; 4],
+    pub bottom_rock_distance_range: [f32; 2],
+    pub top_rock_distance_range: [f32; 2],
+    pub bottom_rock_rate_range: [f32; 2],
+    pub top_rock_rate_range: [f32; 2],
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterShoreConfiguration {
+    pub tint_rgba255: Option<[u8; 4]>,
+    pub bottom_rate: Option<f32>,
+    pub bottom_size: Option<f32>,
+    pub top_rate: Option<f32>,
+    pub top_size: Option<f32>,
+    pub ripple_top: Option<String>,
+    pub ripple_bottom: Option<String>,
+    pub ripple_mask: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterScumConfiguration {
+    pub image: Option<String>,
+    pub bottom_size: Option<[f32; 2]>,
+    pub bottom_rate: Option<[f32; 2]>,
+    pub top_size: Option<[f32; 2]>,
+    pub top_rate: Option<[f32; 2]>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterSideConfiguration {
+    pub colour_rgba255: Option<[u8; 4]>,
+    pub lit_colour_rgba255: Option<[u8; 4]>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterSprayDetail {
+    pub level: u32,
+    pub variants: Vec<TerrainWaterSprayVariant>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterSprayVariant {
+    pub system: String,
+    pub maximum_strength: f32,
+    pub above_water_sound: Option<String>,
+    pub below_water_sound: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterBubbleDetail {
+    pub level: u32,
+    pub system: Option<String>,
+    pub sound: Option<String>,
+    pub emitters: Vec<TerrainWaterBubbleEmission>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterBubbleEmission {
+    pub small_seconds: Option<f32>,
+    pub big_seconds: Option<f32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterSuspensionConfiguration {
+    pub system: Option<String>,
+    pub emitters: Vec<TerrainWaterSuspensionEmission>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterSuspensionEmission {
+    pub minimum_density: Vec<f32>,
+    pub maximum_density: Vec<f32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterCurrentConfiguration {
+    pub wind_speed: Option<f32>,
+    pub gustiness: Option<f32>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterFogDetail {
+    pub quality: crate::world_definitions::environment::EnvironmentFogQuality,
+    pub unlit: Vec<TerrainWaterFogDirtiness>,
+    pub lit: Vec<TerrainWaterFogDirtiness>,
+    /// Dirtiness blocks authored outside either lighting branch.
+    pub unscoped: Vec<TerrainWaterFogDirtiness>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterFogDirtiness {
+    pub level: f32,
+    pub keyframes: Vec<TerrainWaterFogKeyframe>,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct TerrainWaterFogKeyframe {
+    pub time: f32,
+    pub start: f32,
+    pub end: f32,
+    pub colour_rgb255: [u8; 3],
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Serialize)]

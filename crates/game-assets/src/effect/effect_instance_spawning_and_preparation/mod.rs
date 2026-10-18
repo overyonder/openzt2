@@ -80,9 +80,13 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
     asset_server: Res<AssetServer>,
     mut hanabi_effect_assets: ResMut<Assets<HanabiEffectAsset>>,
     mut prepared_hanabi_effect_assets: ResMut<PreparedHanabiEffectAssets>,
-    pending_effect_instances: Query<(Entity, &PendingEffectInstance)>,
+    pending_effect_instances: Query<(
+        Entity,
+        &PendingEffectInstance,
+        Option<&super::particle_wave_surface::ParticleEffectWaveSurface>,
+    )>,
 ) {
-    for (effect_entity, pending_effect_instance) in &pending_effect_instances {
+    for (effect_entity, pending_effect_instance, wave_surface) in &pending_effect_instances {
         let Some(effect_asset) = effect_assets.get(&pending_effect_instance.effect_asset) else {
             continue;
         };
@@ -124,13 +128,33 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
             commands.entity(effect_entity).despawn();
             continue;
         }
-        let Some(hanabi_effect_handle) = prepared_hanabi_effect_assets.prepare_effect_asset(
-            pending_effect_instance.effect_asset.id(),
-            &effect_asset.particle_document,
-            authored_emitter_id,
-            pending_effect_instance.collision_spawn_context.clone(),
-            &mut hanabi_effect_assets,
-        ) else {
+        let prepared_handle = if wave_surface.is_some() {
+            let ParticleDocument::Effect(document) = &effect_asset.particle_document else {
+                continue;
+            };
+            let Some(emitter) = document
+                .emitters
+                .iter()
+                .find(|emitter| emitter.emitter_id == authored_emitter_id)
+            else {
+                continue;
+            };
+            if emitter.modifiers.iter().any(|modifier| matches!(modifier, openzt2_game_data::particle::authored_particle_system::AuthoredParticleSystemModifier::AngularDrag { .. })) {
+                error!(emitter = ?authored_emitter_id, "wave surface particle requires accumulated spin for angular drag");
+                commands.entity(effect_entity).despawn();
+                continue;
+            }
+            Some(hanabi_effect_assets.add(super::authored_particle_system_hanabi_effect_preparation::prepare_authored_particle_system_emitter_as_hanabi_effect_asset(emitter, pending_effect_instance.collision_spawn_context.clone(), true)))
+        } else {
+            prepared_hanabi_effect_assets.prepare_effect_asset(
+                pending_effect_instance.effect_asset.id(),
+                &effect_asset.particle_document,
+                authored_emitter_id,
+                pending_effect_instance.collision_spawn_context.clone(),
+                &mut hanabi_effect_assets,
+            )
+        };
+        let Some(hanabi_effect_handle) = prepared_handle else {
             error!(
                 effect_asset = ?pending_effect_instance.effect_asset.id(),
                 emitter = ?authored_emitter_id,

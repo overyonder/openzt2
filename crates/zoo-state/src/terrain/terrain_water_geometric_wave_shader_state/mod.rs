@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainWaterGeometricWavePresentation;
 use openzt2_game_data::terrain::TerrainWaterRippleWavePresentation;
 
+use openzt2_game_assets::effect::particle_wave_surface::ParticleEffectWaveSurface;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 
 const GEOMETRIC_AMPLITUDE_SCALE: f32 = 0.0019;
@@ -27,15 +28,15 @@ const RIPPLE_STARTUP_DIVISOR: f32 = 3.0;
 const INITIAL_WAVE_STEEPNESS: f32 = 20.0;
 const WAVE_STEEPNESS_DENOMINATOR: f32 = 25.132_742;
 
-#[derive(Clone, Debug)]
+#[derive(Component, Clone, Debug)]
 pub struct NativeTerrainWaterGeometricWaveShaderState {
     channels: [NativeTerrainWaterGeometricWaveChannel; 4],
     geometric_minimum_amplitude_ratio: f32,
     geometric_maximum_amplitude_ratio: f32,
+    geometric_chop_percent: f32,
     ripple_configuration: NativeTerrainWaterImpactWaveConfiguration,
     pending_impact: Option<NativeTerrainWaterPendingImpactWave>,
     next_impact_channel_index: usize,
-    random_state: u32,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -47,9 +48,40 @@ struct NativeTerrainWaterPendingImpactWave {
 
 #[derive(Message, Clone, Copy, Debug)]
 pub struct ActivateTerrainWaterImpactWave {
+    /// Canonical source-region entity.
     pub surface: Entity,
+    /// Z-up horizontal coordinates: Bevy world `(x, -z)`.
     pub source_position: Vec2,
     pub native_strength: f32,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub struct WaterSurfaceSpraySample {
+    /// Canonical source-region entity.
+    pub surface: Entity,
+    /// Z-up horizontal coordinates: Bevy world `(x, -z)`.
+    pub source_position: Vec2,
+    /// Heading and surface normal in Bevy world coordinates.
+    pub direction: Vec3,
+    pub normal: Vec3,
+    pub native_strength: f32,
+}
+
+#[derive(Message, Clone, Copy, Debug)]
+pub struct WaterSurfaceWakeSample {
+    /// Canonical source-region entity.
+    pub surface: Entity,
+    /// Position and heading in Z-up horizontal coordinates.
+    pub source_position: Vec2,
+    pub direction: Vec2,
+    pub native_strength: f32,
+}
+
+/// Actual projected wake renderer capability of one source region.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WaterWakePresentationPath {
+    TerrainStitch,
+    GeometricWave,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -88,7 +120,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
     pub fn from_authored_geometric_wave(
         geometric: TerrainWaterGeometricWavePresentation,
         ripple: TerrainWaterRippleWavePresentation,
-        random_seed: u32,
+        random_unit: &mut impl FnMut() -> f64,
     ) -> Self {
         let startup_divisor_seconds = ripple.startup_seconds / RIPPLE_STARTUP_DIVISOR;
         let mut state = Self {
@@ -103,6 +135,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
                 GEOMETRIC_AMPLITUDE_SCALE,
                 AMPLITUDE_BIAS,
             ),
+            geometric_chop_percent: geometric.chop_percent,
             ripple_configuration: NativeTerrainWaterImpactWaveConfiguration {
                 minimum_amplitude_ratio: map_percent(
                     ripple.minimum_amplitude_percent,
@@ -126,43 +159,27 @@ impl NativeTerrainWaterGeometricWaveShaderState {
             },
             pending_impact: None,
             next_impact_channel_index: 0,
-            random_state: random_seed,
         };
         for channel_index in 0..state.channels.len() {
-            state.spawn_random_wave_channel(channel_index, geometric.chop_percent);
+            state.spawn_random_wave_channel(channel_index, geometric.chop_percent, random_unit);
         }
         state
     }
 
-    fn native_msvcr80_random_unit_float(&mut self) -> f32 {
-        self.random_state = self
-            .random_state
-            .wrapping_mul(214_013)
-            .wrapping_add(2_531_011);
-        ((self.random_state >> 16) & 0x7fff) as f32 / 32_767.0
-    }
-
-    fn spawn_random_wave_channel(&mut self, channel_index: usize, chop_percent: f32) {
-        let wavelength = lerp(
-            MINIMUM_WAVELENGTH,
-            MAXIMUM_WAVELENGTH,
-            self.native_msvcr80_random_unit_float(),
-        );
-        let amplitude_ratio = lerp(
+    fn spawn_random_wave_channel(
+        &mut self,
+        channel_index: usize,
+        chop_percent: f32,
+        random_unit: &mut impl FnMut() -> f64,
+    ) {
+        let wavelength = random_range(MINIMUM_WAVELENGTH, MAXIMUM_WAVELENGTH, random_unit());
+        let amplitude_ratio = random_range(
             self.geometric_minimum_amplitude_ratio,
             self.geometric_maximum_amplitude_ratio,
-            self.native_msvcr80_random_unit_float(),
+            random_unit(),
         );
-        let centre_x = lerp(
-            MINIMUM_CENTRE_X,
-            MAXIMUM_CENTRE_X,
-            self.native_msvcr80_random_unit_float(),
-        );
-        let centre_y = lerp(
-            MINIMUM_CENTRE_Y,
-            MAXIMUM_CENTRE_Y,
-            self.native_msvcr80_random_unit_float(),
-        );
+        let centre_x = random_range(MINIMUM_CENTRE_X, MAXIMUM_CENTRE_X, random_unit());
+        let centre_y = random_range(MINIMUM_CENTRE_Y, MAXIMUM_CENTRE_Y, random_unit());
         self.channels[channel_index] = NativeTerrainWaterGeometricWaveChannel {
             amplitude: wavelength * amplitude_ratio,
             wavelength,
@@ -185,8 +202,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
         if self.channels.iter_mut().any(|channel| {
             let existing_centre = Vec2::new(channel.centre_x, channel.centre_y);
             if existing_centre.distance_squared(source_position) < 1.0 {
-                channel.lifespan_end_seconds = channel.elapsed_seconds
-                    + self.ripple_configuration.activation_transition_seconds;
+                channel.refresh_native_impact_lifetime(self.ripple_configuration);
                 true
             } else {
                 false
@@ -198,14 +214,16 @@ impl NativeTerrainWaterGeometricWaveShaderState {
             let channel_index = self.next_impact_channel_index;
             self.next_impact_channel_index = (channel_index + 1) % self.channels.len();
             let channel = &mut self.channels[channel_index];
-            channel.lifespan_end_seconds = if channel.envelope < 0.05 {
-                channel.elapsed_seconds + self.ripple_configuration.activation_transition_seconds
+            if channel.envelope <= 0.05 {
+                channel.reset_native_release_timing(
+                    self.ripple_configuration.activation_transition_seconds,
+                );
             } else {
-                channel.elapsed_seconds
-            };
+                channel.lifespan_end_seconds = channel.elapsed_seconds;
+            }
             self.pending_impact = Some(NativeTerrainWaterPendingImpactWave {
                 centre: source_position,
-                strength: native_strength,
+                strength: native_impact_strength_fraction(native_strength),
                 channel_index,
             });
         }
@@ -250,7 +268,11 @@ impl NativeTerrainWaterGeometricWaveShaderState {
         };
     }
 
-    pub fn advance_wave_channels(&mut self, elapsed_seconds: f32) {
+    pub fn advance_wave_channels(
+        &mut self,
+        elapsed_seconds: f32,
+        random_unit: &mut impl FnMut() -> f64,
+    ) {
         let mut pending_spawn_exists = false;
         for channel_index in 0..self.channels.len() {
             let channel_before_update = self.channels[channel_index];
@@ -268,7 +290,8 @@ impl NativeTerrainWaterGeometricWaveShaderState {
                     } else {
                         self.spawn_random_wave_channel(
                             channel_index,
-                            channel_before_update.chop / CHOP_SCALE * 100.0,
+                            self.geometric_chop_percent,
+                            random_unit,
                         );
                     }
                 }
@@ -348,6 +371,34 @@ impl NativeTerrainWaterGeometricWaveShaderState {
         );
     }
 
+    pub fn particle_wave_surface(&self, water_height: f32) -> ParticleEffectWaveSurface {
+        ParticleEffectWaveSurface {
+            frequency: Vec4::from_array(
+                self.channels
+                    .map(|channel| std::f32::consts::TAU / channel.wavelength),
+            ),
+            phase: Vec4::from_array(self.channels.map(|channel| channel.phase)),
+            amplitude: Vec4::from_array(
+                self.channels
+                    .map(|channel| channel.amplitude * channel.envelope),
+            ),
+            pos_x: Vec4::from_array(self.channels.map(|channel| channel.centre_x)),
+            pos_y: Vec4::from_array(self.channels.map(|channel| channel.centre_y)),
+            k: Vec4::from_array(self.channels.map(|channel| channel.native_wave_steepness())),
+            ramp_offset: Vec4::from_array(self.channels.map(|channel| channel.ramp_offset)),
+            ramp_scale: Vec4::from_array(
+                self.channels.map(|channel| channel.ramp_distance.recip()),
+            ),
+            depth_offset: Vec4::new(
+                water_height,
+                water_height,
+                water_height + 0.001,
+                water_height,
+            ),
+            depth_scale: Vec4::new(2.0, 2.0, 2.0, 1.0),
+        }
+    }
+
     /// Bounds the shipped watersurface.h displacement in source XY and Z.
     /// Its wrapped seventh/sixth-order sine/cosine polynomials stay below
     /// 1.01/1.22 in magnitude; ramp attenuation is in [0, 1]. Horizontal
@@ -375,6 +426,40 @@ impl NativeTerrainWaterGeometricWaveShaderState {
 }
 
 impl NativeTerrainWaterGeometricWaveChannel {
+    fn refresh_native_impact_lifetime(
+        &mut self,
+        configuration: NativeTerrainWaterImpactWaveConfiguration,
+    ) {
+        if self.lifespan_end_seconds < 0.0 {
+            return;
+        }
+        if self.elapsed_seconds < self.attack_seconds
+            || self.lifespan_end_seconds - self.elapsed_seconds < self.release_seconds
+        {
+            self.lifespan_end_seconds = self.elapsed_seconds + configuration.lifespan_seconds;
+        } else if self.envelope <= 0.05 {
+            self.reset_native_release_timing(configuration.activation_transition_seconds);
+        } else {
+            self.lifespan_end_seconds = self.elapsed_seconds;
+        }
+    }
+
+    fn reset_native_release_timing(&mut self, transition_seconds: f32) {
+        let rescale_release = if self.elapsed_seconds < self.attack_seconds {
+            self.attack_seconds = 0.0;
+            true
+        } else {
+            self.lifespan_end_seconds > 0.0
+                && self.lifespan_end_seconds - self.elapsed_seconds < self.release_seconds
+        };
+        self.release_seconds = if rescale_release {
+            transition_seconds / self.envelope
+        } else {
+            transition_seconds
+        };
+        self.lifespan_end_seconds = self.elapsed_seconds + transition_seconds;
+    }
+
     fn native_wave_steepness(self) -> f32 {
         let amplitude_ratio = self.amplitude / self.wavelength;
         if self.chop / (INITIAL_WAVE_STEEPNESS * WAVE_STEEPNESS_DENOMINATOR) < amplitude_ratio {
@@ -431,8 +516,25 @@ fn map_percent(percent: f32, scale: f32, bias: f32) -> f32 {
     percent / 100.0 * scale + bias
 }
 
+fn native_impact_strength_fraction(strength: f32) -> f32 {
+    const MINIMUM_STRENGTH: f32 = 0.1;
+    const MAXIMUM_STRENGTH: f32 = 5.0;
+    if strength <= MINIMUM_STRENGTH {
+        0.0
+    } else if strength > MAXIMUM_STRENGTH {
+        1.0
+    } else {
+        ((f64::from(strength) - f64::from(MINIMUM_STRENGTH))
+            / (f64::from(MAXIMUM_STRENGTH) - f64::from(MINIMUM_STRENGTH))) as f32
+    }
+}
+
 fn lerp(minimum: f32, maximum: f32, fraction: f32) -> f32 {
     (maximum - minimum) * fraction + minimum
+}
+
+fn random_range(minimum: f32, maximum: f32, fraction: f64) -> f32 {
+    ((f64::from(maximum) - f64::from(minimum)) * fraction + f64::from(minimum)) as f32
 }
 
 #[cfg(test)]
@@ -440,8 +542,33 @@ mod geometric_wave_state_tests {
     use super::*;
 
     #[test]
+    fn impact_strength_uses_the_authored_strength_range() {
+        assert_eq!(native_impact_strength_fraction(0.0), 0.0);
+        assert_eq!(native_impact_strength_fraction(0.1), 0.0);
+        assert_eq!(native_impact_strength_fraction(2.55), 0.5);
+        assert_eq!(native_impact_strength_fraction(5.0), 1.0);
+        assert_eq!(native_impact_strength_fraction(10.0), 1.0);
+    }
+
+    #[test]
+    fn interrupting_an_attacking_wave_preserves_its_fade_envelope() {
+        let mut channel = NativeTerrainWaterGeometricWaveChannel::cleared();
+        channel.attack_seconds = 1.0;
+        channel.elapsed_seconds = 0.25;
+        channel.envelope = 0.25;
+        channel.reset_native_release_timing(0.5);
+        assert_eq!(channel.attack_seconds, 0.0);
+        assert_eq!(channel.release_seconds, 2.0);
+        assert_eq!(channel.lifespan_end_seconds, 0.75);
+        advance_channel(&mut channel, 0.0, 1.0);
+        assert_eq!(channel.envelope, 0.25);
+    }
+
+    #[test]
     fn native_random_wave_defaults_keep_phase_finite_through_respawn() {
         for seed in 0..128 {
+            let mut random = openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream::from_seed(seed);
+            let mut random_unit = || random.unit_f64();
             let mut state =
                 NativeTerrainWaterGeometricWaveShaderState::from_authored_geometric_wave(
                     TerrainWaterGeometricWavePresentation {
@@ -459,10 +586,10 @@ mod geometric_wave_state_tests {
                         ramp_minimum_metres: 1.0,
                         ramp_maximum_metres: 5.0,
                     },
-                    seed,
+                    &mut random_unit,
                 );
             for _ in 0..120 {
-                state.advance_wave_channels(0.1);
+                state.advance_wave_channels(0.1, &mut random_unit);
                 for channel in state.channels {
                     assert!((5.0..=10.0).contains(&channel.wavelength));
                     assert!((-100.0..=0.0).contains(&channel.centre_x));

@@ -28,6 +28,10 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut strokes: MessageReader<TerrainStroke>,
     index: Res<TerrainIndex>,
     assets: Res<Assets<TerrainAsset>>,
+    water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
+    water_membership: Query<
+        &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex,
+    >,
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -35,10 +39,11 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         Option<&mut TerrainDirty>,
         &TerrainChunkId,
     )>,
-    mut previews: Query<Option<&mut TerrainEdit>, With<ActiveTerrainBrush>>,
+    mut previews: Query<Option<&mut TerrainEdit>, Or<(With<ActiveTerrainBrush>, With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit>)>>,
     mut changed: MessageWriter<TerrainChanged>,
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
+    mut missing_membership: Local<Option<(Entity, usize)>>,
 ) {
     for stroke in strokes.read() {
         let Ok(draft_edit) = previews.get_mut(stroke.preview) else {
@@ -81,7 +86,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         }
         candidate_entities.sort_unstable();
 
-        let water_surface_height_cm =
+        let mut water_surface_height_cm =
             crate::terrain::terrain_brush_sample_mutation::resolve_painted_water_surface_height_centimetres(
                 &preview,
                 &dab,
@@ -90,6 +95,54 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                     Some((chunk, assets.get(&chunk.asset)?, edited))
                 }),
             );
+
+        let water_plan = if matches!(
+            preview.kind,
+            openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::PaintWater { .. }
+                | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::AddWater
+                | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::RemoveWater
+        ) {
+            let Some((root, chunk, _, _, _)) = chunks
+                .iter()
+                .find(|(_, chunk, _, _, _)| chunk.source_coord == IVec2::ZERO)
+            else {
+                continue;
+            };
+            let Some(asset) = assets.get(&chunk.asset) else {
+                continue;
+            };
+            let Ok(membership) = water_membership.single() else {
+                let count = water_membership.iter().count();
+                if *missing_membership != Some((stroke.preview, count)) {
+                    warn!(target: "openzt2_water_brush", preview = ?stroke.preview, membership_indexes = count, "water brush dab rejected: expected one resolved terrain membership index");
+                    *missing_membership = Some((stroke.preview, count));
+                }
+                continue;
+            };
+            *missing_membership = None;
+            let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _, _)| {
+                (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
+                    Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
+                }))
+            }).collect();
+            let Some(initial_height) = water_surface_height_cm else {
+                continue;
+            };
+            let plan = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(&mut commands, &preview, &chunk.asset, asset, root, samples.into_iter(), &water_regions, membership, initial_height, dab.seconds);
+            let Some(plan) = plan else {
+                continue;
+            };
+            water_surface_height_cm = plan.ground_reference_height_cm(asset);
+            candidate_entities.extend(chunks.iter().filter_map(|(entity, candidate, _, _, _)| {
+                (candidate.asset == chunk.asset && plan.affects_chunk(candidate, membership))
+                    .then_some(entity)
+            }));
+            candidate_entities.sort_unstable();
+            candidate_entities.dedup();
+            Some(plan)
+        } else {
+            None
+        };
 
         let mut applied_deltas = Vec::with_capacity(candidate_entities.len());
         for entity in candidate_entities {
@@ -108,9 +161,40 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                     &preview,
                     core::slice::from_ref(&dab),
                     &[water_surface_height_cm],
+                    water_plan
+                        .as_ref()
+                        .zip(water_membership.single().ok())
+                        .map(|(plan, membership)| (plan, &water_regions, membership)),
                 )
             };
             let Some(delta) = delta else {
+                continue;
+            };
+            applied_deltas.push(delta);
+        }
+        if applied_deltas.is_empty() {
+            continue;
+        }
+        let mut owner_changes = water_plan.map_or_else(Vec::new, |plan| plan.changes);
+        if let Ok(membership) = water_membership.single() {
+            let Some(asset) = assets.get(membership.terrain()) else {
+                continue;
+            };
+            let Some((parent, _, _, _, _)) = chunks.iter().find(|(_, chunk, _, _, _)| {
+                chunk.source_coord == IVec2::ZERO && chunk.asset.id() == membership.terrain()
+            }) else {
+                continue;
+            };
+            if crate::terrain::terrain_brush_sample_mutation::water_affiliation::splitting::split_disconnected_water_affiliations(
+                &mut commands, asset, parent, membership, &water_regions,
+                chunks.iter().map(|(_, chunk, edited, _, persistent)| (chunk, edited, *persistent)),
+                &mut applied_deltas, &mut owner_changes,
+            ).is_none() { continue; }
+        }
+        for delta in &applied_deltas {
+            let Some(entity) = chunks.iter().find_map(|(entity, _, _, _, persistent)| {
+                (*persistent == delta.chunk).then_some(entity)
+            }) else {
                 continue;
             };
             apply_validated_terrain_edit_delta_and_publish_changed_region(
@@ -119,22 +203,27 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 &assets,
                 stroke.preview,
                 entity,
-                &delta,
+                delta,
                 true,
                 &mut changed,
                 &mut navigation_changed,
                 &mut water_changed,
             );
-            applied_deltas.push(delta);
         }
-        if applied_deltas.is_empty() {
-            continue;
-        }
+        crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
+            &mut commands,
+            owner_changes
+                .iter()
+                .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
+                .collect(),
+        );
         if let Some(mut draft_edit) = draft_edit {
             draft_edit.deltas.extend(applied_deltas);
+            draft_edit.water_regions.extend(owner_changes);
         } else {
             commands.entity(stroke.preview).insert(TerrainEdit {
                 deltas: applied_deltas,
+                water_regions: owner_changes,
             });
         }
     }
@@ -163,6 +252,14 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
         return;
     }
     for (preview_entity, edit) in &previews {
+        crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
+            &mut commands,
+            edit.water_regions
+                .iter()
+                .rev()
+                .map(|delta| (delta.owner, delta.before.clone(), delta.before_active))
+                .collect(),
+        );
         for delta in edit.deltas.iter().rev() {
             let Some(chunk_entity) = chunks.iter_mut().find_map(|(entity, _, _, _, persistent)| {
                 (*persistent == delta.chunk).then_some(entity)

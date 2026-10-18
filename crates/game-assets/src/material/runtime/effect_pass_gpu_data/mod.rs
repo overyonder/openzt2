@@ -51,7 +51,7 @@ pub(super) struct D3d9BooleanShaderRegisters {
 
 #[derive(Clone, Copy, Debug, PartialEq, ShaderType)]
 pub(super) struct D3d9FixedFunctionRegisters {
-    pub(super) values: [Vec4; 48],
+    pub(super) values: [Vec4; 49],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, ShaderType)]
@@ -121,6 +121,7 @@ pub struct EffectPassMaterial {
     pub(super) lighting_state_is_authored: bool,
     pub(super) fixed_function: D3d9FixedFunctionRegisters,
     pub(super) fixed_transforms: D3d9FixedFunctionTransforms,
+    pub(super) model_reflection_projections: [Option<Mat4>; 8],
     pub(super) vertex_floats: D3d9FloatShaderRegisters,
     pub(super) vertex_integers: D3d9IntegerShaderRegisters,
     pub(super) vertex_booleans: D3d9BooleanShaderRegisters,
@@ -139,6 +140,7 @@ pub struct EffectPassMaterial {
     pub(super) fixed_transform_bindings:
         Vec<fixed_function_transform_binding::DynamicFixedFunctionTransformBinding>,
     pub(super) dirty_fixed_transforms: bool,
+    pub(super) dirty_fixed_function: bool,
     pub(super) fixed_transform_render_view: Option<Entity>,
     pub(super) fixed_transform_evaluations: u64,
     pub(super) fixed_transform_evaluation_failures: u64,

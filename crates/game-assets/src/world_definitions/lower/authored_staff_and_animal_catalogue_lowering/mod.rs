@@ -739,6 +739,10 @@ pub(super) fn bind_authored_staff_catalogue(
             })
             .transpose()?;
 
+    let (presentation_caustic_policies, surface_effect_strength) =
+        super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
+            record,
+        )?;
     output.document.objects.push(WorldObjectDefinition {
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -768,6 +772,8 @@ pub(super) fn bind_authored_staff_catalogue(
         container_quantity: None,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,
         prefab_scale: 1.0,
+        surface_effect_strength,
+        presentation_caustic_policies,
         icon,
         biomes: Vec::new(),
         location: AssetId::default(),
@@ -958,6 +964,10 @@ pub(super) fn bind_authored_animal_catalogue(
             format!("authored animal actor {actor:?} has no resolved model scene"),
         )
     })?;
+    let (presentation_caustic_policies, surface_effect_strength) =
+        super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
+            record,
+        )?;
     output.document.objects.push(WorldObjectDefinition {
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -987,6 +997,8 @@ pub(super) fn bind_authored_animal_catalogue(
         container_quantity: None,
         transactions: super::authored_transaction_lowering::lower_object_transactions(record)?,
         prefab_scale,
+        surface_effect_strength,
+        presentation_caustic_policies,
         icon,
         biomes,
         location,

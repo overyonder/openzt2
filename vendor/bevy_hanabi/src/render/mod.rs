@@ -407,7 +407,17 @@ pub(crate) struct GpuSpawnerParams {
     /// particles (row index). This is ignored if the effect has no parent.
     parent_slab_offset: u32,
     // For Pod
-    _padding0: u32,
+    spawn_point_offset: u32,
+    particle_size_scale: f32,
+    properties_array_index: u32,
+    _spawn_padding: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Debug, Default, Clone, Copy, Pod, Zeroable, ShaderType)]
+struct GpuParticleSpawnPoint {
+    position: [f32; 4],
+    velocity: [f32; 4],
 }
 
 impl GpuSpawnerParams {
@@ -439,6 +449,7 @@ impl GpuSpawnerParams {
                 .unwrap_or_default(),
             slab_offset,
             parent_slab_offset: parent_slab_offset.unwrap_or(u32::MAX),
+            particle_size_scale: 1.0,
             ..default()
         }
     }
@@ -925,9 +936,12 @@ impl FromWorld for DispatchIndirectPipeline {
         trace!("GpuSimParams: min_size={}", GpuSimParams::min_size());
         let sim_params_bind_group_layout_desc = BindGroupLayoutDescriptor::new(
             "hanabi:bgl:dispatch_indirect:sim_params",
-            &BindGroupLayoutEntries::single(
+            &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
-                uniform_buffer::<GpuSimParams>(false),
+                (
+                    uniform_buffer::<GpuSimParams>(false),
+                    storage_buffer_read_only::<GpuParticleSpawnPoint>(false),
+                ),
             ),
         );
 
@@ -1724,9 +1738,12 @@ impl Default for ParticlesInitPipeline {
         let sim_params_layout_desc = BindGroupLayoutDescriptor::new(
             "hanabi:bgl:vfx_init:sim_params@0",
             // @group(0) @binding(0) var<uniform> sim_params: SimParams;
-            &BindGroupLayoutEntries::single(
+            &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE,
-                uniform_buffer::<GpuSimParams>(false),
+                (
+                    uniform_buffer::<GpuSimParams>(false),
+                    storage_buffer_read_only::<GpuParticleSpawnPoint>(false),
+                ),
             ),
         );
 
@@ -2312,6 +2329,10 @@ pub(crate) struct ExtractedSpawner {
     pub transform: GlobalTransform,
     /// Is the effect visible this frame?
     pub is_visible: bool,
+    pub spawn_points: Vec<crate::ParticleSpawnPoint>,
+    pub alive_count: Option<crate::ParticleAliveCount>,
+    pub spawn_submission: u32,
+    pub particle_size_scale: f32,
 }
 
 /// Cache info for the metadata of the effect.
@@ -2579,6 +2600,9 @@ pub(crate) fn extract_effects(
             Option<Ref<EffectProperties>>,
             &GlobalTransform,
             Option<&crate::EffectDeltaTime>,
+            Option<&crate::ParticleSpawnBatch>,
+            Option<&crate::ParticleAliveCount>,
+            Option<&crate::EffectParticleSizeScale>,
         )>,
     >,
     // Render world effects extracted from a previous frame, if any
@@ -2606,6 +2630,9 @@ pub(crate) fn extract_effects(
         maybe_properties,
         transform,
         effect_delta,
+        spawn_batch,
+        alive_count,
+        particle_size_scale,
     ) in q_effects.iter()
     {
         // Check if shaders are configured
@@ -2670,7 +2697,11 @@ pub(crate) fn extract_effects(
             textures: compiled_effect.textures.clone(),
             alpha_mode,
             effect_shaders: effect_shaders.clone(),
-            simulation_condition: asset.simulation_condition,
+            simulation_condition: if spawn_batch.is_some() {
+                SimulationCondition::Always
+            } else {
+                asset.simulation_condition
+            },
             delta_time: effect_delta.map_or(0.0, |delta| delta.0.max(0.0)),
         };
         if let Some(mut extracted_effect) = maybe_extracted_effect {
@@ -2689,6 +2720,10 @@ pub(crate) fn extract_effects(
             prng_seed: compiled_effect.prng_seed,
             transform: *transform,
             is_visible,
+            spawn_points: spawn_batch.map_or_else(Vec::new, |batch| batch.points.clone()),
+            alive_count: alive_count.cloned(),
+            spawn_submission: spawn_batch.map_or(0, |batch| batch.submission),
+            particle_size_scale: particle_size_scale.map_or(1.0, |scale| scale.0),
         };
         trace!(
             "[Effect {}] spawn_count={} prng_seed={}",
@@ -2724,7 +2759,7 @@ pub(crate) fn extract_effects(
 
         // Extract the parent, if any, and resolve its render entity
         let parent_render_entity = if let Some(main_entity) = compiled_effect.parent {
-            let Ok((_, render_entity, _, _, _, _, _, _, _)) = q_effects.get(main_entity) else {
+            let Ok((_, render_entity, ..)) = q_effects.get(main_entity) else {
                 error!(
                     "Failed to resolve render entity of parent with main entity {:?}.",
                     main_entity
@@ -2916,6 +2951,7 @@ pub struct EffectsMeta {
     /// for the active effect instances.
     // Note: we're still binding individual spawners in vfx_sort_fill.
     spawner_buffer: AlignedBufferVec<GpuSpawnerParams>,
+    spawn_point_buffer: AlignedBufferVec<GpuParticleSpawnPoint>,
     /// Global shared GPU buffer storing the various indirect dispatch structs
     /// for the indirect dispatch of the Update pass.
     dispatch_indirect_buffer: GpuBuffer<GpuDispatchIndirectArgs>,
@@ -2986,6 +3022,11 @@ impl EffectsMeta {
                 Some(item_align.into()),
                 Some("hanabi:buffer:spawner".to_string()),
             ),
+            spawn_point_buffer: AlignedBufferVec::new(
+                BufferUsages::STORAGE,
+                None,
+                Some("hanabi:buffer:spawn_points".to_string()),
+            ),
             dispatch_indirect_buffer: GpuBuffer::new(
                 BufferUsages::STORAGE | BufferUsages::INDIRECT,
                 Some("hanabi:buffer:dispatch_indirect".to_string()),
@@ -3003,7 +3044,7 @@ impl EffectsMeta {
             is_batch_open: false,
             prefix_sum_buffer,
             effect_metadata_buffer: BufferTable::new(
-                BufferUsages::STORAGE | BufferUsages::INDIRECT,
+                BufferUsages::STORAGE | BufferUsages::INDIRECT | BufferUsages::COPY_SRC,
                 Some(item_align.into()),
                 Some("hanabi:buffer:effect_metadata".to_string()),
             ),
@@ -4389,6 +4430,7 @@ pub(crate) fn prepare_batch_inputs(
         Option<&ChildEffectOf>,
         Option<&CachedChildInfo>,
         Option<&CachedEffectEvents>,
+        Option<&CachedEffectProperties>,
     )>,
     mut sort_bind_groups: ResMut<SortBindGroups>,
 ) {
@@ -4401,6 +4443,10 @@ pub(crate) fn prepare_batch_inputs(
 
     // Clear per-instance buffers, which are filled below and re-uploaded each frame
     effects_meta.spawner_buffer.clear();
+    effects_meta.spawn_point_buffer.clear();
+    effects_meta
+        .spawn_point_buffer
+        .push(GpuParticleSpawnPoint::default());
     effects_meta.dispatch_indirect_buffer.clear();
 
     // Build batcher inputs from extracted effects, updating all cached components
@@ -4421,6 +4467,7 @@ pub(crate) fn prepare_batch_inputs(
         maybe_child_effect_of,
         maybe_cached_child_info,
         maybe_cached_effect_events,
+        maybe_cached_effect_properties,
     ) in &q_cached_effects
     {
         extracted_effect_count += 1;
@@ -4459,7 +4506,7 @@ pub(crate) fn prepare_batch_inputs(
         // Fetch the bind group layouts from the cache
         trace!("child_effect_of={:?}", maybe_child_effect_of);
         let parent_slab_id = if let Some(child_effect_of) = maybe_child_effect_of {
-            let Ok((_, _, _, _, parent_cached_effect, _, _, _, _, _, _, _, _)) =
+            let Ok((_, _, _, _, parent_cached_effect, ..)) =
                 q_cached_effects.get(child_effect_of.parent)
             else {
                 // At this point we should have discarded invalid effects with a missing parent,
@@ -4520,7 +4567,7 @@ pub(crate) fn prepare_batch_inputs(
         let parent_slab_offset = maybe_cached_child_info.map(|cci| cci.parent_slab_offset);
 
         assert!(cached_effect_metadata.table_id.is_valid());
-        let gpu_spawner_params = GpuSpawnerParams::new(
+        let mut gpu_spawner_params = GpuSpawnerParams::new(
             &extracted_spawner.transform,
             extracted_spawner.spawn_count,
             extracted_spawner.prng_seed,
@@ -4529,6 +4576,20 @@ pub(crate) fn prepare_batch_inputs(
             cached_effect_metadata.table_id,
             maybe_cached_draw_indirect_args,
         );
+        gpu_spawner_params.particle_size_scale = extracted_spawner.particle_size_scale;
+        gpu_spawner_params.properties_array_index = maybe_cached_effect_properties
+            .map(|properties| properties.array_index)
+            .unwrap_or(u32::MAX);
+        if !extracted_spawner.spawn_points.is_empty() {
+            gpu_spawner_params.spawn_point_offset = effects_meta.spawn_point_buffer.len() as u32;
+            gpu_spawner_params.spawn = extracted_spawner.spawn_points.len() as i32;
+            for point in &extracted_spawner.spawn_points {
+                effects_meta.spawn_point_buffer.push(GpuParticleSpawnPoint {
+                    position: point.position.extend(0.0).to_array(),
+                    velocity: point.velocity.extend(0.0).to_array(),
+                });
+            }
+        }
 
         trace!("Updating cached effect at entity {render_entity:?}...");
         let mut cmd = commands.entity(render_entity);
@@ -4761,6 +4822,12 @@ pub(crate) fn batch_effects(
 
     // Write the entire spawner buffer for this frame, for all effects combined
     if effects_meta
+        .spawn_point_buffer
+        .write_buffer(&render_device, &render_queue)
+    {
+        effects_meta.init_and_indirect_sim_params_bind_group = None;
+    }
+    if effects_meta
         .spawner_buffer
         .write_buffer(&render_device, &render_queue)
     {
@@ -4855,6 +4922,7 @@ impl Material {
     pub fn make_entries<'a>(
         &self,
         gpu_images: &'a RenderAssets<GpuImage>,
+        clamp_linear_sampler: &'a Sampler,
     ) -> Result<Vec<BindGroupEntry<'a>>, ()> {
         if self.textures.is_empty() {
             return Ok(vec![]);
@@ -4874,7 +4942,13 @@ impl Material {
                         },
                         BindGroupEntry {
                             binding: base_binding + 1,
-                            resource: BindingResource::Sampler(&gpu_image.sampler),
+                            resource: BindingResource::Sampler(
+                                if self.layout.layout[index].clamp_linear {
+                                    clamp_linear_sampler
+                                } else {
+                                    &gpu_image.sampler
+                                },
+                            ),
                         },
                     ]
                 } else {
@@ -5020,6 +5094,7 @@ struct ConsumeEventBuffers<'a> {
 
 #[derive(Default, Resource)]
 pub struct EffectBindGroups {
+    clamp_linear_sampler: Option<Sampler>,
     /// Map from a slab ID to the bind groups shared among all effects that
     /// use that particle slab.
     particle_slabs: HashMap<SlabId, BufferBindGroups>,
@@ -6296,6 +6371,19 @@ pub(crate) fn prepare_bind_groups(
     gpu_images: Res<RenderAssets<GpuImage>>,
     mut gpu_buffer_operation_queue: ResMut<GpuBufferOperations>,
 ) {
+    if effect_bind_groups.clamp_linear_sampler.is_none() {
+        effect_bind_groups.clamp_linear_sampler =
+            Some(render_device.create_sampler(&SamplerDescriptor {
+                label: Some("hanabi_clamp_linear"),
+                address_mode_u: AddressMode::ClampToEdge,
+                address_mode_v: AddressMode::ClampToEdge,
+                address_mode_w: AddressMode::ClampToEdge,
+                mag_filter: FilterMode::Linear,
+                min_filter: FilterMode::Linear,
+                mipmap_filter: MipmapFilterMode::Linear,
+                ..default()
+            }));
+    }
     // We can't simulate nor render anything without at least the spawner buffer
     if effects_meta.spawner_buffer.is_empty() {
         return;
@@ -6359,13 +6447,21 @@ pub(crate) fn prepare_bind_groups(
             .is_none()
         {
             debug!("Re-creating init_and_indirect_sim_params_bind_group...");
-            effects_meta.init_and_indirect_sim_params_bind_group =
-                Some(render_device.create_bind_group(
+            effects_meta.init_and_indirect_sim_params_bind_group = Some(
+                render_device.create_bind_group(
                     "hanabi:bg:vfx_indirect:sim_params@0",
                     &pipeline_cache.get_bind_group_layout(&init_pipeline.sim_params_layout_desc), // FIXME - Shared with init
                     // @group(0) @binding(0) var<uniform> sim_params : SimParams;
-                    &BindGroupEntries::single(effects_meta.sim_params_uniforms.binding().unwrap()),
-                ));
+                    &BindGroupEntries::sequential((
+                        effects_meta.sim_params_uniforms.binding().unwrap(),
+                        effects_meta
+                            .spawn_point_buffer
+                            .buffer()
+                            .unwrap()
+                            .as_entire_binding(),
+                    )),
+                ),
+            );
         }
 
         // Create the @1 bind group for the indirect dispatch preparation pass of all
@@ -6671,7 +6767,13 @@ pub(crate) fn prepare_bind_groups(
             assert_eq!(material.layout.layout.len(), material.textures.len());
 
             //let bind_group_entries = material.make_entries(&gpu_images).unwrap();
-            let Ok(bind_group_entries) = material.make_entries(&gpu_images) else {
+            let clamp_linear_sampler = effect_bind_groups
+                .clamp_linear_sampler
+                .as_ref()
+                .unwrap()
+                .clone();
+            let Ok(bind_group_entries) = material.make_entries(&gpu_images, &clamp_linear_sampler)
+            else {
                 trace!(
                     "Temporarily ignoring material {:?} due to missing image(s)",
                     material
@@ -7055,6 +7157,11 @@ fn begin_hanabi_compute_pass<'encoder>(
 
 fn simulate(
     mut render_context: RenderContext,
+    render_device: Res<RenderDevice>,
+    sampled_effects: Query<
+        (&ExtractedSpawner, &CachedEffectMetadata, &CachedReadyState),
+        With<BatchInput>,
+    >,
     pipeline_cache: Res<PipelineCache>,
     effects_meta: Res<EffectsMeta>,
     effect_bind_groups: Res<EffectBindGroups>,
@@ -7735,6 +7842,65 @@ fn simulate(
                     compute_pass.pop_debug_group();
                 }
             }
+        }
+    }
+    readback_live_particle_counts(
+        &mut render_context,
+        &render_device,
+        &effects_meta,
+        &sampled_effects,
+    );
+}
+
+fn readback_live_particle_counts(
+    render_context: &mut RenderContext,
+    render_device: &RenderDevice,
+    effects_meta: &EffectsMeta,
+    sampled_effects: &Query<
+        (&ExtractedSpawner, &CachedEffectMetadata, &CachedReadyState),
+        With<BatchInput>,
+    >,
+) {
+    use std::sync::atomic::Ordering;
+    if let Some(source) = effects_meta.effect_metadata_buffer.buffer() {
+        for (spawner, metadata, ready) in sampled_effects {
+            let completed_submission = spawner.spawn_submission;
+            let Some(count) = spawner.alive_count.as_ref().filter(|_| ready.is_ready()) else {
+                continue;
+            };
+            let offset = metadata.table_id.0 as u64
+                * effects_meta.effect_metadata_buffer.aligned_size() as u64
+                + std::mem::offset_of!(GpuEffectMetadata, alive_count) as u64;
+            if offset + 4 > source.size() {
+                continue;
+            }
+            if count.value.pending.swap(true, Ordering::AcqRel) {
+                continue;
+            }
+            let staging = render_device.create_buffer(&BufferDescriptor {
+                label: Some("hanabi:alive_count_readback"),
+                size: 4,
+                usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let encoder = render_context.command_encoder();
+            encoder.copy_buffer_to_buffer(source, offset, &staging, 0, 4);
+            let mapped = staging.clone();
+            let value = count.value.clone();
+            encoder.map_buffer_on_submit(&staging, MapMode::Read, .., move |result| {
+                if result.is_ok() {
+                    let bytes = mapped.slice(..).get_mapped_range();
+                    let count = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+                    drop(bytes);
+                    mapped.unmap();
+                    value.sample.store(
+                        (u64::from(completed_submission) << 32) | u64::from(count),
+                        Ordering::Release,
+                    );
+                    value.sampled.store(true, Ordering::Release);
+                }
+                value.pending.store(false, Ordering::Release);
+            });
         }
     }
 }

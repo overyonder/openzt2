@@ -2,23 +2,7 @@ use bevy::camera::primitives::{Aabb, Frustum};
 use bevy::prelude::{Vec2, Vec3};
 
 use super::terrain_water_geometric_wave_shader_state::NativeTerrainWaterGeometricWaveShaderState;
-use super::terrain_water_renderer_types::{
-    AuthoredTerrainWaterRendererTargets, AuthoredTerrainWaterSurfaceEffectPass,
-    TerrainWaterWaveStateKey,
-};
-
-impl AuthoredTerrainWaterRendererTargets {
-    pub fn queue_wave_impact(
-        &mut self,
-        key: TerrainWaterWaveStateKey,
-        position: Vec2,
-        strength: f32,
-    ) {
-        if let Some(state) = self.wave_states.get_mut(&key) {
-            state.queue_native_impact_wave(position, strength);
-        }
-    }
-}
+use super::terrain_water_renderer_types::AuthoredTerrainWaterSurfaceEffectPass;
 
 impl AuthoredTerrainWaterSurfaceEffectPass {
     pub fn intersects_camera_frustum(

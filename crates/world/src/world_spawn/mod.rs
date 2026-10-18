@@ -60,6 +60,7 @@ pub struct WorldSpawnPlugin;
 
 impl Plugin for WorldSpawnPlugin {
     fn build(&self, app: &mut App) {
+        app.init_resource::<openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream>();
         app.configure_sets(
             Update,
             (
@@ -131,6 +132,7 @@ impl Plugin for WorldSpawnPlugin {
                     crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests,
                     project_default_authored_world_object_presentation_attachments,
                     crate::world_spawn::named_physical_presentation_projection::hydrate_required_named_physical_presentations,
+                    crate::world_spawn::named_physical_presentation_projection::project_physical_presentation_caustic_policies,
                     crate::world_spawn::prefab_effect_trigger_hydration::hydrate_prefab_effect_triggers,
                     synchronize_zoo_entrance_anchor_after_transform_changes,
                 )

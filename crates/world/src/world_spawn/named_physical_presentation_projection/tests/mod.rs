@@ -33,6 +33,8 @@ fn presentation(
 
 fn marker_object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        surface_effect_strength: None,
+        presentation_caustic_policies: Vec::new(),
         supports_show_tricks: false,
         behavior_type_identifiers: Vec::new(),
         view_data: Vec::new(),

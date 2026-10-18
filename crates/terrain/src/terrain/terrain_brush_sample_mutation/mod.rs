@@ -17,6 +17,8 @@ use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainSample;
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::terrain_sample_rectangle_length;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
 
+pub(super) mod water_affiliation;
+
 pub(super) fn resolve_painted_water_surface_height_centimetres<'a>(
     preview: &TerrainBrushPreview,
     dab: &TerrainBrushDab,
@@ -28,7 +30,12 @@ pub(super) fn resolve_painted_water_surface_height_centimetres<'a>(
         ),
     >,
 ) -> Option<i16> {
-    if !matches!(preview.kind, TerrainBrushKind::PaintWater { .. }) {
+    if !matches!(
+        preview.kind,
+        TerrainBrushKind::PaintWater { .. }
+            | TerrainBrushKind::AddWater
+            | TerrainBrushKind::RemoveWater
+    ) {
         return None;
     }
     let mut centre = None;
@@ -87,6 +94,11 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
     preview: &TerrainBrushPreview,
     dabs: &[TerrainBrushDab],
     water_surface_heights_cm: &[Option<i16>],
+    water_plan: Option<(
+        &water_affiliation::WaterBrushRegionPlan,
+        &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
+        &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex,
+    )>,
 ) -> Option<TerrainEditDelta> {
     let (world_min, world_max) = dabs.iter().fold(
         (Vec2::splat(f32::INFINITY), Vec2::splat(f32::NEG_INFINITY)),
@@ -99,12 +111,16 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
     );
     let local_min = ((world_min - chunk.origin) / chunk.spacing_m).floor();
     let local_max = ((world_max - chunk.origin) / chunk.spacing_m).ceil();
-    let min = UVec2::new(local_min.x.max(0.0) as u32, local_min.y.max(0.0) as u32)
+    let mut min = UVec2::new(local_min.x.max(0.0) as u32, local_min.y.max(0.0) as u32)
         .min(UVec2::splat(chunk.side as u32 - 1));
-    let max = UVec2::new(local_max.x.max(0.0) as u32, local_max.y.max(0.0) as u32)
+    let mut max = UVec2::new(local_max.x.max(0.0) as u32, local_max.y.max(0.0) as u32)
         .min(UVec2::splat(chunk.side as u32 - 1));
     if min.x > max.x || min.y > max.y {
         return None;
+    }
+    if water_plan.is_some() {
+        min = UVec2::ZERO;
+        max = UVec2::splat(u32::from(chunk.side) - 1);
     }
 
     let capacity = terrain_sample_rectangle_length(min, max)?;
@@ -141,7 +157,7 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                 .then(|| find_default_water_style_for_terrain_sample(asset, edited, &original))
                 .flatten();
             let world = chunk.origin + Vec2::new(x as f32, z as f32) * chunk.spacing_m;
-            let result = dabs.iter().zip(water_surface_heights_cm).fold(
+            let mut result = dabs.iter().zip(water_surface_heights_cm).fold(
                 original,
                 |current, (dab, water_surface_height_cm)| {
                     let weight = calculate_terrain_brush_weight_with_falloff(
@@ -166,6 +182,33 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                     )
                 },
             );
+            if let Some((plan, regions, membership)) = water_plan {
+                let source_index = openzt2_zoo_state::terrain::terrain_sample_grid_queries::authored_terrain_sample_index(chunk, asset, x, z)?;
+                let point = UVec2::new(
+                    source_index as u32 % asset.canonical_terrain_grid().width,
+                    source_index as u32 / asset.canonical_terrain_grid().width,
+                );
+                if result != original
+                    && result.water_style != 0
+                    && (matches!(preview.kind, TerrainBrushKind::PaintWater { .. })
+                        || original.water_affiliation.is_none())
+                {
+                    let previous_above_plane = original
+                        .water_affiliation
+                        .and_then(|affiliation| {
+                            regions.resolve_affiliation(chunk.asset.id(), affiliation)
+                        })
+                        .filter(|owner| *owner != plan.owner)
+                        .and_then(|owner| regions.get(owner)?.surface_height(asset))
+                        .is_some_and(|plane| f32::from(original.height_cm) * 0.01 >= plane);
+                    if !previous_above_plane && plan.accepts_point(point, membership, asset) {
+                        result.water_affiliation = Some(openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainWaterAffiliation::Edited(plan.owner));
+                    } else {
+                        result = original;
+                    }
+                }
+                plan.update_sample(&mut result, membership.point_owner(point));
+            }
             any_changed |= result != original;
             before.push(original);
             after.push(result);
@@ -254,6 +297,7 @@ fn apply_terrain_brush_to_sample(
                     result.ground_cover = u8::from(ground_cover);
                 }
                 result.water_style = 0;
+                result.water_affiliation = None;
                 result.water_cm = result.height_cm;
             }
         }
@@ -305,6 +349,7 @@ fn apply_terrain_brush_to_sample(
                 .max(result.height_cm);
             if result.water_cm <= result.height_cm {
                 result.water_style = 0;
+                result.water_affiliation = None;
             }
         }
     }

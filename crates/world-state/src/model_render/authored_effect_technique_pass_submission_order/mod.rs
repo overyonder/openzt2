@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy::render::extract_instances::ExtractInstance;
 
 /// Bevy owns draw preparation and submission. This component supplies only the
-/// authored ordering constraint between passes of the same invocation.
+/// authored ordering constraints between effect stages and technique passes.
 #[derive(Component, Clone, Copy)]
 pub struct AuthoredEffectTechniquePassSubmissionOrder {
     technique_invocation: Entity,
@@ -11,6 +11,16 @@ pub struct AuthoredEffectTechniquePassSubmissionOrder {
     opaque_base_pass: bool,
     source_hierarchy_parent: Entity,
     source_hierarchy_index: usize,
+    render_stage: AuthoredEffectTransparentRenderStage,
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AuthoredEffectTransparentRenderStage {
+    TerrainEffects,
+    TerrainCaustics,
+    WaterSurface,
+    #[default]
+    Scene,
 }
 
 impl ExtractInstance for AuthoredEffectTechniquePassSubmissionOrder {
@@ -30,6 +40,7 @@ impl AuthoredEffectTechniquePassSubmissionOrder {
             opaque_base_pass: false,
             source_hierarchy_parent: technique_invocation,
             source_hierarchy_index: 0,
+            render_stage: AuthoredEffectTransparentRenderStage::Scene,
         })
     }
 
@@ -45,6 +56,15 @@ impl AuthoredEffectTechniquePassSubmissionOrder {
 
     pub fn belongs_to_technique_invocation(self, technique_invocation: Entity) -> bool {
         self.technique_invocation == technique_invocation
+    }
+
+    pub fn with_render_stage(mut self, stage: AuthoredEffectTransparentRenderStage) -> Self {
+        self.render_stage = stage;
+        self
+    }
+
+    pub fn render_stage(&self) -> AuthoredEffectTransparentRenderStage {
+        self.render_stage
     }
 }
 

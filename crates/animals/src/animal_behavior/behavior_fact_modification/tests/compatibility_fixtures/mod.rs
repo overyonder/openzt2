@@ -124,6 +124,8 @@ pub(super) fn install_definitions(
     ]
     .into_iter()
     .map(|(name, content)| WorldObjectDefinition {
+        surface_effect_strength: None,
+        presentation_caustic_policies: Vec::new(),
         id: AssetId::from_key(name),
         kind: WorldObjectKind::Food,
         supports_show_tricks: false,

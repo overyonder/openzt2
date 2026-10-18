@@ -27,6 +27,7 @@ use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement
 use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -105,6 +106,16 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
             },
         ));
         let spawned = entity.id();
+        if let Some(bound) = row.local_render_bound {
+            entity.insert(PrefabLocalRenderBound(bound));
+        }
+        if let Some(bound) = &row.skin_render_bound {
+            entity.insert(
+                openzt2_world_state::world_spawn::prefab_presentation_types::PrefabSkinRenderBound(
+                    bound.clone(),
+                ),
+            );
+        }
         if row.flags.0 & ScenePrefabEntityFlags::ACTIVE.0 == 0 {
             entity.insert(Disabled);
         }

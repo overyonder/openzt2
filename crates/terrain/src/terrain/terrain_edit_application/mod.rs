@@ -26,7 +26,11 @@ use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_t
 pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,
-    edits: Query<&TerrainEdit>,
+    edits: Query<(
+        &TerrainEdit,
+        Option<&openzt2_zoo_state::construction::construction_transaction_types::RollbackContext>,
+    )>,
+    entities: Query<Entity>,
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -41,7 +45,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut acknowledged: MessageWriter<TerrainEditAcknowledged>,
 ) {
     for request in requests.read() {
-        let Ok(edit) = edits.get(request.transaction) else {
+        let Ok((edit, rollback)) = edits.get(request.transaction) else {
             acknowledged.write(TerrainEditAcknowledged {
                 transaction: request.transaction,
                 application: request.application,
@@ -53,9 +57,23 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
         let use_after = matches!(
             request.application,
             EditApplication::InitialCommit | EditApplication::Redo
-        );
+        ) || (request.application == EditApplication::FailureRollback
+            && rollback.is_some_and(|context| context.failed_application == EditApplication::Undo));
         let mut targets = Vec::with_capacity(edit.deltas.len());
-        let mut valid = true;
+        let mut valid = edit.water_regions.iter().all(|delta| {
+            entities.contains(delta.owner)
+                && [&delta.before, &delta.after]
+                    .into_iter()
+                    .flatten()
+                    .all(|state| {
+                        state.surface_height_metres.is_finite()
+                            && state.depth_ratio.is_finite()
+                            && (0.0..=1.0).contains(&state.depth_ratio)
+                            && assets.get(&state.terrain).is_some_and(|asset| {
+                                state.biome_index < asset.canonical_terrain_grid().biomes.len()
+                            })
+                    })
+        });
         for delta in edit.deltas.iter() {
             let Some((entity, chunk, edited, _, _)) = chunks
                 .iter_mut()
@@ -97,6 +115,20 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
             continue;
         }
 
+        let owner_changes: Box<[_]> = if use_after {
+            edit.water_regions
+                .iter()
+                .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
+                .collect()
+        } else {
+            edit.water_regions
+                .iter()
+                .rev()
+                .map(|delta| (delta.owner, delta.before.clone(), delta.before_active))
+                .collect()
+        };
+        apply_water_region_edit_changes(&mut commands, owner_changes);
+
         if use_after {
             for (entity, delta) in targets.into_iter().zip(edit.deltas.iter()) {
                 apply_validated_terrain_edit_delta_and_publish_changed_region(
@@ -134,6 +166,27 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
             accepted: true,
         });
     }
+}
+
+pub(super) fn apply_water_region_edit_changes(
+    commands: &mut Commands,
+    changes: Box<[(Entity, Option<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>, bool)]>,
+) {
+    commands.queue(move |world: &mut World| {
+        for (owner, state, active) in changes {
+            let Ok(mut entity) = world.get_entity_mut(owner) else { continue; };
+            if let Some(state) = state {
+                entity.insert(state);
+            } else {
+                entity.remove::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>();
+            }
+            if active {
+                entity.remove::<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired>();
+            } else {
+                entity.insert(openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired);
+            }
+        }
+    });
 }
 
 #[allow(clippy::too_many_arguments)]

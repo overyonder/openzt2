@@ -10,11 +10,14 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMate
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderView;
+use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_BUMP_COMBINATION_RENDER_LAYER;
+use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFLECTION_TARGET_SIZE;
+use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFRACTION_TARGET_SIZE;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_RENDER_TARGET_SIDE;
 
 #[derive(Component)]
@@ -64,14 +67,20 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
         None,
     ));
     let reflection = images.add(Image::new_target_texture(
-        WATER_RENDER_TARGET_SIDE,
-        WATER_RENDER_TARGET_SIDE,
+        WATER_REFLECTION_TARGET_SIZE.x,
+        WATER_REFLECTION_TARGET_SIZE.y,
         TextureFormat::Rgba8UnormSrgb,
         None,
     ));
     let refraction = images.add(Image::new_target_texture(
-        WATER_RENDER_TARGET_SIDE,
-        WATER_RENDER_TARGET_SIDE,
+        WATER_REFRACTION_TARGET_SIZE.x,
+        WATER_REFRACTION_TARGET_SIZE.y,
+        TextureFormat::Rgba8UnormSrgb,
+        None,
+    ));
+    let fallback_reflection = images.add(Image::new_target_texture(
+        WATER_REFLECTION_TARGET_SIZE.x,
+        WATER_REFLECTION_TARGET_SIZE.y,
         TextureFormat::Rgba8UnormSrgb,
         None,
     ));
@@ -130,17 +139,28 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
         WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
         true,
     );
+    let fallback_reflection_camera = spawn_water_scene_render_target_camera(
+        &mut commands,
+        fallback_reflection.clone(),
+        -4,
+        WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+        true,
+    );
     commands.insert_resource(AuthoredTerrainWaterRendererTargets {
         combined_bump_map,
         reflection,
         refraction,
+        fallback_reflection,
         bump_camera,
         reflection_camera,
         refraction_camera,
+        fallback_reflection_camera,
         water_bump_combination_materials,
         elapsed_seconds: 0.0,
         active_water_plane_height: None,
-        wave_states: default(),
+        reflection_world_extent: Vec2::splat(50.0),
+        refraction_world_extent: Vec2::splat(50.0),
+        fallback_reflection_world_extent: Vec2::splat(50.0),
     });
 }
 

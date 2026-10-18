@@ -1,0 +1,8 @@
+diff --git a/libs/vkd3d-shader/fx.c b/libs/vkd3d-shader/fx.c
+--- a/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d-shader/fx.c
+@@ -957,3 +957,3 @@
+     { "Lighting",         HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,  1, 1, 48 },
+-    { "Ambient",          HLSL_CLASS_PASS, HLSL_CLASS_VECTOR, FX_FLOAT, 4, 1, 49 },
++    { "Ambient",          HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,  1, 1, 49 },
+     { "FogVertexMode",    HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_UINT,  1, 1, 50, fx_2_fogmode_values },

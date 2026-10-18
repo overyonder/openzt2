@@ -11,8 +11,8 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 
-use crate::topology::topology_presentation_types::FenceTerrainEndpointPresentationCells;
 use crate::topology::topology_presentation_types::FenceTerrainEndpointSkewPresentation;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceEndpointFittingReport;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceEndpointFittingReports;
 use openzt2_zoo_state::topology::fence_terrain_fitting_diagnostic_types::FenceTerrainFittingAttempt;

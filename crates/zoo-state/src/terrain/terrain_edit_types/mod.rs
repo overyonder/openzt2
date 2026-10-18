@@ -17,6 +17,8 @@ pub struct TerrainChanged {
 #[derive(Component, Debug)]
 pub struct TerrainEdit {
     pub deltas: Vec<TerrainEditDelta>,
+    pub water_regions:
+        Vec<crate::terrain::terrain_water_presentation_types::TerrainWaterRegionEditDelta>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

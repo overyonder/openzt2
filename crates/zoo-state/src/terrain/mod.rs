@@ -10,8 +10,14 @@ pub mod terrain_fitted_surface_mesh_construction;
 pub mod terrain_navigation_cell_queries;
 pub mod terrain_navigation_change_types;
 pub mod terrain_sample_grid_queries;
+pub mod terrain_water_caustic_types;
 pub mod terrain_water_geometric_wave_shader_state;
+pub mod terrain_water_ray_types;
 pub mod terrain_water_renderer_types;
+pub mod terrain_water_shoreline_geometry_types;
+pub mod terrain_water_shoreline_presentation_types;
+pub mod terrain_water_underwater_particle_types;
+pub mod terrain_water_view_state;
 pub mod terrain_world_sampling;
 pub mod terrain_world_sampling_types;
 

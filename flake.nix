@@ -56,6 +56,7 @@
           ./patches/vkd3d/0013-reset-sm123-constant-allocations-between-effect-shaders.patch
           ./patches/vkd3d/0014-emit-matrix-fx2-state-expressions.patch
           ./patches/vkd3d/0015-reject-value-changing-fx2-expression-casts.patch
+          ./patches/vkd3d/0016-preserve-packed-fx2-ambient-state.patch
         ];
     });
     mojoshaderSource = pkgs.applyPatches {

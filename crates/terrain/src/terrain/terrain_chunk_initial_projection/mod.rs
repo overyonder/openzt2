@@ -12,6 +12,7 @@ use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
+use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
 
 use crate::terrain::terrain_biome_detail_types::TerrainDetailProjectionState;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
@@ -182,7 +183,8 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             TerrainDetailProjectionState::default(),
             TerrainCollisionPending,
             AuthoredEffectTechniquePassSubmissionOrder::new(entity, 0)
-                .expect("the first authored terrain effect pass index fits u16"),
+                .expect("the first authored terrain effect pass index fits u16")
+                .with_render_stage(AuthoredEffectTransparentRenderStage::TerrainEffects),
         ));
         for (pass_index, material) in projected_materials.enumerate() {
             commands.spawn((
@@ -194,7 +196,8 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
                 RenderLayers::layer(TERRAIN_RENDER_LAYER),
                 ChildOf(entity),
                 AuthoredEffectTechniquePassSubmissionOrder::new(entity, pass_index + 1)
-                    .expect("the authored terrain effect pass index fits u16"),
+                    .expect("the authored terrain effect pass index fits u16")
+                    .with_render_stage(AuthoredEffectTransparentRenderStage::TerrainEffects),
             ));
         }
     }
@@ -279,7 +282,8 @@ pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
                 RenderLayers::layer(TERRAIN_RENDER_LAYER),
                 ChildOf(entity),
                 AuthoredEffectTechniquePassSubmissionOrder::new(entity, pass_index + 1)
-                    .expect("the authored terrain effect pass index fits u16"),
+                    .expect("the authored terrain effect pass index fits u16")
+                    .with_render_stage(AuthoredEffectTransparentRenderStage::TerrainEffects),
             ));
         }
     }

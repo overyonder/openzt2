@@ -70,6 +70,7 @@ pub(super) fn project_default_authored_world_object_presentation_attachments(
                         selected,
                         attachment.child_animation.is_some(),
                         attachment.inherit_parent_rotation,
+                        attachment.child_binder,
                     )),
                     old_child,
                 ))
@@ -79,13 +80,14 @@ pub(super) fn project_default_authored_world_object_presentation_attachments(
             continue;
         };
         for (controller, attachment, old_child) in requested_attachments {
-            let child = attachment.map(|(parent, prefab, state, animated, inherit_rotation)| {
+            let child = attachment.map(|(parent, prefab, state, animated, inherit_rotation, child_binder)| {
                 let mut child = commands
                     .spawn((
                         Transform::IDENTITY,
                         Visibility::Inherited,
                         ChildOf(parent),
                         PrefabPresentation::new(prefab),
+                        PrefabAuthoredAttachmentIdentifier(child_binder),
                     ));
                 if !inherit_rotation {
                     child.insert(crate::world_spawn::prefab_attachment_independent_rotation::PrefabAttachmentIndependentRotation);

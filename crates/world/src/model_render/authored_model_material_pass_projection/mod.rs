@@ -7,7 +7,6 @@ use bevy::light::NotShadowReceiver;
 use bevy::mesh::morph::MeshMorphWeights;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::pbr::DistanceFog;
-use bevy::pbr::FogFalloff;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -22,6 +21,7 @@ use openzt2_world_state::model_render::authored_model_material_pass_projection::
 use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingTextures;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPrimitiveMaterial;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
 
@@ -176,6 +176,7 @@ pub(super) fn project_authored_model_material_passes(
                 continue;
             };
             let mut target = commands.entity(entity);
+            target.insert(PrefabPrimitiveMaterial(handle.clone()));
             let projected_passes = material
                 .evaluated_pass_material_assets_for_effect_quality(graphics_settings.effects)
                 .iter()
@@ -471,9 +472,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         let fog_parameters = distance_fog
             .as_ref()
             .filter(|_| force || fog_changed || view_changed)
-            .and_then(|fog| {
-                effect_fog_shader_registers_for_render_view(fog, &view_transform, &projection)
-            });
+            .and_then(|fog| prepared_view.fog_shader_registers(fog, &projection));
         material.bind_changed_environment_registers(
             (force || wind_changed).then_some(wind_registers.as_slice()),
             (force || light_changed).then_some(light_rig.as_slice()),
@@ -750,26 +749,6 @@ fn report_material_hot_loop_measurements(
             changed_per_call = measurements.changed_items / 120, "material hot loop attribution");
         *measurements = MaterialHotLoopMeasurements::default();
     }
-}
-
-fn effect_fog_shader_registers_for_render_view(
-    fog: &DistanceFog,
-    view_transform: &GlobalTransform,
-    view_projection: &Projection,
-) -> Option<[Vec4; 2]> {
-    let FogFalloff::Linear { start, end } = fog.falloff else {
-        return None;
-    };
-    let view_direction = Vec3::from(view_transform.forward());
-    let far_plane = match view_projection {
-        Projection::Perspective(projection) => projection.far,
-        Projection::Orthographic(projection) => projection.far,
-        Projection::Custom(_) => end,
-    };
-    Some([
-        Vec4::new(start, (end - start).recip(), end, far_plane),
-        view_direction.extend(view_transform.translation().dot(view_direction)),
-    ])
 }
 
 pub(super) fn invalidate_authored_model_material_pass_projection(

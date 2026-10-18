@@ -425,6 +425,10 @@ pub(super) fn bind_authored_placement_object(
     )
     .expect("authored object flags are part of the canonical flag vocabulary");
 
+    let (presentation_caustic_policies, surface_effect_strength) =
+        super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
+            record,
+        )?;
     output.document.objects.push(WorldObjectDefinition {
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
@@ -457,6 +461,8 @@ pub(super) fn bind_authored_placement_object(
         interaction_slots,
         transactions,
         prefab_scale: presentation_scale,
+        surface_effect_strength,
+        presentation_caustic_policies,
         icon,
         biomes,
         location,

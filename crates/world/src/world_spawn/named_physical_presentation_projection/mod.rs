@@ -1,5 +1,6 @@
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
+use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabCausticPolicy;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use bevy::prelude::*;
@@ -18,6 +19,65 @@ pub(super) struct NamedPhysicalPresentationsHydrated;
 /// A named physical object of its parent entity, such as a food stand's vendor.
 #[derive(Component)]
 pub(super) struct NamedPhysicalPresentation;
+
+/// Borrows each physical binder's policy without applying it to sibling binders.
+pub(super) fn project_physical_presentation_caustic_policies(
+    mut commands: Commands,
+    active_definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    presentations: Query<
+        (
+            Entity,
+            Option<&DefinitionId>,
+            Option<&PrefabAuthoredAttachmentIdentifier>,
+            Option<&PrefabCausticPolicy>,
+        ),
+        Or<(With<DefinitionId>, With<PrefabPresentation>)>,
+    >,
+    parents: Query<&ChildOf>,
+    definitions: Query<&DefinitionId>,
+) {
+    let catalogue = active_definitions.get(&assets);
+    for (entity, own_definition, binder, current) in &presentations {
+        let definition = own_definition.or_else(|| {
+            parents
+                .iter_ancestors::<ChildOf>(entity)
+                .find_map(|ancestor| definitions.get(ancestor).ok())
+        });
+        let Some(object) = definition.and_then(|id| catalogue.as_ref()?.find_object(id.0)) else {
+            if current.is_some() {
+                commands.entity(entity).remove::<PrefabCausticPolicy>();
+            }
+            continue;
+        };
+        let binder = if own_definition.is_some() {
+            AssetId::from_key("mainobj")
+        } else if let Some(binder) = binder {
+            binder.0
+        } else {
+            if current.is_some() {
+                commands.entity(entity).remove::<PrefabCausticPolicy>();
+            }
+            continue;
+        };
+        let Some(policy) = object
+            .presentation_caustic_policies
+            .iter()
+            .find(|policy| policy.binder == binder)
+        else {
+            if current.is_some() {
+                commands.entity(entity).remove::<PrefabCausticPolicy>();
+            }
+            continue;
+        };
+        let projected = PrefabCausticPolicy {
+            receives: !policy.no_caustics && !policy.is_decal,
+        };
+        if current != Some(&projected) {
+            commands.entity(entity).insert(projected);
+        }
+    }
+}
 
 pub(super) fn hydrate_required_named_physical_presentations(
     mut commands: Commands,

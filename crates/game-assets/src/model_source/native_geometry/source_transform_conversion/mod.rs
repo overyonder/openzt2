@@ -57,7 +57,7 @@ pub fn convert_source_transform_to_bevy_components(
     )
 }
 
-pub(super) fn convert_netimmerse_transform_to_gltf_matrix(
+pub(in crate::model_source) fn convert_netimmerse_transform_to_gltf_matrix(
     netimmerse_transform: &NetImmerseNiTransform,
 ) -> [f32; 16] {
     let bevy_rotation = convert_row_major_rotation_matrix_to_quaternion(

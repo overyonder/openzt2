@@ -8,7 +8,9 @@ use super::{
     authored_material_parameter_lowering::{
         MaterialEffectParameterValue, OwnedMaterialEffectParameter,
     },
-    material_asset_types::{EvaluatedTechniquePassMaterialAssets, MaterialAsset},
+    material_asset_types::{
+        EvaluatedTechniquePassMaterialAssets, MaterialAsset, MaterialTextureAssetBinding,
+    },
     runtime::effect_pass_material_asset_construction::create_effect_pass_material_assets_from_evaluated_technique,
 };
 
@@ -20,6 +22,7 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
     texture_coordinate_animations: &std::sync::Arc<
         [super::runtime::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
+    reflection_projections: &[(usize, usize, [f32; 16])],
 ) -> io::Result<MaterialAsset> {
     let parameters = texture_asset_paths
         .iter()
@@ -45,6 +48,7 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
                 load_context,
                 &format!("{evaluated_pass_label_prefix}-technique-{technique_index}"),
                 texture_coordinate_animations,
+                reflection_projections,
             )
             .map(
                 |pass_material_assets| EvaluatedTechniquePassMaterialAssets {
@@ -62,7 +66,10 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
     }
     let bound_texture_assets = texture_asset_paths
         .into_iter()
-        .map(|(_, path)| load_context.load(path))
+        .map(|(parameter_name, path)| MaterialTextureAssetBinding {
+            parameter_name,
+            texture: load_context.load(path),
+        })
         .collect();
     Ok(MaterialAsset {
         netimmerse_texture_binding: None,
@@ -70,5 +77,6 @@ pub fn create_material_asset_from_evaluated_d3d9_effect(
         _source_dependencies: Box::default(),
         evaluated_technique_pass_material_assets,
         bound_texture_assets,
+        modes: Box::default(),
     })
 }

@@ -59,6 +59,8 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let definition = AssetId::from_key("track");
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            surface_effect_strength: None,
+            presentation_caustic_policies: Vec::new(),
             id: definition,
             kind: WorldObjectKind::Scenery,
             supports_show_tricks: false,

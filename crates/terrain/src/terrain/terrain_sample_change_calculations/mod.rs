@@ -27,6 +27,8 @@ pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
                     || sample_before_change.water_biome_channel
                         != sample_after_change.water_biome_channel
                     || sample_before_change.water_cm != sample_after_change.water_cm
+                    || sample_before_change.water_affiliation
+                        != sample_after_change.water_affiliation
                 {
                     changed_terrain_properties |=
                         TerrainDirtyFlags::WATER | TerrainDirtyFlags::COLLISION;

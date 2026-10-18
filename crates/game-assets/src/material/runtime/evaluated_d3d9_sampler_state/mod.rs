@@ -34,6 +34,15 @@ impl Default for EvaluatedD3d9SamplerState {
 }
 
 impl EvaluatedD3d9SamplerState {
+    pub(super) fn copy_addressing_from(&mut self, source: &Self) -> io::Result<()> {
+        source
+            .address
+            .into_iter()
+            .try_for_each(|value| address_mode(value).map(|_| ()))?;
+        self.address = source.address;
+        Ok(())
+    }
+
     pub(super) fn apply(&mut self, state: u32, value: u32) -> io::Result<()> {
         match state {
             1..=3 => self.address[state as usize - 1] = value,

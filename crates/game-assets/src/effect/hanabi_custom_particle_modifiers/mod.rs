@@ -49,7 +49,7 @@ impl Modifier for CollisionSpawnParticleInitializationModifier {
         shader_writer: &mut ShaderWriter,
     ) -> Result<(), ExprError> {
         shader_writer.main_code += &format!(
-            "let collision_radial = normalize(frand3() * 2.0 - vec3<f32>(1.0)); particle.position = parent_particle.position + collision_radial * {} + vec3<f32>({},{},{}) * {}; let collision_velocity = vec3<f32>({},{},{}) + vec3<f32>({},{},{}) * collision_radial.x + vec3<f32>({},{},{}) * collision_radial.y; particle.velocity = collision_velocity * vec3<f32>({},{},{}) * {};\n",
+            "let source_radial = normalize(frand3() * 2.0 - vec3<f32>(1.0)); let collision_radial = vec3<f32>(source_radial.x, source_radial.z, -source_radial.y); particle.position = parent_particle.position + collision_radial * {} + vec3<f32>({},{},{}) * {}; let collision_velocity = vec3<f32>({},{},{}) + vec3<f32>({},{},{}) * source_radial.x + vec3<f32>({},{},{}) * source_radial.y; particle.velocity = collision_velocity * vec3<f32>({},{},{}) * {};\n",
             self.spawn_radius,
             self.base_velocity_direction.x,
             self.base_velocity_direction.y,

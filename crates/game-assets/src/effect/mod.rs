@@ -16,6 +16,7 @@ pub mod effect_instance_runtime_systems;
 pub mod effect_instance_spawning_and_preparation;
 pub mod effect_runtime_types;
 pub mod effect_source_reloading;
+pub mod explicit_particle_emission;
 pub mod hanabi_custom_particle_modifiers;
 pub mod legacy_nif_hanabi_effect_preparation;
 pub mod particle_system_emitter_graph_validation;
@@ -27,6 +28,7 @@ pub mod particle_system_source_curve_lowering;
 pub mod particle_system_source_node_traversal;
 pub mod particle_system_source_scalar_reading;
 pub mod particle_system_source_vector_reading;
+pub mod particle_wave_surface;
 pub mod preparation;
 pub mod prepared_effect_asset_cache;
 pub mod source;
@@ -90,12 +92,15 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             .add_message::<SpawnParticleEffectEmitter>()
             .add_message::<SpawnCompleteParticleEffectDocument>()
             .add_message::<StopParticleEffectsAttachedToEntity>()
+            .add_message::<explicit_particle_emission::AppendParticleEffectPoints>()
             .add_systems(
                 Update,
                 (
                     refresh_prepared_effect_assets_from_source_changes,
                     enqueue_requested_effect_instances_for_preparation,
+                    explicit_particle_emission::prepare_explicit_particle_emitters,
                     prepare_pending_effect_instances_from_loaded_authored_assets,
+                    explicit_particle_emission::retain_explicit_particle_emitters,
                     stop_effect_instances_attached_to_requested_entities,
                     bind_loaded_material_textures_to_pending_effect_instances,
                     bind_loaded_named_meshes_to_pending_effect_instances,
@@ -106,8 +111,17 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             )
             .add_systems(
                 PostUpdate,
-                update_controlled_effect_emission_from_authored_timing
+                (
+                    update_controlled_effect_emission_from_authored_timing,
+                    explicit_particle_emission::upload_explicit_particle_emission_points,
+                )
+                    .chain()
                     .after(bevy_hanabi::prelude::EffectSystems::TickSpawners),
+            )
+            .add_systems(
+                PostUpdate,
+                particle_wave_surface::upload_particle_wave_surface_uniforms
+                    .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
             );
     }
 }

@@ -27,9 +27,7 @@ pub(super) fn collect_all_effect_emitter_ids(particle_document: &ParticleDocumen
     }
 }
 
-pub(super) fn collect_root_effect_emitter_ids(
-    particle_document: &ParticleDocument,
-) -> Vec<AssetId> {
+pub fn collect_root_effect_emitter_ids(particle_document: &ParticleDocument) -> Vec<AssetId> {
     match particle_document {
         ParticleDocument::LegacyNif(legacy_nif_effect) => vec![legacy_nif_effect.emitter_id],
         ParticleDocument::Effect(effect_document) => {
@@ -185,10 +183,10 @@ pub(super) fn create_collision_spawn_initialization(
                 modifier_index: u32::try_from(modifier_index).unwrap_or(u32::MAX),
                 spawn_radius: *radius,
                 initial_speed: *speed,
-                outward_velocity: Vec3::from_array(*velocity_out),
-                upward_velocity: Vec3::from_array(*velocity_up),
-                base_velocity_direction: Vec3::from_array(*velocity_direction),
-                velocity_scale: Vec3::from_array(*velocity_scale),
+                outward_velocity: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*velocity_out)),
+                upward_velocity: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*velocity_up)),
+                base_velocity_direction: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*velocity_direction)),
+                velocity_scale: Vec3::new(velocity_scale[0], velocity_scale[2], velocity_scale[1]),
                 position_offset: *offset,
             },
         )),
