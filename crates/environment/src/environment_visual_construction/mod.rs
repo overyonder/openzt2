@@ -27,12 +27,17 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
     member: &WorldMember,
     catalogue: WorldDefinitionsView<'_>,
     definition: &EnvironmentDefinition,
+    terrain_start_height_metres: f32,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
     let mut sun_rigs = Vec::<(AssetId, Entity)>::new();
     for (sample_index, sample) in definition.visual_samples.iter().enumerate() {
         let id = sample.asset;
+        let mut transform = Transform::from_scale(Vec3::splat(sample.scale));
+        if matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
+            transform.translation.y = terrain_start_height_metres;
+        }
         if let Some(source) = catalogue.scene(id) {
             let color = Color::srgb(
                 f32::from(sample.color_unorm[0]) / f32::from(u16::MAX),
@@ -50,7 +55,7 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
                     receives: false,
                     visible_in_reflections: true,
                 },
-                Transform::from_scale(Vec3::splat(sample.scale)),
+                transform,
                 Visibility::Inherited,
                 *member,
             ));
@@ -98,7 +103,7 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
             create_environment_texture_renderer_components(image, color, meshes, materials),
             EnvironmentVisualSampleIndex(sample_index as u32),
             EnvironmentVisualOwner(parent),
-            Transform::from_scale(Vec3::splat(sample.scale)),
+            transform,
             Visibility::Inherited,
             *member,
         ));

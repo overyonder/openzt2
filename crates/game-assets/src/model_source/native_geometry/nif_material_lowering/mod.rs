@@ -141,7 +141,7 @@ pub(super) fn lower_netimmerse_native_material(
         depth_test: depth.is_none_or(|value| value.flags & 0x0001 != 0),
         depth_write: depth.is_none_or(|value| value.flags & 0x0002 != 0),
         depth_test_mode: depth.map_or(3, |value| value.function),
-        cull_mode: stencil.map_or(0, |value| value.draw_mode),
+        cull_mode: stencil.map_or(3, |value| value.draw_mode),
     }))
 }
 

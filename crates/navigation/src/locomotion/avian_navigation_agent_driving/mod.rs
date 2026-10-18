@@ -1,3 +1,6 @@
+use super::sampled_animation_motion_projection::{
+    LocomotionAnimationSamples, LocomotionAnimationSource,
+};
 use avian3d::prelude::AngularVelocity;
 use avian3d::prelude::LinearVelocity;
 use avian3d::prelude::RigidBody;
@@ -18,6 +21,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 #[allow(clippy::type_complexity)]
 pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
     mut commands: Commands,
+    animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
     fences: FenceNavigationPolicy,
     mut avian_navigation_agents: Query<(
@@ -33,8 +37,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         Option<&Destination>,
         Option<&Docking>,
         Has<DirectLocomotion>,
-        Option<&openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion>,
-        Option<&openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
+        Option<&LocomotionAnimationSource>,
     )>,
     mut completed_arrivals: MessageWriter<Arrived>,
 ) {
@@ -52,10 +55,14 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         destination,
         docking,
         direct_locomotion,
-        motion,
-        controller,
+        animation_source,
     ) in &mut avian_navigation_agents
     {
+        let playback = animation_samples.get(navigation_agent_entity, animation_source);
+        let animation_mean_speed = animation_source
+            .map_or(navigation_agent.max_speed_mps, |source| {
+                source.mean_speed_mps
+            });
         if !matches!(*rigid_body, RigidBody::Dynamic | RigidBody::Kinematic) {
             linear_velocity.0 = Vec3::ZERO;
             angular_velocity.0 = Vec3::ZERO;
@@ -71,15 +78,13 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         } else {
             Vec3::ZERO
         };
-        let (sampled_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(desired_velocity, navigation_agent.max_speed_mps, fixed_delta_seconds, transform, motion.zip(controller));
+        let (sampled_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(desired_velocity, animation_mean_speed, fixed_delta_seconds, transform, playback);
         desired_velocity = sampled_velocity;
         let preserve_vertical_physics_velocity = matches!(
             locomotion_mode.copied().unwrap_or_default(),
             LocomotionMode::Ground | LocomotionMode::Vehicle
         );
-        let sampled = motion
-            .zip(controller)
-            .is_some_and(|(motion, controller)| motion.owns_playback(controller));
+        let sampled = playback.is_some_and(|(motion, controller)| motion.owns_playback(controller));
         if preserve_vertical_physics_velocity {
             // Horizontal locomotion intent must not cancel gravity or Avian's
             // vertical contact response on dynamic agents.

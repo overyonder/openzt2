@@ -1,3 +1,6 @@
+use super::sampled_animation_motion_projection::{
+    LocomotionAnimationSamples, LocomotionAnimationSource,
+};
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
 
@@ -22,6 +25,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
+    animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
     fences: FenceNavigationPolicy,
     terrain_index: Res<TerrainIndex>,
@@ -38,8 +42,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             &mut Route,
             &Destination,
             Option<&Docking>,
-            Option<&openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion>,
-            Option<&openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
+            Option<&LocomotionAnimationSource>,
         ),
         (Without<DirectLocomotion>, Without<RigidBody>),
     >,
@@ -56,18 +59,19 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         mut planned_route,
         destination,
         docking,
-        motion,
-        controller,
+        animation_source,
     ) in &mut non_physics_navigation_agents
     {
-        let (desired_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, navigation_agent.max_speed_mps, fixed_delta_seconds, &local_transform, motion.zip(controller));
+        let playback = animation_samples.get(navigation_agent_entity, animation_source);
+        let animation_mean_speed = animation_source
+            .map_or(navigation_agent.max_speed_mps, |source| {
+                source.mean_speed_mps
+            });
+        let (desired_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, animation_mean_speed, fixed_delta_seconds, &local_transform, playback);
         let requested_velocity_change = desired_velocity - local_velocity.0;
         local_velocity.0 += requested_velocity_change
             .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        if motion
-            .zip(controller)
-            .is_none_or(|(motion, controller)| !motion.owns_playback(controller))
-        {
+        if playback.is_none_or(|(motion, controller)| !motion.owns_playback(controller)) {
             local_velocity.0 = local_velocity
                 .0
                 .clamp_length_max(navigation_agent.max_speed_mps);
@@ -98,14 +102,12 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         }
         let horizontal_velocity = Vec2::new(local_velocity.0.x, local_velocity.0.z);
         if horizontal_velocity.length_squared() > 0.0001 {
-            let direction = if motion
-                .zip(controller)
-                .is_some_and(|(motion, controller)| motion.owns_playback(controller))
-            {
-                steering.desired_velocity.xz()
-            } else {
-                horizontal_velocity
-            };
+            let direction =
+                if playback.is_some_and(|(motion, controller)| motion.owns_playback(controller)) {
+                    steering.desired_velocity.xz()
+                } else {
+                    horizontal_velocity
+                };
             local_transform.rotation =
                 Quat::from_rotation_y(direction.x.atan2(direction.y)) * sampled_rotation;
         }

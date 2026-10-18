@@ -1,5 +1,7 @@
 use bevy::{camera::visibility::RenderLayers, prelude::*};
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::world_definitions::environment::EnvironmentLightTarget;
+use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
@@ -27,6 +29,8 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
         With<EnvironmentPresentationPending>,
     >,
     cameras: Query<Entity, With<ZooCamera>>,
+    worlds: Query<&SelectedWorldTerrainAssetHandle>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
     lights: Query<(), With<EnvironmentLight>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -40,6 +44,19 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
         let Some(definition) = definitions.find_environment(environment.definition) else {
             continue;
         };
+        let Some(terrain) = worlds
+            .get(world_member.root)
+            .ok()
+            .and_then(|handle| terrain_assets.get(&handle.0))
+        else {
+            continue;
+        };
+        // nodeStartHeight is already retained as the water height-grid origin.
+        let terrain_start_height_metres = terrain
+            .canonical_terrain_grid()
+            .presentation
+            .water_editing
+            .height_snap_base_metres;
         if lights.is_empty() {
             if !definition.light_keyframes.is_empty() {
                 let light_entity = commands
@@ -121,6 +138,7 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
             world_member,
             definitions,
             definition,
+            terrain_start_height_metres,
             &mut meshes,
             &mut materials,
         );

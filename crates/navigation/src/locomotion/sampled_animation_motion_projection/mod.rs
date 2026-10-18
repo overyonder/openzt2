@@ -2,6 +2,37 @@ use bevy::prelude::*;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 
+/// A presentation controller supplies samples; the actor retains movement authority.
+#[derive(Component, Clone, Copy)]
+pub(super) struct LocomotionAnimationSource {
+    pub controller: Entity,
+    pub mean_speed_mps: f32,
+}
+
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct LocomotionAnimationSamples<'w, 's> {
+    controllers: Query<
+        'w,
+        's,
+        (
+            &'static ConsumedLocomotionRootMotion,
+            &'static AnimationPlaybackController,
+        ),
+    >,
+}
+
+impl LocomotionAnimationSamples<'_, '_> {
+    pub(super) fn get(
+        &self,
+        actor: Entity,
+        source: Option<&LocomotionAnimationSource>,
+    ) -> Option<(&ConsumedLocomotionRootMotion, &AnimationPlaybackController)> {
+        self.controllers
+            .get(source.map_or(actor, |source| source.controller))
+            .ok()
+    }
+}
+
 pub(super) fn project_sampled_animation_motion_to_steering(
     desired_velocity: Vec3,
     mean_speed: f32,

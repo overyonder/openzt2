@@ -1,3 +1,6 @@
+use super::sampled_animation_motion_projection::{
+    LocomotionAnimationSamples, LocomotionAnimationSource,
+};
 use avian3d::prelude::LinearVelocity;
 use avian3d::prelude::RigidBody;
 use bevy::prelude::*;
@@ -82,6 +85,7 @@ pub(super) fn calculate_direct_locomotion_steering(
 
 #[allow(clippy::type_complexity)]
 pub(super) fn integrate_non_physics_direct_locomotion(
+    animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
     fences: FenceNavigationPolicy,
     terrain_index: Res<TerrainIndex>,
@@ -98,8 +102,7 @@ pub(super) fn integrate_non_physics_direct_locomotion(
             &Steering,
             &DirectLocomotion,
             Option<&WorldMember>,
-            Option<&openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion>,
-            Option<&openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
+            Option<&LocomotionAnimationSource>,
         ),
         Without<RigidBody>,
     >,
@@ -114,18 +117,19 @@ pub(super) fn integrate_non_physics_direct_locomotion(
         steering,
         _,
         world_member,
-        motion,
-        controller,
+        animation_source,
     ) in &mut direct_locomotion_agents
     {
-        let (desired_velocity, _) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, navigation_agent.max_speed_mps, fixed_delta_seconds, &local_transform, motion.zip(controller));
+        let playback = animation_samples.get(entity, animation_source);
+        let animation_mean_speed = animation_source
+            .map_or(navigation_agent.max_speed_mps, |source| {
+                source.mean_speed_mps
+            });
+        let (desired_velocity, _) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, animation_mean_speed, fixed_delta_seconds, &local_transform, playback);
         let requested_velocity_change = desired_velocity - local_velocity.0;
         local_velocity.0 += requested_velocity_change
             .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        if motion
-            .zip(controller)
-            .is_none_or(|(motion, controller)| !motion.owns_playback(controller))
-        {
+        if playback.is_none_or(|(motion, controller)| !motion.owns_playback(controller)) {
             local_velocity.0 = local_velocity
                 .0
                 .clamp_length_max(navigation_agent.max_speed_mps);

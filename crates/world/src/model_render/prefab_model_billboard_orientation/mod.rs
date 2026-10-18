@@ -97,19 +97,9 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
             .unwrap_or(camera);
         let to_center = target - transform.translation;
         if mode.mode == 1 {
-            // Gamebryo's ROTATE_ABOUT_UP adjustment follows the authored
-            // local transform. NIF/BFB source local Z is the billboard normal
-            // and source local Y is its fixed up axis; after source Y/Z
-            // conversion those are Bevy local Y and Z respectively. This mode
-            // tracks the camera view direction; pointing at the camera center
-            // is the separately authored ALWAYS_FACE_CENTER behavior.
-            let parent_local_camera_direction = parent_from_world
-                .map(|parent_from_world| {
-                    parent_from_world.transform_vector3(camera_facing_direction)
-                })
-                .unwrap_or(camera_facing_direction);
-            let authored_local_direction =
-                mode.authored_local_rotation.inverse() * parent_local_camera_direction;
+            // Rotate about the authored up axis toward the camera position.
+            // Source local Y becomes Bevy local Z after coordinate conversion.
+            let authored_local_direction = mode.authored_local_rotation.inverse() * to_center;
             let direction_in_billboard_rotation_plane =
                 Vec2::new(authored_local_direction.x, authored_local_direction.y);
             if direction_in_billboard_rotation_plane.length_squared() > f32::EPSILON {
