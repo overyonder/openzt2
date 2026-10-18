@@ -99,7 +99,9 @@ fn create_terrain_water_fixed_detail_materials(
             alpha_test_mode: 0,
             depth_test: true,
             depth_write: true,
-            depth_test_mode: 6,
+            // This generated mesh uses Bevy's projection. The material lowerer
+            // converts a forward-depth less/equal comparison to reverse depth.
+            depth_test_mode: 3,
             cull_mode: 3,
         };
         let lowered = lower_netimmerse_material_into_evaluated_d3d9_effect(&material)?;
