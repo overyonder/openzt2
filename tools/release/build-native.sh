@@ -67,7 +67,7 @@ esac
 for candidate in "${MSYSTEM_CHOST:-x86_64-w64-mingw32}-widl" widl x86_64-w64-mingw32-widl; do
     if command -v "$candidate" >/dev/null; then export WIDL="$candidate"; break; fi
 done
-./configure "${configure_arguments[@]}" --enable-shared --disable-static --prefix="$prefix" --disable-tests --disable-demos --without-spirv-tools --without-opengl --without-xcb --without-ncurses
+./configure ${configure_arguments[@]+"${configure_arguments[@]}"} --enable-shared --disable-static --prefix="$prefix" --disable-tests --disable-demos --without-spirv-tools --without-opengl --without-xcb --without-ncurses
 # Direct library targets do not depend on Automake's all-target header rule.
 make -j2 -f Makefile -f - openzt2-generated-headers <<'MAKE'
 openzt2-generated-headers: $(BUILT_SOURCES)
@@ -79,7 +79,7 @@ cp include/vkd3d_shader.h include/vkd3d_types.h "$prefix/include/vkd3d/"
 mkdir -p "$prefix/lib/pkgconfig"
 cp libvkd3d-shader.pc "$prefix/lib/pkgconfig/"
 cmake -G Ninja -S "$prefix/source/mojoshader" -B "$prefix/mojoshader-build" \
-    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCOMPILER_SUPPORT=ON "${cmake_arguments[@]}"
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCOMPILER_SUPPORT=ON ${cmake_arguments[@]+"${cmake_arguments[@]}"}
 cmake --build "$prefix/mojoshader-build" --config Release --target mojoshader --parallel 2
 cp "$prefix/source/mojoshader/mojoshader.h" "$prefix/source/mojoshader/mojoshader_effects.h" "$prefix/include/"
 case "$(uname -s)" in
