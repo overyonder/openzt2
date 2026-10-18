@@ -69,8 +69,8 @@ For the shipping binary, use `direnv exec . cargo build --locked --release
 
 ### Native Linux and macOS
 
-The native release targets are Ubuntu 24.04 x86_64 and macOS on Apple
-Silicon. Install Git, Python 3.12, rustup and direnv 2.37.1.
+The native release targets include Ubuntu 24.04 on x86-64 and ARM64 and macOS
+on Apple Silicon and Intel. Install Git, Python 3.13, rustup and direnv 2.37.1.
 macOS also needs Xcode Command Line Tools and Homebrew.
 
 On Ubuntu, install the native dependencies:
@@ -114,17 +114,19 @@ To produce release packages, including dependency licences:
 
 ```sh
 cargo install --locked --features cli cargo-about --version 0.9.0
-direnv exec . python3 tools/release/package.py package
+direnv exec . python3 tools/release/package.py package --target linux-x86_64
 ```
 
+Choose `linux-aarch64`, `darwin-arm64` or `darwin-x86_64` for the other hosts.
 Linux packaging also needs the [Linux packaging tools and runtimes](tools/release/linux/README.md).
 It produces `.deb`, `.rpm`, `.pkg.tar.zst`, AppImage and Flatpak from one build.
-These packages must be built on a native Linux host, not in the Nix shell.
+Native Linux packages use a matching Ubuntu release host. The flake also
+provides an installable Nix package through `nix build .#default`.
 
 ### Windows
 
-The Windows build uses Rust's x64 MSVC toolchain. Install Visual Studio Build
-Tools with the C++ workload and Windows SDK, rustup, Python 3.12, Git for
+The Windows build uses Rust's MSVC toolchain for x86-64 or ARM64. Install Visual Studio Build
+Tools with the matching C++ workload and Windows SDK, rustup, Python 3.13, Git for
 Windows, PowerShell 7, direnv 2.37.1 and MSYS2. Keep Git's Bash and direnv on
 `PATH`.
 
@@ -168,20 +170,29 @@ Adjust the MSYS2 path if installed elsewhere. Windows uses `direnv export`
 because `direnv exec` uses Unix executable lookup. After activation, run Cargo
 commands directly in that PowerShell session.
 
-For the release ZIP:
+For x86-64 release packages:
 
 ```powershell
 cargo install --locked --features cli cargo-about --version 0.9.0
-python tools/release/package.py package
+python tools/release/package.py package --target windows-amd64
 ```
+
+This also builds MSI and MSIX installers with the tools and signing settings
+in the [release packaging guide](tools/release/README.md). ARM64 uses the
+CLANGARM64 MSYS2 environment, the ARM64 Visual Studio toolchain and
+`--target windows-arm64` for its ZIP. The workflow contains the target-specific
+dependency packages and environment setup.
 
 ### Release packages
 
 Packages and `SHA256SUMS` go under `build/releases/`. The
-[release workflow](.github/workflows/release-builds.yml) builds Windows,
-macOS and Linux on a version tag or manual dispatch. Tag pushes publish a
-GitHub release after all three packages pass checksum verification; manual
-runs only upload workflow artifacts.
+[release workflow](.github/workflows/release-builds.yml) reads its targets from
+`tools/release/targets.toml`. It builds Windows, macOS, glibc Linux, Alpine and
+Nix packages on a version tag or manual dispatch. Tagged releases require every
+declared artifact and checksum. Manual runs upload workflow artifacts.
+
+See the [release packaging guide](tools/release/README.md) for installer versions,
+signing settings and the new targets' unverified implementation status.
 
 The tag must match the workspace version, prefixed with `v`. Versions
 containing a hyphen, including alpha versions, publish as prereleases.

@@ -35,51 +35,19 @@
         "rustfmt"
       ];
     };
+    nativeLibraryPatches = directory:
+      builtins.map (name: directory + "/${name}")
+      (builtins.filter (pkgs.lib.hasSuffix ".patch")
+        (builtins.attrNames (builtins.readDir directory)));
     vkd3dFork = pkgs.vkd3d.overrideAttrs (old: {
       version = "2.0-openzt2";
       src = vkd3d-src;
-      patches =
-        (old.patches or [])
-        ++ [
-          ./patches/vkd3d/0001-complete-observed-fx2-emission.patch
-          ./patches/vkd3d/0002-complete-corpus-fx2-states.patch
-          ./patches/vkd3d/0003-allow-duplicate-effect-pass-names.patch
-          ./patches/vkd3d/0004-resolve-effect-state-variables.patch
-          ./patches/vkd3d/0005-type-fx2-object-state-values.patch
-          ./patches/vkd3d/0006-lower-direct-null-state-values.patch
-          ./patches/vkd3d/0007-unwrap-fx2-state-swizzles.patch
-          ./patches/vkd3d/0008-emit-fx2-state-expressions.patch
-          ./patches/vkd3d/0009-separate-fx2-small-object-count.patch
-          ./patches/vkd3d/0010-separate-fx2-object-sections.patch
-          ./patches/vkd3d/0011-preserve-fx2-state-constant-types.patch
-          ./patches/vkd3d/0012-preserve-fx2-state-vector-components.patch
-          ./patches/vkd3d/0013-reset-sm123-constant-allocations-between-effect-shaders.patch
-          ./patches/vkd3d/0014-emit-matrix-fx2-state-expressions.patch
-          ./patches/vkd3d/0015-reject-value-changing-fx2-expression-casts.patch
-          ./patches/vkd3d/0016-preserve-packed-fx2-ambient-state.patch
-        ];
+      patches = (old.patches or []) ++ nativeLibraryPatches ./patches/vkd3d;
     });
     mojoshaderSource = pkgs.applyPatches {
       name = "mojoshader-openzt2-source";
       src = mojoshader-src;
-      patches = [
-        ./patches/mojoshader/0001-retain-effect-state-index.patch
-        ./patches/mojoshader/0002-retain-effect-state-parameter.patch
-        ./patches/mojoshader/0003-resolve-effect-object-parameters.patch
-        ./patches/mojoshader/0004-evaluate-effect-state-preshaders.patch
-        ./patches/mojoshader/0005-accept-upgraded-shader-ctab-profiles.patch
-        ./patches/mojoshader/0006-accept-vkd3d-vs2-sampler-declarations.patch
-        ./patches/mojoshader/0007-expose-spirv-binary-size.patch
-        ./patches/mojoshader/0008-link-implicit-pixel-shader-inputs.patch
-        ./patches/mojoshader/0009-copy-complete-effect-state-vectors.patch
-        ./patches/mojoshader/0010-retain-sampler-mappings-and-guard-pointcoord-patches.patch
-        ./patches/mojoshader/0011-link-vertex-shaders-without-pixel-shaders.patch
-        ./patches/mojoshader/0012-use-integer-windows-file-flags.patch
-        ./patches/mojoshader/0013-evaluate-preshaders-with-independent-registers.patch
-        ./patches/mojoshader/0014-pack-direct-matrix-state-references.patch
-        ./patches/mojoshader/0015-bound-preshader-execution-storage.patch
-        ./patches/mojoshader/0016-decode-struct-matrix-members.patch
-      ];
+      patches = nativeLibraryPatches ./patches/mojoshader;
     };
     mojoshaderFork = pkgs.mojoshader.overrideAttrs (old: {
       version = "0-openzt2";
@@ -102,7 +70,15 @@
       vulkan-loader
       wayland
     ];
+    gamePackage = import ./tools/release/nix/package.nix {
+      inherit pkgs rustToolchain vkd3dFork mojoshaderFork mojoshaderSource runtimeLibraries;
+    };
   in {
+    packages.${system}.default = gamePackage;
+    apps.${system}.default = {
+      type = "app";
+      program = "${gamePackage}/bin/openzt2";
+    };
     devShells.${system} = {
       windows = pkgs.mkShell {
         packages = [

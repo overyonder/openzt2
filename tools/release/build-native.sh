@@ -8,6 +8,27 @@ mkdir -p "$prefix" "$prefix/source" "$prefix/include/vkd3d" "$prefix/lib" "$pref
 prefix=$(cd "$prefix" && pwd)
 patch_command=patch
 if command -v gpatch >/dev/null; then patch_command=gpatch; fi
+configure_arguments=()
+cmake_arguments=()
+import_library_tool=dlltool
+import_library_machine=i386:x86-64
+case "$(uname -s)" in
+    Darwin)
+        export MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-14.0}
+        export CFLAGS="${CFLAGS:-} -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+        export CXXFLAGS="${CXXFLAGS:-} -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+        export LDFLAGS="${LDFLAGS:-} -mmacosx-version-min=$MACOSX_DEPLOYMENT_TARGET"
+        cmake_arguments+=("-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET")
+        ;;
+    MINGW*|MSYS*)
+        configure_arguments+=("--host=${MSYSTEM_CHOST:?MSYS2 target triplet is required}")
+        if [[ ${MSYSTEM:-} == CLANGARM64 ]]; then
+            export CC=clang CXX=clang++ AR=llvm-ar RANLIB=llvm-ranlib NM=llvm-nm STRIP=llvm-strip
+            import_library_tool=llvm-dlltool
+            import_library_machine=arm64
+        fi
+        ;;
+esac
 for library in vkd3d mojoshader; do
     revision=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["nodes"][sys.argv[2]+"-src"]["locked"]["rev"])' "$workspace/flake.lock" "$library")
     case "$library" in
@@ -43,10 +64,10 @@ case "$(uname -s)" in
     MINGW*|MSYS*) export SONAME_LIBVULKAN=vulkan-1.dll ;;
     *) export SONAME_LIBVULKAN=libvulkan.so.1 ;;
 esac
-if command -v x86_64-w64-mingw32-widl >/dev/null; then
-    export WIDL=x86_64-w64-mingw32-widl
-fi
-./configure --enable-shared --disable-static --prefix="$prefix" --disable-tests --disable-demos --without-spirv-tools --without-opengl --without-xcb --without-ncurses
+for candidate in "${MSYSTEM_CHOST:-x86_64-w64-mingw32}-widl" widl x86_64-w64-mingw32-widl; do
+    if command -v "$candidate" >/dev/null; then export WIDL="$candidate"; break; fi
+done
+./configure "${configure_arguments[@]}" --enable-shared --disable-static --prefix="$prefix" --disable-tests --disable-demos --without-spirv-tools --without-opengl --without-xcb --without-ncurses
 # Direct library targets do not depend on Automake's all-target header rule.
 make -j2 -f Makefile -f - openzt2-generated-headers <<'MAKE'
 openzt2-generated-headers: $(BUILT_SOURCES)
@@ -58,7 +79,7 @@ cp include/vkd3d_shader.h include/vkd3d_types.h "$prefix/include/vkd3d/"
 mkdir -p "$prefix/lib/pkgconfig"
 cp libvkd3d-shader.pc "$prefix/lib/pkgconfig/"
 cmake -G Ninja -S "$prefix/source/mojoshader" -B "$prefix/mojoshader-build" \
-    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCOMPILER_SUPPORT=ON
+    -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DCOMPILER_SUPPORT=ON "${cmake_arguments[@]}"
 cmake --build "$prefix/mojoshader-build" --config Release --target mojoshader --parallel 2
 cp "$prefix/source/mojoshader/mojoshader.h" "$prefix/source/mojoshader/mojoshader_effects.h" "$prefix/include/"
 case "$(uname -s)" in
@@ -71,7 +92,7 @@ case "$(uname -s)" in
         # MSVC consumes COFF import libraries produced from the DLL exports.
         for library in vkd3d-shader mojoshader; do
             (cd "$prefix/bin" && gendef "$library.dll")
-            dlltool -d "$prefix/bin/$library.def" -l "$prefix/lib/$library.lib" -D "$library.dll"
+            "$import_library_tool" -m "$import_library_machine" -d "$prefix/bin/$library.def" -l "$prefix/lib/$library.lib" -D "$library.dll"
         done
         cp -R "${MINGW_PREFIX:-/mingw64}/share/licenses" \
             "$prefix/share/openzt2-licenses/mingw-runtime-notices"

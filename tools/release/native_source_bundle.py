@@ -57,6 +57,8 @@ def prepare_native_source_bundle(workspace, vkd3d, mojoshader, destination):
             "build-native.sh",
             "native_source_bundle.py",
             "windows-dependencies.nix",
+            "targets.toml",
+            "release_targets.py",
         ):
             shutil.copy2(workspace / "tools/release" / name, root / "tools/release" / name)
         (root / "BUILD.txt").write_text(

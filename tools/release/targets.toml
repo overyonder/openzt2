@@ -1,0 +1,90 @@
+[packaging]
+direnv_version = "2.37.1"
+wix_version = "5.0.2"
+macos_deployment_target = "14.0"
+flatpak_runtime = "25.08"
+alpine_image = "alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6"
+
+[targets.linux-x86_64]
+runner = "ubuntu-24.04"
+platform = "linux"
+architecture = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+direnv = "linux-amd64"
+libc = "glibc"
+formats = ["deb", "rpm", "pkg.tar.zst", "AppImage", "flatpak"]
+
+[targets.linux-aarch64]
+runner = "ubuntu-24.04-arm"
+platform = "linux"
+architecture = "aarch64"
+rust_target = "aarch64-unknown-linux-gnu"
+direnv = "linux-arm64"
+libc = "glibc"
+formats = ["deb", "rpm", "pkg.tar.zst", "AppImage", "flatpak"]
+
+[targets.darwin-arm64]
+runner = "macos-26"
+platform = "darwin"
+architecture = "arm64"
+rust_target = "aarch64-apple-darwin"
+direnv = "darwin-arm64"
+libc = "libSystem"
+formats = ["dmg"]
+
+[targets.darwin-x86_64]
+runner = "macos-26-intel"
+platform = "darwin"
+architecture = "x86_64"
+rust_target = "x86_64-apple-darwin"
+direnv = "darwin-amd64"
+libc = "libSystem"
+formats = ["dmg"]
+
+[targets.windows-amd64]
+runner = "windows-2022"
+platform = "windows"
+architecture = "amd64"
+rust_target = "x86_64-pc-windows-msvc"
+direnv = "windows-amd64"
+libc = "msvc"
+msvc_arch = "x64"
+msys_compiler = "mingw-w64-x86_64-gcc"
+msys_extra = ""
+msystem = "MINGW64"
+mingw_prefix = "mingw-w64-x86_64"
+mingw_bin = "C:/msys64/mingw64/bin"
+formats = ["zip", "msi", "msix"]
+
+[targets.windows-arm64]
+runner = "windows-11-arm"
+platform = "windows"
+architecture = "arm64"
+rust_target = "aarch64-pc-windows-msvc"
+direnv = "windows-arm64"
+libc = "msvc"
+msvc_arch = "arm64"
+msys_compiler = "mingw-w64-clang-aarch64-clang"
+msys_extra = "mingw-w64-clang-aarch64-llvm-tools"
+msystem = "CLANGARM64"
+mingw_prefix = "mingw-w64-clang-aarch64"
+mingw_bin = "C:/msys64/clangarm64/bin"
+formats = ["zip"]
+
+[targets.linux-x86_64-musl]
+runner = "ubuntu-24.04"
+platform = "linux"
+architecture = "x86_64"
+rust_target = "x86_64-unknown-linux-musl"
+direnv = "linux-amd64"
+libc = "musl"
+formats = ["apk"]
+public_key = "openzt2-alpine.rsa.pub"
+
+[targets.nix-x86_64]
+runner = "ubuntu-24.04"
+platform = "nix"
+architecture = "x86_64"
+rust_target = "x86_64-unknown-linux-gnu"
+libc = "glibc"
+formats = ["nar.zst", "store-path"]

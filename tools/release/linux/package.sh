@@ -8,9 +8,12 @@ mode=${4:-all}
 [[ $mode == all || $mode == additional-only ]] || exit 1
 tools=$(realpath "${OPENZT2_LINUX_PACKAGE_TOOLS:?Run linux/install-tools.sh first}")
 source_directory=$(cd "$(dirname "$0")" && pwd)
-[[ $(uname -m) == x86_64 ]] || { echo 'Linux release packages require x86_64' >&2; exit 1; }
+architecture=${OPENZT2_RELEASE_ARCH:-$(uname -m)}
+case "$architecture" in x86_64|aarch64) ;; *) echo "Unsupported Linux architecture: $architecture" >&2; exit 1 ;; esac
+identifier=${OPENZT2_RELEASE_TARGET:-linux-$architecture}
+runtime=${OPENZT2_FLATPAK_RUNTIME:-25.08}
 [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]] || exit 1
-name="OpenZT2-$version-linux-x86_64"
+name="OpenZT2-$version-$identifier"
 app_id=org.openzt2.OpenZT2
 work="$output/staging/formats"
 mkdir -p "$work"
@@ -35,7 +38,7 @@ rpm_root="$work/rpm"
 mkdir -p "$rpm_root"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
 rpmbuild -bb --define "_topdir $rpm_root" \
     --define "openzt2_version ${version/-/\~}" \
-    --define "openzt2_payload $payload" "$source_directory/openzt2.spec"
+    --define "openzt2_payload $payload" --define "openzt2_arch $architecture" "$source_directory/openzt2.spec"
 mapfile -t rpms < <(find "$rpm_root/RPMS" -name '*.rpm' -type f)
 [[ ${#rpms[@]} == 1 ]] || { echo 'Expected exactly one RPM' >&2; exit 1; }
 cp "${rpms[0]}" "$output/$name.rpm"
@@ -53,7 +56,7 @@ url = https://github.com/overyonder/openzt2
 builddate = ${SOURCE_DATE_EPOCH:-$(date +%s)}
 packager = OpenZT2 contributors
 size = $(du -sb "$arch_root/usr" | cut -f1)
-arch = x86_64
+arch = $architecture
 license = MIT
 license = BSD-3-Clause
 license = LGPL-2.1-or-later
@@ -84,7 +87,7 @@ ln -s "$app_id.svg" "$appdir/.DirIcon"
 cp "$tools/appimage-runtime-LICENSE" "$appdir/usr/share/doc/openzt2/licenses/"
 cp "$tools/appimage-runtime-sources.tar.gz" "$appdir/usr/share/doc/openzt2/licenses/"
 cp -a "$tools/runtime-notices" "$appdir/usr/share/doc/openzt2/licenses/appimage-runtime"
-ARCH=x86_64 "$tools/squashfs-root/AppRun" --runtime-file "$tools/runtime-x86_64" \
+ARCH="$architecture" "$tools/squashfs-root/AppRun" --runtime-file "$tools/runtime-$architecture" \
     "$appdir" "$output/$name.AppImage"
 chmod +x "$output/$name.AppImage"
 mkdir -p "$work/appimage-check"
@@ -92,8 +95,8 @@ mkdir -p "$work/appimage-check"
 cmp "$payload/usr/bin/openzt2" "$work/appimage-check/squashfs-root/usr/bin/openzt2"
 
 flatpak_root="$work/flatpak"
-flatpak build-init --arch=x86_64 "$flatpak_root" "$app_id" \
-    org.freedesktop.Sdk org.freedesktop.Platform 25.08
+flatpak build-init --arch="$architecture" "$flatpak_root" "$app_id" \
+    org.freedesktop.Sdk org.freedesktop.Platform "$runtime"
 cp -a "$payload/usr/." "$flatpak_root/files/"
 # A raster export works with Flatpak validators that lack an SVG loader.
 mkdir -p "$flatpak_root/files/share/icons/hicolor/128x128/apps"
@@ -111,8 +114,8 @@ flatpak build "$flatpak_root" sh -ec '
 '
 flatpak build-finish --command=openzt2-launch --socket=wayland --socket=pulseaudio \
     --share=ipc --share=network --device=dri "$flatpak_root"
-flatpak build-export --arch=x86_64 "$work/flatpak-repo" "$flatpak_root" stable
-flatpak build-bundle --arch=x86_64 \
+flatpak build-export --arch="$architecture" "$work/flatpak-repo" "$flatpak_root" stable
+flatpak build-bundle --arch="$architecture" \
     --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo \
     "$work/flatpak-repo" "$output/$name.flatpak" "$app_id" stable
 

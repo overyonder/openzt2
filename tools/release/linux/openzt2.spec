@@ -4,7 +4,7 @@ Release: 1
 Summary: Zoo simulation using user-supplied Zoo Tycoon 2 archives
 License: MIT AND BSD-3-Clause AND LGPL-2.1-or-later AND Zlib
 URL: https://github.com/overyonder/openzt2
-BuildArch: x86_64
+BuildArch: %{openzt2_arch}
 # Keep the private shader translators private; ELF dependency scanning still
 # supplies the versioned system-library requirements for every shipped ELF.
 %global __provides_exclude_from ^/usr/lib/openzt2/.*$

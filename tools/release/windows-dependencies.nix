@@ -36,6 +36,8 @@ in
       cp ${./build-native.sh} "$source_workspace/tools/release/build-native.sh"
       cp ${./native_source_bundle.py} "$source_workspace/tools/release/native_source_bundle.py"
       cp ${./windows-dependencies.nix} "$source_workspace/tools/release/windows-dependencies.nix"
+      cp ${./targets.toml} "$source_workspace/tools/release/targets.toml"
+      cp ${./release_targets.py} "$source_workspace/tools/release/release_targets.py"
       cp ${../../.github/workflows/release-builds.yml} "$source_workspace/.github/workflows/release-builds.yml"
       python3 ${./native_source_bundle.py} --workspace "$source_workspace" \
         --vkd3d "$PWD" --mojoshader "$PWD/mojo-source" \

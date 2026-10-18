@@ -3,19 +3,28 @@
 # pinned separately so appimagetool cannot silently download a newer runtime.
 set -euo pipefail
 destination=${1:?usage: install-tools.sh DESTINATION}
+architecture=${2:-$(uname -m)}
+case "$architecture" in
+    x86_64)
+        appimage_hash=ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        runtime_hash=2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d
+        ;;
+    aarch64)
+        appimage_hash=f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
+        runtime_hash=00cbdfcf917cc6c0ff6d3347d59e0ca1f7f45a6df1a428a0d6d8a78664d87444
+        ;;
+    *) echo "Unsupported AppImage architecture: $architecture" >&2; exit 1 ;;
+esac
 mkdir -p "$destination"
 cd "$destination"
 curl --fail --location --retry 3 \
-    https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage \
+    "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-$architecture.AppImage" \
     -o appimagetool.AppImage
 curl --fail --location --retry 3 \
-    https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64 \
-    -o runtime-x86_64
-sha256sum --check <<'SUMS'
-ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0  appimagetool.AppImage
-2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d  runtime-x86_64
-SUMS
-chmod +x appimagetool.AppImage runtime-x86_64
+    "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-$architecture" \
+    -o "runtime-$architecture"
+printf '%s  %s\n' "$appimage_hash" appimagetool.AppImage "$runtime_hash" "runtime-$architecture" | sha256sum --check
+chmod +x appimagetool.AppImage "runtime-$architecture"
 # Extract once; neither packaging nor its checks require FUSE on CI.
 ./appimagetool.AppImage --appimage-extract > /dev/null
 curl --fail --location --retry 3 \

@@ -1,64 +1,79 @@
-<img width="1477" height="546" alt="openzt2" src="https://github.com/user-attachments/assets/fcffdcda-fe14-4df2-8307-62c97eff160e" />
+# OpenZT2
+
+<img width="1477" height="546" alt="OpenZT2" src="https://github.com/user-attachments/assets/fcffdcda-fe14-4df2-8307-62c97eff160e" />
 
 [![Release builds](https://github.com/overyonder/openzt2/actions/workflows/release-builds.yml/badge.svg)](https://github.com/overyonder/openzt2/actions/workflows/release-builds.yml)
 [![Open issues](https://img.shields.io/github/issues-raw/overyonder/openzt2?label=open%20issues&color=red)](https://github.com/overyonder/openzt2/issues?q=is%3Aissue%20is%3Aopen)
 
----
-OpenZT2 is an open-source engine reimplementation of Zoo Tycoon 2 Ultimate Collection, a simulation game which tasks a player with managing zoos and aquariums.
----
+OpenZT2 is an open-source engine reimplementation of Zoo Tycoon 2 Ultimate
+Collection, a game about building and managing zoos and aquariums. It's written
+in Rust with Bevy and is in early alpha, with gameplay still in development.
 
-## Downloads and packaging
+## Downloads
 
-OpenZT2 is an early alpha. Gameplay remains incomplete; the red badge counts
-all open issues, including bugs and missing features. The build badge reports
-release packaging status.
+Download a package from [GitHub Releases](https://github.com/overyonder/openzt2/releases).
+You'll need your own Zoo Tycoon 2 Ultimate Collection game files to play.
 
-Download packages from [GitHub Releases](https://github.com/overyonder/openzt2/releases).
-You need your own Zoo Tycoon 2 Ultimate Collection game files; they are not included.
+✅ marks a built release package. The new CI targets await their first builds
+and installation checks. The [packaging guide](tools/release/README.md) covers
+their installation and signing settings.
 
-✅ means yes. [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] means no; click it to request support.
-“Built” means a package has been produced. Repository listings are maintained
-separately from downloadable packages.
+| OS | Architecture | Package | Built | Install with |
+| --- | --- | --- | :---: | --- |
+| Windows | x86-64 (MSVC) | `.zip` | ✅ | Extract and run |
+| Windows | x86-64 | `.msi` | [CI configured][release-builds] | Windows Installer |
+| Windows | x86-64 | `.msix` | [CI configured][release-builds] | App Installer |
+| Windows | ARM64 | `.zip` | [CI configured][release-builds] | Extract and run |
+| macOS | ARM64 (Apple Silicon) | `.dmg` | ✅ | Finder |
+| macOS | x86-64 (Intel) | `.dmg` | [CI configured][release-builds] | Finder |
+| Linux | x86-64 (glibc) | `.deb` | ✅ | APT / dpkg |
+| Linux | x86-64 (glibc) | `.rpm` | ✅ | DNF / Zypper / rpm |
+| Linux | x86-64 (glibc) | `.pkg.tar.zst` | ✅ | pacman |
+| Linux | x86-64 (glibc) | `.AppImage` | ✅ | Run directly |
+| Linux | x86-64 (Freedesktop runtime) | `.flatpak` | ✅ | Flatpak |
+| Linux | ARM64 (glibc) | DEB, RPM, Arch, AppImage, Flatpak | [CI configured][release-builds] | See installation guide |
+| Alpine Linux | x86-64 (musl) | `.apk` | [CI configured][release-builds] | apk |
+| NixOS / Linux with Nix | x86-64 | Flake / `.nar.zst` | [CI configured][release-builds] | Nix |
 
-| OS | Target | Package format | Built | Install with | Project-maintained repository listing |
-| --- | --- | --- | :---: | --- | :---: |
-| Windows | x86-64 (GNU) | `.zip` | ✅ | Extract and run | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Windows | x86-64 | `.msi` / `.msix` | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] | Windows Installer / App Installer | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Windows | ARM64 | `.zip` | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] | Extract and run | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| macOS | ARM64 (Apple Silicon) | `.dmg` | ✅ | Finder | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| macOS | x86-64 (Intel) | `.dmg` | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] | Finder | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | x86-64 (glibc) | `.deb` | ✅ | APT / dpkg | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | x86-64 (glibc) | `.rpm` | ✅ | DNF / Zypper / rpm | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | x86-64 (glibc) | `.pkg.tar.zst` | ✅ | pacman | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | x86-64 (glibc) | `.AppImage` | ✅ | Run directly | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | x86-64 (Freedesktop runtime) | `.flatpak` | ✅ | Flatpak | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| Linux | ARM64 / x86-64 musl | Native packages | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] | Distribution package manager | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
-| NixOS / Linux with Nix | x86-64 | Nix package | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] | Nix / nixpkgs | [![Need this? Ask in discussions and we can accommodate.][unavailable]][discussions] |
+The seven built packages are published with
+[v0.7.0-alpha](https://github.com/overyonder/openzt2/releases/tag/v0.7.0-alpha).
+Listings for winget, Chocolatey, Scoop, Homebrew, AUR, nixpkgs and Flathub can
+also be requested in [Discussions][discussions].
 
-The Alpha 6 RPM, Arch package, AppImage and Flatpak have been built from the
-published Linux executable and are awaiting upload to the release. The ZIP,
-DMG and DEB are already published. We have not submitted project-maintained
-listings to winget, Chocolatey, Scoop, Homebrew, AUR, nixpkgs or Flathub.
-The Nix flake currently provides a development shell.
+Native Linux packages and AppImage require glibc 2.39 or newer. Flatpak
+supplies its own runtime. The [Linux installation guide](tools/release/linux/README.md)
+covers dependencies, installation and game-file locations.
 
-Native Linux packages and AppImage require **glibc 2.39 or newer**. Flatpak
-supplies its own runtime. See the [Linux installation guide](tools/release/linux/README.md)
-for dependencies, commands and game-file locations, or [CONTRIBUTING.md](CONTRIBUTING.md)
-to build from source.
-
-[unavailable]: docs/images/unavailable.svg "Need this? Ask in discussions and we can accommodate."
 [discussions]: https://github.com/overyonder/openzt2/discussions
+[release-builds]: .github/workflows/release-builds.yml
 
-New features which OpenZT2 include (as of alpha):
-- Mod reloading (reload mods from the main menu without restarting the game)
-- Re-do functionality (CTRL+Y shortcut)
-- 64-bit platform support for Windows, Linux, and macOS
-- Controller support for XInput devices
-- Modern shader pipeline (vkd3d-shader and MojoShader compile the original D3D9 Effects into shaders and evaluated pass state for Bevy’s renderer)
-- Better performance improvements powered by the Bevy engine in Rust
+## Features
 
-<img width="1280" height="960" alt="image" src="https://github.com/user-attachments/assets/b45e89bf-9c02-4df8-b964-4b7089287e4b" />
+- Mod reloading from the main menu.
+- Construction undo and redo, with Ctrl+Y for redo.
+- 64-bit builds for Windows, Linux and macOS.
+- Controller input for gameplay and menus.
+- Rendering the original game's materials through Bevy using patched
+  vkd3d-shader and MojoShader libraries.
 
-## Check out more details about the project on: https://openzt2.org
+<img width="1280" height="960" alt="OpenZT2 gameplay" src="https://github.com/user-attachments/assets/b45e89bf-9c02-4df8-b964-4b7089287e4b" />
 
-## Join the Restorers Discord for development updates and sneak-peeks at new features: https://discord.gg/bvcd3ZjSe9
+## Building and contributing
+
+The Nix flake provides an x86-64 Linux development shell and package definition.
+[CONTRIBUTING.md](CONTRIBUTING.md) covers building from source on Linux,
+Windows and macOS and the project's contribution guidelines.
+
+Bug reports and missing features are tracked in
+[Issues](https://github.com/overyonder/openzt2/issues).
+
+## Community
+
+Visit [openzt2.org](https://openzt2.org) for project details, use
+[Discussions][discussions] for questions and package requests, or join the
+[Restorers Discord](https://discord.gg/bvcd3ZjSe9) for development updates.
+
+## License
+
+OpenZT2 is licensed under the [MIT License](LICENSE). Release packages include
+the licences and notices for their dependencies.

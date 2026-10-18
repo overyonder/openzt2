@@ -1,21 +1,20 @@
 # Linux packages
 
-The Linux release job compiles once on Ubuntu 24.04, then produces a Debian
-package, RPM, Arch package, AppImage and Flatpak from that executable. Every
-format includes the patched shader libraries, dependency notices and source
-bundles. Original Zoo Tycoon 2 files are never included.
+The Linux release jobs compile once per architecture on Ubuntu 24.04, then
+produce a Debian package, RPM, Arch package, AppImage and Flatpak from each
+executable. Every format includes the patched shader libraries, dependency
+notices and source bundles. ARM64 packaging is implemented and awaits its first
+build and installation checks.
 
 ## Compatibility
 
-Native packages and AppImage require x86-64 Linux with **glibc 2.39 or newer**.
-Check with `getconf GNU_LIBC_VERSION`; `ldd --version` can identify the libc
-if `getconf` is unavailable. An older version does not require switching to
-musl: use Flatpak's runtime, or build from source on the target distribution.
+Native packages and AppImage target x86-64 or ARM64 Linux with glibc 2.39 or
+newer. `getconf GNU_LIBC_VERSION` shows the installed version. Flatpak supplies
+its own runtime for systems with older glibc versions.
 
-The AppImage bundles the game's shader libraries, but uses the host's glibc,
+The AppImage bundles the game's shader libraries and uses the host's glibc,
 C++ runtime, ALSA, udev, Wayland, XKB, Vulkan loader and Fontconfig libraries.
-Install those through your distribution. An AppImage does not by itself make
-a binary compatible with an older glibc. All formats need a working graphics
+Install those through your distribution. All formats need a working graphics
 driver. Flatpak uses the Freedesktop 25.08 runtime and its graphics extensions.
 
 ## Install
@@ -60,15 +59,16 @@ its build tools, install `rpm`, `libarchive-tools`, `zstd`, `squashfs-tools`,
 `desktop-file-utils`, `librsvg2-bin` and `flatpak`. Install `org.freedesktop.Platform//25.08`
 and `org.freedesktop.Sdk//25.08` from Flathub in the user installation.
 
-Run `bash tools/release/linux/install-tools.sh /path/to/packaging-tools`, then
-set `OPENZT2_LINUX_PACKAGE_TOOLS` to that directory before invoking the usual
-`package.py package` command. AppImage tooling and its runtime have separate
+Run `bash tools/release/linux/install-tools.sh /path/to/packaging-tools x86_64`,
+then set `OPENZT2_LINUX_PACKAGE_TOOLS` to that directory and invoke
+`package.py package --target linux-x86_64`. ARM64 uses `aarch64` for the tools
+and `linux-aarch64` for packaging. AppImage tooling and its runtime have separate
 version and checksum pins. The native binary is not rebuilt per format.
 
 The packaging script checks the Flatpak ELF dependencies inside its runtime
 and extracts the AppImage to compare its executable with the staged one.
-Publication requires all seven platform/format artifacts and their checksums;
-missing, unexpected or duplicate entries fail the release job.
+Publication requires all artifacts declared in `../targets.toml` and their checksums.
+Missing, unexpected or duplicate entries fail the release job.
 
 To add formats to an existing release without recompiling, verify its published
 `.deb` against that release's checksums, extract it with `dpkg-deb -R`, and run:
@@ -81,3 +81,5 @@ bash tools/release/linux/package.sh extracted-package output 0.6.0-alpha additio
 This mode leaves the original `.deb` unchanged and creates the four additional
 formats. Its checksum file covers those four files only; retain the existing
 release checksum entries when combining the manifests for upload.
+
+Alpine APK and Nix installation are covered in the [release packaging guide](../README.md).

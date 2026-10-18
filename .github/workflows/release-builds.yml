@@ -8,76 +8,83 @@ permissions:
   contents: read
 
 jobs:
+  targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+      rust: ${{ steps.targets.outputs.rust }}
+      alpine_image: ${{ steps.targets.outputs.alpine_image }}
+      wix_version: ${{ steps.targets.outputs.wix_version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - id: targets
+        run: python3 tools/release/release_targets.py matrix
+
   package:
+    needs: targets
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-24.04
-            platform: linux
-            direnv: linux-amd64
-          - os: macos-14
-            platform: macos
-            direnv: darwin-arm64
-          - os: windows-2022
-            platform: windows
-            direnv: windows-amd64
-    runs-on: ${{ matrix.os }}
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
+    environment: release
     env:
       OPENZT2_RELEASE_HOST: '1'
+      OPENZT2_RUST_VERSION: ${{ needs.targets.outputs.rust }}
       CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      DOTNET_ROLL_FORWARD: Major
+      OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 }}
+      OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD }}
+      OPENZT2_MSIX_PUBLISHER: ${{ vars.OPENZT2_MSIX_PUBLISHER }}
+      OPENZT2_APK_SIGNING_KEY_BASE64: ${{ secrets.OPENZT2_APK_SIGNING_KEY_BASE64 }}
     defaults:
       run:
-        working-directory: .
         shell: bash
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
-      - name: Configure source-owned toolchain and staging
+          python-version: '3.13'
+      - name: Configure release target
+        run: python3 tools/release/release_targets.py environment '${{ matrix.id }}'
+      - name: Require signing credentials for tagged installers
+        if: github.ref_type == 'tag'
         run: |
-          python3 - <<'PY'
-          import os, pathlib, re, tomllib
-          if os.environ["GITHUB_REF_TYPE"] == "tag":
-              version = tomllib.loads(pathlib.Path("Cargo.toml").read_text())["workspace"]["package"]["version"]
-              if os.environ["GITHUB_REF_NAME"] != f"v{version}":
-                  raise SystemExit(f"Release tag must match Cargo.toml: v{version}")
-          version = re.search(r'rust-bin.stable."([0-9.]+)"', pathlib.Path('flake.nix').read_text())[1]
-          with open(os.environ['GITHUB_ENV'], 'a') as output:
-              print(f'OPENZT2_RUST_VERSION={version}', file=output)
-              print(f'OPENZT2_NATIVE_DEPENDENCY_DIR={os.environ["RUNNER_TEMP"]}/openzt2-native', file=output)
-              print(f'KAI_CARGO_TARGET_ROOT={os.environ["RUNNER_TEMP"]}/cargo-targets', file=output)
-              cache_target = os.path.relpath(
-                  pathlib.Path(os.environ['RUNNER_TEMP']) / 'cargo-targets/openzt2-reimplementation',
-                  pathlib.Path.cwd(),
-              ).replace('\\', '/')
-              print(f'OPENZT2_CARGO_CACHE_TARGET={cache_target}', file=output)
-          PY
+          if [[ '${{ matrix.id }}' == windows-amd64 ]]; then
+            : "${OPENZT2_MSIX_CERTIFICATE_BASE64:?MSIX signing certificate is required}"
+            : "${OPENZT2_MSIX_CERTIFICATE_PASSWORD:?MSIX signing password is required}"
+            : "${OPENZT2_MSIX_PUBLISHER:?MSIX publisher identity is required}"
+          fi
+          if [[ '${{ matrix.libc }}' == musl ]]; then
+            : "${OPENZT2_APK_SIGNING_KEY_BASE64:?APK signing key is required}"
+          fi
       - name: Install pinned Rust
+        if: matrix.platform != 'nix' && matrix.libc != 'musl'
         run: |
-          rustup toolchain install "$OPENZT2_RUST_VERSION" --profile minimal
+          rustup toolchain install "$OPENZT2_RUST_VERSION" --profile minimal --target "$OPENZT2_RUST_TARGET"
           rustup override set "$OPENZT2_RUST_VERSION"
+      - uses: Swatinem/rust-cache@v2
+        if: matrix.platform != 'nix' && matrix.libc != 'musl'
+        with:
+          prefix-key: release-${{ matrix.id }}
+          shared-key: ${{ hashFiles('flake.lock', 'tools/release/targets.toml', 'patches/**') }}
+          workspaces: . -> ${{ env.OPENZT2_CARGO_CACHE_TARGET }}
+          cache-on-failure: true
       - name: Linux native tools
-        if: runner.os == 'Linux'
+        if: matrix.platform == 'linux' && matrix.libc == 'glibc'
         run: |
           sudo apt-get update
           sudo apt-get install -y autoconf automake libtool flex bison libjson-perl cmake ninja-build pkg-config spirv-headers libvulkan-dev libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev libfontconfig1-dev patchelf dpkg-dev mingw-w64-tools rpm libarchive-tools zstd squashfs-tools desktop-file-utils flatpak xz-utils librsvg2-bin
-      - name: Linux package runtimes and tools
-        if: runner.os == 'Linux'
-        run: |
           flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak install --user --noninteractive --no-related flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
-          bash tools/release/linux/install-tools.sh "$RUNNER_TEMP/openzt2-packaging"
+          flatpak install --user --noninteractive --no-related --arch="$OPENZT2_RELEASE_ARCH" flathub "org.freedesktop.Platform//$OPENZT2_FLATPAK_RUNTIME" "org.freedesktop.Sdk//$OPENZT2_FLATPAK_RUNTIME"
+          bash tools/release/linux/install-tools.sh "$RUNNER_TEMP/openzt2-packaging" "$OPENZT2_RELEASE_ARCH"
           echo "OPENZT2_LINUX_PACKAGE_TOOLS=$RUNNER_TEMP/openzt2-packaging" >> "$GITHUB_ENV"
-      - uses: Swatinem/rust-cache@v2
-        with:
-          prefix-key: v1-rust
-          workspaces: . -> ${{ env.OPENZT2_CARGO_CACHE_TARGET }}
-          cache-on-failure: true
       - name: macOS native tools
-        if: runner.os == 'macOS'
+        if: matrix.platform == 'darwin'
         run: |
           brew install autoconf automake libtool flex bison cmake ninja pkg-config spirv-headers vulkan-headers cpanminus gpatch mingw-w64
           cpanm --local-lib="$RUNNER_TEMP/perl" JSON
@@ -85,146 +92,137 @@ jobs:
           echo "$(brew --prefix flex)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix bison)/bin" >> "$GITHUB_PATH"
           echo "CPPFLAGS=-I$(brew --prefix)/include" >> "$GITHUB_ENV"
-      - uses: msys2/setup-msys2@v2
-        if: runner.os == 'Windows'
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: matrix.platform == 'windows'
         with:
-          msystem: MINGW64
+          arch: ${{ matrix.msvc_arch }}
+      - uses: msys2/setup-msys2@v2
+        if: matrix.platform == 'windows'
+        with:
+          msystem: ${{ matrix.msystem }}
           update: true
           install: >-
             git make patch python autoconf automake libtool flex bison perl-JSON
-            mingw-w64-x86_64-gcc mingw-w64-x86_64-cmake
-            mingw-w64-x86_64-ninja mingw-w64-x86_64-tools
-            mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-spirv-headers
-      - name: Build Windows shader dependencies
-        if: runner.os == 'Windows'
+            ${{ matrix.msys_compiler }} ${{ matrix.msys_extra }} ${{ matrix.mingw_prefix }}-cmake
+            ${{ matrix.mingw_prefix }}-ninja ${{ matrix.mingw_prefix }}-tools
+            ${{ matrix.mingw_prefix }}-vulkan-headers ${{ matrix.mingw_prefix }}-spirv-headers
+            ${{ matrix.mingw_prefix }}-librsvg
+      - name: Windows native shader libraries
+        if: matrix.platform == 'windows'
         shell: msys2 {0}
         run: bash tools/release/build-native.sh
-      - name: Build Unix shader dependencies
-        if: runner.os != 'Windows'
+      - name: Unix native shader libraries
+        if: matrix.platform != 'windows' && matrix.platform != 'nix' && matrix.libc != 'musl'
         run: bash tools/release/build-native.sh
       - name: Install direnv
+        if: matrix.platform != 'nix' && matrix.libc != 'musl'
         run: |
           mkdir -p "$RUNNER_TEMP/release-tools"
           suffix=''
           if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; fi
-          curl --fail --location "https://github.com/direnv/direnv/releases/download/v2.37.1/direnv.${{ matrix.direnv }}" -o "$RUNNER_TEMP/release-tools/direnv$suffix"
+          curl --fail --location "https://github.com/direnv/direnv/releases/download/v$OPENZT2_DIRENV_VERSION/direnv.${{ matrix.direnv }}" -o "$RUNNER_TEMP/release-tools/direnv$suffix"
           chmod +x "$RUNNER_TEMP/release-tools/direnv$suffix"
           echo "$RUNNER_TEMP/release-tools" >> "$GITHUB_PATH"
-          if [[ "$RUNNER_OS" == Windows ]]; then printf '%s\n' 'C:\msys64\mingw64\bin' >> "$GITHUB_PATH"; fi
-      - name: Install dependency license collector
+      - name: Install licence collector
+        if: matrix.platform != 'nix' && matrix.libc != 'musl'
         run: cargo install --locked --features cli cargo-about --version 0.9.0
-      - name: Build and package
-        if: runner.os != 'Windows'
-        run: |
-          direnv allow .
-          direnv exec . python3 tools/release/package.py package
-      - name: Build and package Windows
-        if: runner.os == 'Windows'
+      - name: Windows installer tools
+        if: matrix.id == 'windows-amd64'
         shell: pwsh
         run: |
-          # PowerShell does not supply the Unix home/XDG variables direnv uses.
+          dotnet tool install --tool-path "$env:RUNNER_TEMP/wix" wix --version '${{ needs.targets.outputs.wix_version }}'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "$env:RUNNER_TEMP/wix" >> $env:GITHUB_PATH
+          $sdk = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin" -Directory | Sort-Object Name -Descending | Where-Object { Test-Path (Join-Path $_.FullName 'x64/makeappx.exe') } | Select-Object -First 1
+          if (-not $sdk) { throw 'Windows SDK packaging tools are required.' }
+          (Join-Path $sdk.FullName 'x64') >> $env:GITHUB_PATH
+      - name: Package Unix release
+        if: matrix.platform != 'windows' && matrix.platform != 'nix' && matrix.libc != 'musl'
+        run: |
+          direnv allow .
+          direnv exec . python3 tools/release/package.py package --target '${{ matrix.id }}'
+      - name: Package Windows release
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
           $env:XDG_CONFIG_HOME = "$env:RUNNER_TEMP/direnv/config".Replace('\', '/')
           $env:XDG_CACHE_HOME = "$env:RUNNER_TEMP/direnv/cache".Replace('\', '/')
           $env:XDG_DATA_HOME = "$env:RUNNER_TEMP/direnv/data".Replace('\', '/')
           $env:DIRENV_BASH = "$env:ProgramFiles/Git/bin/bash.exe".Replace('\', '/')
-          if (-not (Test-Path $env:DIRENV_BASH)) { throw 'Git Bash is required for direnv' }
           $env:OPENZT2_NATIVE_DEPENDENCY_DIR = $env:OPENZT2_NATIVE_DEPENDENCY_DIR.Replace('\', '/')
           $env:KAI_CARGO_TARGET_ROOT = $env:KAI_CARGO_TARGET_ROOT.Replace('\', '/')
+          $env:PATH = '${{ matrix.mingw_bin }};' + $env:PATH
+          if ('${{ matrix.architecture }}' -eq 'arm64') { $env:OPENZT2_OBJDUMP = 'llvm-objdump' }
           direnv allow .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # direnv exec uses Unix-only executable lookup. Activate the same
-          # .envrc through its structured exporter before invoking the packager.
           $changes = direnv export json | ConvertFrom-Json -AsHashtable
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          # Keep the native Windows PATH and case-insensitive system variables.
           foreach ($name in @('CARGO_TARGET_DIR', 'MOJOSHADER_DIR', 'PKG_CONFIG_PATH', 'LIBRARY_PATH', 'LD_LIBRARY_PATH')) {
             if (-not $changes.ContainsKey($name)) { throw "Missing release environment variable: $name" }
             [Environment]::SetEnvironmentVariable($name, $changes[$name], 'Process')
           }
-          # Check the native wrappers before compiling the full game.
-          cargo build --locked --release -p d3d9-effects
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          python tools/release/package.py package
+          python tools/release/package.py package --target '${{ matrix.id }}'
           exit $LASTEXITCODE
+      - name: Package Alpine release
+        if: matrix.libc == 'musl'
+        run: |
+          docker run --rm --volume "$PWD:/workspace" --volume "$RUNNER_TEMP:/ci-temp" --workdir /workspace \
+            --env RUNNER_TEMP=/ci-temp --env OPENZT2_RUST_VERSION --env CARGO_BUILD_JOBS \
+            --env OPENZT2_APK_SIGNING_KEY_BASE64 --env GITHUB_REF_TYPE \
+            --env OPENZT2_RELEASE_TARGET --env OPENZT2_RELEASE_ARCH \
+            '${{ needs.targets.outputs.alpine_image }}' \
+            sh -ec 'apk add --no-cache bash; exec bash tools/release/alpine/build.sh'
+      - uses: cachix/install-nix-action@v31
+        if: matrix.platform == 'nix'
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+            max-jobs = 2
+            cores = 2
+      - name: Package Nix closure
+        if: matrix.platform == 'nix'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd
+          bash tools/release/nix/export-package.sh
+      - name: Stage declared release artifacts
+        run: python3 tools/release/release_targets.py stage '${{ matrix.id }}'
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenZT2-${{ matrix.platform }}
-          path: |
-            build/releases/windows-amd64/OpenZT2-*.zip
-            build/releases/darwin-arm64/OpenZT2-*.dmg
-            build/releases/linux-x86_64/OpenZT2-*.deb
-            build/releases/linux-x86_64/OpenZT2-*.rpm
-            build/releases/linux-x86_64/OpenZT2-*.pkg.tar.zst
-            build/releases/linux-x86_64/OpenZT2-*.AppImage
-            build/releases/linux-x86_64/OpenZT2-*.flatpak
-            build/releases/windows-amd64/SHA256SUMS
-            build/releases/darwin-arm64/SHA256SUMS
-            build/releases/linux-x86_64/SHA256SUMS
+          name: OpenZT2-${{ matrix.id }}
+          path: build/artifacts/${{ matrix.id }}/
           if-no-files-found: error
 
   publish:
-    needs: package
+    needs: [targets, package]
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    environment: release
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - uses: actions/download-artifact@v4
         with:
           pattern: OpenZT2-*
           path: artifacts
-      - name: Verify release packages
-        run: |
-          python3 - <<'PY'
-          import hashlib, pathlib, shutil
-          root = pathlib.Path('artifacts')
-          output = pathlib.Path('release')
-          output.mkdir()
-          checksums = []
-          version = __import__('os').environ['RELEASE_TAG'].removeprefix('v')
-          expected_packages = {
-              f'OpenZT2-{version}-windows-amd64.zip',
-              f'OpenZT2-{version}-darwin-arm64.dmg',
-              *(f'OpenZT2-{version}-linux-x86_64.{suffix}'
-                for suffix in ('deb', 'rpm', 'pkg.tar.zst', 'AppImage', 'flatpak')),
-          }
-          seen = set()
-          for manifest in sorted(root.rglob('SHA256SUMS')):
-              for line in manifest.read_text().splitlines():
-                  expected, name = line.split(maxsplit=1)
-                  name = name.strip()
-                  if name not in expected_packages or name in seen:
-                      raise SystemExit(f'Unexpected or duplicate package: {name}')
-                  seen.add(name)
-                  package = manifest.parent / name
-                  if package.name != name or not package.is_file():
-                      raise SystemExit(f'Invalid package path: {name}')
-                  with package.open('rb') as stream:
-                      actual = hashlib.file_digest(stream, 'sha256').hexdigest()
-                  if actual != expected:
-                      raise SystemExit(f'Checksum mismatch: {name}')
-                  shutil.copy2(package, output / name)
-                  checksums.append(f'{actual}  {name}')
-          if seen != expected_packages:
-              raise SystemExit(f'Missing release packages: {sorted(expected_packages - seen)}')
-          (output / 'SHA256SUMS').write_text('\n'.join(checksums) + '\n')
-          PY
+      - name: Collect declared packages and checksums
+        run: python3 tools/release/release_targets.py collect artifacts release
       - name: Publish tagged release
         run: |
           options=()
-          if [[ "$RELEASE_TAG" == *-* ]]; then
-            options+=(--prerelease --latest=false)
-          fi
+          if [[ "$RELEASE_TAG" == *-* ]]; then options+=(--prerelease --latest=false); fi
           cat > release-notes.md <<'EOF'
-          Early alpha. Gameplay remains incomplete and known bugs are tracked in Issues.
+          OpenZT2 is in early development. Requires your own Zoo Tycoon 2 Ultimate Collection game files.
 
-          Packages: Windows x64 (.zip), macOS Apple Silicon (.dmg), Linux x64 (.deb, .rpm, .pkg.tar.zst, AppImage and Flatpak). Native Linux packages and AppImage require glibc 2.39 or newer and the system libraries listed in the Linux packaging documentation; Flatpak uses its own runtime. See tools/release/linux/README.md for installation and game-file locations.
-
-          Requires your own Zoo Tycoon 2 game files. They are not included. These packages have not yet been verified through complete gameplay sessions on all three platforms.
+          Packages cover Windows x86-64 and ARM64, macOS Apple Silicon and Intel, Linux x86-64 and ARM64, Alpine Linux and Nix. Installation instructions and runtime requirements are in README.md and tools/release/README.md.
           EOF
           gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" \
             --notes-file release-notes.md "${options[@]}" release/*

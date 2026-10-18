@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import platform
 import plistlib
 import re
 import shutil
@@ -15,12 +14,38 @@ import tomllib
 import zipfile
 
 from license_bundle import prepare_release_license_bundle
+from release_targets import PACKAGING, TARGETS, release_target, workspace_version, write_package_checksums
+from windows.package import build_windows_installers
 
 WORKSPACE = Path(__file__).resolve().parents[2]
 
 
 def run(*arguments, **options):
     return subprocess.run(arguments, check=True, **options)
+
+
+def require_binary_architecture(binary, target):
+    if target["platform"] == "darwin":
+        run("lipo", "-verify_arch", target["architecture"], str(binary))
+        commands = subprocess.check_output(["otool", "-l", str(binary)], text=True)
+        minimums = re.findall(r"\bminos (\d+(?:\.\d+)+)", commands)
+        minimums += re.findall(r"cmd LC_VERSION_MIN_MACOSX\s+cmdsize \d+\s+version (\d+(?:\.\d+)+)", commands)
+        permitted = tuple(map(int, PACKAGING["macos_deployment_target"].split(".")))
+        for minimum in minimums:
+            if tuple(map(int, minimum.split("."))) > permitted:
+                raise RuntimeError(f"{binary} requires macOS {minimum}, beyond the declared deployment target")
+    elif target["platform"] == "windows":
+        headers = subprocess.check_output(
+            [os.environ.get("OPENZT2_OBJDUMP", "objdump"), "-f", str(binary)], text=True).lower()
+        names = ("aarch64", "arm64") if target["architecture"] == "arm64" else ("x86-64", "x86_64")
+        if not any(name in headers for name in names):
+            raise RuntimeError(f"Unexpected binary architecture: {binary}")
+    else:
+        with binary.open("rb") as stream:
+            header = stream.read(20)
+        machine = {"x86_64": 62, "aarch64": 183}[target["architecture"]]
+        if len(header) != 20 or header[:4] != b"\x7fELF" or header[4:6] != b"\x02\x01" or int.from_bytes(header[18:20], "little") != machine:
+            raise RuntimeError(f"Unexpected ELF architecture: {binary}")
 
 
 def bundle_macos_shared_libraries(binary, destination, original_binary):
@@ -55,7 +80,7 @@ def bundle_macos_shared_libraries(binary, destination, original_binary):
                 candidates = [expand_loader_path(dependency)]
             source = next((path.resolve() for path in candidates if path.is_file()), None)
             if source is None:
-                raise RuntimeError(f"Cannot resolve macOS dependency {dependency} from {original}")
+                raise RuntimeError(f"Can't resolve macOS dependency {dependency} from {original}")
             if source == original.resolve():
                 continue
             if str(source).startswith(("/usr/lib/", "/System/")):
@@ -65,6 +90,7 @@ def bundle_macos_shared_libraries(binary, destination, original_binary):
                 raise RuntimeError(f"Conflicting macOS libraries named {source.name}: {source} and {copied[source.name]}")
             replacement = f"@executable_path/../Frameworks/{source.name}"
             if source.name not in copied:
+                require_binary_architecture(source, release_target(os.environ["OPENZT2_RELEASE_TARGET"]))
                 shutil.copy2(source, target)
                 target.chmod(0o755)
                 copied[source.name] = source
@@ -79,10 +105,13 @@ def bundle_windows_shared_libraries(binary, destination):
     copied = set()
     while pending:
         current = pending.pop()
-        imports = subprocess.check_output(["objdump", "-p", str(current)], text=True)
+        imports = subprocess.check_output([os.environ.get("OPENZT2_OBJDUMP", "objdump"), "-p", str(current)], text=True)
         for name in re.findall(r"DLL Name:\s*(\S+)", imports):
-            source = shutil.which(name)
+            staged = destination / name
+            source = str(staged) if staged.is_file() else shutil.which(name)
             windows_directory = Path(os.environ["SystemRoot"]).resolve()
+            if not source and not name.lower().startswith(("api-ms-", "ext-ms-")):
+                raise RuntimeError(f"Missing Windows runtime library: {name}")
             if source and not Path(source).resolve().is_relative_to(windows_directory) and name not in copied:
                 target = destination / name
                 if Path(source).resolve() != target.resolve():
@@ -91,55 +120,48 @@ def bundle_windows_shared_libraries(binary, destination):
                 pending.append(target)
 
 
-def package(target=None):
-    version = tomllib.loads((WORKSPACE / "Cargo.toml").read_text())["workspace"]["package"]["version"]
-    system = "Windows" if target else platform.system()
-    architecture = "amd64" if target else platform.machine().lower()
-    output = WORKSPACE / "build/releases" / f"{system.lower()}-{architecture}"
+def package(identifier):
+    target = release_target(identifier)
+    os.environ["OPENZT2_RELEASE_TARGET"] = identifier
+    version = workspace_version()
+    output = WORKSPACE / "build/releases" / identifier
     staging = output / "staging"
     if staging.exists():
         shutil.rmtree(staging)
     staging.mkdir(parents=True)
-    if system == "Linux" and Path("/etc/NIXOS").exists():
-        raise RuntimeError("Portable .deb builds require a native Ubuntu 24.04 release host outside the Nix shell.")
     prefix = Path(os.environ["OPENZT2_NATIVE_DEPENDENCY_DIR"])
-    release_target = target or subprocess.check_output(
-        ["rustc", "--print", "host-tuple"], text=True).strip()
     licenses = output / "licenses"
     if licenses.exists():
         shutil.rmtree(licenses)
-    prepare_release_license_bundle(WORKSPACE, prefix, licenses, release_target)
+    prepare_release_license_bundle(WORKSPACE, prefix, licenses, target["rust_target"])
     metadata = json.loads(subprocess.check_output(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"], cwd=WORKSPACE))
-    target_arguments = ["--target", target] if target else []
-    run("cargo", "build", "--locked", "--release", "-p", "openzt2_game", "--bin", "openzt2", *target_arguments, cwd=WORKSPACE)
-    binary_directory = Path(metadata["target_directory"])
-    if target:
-        binary_directory /= target
-    executable = binary_directory / "release" / ("openzt2.exe" if system == "Windows" else "openzt2")
-    name = f"OpenZT2-{version}-{system.lower()}-{architecture}"
-    if system == "Windows":
-        root = staging / "OpenZT2"
-        root.mkdir()
-        shutil.copy2(executable, root / executable.name)
+    run("cargo", "build", "--locked", "--release", "--target", target["rust_target"],
+        "-p", "openzt2_game", "--bin", "openzt2", cwd=WORKSPACE)
+    binary_directory = Path(metadata["target_directory"]) / target["rust_target"] / "release"
+    executable = binary_directory / ("openzt2.exe" if target["platform"] == "windows" else "openzt2")
+    require_binary_architecture(executable, target)
+    name = f"OpenZT2-{version}-{identifier}"
+    if target["platform"] == "windows":
+        payload = staging / "OpenZT2"
+        payload.mkdir()
+        shutil.copy2(executable, payload / executable.name)
         for library in (prefix / "bin").glob("*.dll"):
-            shutil.copy2(library, root / library.name)
-        if not target:
-            for binary in list(root.iterdir()):
-                bundle_windows_shared_libraries(binary, root)
-        shutil.copy2(WORKSPACE / "README.md", root / "README.txt")
-        shutil.copytree(licenses, root / "licenses")
-        artifact = output / f"{name}.zip"
-        # Nix store files have epoch timestamps; ZIP's earliest date is 1980.
-        with zipfile.ZipFile(artifact, "w", compression=zipfile.ZIP_DEFLATED,
+            shutil.copy2(library, payload / library.name)
+        bundle_windows_shared_libraries(payload / executable.name, payload)
+        for library in payload.glob("*.dll"):
+            require_binary_architecture(library, target)
+        shutil.copy2(WORKSPACE / "README.md", payload / "README.txt")
+        shutil.copytree(licenses, payload / "licenses")
+        with zipfile.ZipFile(output / f"{name}.zip", "w", compression=zipfile.ZIP_DEFLATED,
                              strict_timestamps=False) as archive:
-            for file in sorted(root.rglob("*")):
+            for file in sorted(payload.rglob("*")):
                 if file.is_file():
                     archive.write(file, file.relative_to(staging))
-    elif system == "Darwin":
+        build_windows_installers(payload, output, name, version, target["formats"], WORKSPACE / "tools/release")
+    elif target["platform"] == "darwin":
         contents = staging / "OpenZT2.app/Contents"
-        binaries = contents / "MacOS"
-        libraries = contents / "Frameworks"
+        binaries, libraries = contents / "MacOS", contents / "Frameworks"
         binaries.mkdir(parents=True)
         libraries.mkdir()
         binary = binaries / "openzt2"
@@ -149,22 +171,20 @@ def package(target=None):
             plistlib.dump({"CFBundleExecutable": "openzt2", "CFBundleIdentifier": "org.openzt2.game",
                           "CFBundleName": "OpenZT2", "CFBundlePackageType": "APPL",
                           "CFBundleShortVersionString": bundle_version, "CFBundleVersion": bundle_version,
+                          "LSMinimumSystemVersion": PACKAGING["macos_deployment_target"],
                           "NSHighResolutionCapable": True}, stream)
         bundle_macos_shared_libraries(binary, libraries, executable)
         shutil.copytree(licenses, contents / "Resources/licenses")
-        # Ad-hoc signing makes a locally built Apple Silicon app executable; it is not notarization.
         run("codesign", "--force", "--deep", "--sign", "-", str(contents.parent))
         shutil.copy2(WORKSPACE / "README.md", staging / "README.txt")
         (staging / "Applications").symlink_to("/Applications")
-        artifact = output / f"{name}.dmg"
-        run("hdiutil", "create", "-ov", "-format", "UDZO", "-volname", "OpenZT2", "-srcfolder", str(staging), str(artifact))
-    elif system == "Linux":
-        root = staging / "package"
-        binaries = root / "usr/bin"
-        libraries = root / "usr/lib/openzt2"
-        control = root / "DEBIAN"
-        for directory in (binaries, libraries, control):
-            directory.mkdir(parents=True)
+        run("hdiutil", "create", "-ov", "-format", "UDZO", "-volname", "OpenZT2",
+            "-srcfolder", str(staging), str(output / f"{name}.dmg"))
+    elif target["platform"] == "linux":
+        payload = staging / "package"
+        binaries, libraries = payload / "usr/bin", payload / "usr/lib/openzt2"
+        binaries.mkdir(parents=True)
+        libraries.mkdir(parents=True)
         binary = binaries / "openzt2"
         shutil.copy2(executable, binary)
         for pattern in ("libvkd3d-shader.so*", "libmojoshader.so*"):
@@ -173,37 +193,43 @@ def package(target=None):
         run("patchelf", "--set-rpath", "$ORIGIN/../lib/openzt2", str(binary))
         for library in libraries.iterdir():
             run("patchelf", "--set-rpath", "$ORIGIN", str(library))
+            require_binary_architecture(library, target)
         imports = subprocess.check_output(["ldd", str(binary)], text=True)
         if "not found" in imports or "/nix/store/" in imports:
-            raise RuntimeError(f"Package has unresolved or Nix-only imports:\n{imports}")
-        deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}[architecture]
-        (control / "control").write_text(
-            f"Package: openzt2\nVersion: {version.replace('-', '~', 1)}\nArchitecture: {deb_arch}\n"
-            "Maintainer: OpenZT2 contributors <noreply@openzt2.org>\n"
-            "Depends: libc6 (>= 2.39), libgcc-s1, libstdc++6, libasound2t64, libudev1, libwayland-client0, libxkbcommon0, libvulkan1, libfontconfig1\n"
-            "Section: games\nPriority: optional\nDescription: OpenZT2 development build\n"
-            " Requires user-supplied Zoo Tycoon 2 archives.\n")
-        readme = root / "usr/share/doc/openzt2"
-        readme.mkdir(parents=True)
-        shutil.copy2(WORKSPACE / "README.md", readme / "README")
-        shutil.copytree(licenses, readme / "licenses")
-        artifact = output / f"{name}.deb"
-        run("bash", str(WORKSPACE / "tools/release/linux/package.sh"),
-            str(root), str(output), version)
-        return
+            raise RuntimeError(f"Unresolved native package imports:\n{imports}")
+        documentation = payload / "usr/share/doc/openzt2"
+        documentation.mkdir(parents=True)
+        shutil.copy2(WORKSPACE / "README.md", documentation / "README")
+        shutil.copytree(licenses, documentation / "licenses")
+        environment = {**os.environ, "OPENZT2_RELEASE_TARGET": identifier,
+                       "OPENZT2_RELEASE_ARCH": target["architecture"],
+                       "OPENZT2_FLATPAK_RUNTIME": PACKAGING["flatpak_runtime"]}
+        if target["libc"] == "musl":
+            run("bash", str(WORKSPACE / "tools/release/alpine/package.sh"),
+                str(payload), str(output), version, env=environment)
+        else:
+            control = payload / "DEBIAN"
+            control.mkdir()
+            deb_arch = {"x86_64": "amd64", "aarch64": "arm64"}[target["architecture"]]
+            (control / "control").write_text(
+                f"Package: openzt2\nVersion: {version.replace('-', '~', 1)}\nArchitecture: {deb_arch}\n"
+                "Maintainer: OpenZT2 contributors <noreply@openzt2.org>\n"
+                "Depends: libc6 (>= 2.39), libgcc-s1, libstdc++6, libasound2t64, libudev1, libwayland-client0, libxkbcommon0, libvulkan1, libfontconfig1\n"
+                "Section: games\nPriority: optional\nDescription: OpenZT2 development build\n"
+                " Requires user-supplied Zoo Tycoon 2 archives.\n")
+            run("bash", str(WORKSPACE / "tools/release/linux/package.sh"),
+                str(payload), str(output), version, env=environment)
     else:
-        raise RuntimeError(f"Unsupported platform: {system}")
-    with artifact.open("rb") as stream:
-        checksum = hashlib.file_digest(stream, "sha256").hexdigest()
-    (output / "SHA256SUMS").write_text(f"{checksum}  {artifact.name}\n")
-    print(artifact)
+        raise ValueError(f"Use the Nix package builder for {identifier}")
+    write_package_checksums(output, identifier, version)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    package_command = commands.add_parser("package", help="Build and package on a configured release host")
-    package_command.add_argument("--target", choices=["x86_64-pc-windows-gnu"], help="Cross-compile Windows using the project Windows shell")
+    package_command = commands.add_parser("package", help="Build release packages for the selected target")
+    package_command.add_argument("--target", choices=TARGETS,
+                                 default=os.environ.get("OPENZT2_RELEASE_TARGET"), required=not os.environ.get("OPENZT2_RELEASE_TARGET"))
     arguments = parser.parse_args()
     package(arguments.target)
 
