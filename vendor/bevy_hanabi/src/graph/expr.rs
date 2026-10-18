@@ -1743,7 +1743,7 @@ impl ToWgslString for BuiltInOperator {
         match self {
             BuiltInOperator::Rand(_) => format!("{}()", self.name()),
             BuiltInOperator::IsAlive => "is_alive".to_string(),
-            BuiltInOperator::DeltaTime => "(*effect_metadata).delta_time".to_string(),
+            BuiltInOperator::DeltaTime => "effect_delta_time".to_string(),
             _ => format!("sim_params.{}", self.name()),
         }
     }

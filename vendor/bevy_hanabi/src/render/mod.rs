@@ -410,7 +410,8 @@ pub(crate) struct GpuSpawnerParams {
     spawn_point_offset: u32,
     particle_size_scale: f32,
     properties_array_index: u32,
-    _spawn_padding: [f32; 2],
+    simulation_delta_time: f32,
+    _spawn_padding: f32,
 }
 
 #[repr(C)]
@@ -4577,6 +4578,7 @@ pub(crate) fn prepare_batch_inputs(
             maybe_cached_draw_indirect_args,
         );
         gpu_spawner_params.particle_size_scale = extracted_spawner.particle_size_scale;
+        gpu_spawner_params.simulation_delta_time = extracted_effect.delta_time;
         gpu_spawner_params.properties_array_index = maybe_cached_effect_properties
             .map(|properties| properties.array_index)
             .unwrap_or(u32::MAX);

@@ -1182,7 +1182,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             if has_position && has_velocity {
                 // Note the prepended "\n" to prevent appending to a comment line.
                 let code = format!(
-                    "\nparticle.{0} += particle.{1} * (*effect_metadata).delta_time;\n",
+                    "\nparticle.{0} += particle.{1} * effect_delta_time;\n",
                     Attribute::POSITION.name(),
                     Attribute::VELOCITY.name()
                 );
@@ -1308,7 +1308,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             }
 
             age_code += &format!(
-                "\n    particle.{0} = particle.{0} + (*effect_metadata).delta_time;",
+                "\n    particle.{0} = particle.{0} + effect_delta_time;",
                 Attribute::AGE.name()
             );
 

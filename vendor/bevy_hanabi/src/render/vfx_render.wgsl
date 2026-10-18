@@ -193,6 +193,7 @@ fn find_location_from_particle(slab_particle_index: u32) -> EffectLocation {
 var<private> effect_location : EffectLocation;
 
 var<private> effect_metadata_index: u32;
+var<private> effect_delta_time: f32;
 var<private> properties_array_index: u32;
 
 @vertex
@@ -217,6 +218,7 @@ fn vertex(
     effect_location = find_location_from_particle(slab_particle_index);
     let spawner = &spawners[batch_info.base_effect + effect_location.effect_index];
     effect_metadata_index = (*spawner).effect_metadata_index;
+    effect_delta_time = (*spawner).simulation_delta_time;
     properties_array_index = (*spawner).properties_array_index;
     let base_particle = effect_location.base_particle;
 

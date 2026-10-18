@@ -100,6 +100,7 @@ fn find_location_from_particle(slab_particle_index: u32) -> EffectLocation {
 #endif
 
 var<private> effect_metadata_index: u32;
+var<private> effect_delta_time: f32;
 var<private> properties_array_index: u32;
 
 @compute @workgroup_size(64)
@@ -113,6 +114,7 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
     let location = find_location_from_particle(slab_particle_index);
     let spawner = &spawners[batch_info.base_effect + location.effect_index];
     effect_metadata_index = (*spawner).effect_metadata_index;
+    effect_delta_time = (*spawner).simulation_delta_time;
     let base_particle = location.base_particle;
 
     // Cap at maximum number of alive particles for the current effect

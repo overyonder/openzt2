@@ -54,7 +54,7 @@ struct Spawner {
     spawn_point_offset: u32,
     particle_size_scale: f32,
     properties_array_index: u32,
-    spawn_padding_one: f32,
+    simulation_delta_time: f32,
     spawn_padding_two: f32,
 
     {{SPAWNER_PADDING}}
@@ -251,6 +251,7 @@ struct EffectMetadata {
     /// The value loops back after some time, but unless some particle lives
     /// forever there's little chance of repetition.
     particle_counter: atomic<u32>,
+    delta_time: f32,
 
     /// Padding for storage buffer alignment. This struct is sometimes bound as part
     /// of an array, or sometimes individually as a single unit. In the later case,
