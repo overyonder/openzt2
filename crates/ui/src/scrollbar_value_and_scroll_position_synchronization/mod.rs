@@ -30,11 +30,17 @@ pub(super) fn apply_changed_authored_scrollbar_values_to_owned_bevy_scroll_posit
             * computed.inverse_scale_factor();
         let value = value.0 as f32;
         match decoration.axis {
-            UiSliderAxis::Horizontal => position.x = value.clamp(0.0, maximum.x),
-            UiSliderAxis::Vertical => position.y = value.clamp(0.0, maximum.y),
+            UiSliderAxis::Horizontal => {
+                let next = value.clamp(0.0, maximum.x);
+                if position.x != next { position.x = next; }
+            }
+            UiSliderAxis::Vertical => {
+                let next = value.clamp(0.0, maximum.y);
+                if position.y != next { position.y = next; }
+            }
             UiSliderAxis::Both => {
-                position.x = value.clamp(0.0, maximum.x);
-                position.y = value.clamp(0.0, maximum.y);
+                let next = Vec2::splat(value).clamp(Vec2::ZERO, maximum);
+                if position.0 != next { position.0 = next; }
             }
         }
     }
@@ -70,7 +76,8 @@ pub(super) fn project_owned_bevy_scroll_positions_into_authored_scrollbar_values
             maximum.0 = limit;
         }
         if value.0 != offset {
-            value.0 = offset;
+            // This is an observation of the owner, not a new scroll command.
+            value.bypass_change_detection().0 = offset;
         }
     }
 }

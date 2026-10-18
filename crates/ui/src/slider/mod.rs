@@ -37,8 +37,10 @@ pub(super) struct UiSliderPresentation {
 }
 
 /// Entity-local pointer capture while the primary pointer adjusts a slider.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct UiSliderPointerActive;
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub(super) struct UiSliderPointerActive {
+    grab_offset: Vec2,
+}
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiSliderValuePresentation {
@@ -175,12 +177,17 @@ fn value_from_point(
 /// Applies authored bounds immediately and suppresses redundant value writes.
 pub(super) fn apply_slider_bounds(
     mut sliders: Query<
-        (&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue),
+        (&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue, Option<&UiScrollDecoration>),
         Or<(Changed<UiMinimum>, Changed<UiMaximum>)>,
     >,
 ) {
-    for (policy, minimum, maximum, mut value) in &mut sliders {
-        let next = clamp_and_step(value.0 as f64, policy, minimum.0, maximum.0);
+    for (policy, minimum, maximum, mut value, scroll) in &mut sliders {
+        let (lower, upper) = ordered_bounds(minimum.0, maximum.0);
+        let next = if scroll.is_some() {
+            value.0.clamp(lower, upper)
+        } else {
+            clamp_and_step(value.0 as f64, policy, lower, upper)
+        };
         value.set_if_neq(UiValue(next));
     }
 }
@@ -191,7 +198,7 @@ pub(super) fn adjust_focused_sliders(
     mut actions: MessageReader<ActionRequest>,
     scopes: Query<(Entity, &UiFocusScope)>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
-    mut sliders: Query<(&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue)>,
+    mut sliders: Query<(&UiSliderPolicy, &UiMinimum, &UiMaximum, &mut UiValue, Option<&UiScrollDecoration>)>,
 ) {
     let active_scope = context.active_scope();
     let modal = context.top_modal();
@@ -206,16 +213,20 @@ pub(super) fn adjust_focused_sliders(
             if !context.eligible_in_scope(focused, root, modal) {
                 continue;
             }
-            let Ok((policy, minimum, maximum, mut value)) = sliders.get_mut(focused) else {
+            let Ok((policy, minimum, maximum, mut value, scroll)) = sliders.get_mut(focused) else {
                 continue;
             };
-            let direction = match (policy.axis, request.action) {
+            let axis = scroll.map_or(policy.axis, |scroll| scroll.axis);
+            let direction = match (axis, request.action) {
                 (UiSliderAxis::Horizontal | UiSliderAxis::Both, GameAction::NavigateLeft)
                 | (UiSliderAxis::Vertical | UiSliderAxis::Both, GameAction::NavigateDown) => -1.0,
                 (UiSliderAxis::Horizontal | UiSliderAxis::Both, GameAction::NavigateRight)
                 | (UiSliderAxis::Vertical | UiSliderAxis::Both, GameAction::NavigateUp) => 1.0,
                 _ => continue,
             };
+            let direction = if scroll.is_some()
+                && matches!(request.action, GameAction::NavigateUp | GameAction::NavigateDown)
+            { -direction } else { direction };
             let next = value.0 as f64 + slider_step(policy) * direction;
             let next = clamp_and_step(next, policy, minimum.0, maximum.0);
             value.set_if_neq(UiValue(next));
@@ -305,20 +316,35 @@ pub(super) fn adjust_sliders_from_pointer(
         if !starting && active.is_none() {
             continue;
         }
+        let grab_offset = active.map_or_else(
+            || {
+                if starting && pointer_over_thumb {
+                    point.zip(thumb).map_or(Vec2::ZERO, |(point, (_, _, _, transform))| {
+                        point - transform.affine().translation
+                    })
+                } else {
+                    Vec2::ZERO
+                }
+            },
+            |active| active.grab_offset,
+        );
         if let Some(next) = track.and_then(|(node, transform)| {
             let scroll_thumb = scroll.map(|_| {
                 let size = thumb.map_or(Vec2::ZERO, |(_, _, thumb, _)| thumb.size());
-                match effective_axis(policy.axis, node.size()) {
+                match effective_axis(scroll.map_or(policy.axis, |scroll| scroll.axis), node.size()) {
                     UiSliderAxis::Horizontal => size.x,
                     _ => size.y,
                 }
             });
             point.and_then(|point| {
                 value_from_point(
-                    point,
+                    point - grab_offset,
                     node,
                     *transform,
-                    policy,
+                    &UiSliderPolicy {
+                        axis: scroll.map_or(policy.axis, |scroll| scroll.axis),
+                        ..*policy
+                    },
                     scroll_thumb,
                     minimum.0,
                     maximum.0,
@@ -328,7 +354,7 @@ pub(super) fn adjust_sliders_from_pointer(
             value.set_if_neq(UiValue(next));
         }
         if starting {
-            commands.entity(entity).insert(UiSliderPointerActive);
+            commands.entity(entity).insert(UiSliderPointerActive { grab_offset });
         }
         if primary_pointer.just_released {
             commands.entity(entity).remove::<UiSliderPointerActive>();
@@ -347,132 +373,125 @@ fn node_is_descendant_of(node: Entity, ancestor: Entity, parents: &Query<&ChildO
     false
 }
 
-/// Positions the thumb along the track for the current value.
-pub(super) fn present_slider_values(
-    sliders: Query<(
-        Entity,
-        &UiSliderPresentation,
-        &UiSliderPolicy,
-        &UiMinimum,
-        &UiMaximum,
-        &UiValue,
-        Option<&UiScrollDecoration>,
-    )>,
-    tracks: Query<(&ComputedNode, &UiGlobalTransform)>,
-    scroll_owners: Query<&ComputedNode>,
+/// Sizes scrollbar thumbs without changing the authored track geometry.
+pub(super) fn size_scrollbar_thumbs(
+    sliders: Query<(Entity, &UiSliderPresentation, &UiSliderPolicy, &UiScrollDecoration)>,
+    bounds: Query<&ComputedNode>,
     children: Query<&Children>,
-    mut thumbs: Query<(
-        Entity,
-        &UiNodeId,
-        &UiGlobalTransform,
-        &mut Node,
-        &mut UiTransform,
-    )>,
+    mut thumbs: Query<(&UiNodeId, &mut Node)>,
 ) {
-    for (slider, presentation, policy, minimum, maximum, value, scroll) in &sliders {
-        if presentation.thumb == AssetId::default() {
-            continue;
-        }
-        let Ok((track, track_transform)) = tracks.get(presentation.track) else {
+    for (slider, presentation, policy, scroll) in &sliders {
+        let (Ok(track), Ok(owner)) = (bounds.get(presentation.track), bounds.get(scroll.owner)) else {
             continue;
         };
-        let ratio = value_ratio(value.0, minimum.0, maximum.0);
-        let axis = effective_axis(policy.axis, track.size());
-        // Search only this slider's own subtree for its thumb.
-        let Some(thumb) = children.iter_descendants(slider).find(|candidate| {
-            thumbs
-                .get(*candidate)
-                .is_ok_and(|(_, id, _, _, _)| id.id == presentation.thumb)
+        let Some(thumb) = children.iter_descendants(slider).find(|entity| {
+            thumbs.get(*entity).is_ok_and(|(id, _)| id.id == presentation.thumb)
         }) else {
             continue;
         };
-        let Ok((_, _, thumb_transform, mut thumb_node, mut transform)) = thumbs.get_mut(thumb)
-        else {
+        let Ok((_, mut node)) = thumbs.get_mut(thumb) else {
             continue;
         };
-        let inverse_scale = track.inverse_scale_factor();
-        // Physical thumb length along the axis, only for scrollbars.
-        let mut scroll_thumb = None;
-        if let Some(scroll) = scroll {
-            let Ok(scroll_owner) = scroll_owners.get(scroll.owner) else {
-                continue;
-            };
-            let viewport = scroll_owner.size();
-            let content = scroll_owner.content_size().max(viewport);
-            let authored_track = track.size() * inverse_scale;
-            let proportion = Vec2::new(
-                if content.x > 0.0 {
-                    viewport.x / content.x
-                } else {
-                    1.0
-                },
-                if content.y > 0.0 {
-                    viewport.y / content.y
-                } else {
-                    1.0
-                },
-            );
-            match effective_axis(policy.axis, track.size()) {
-                UiSliderAxis::Horizontal => {
-                    let minimum = policy.minimum_thumb_size.min(authored_track.x);
-                    let width = (authored_track.x * proportion.x).clamp(minimum, authored_track.x);
-                    if thumb_node.width != px(width) {
-                        thumb_node.width = px(width);
-                    }
-                    scroll_thumb = Some(width / inverse_scale);
-                }
-                UiSliderAxis::Vertical => {
-                    let minimum = policy.minimum_thumb_size.min(authored_track.y);
-                    let height = (authored_track.y * proportion.y).clamp(minimum, authored_track.y);
-                    if thumb_node.height != px(height) {
-                        thumb_node.height = px(height);
-                    }
-                    scroll_thumb = Some(height / inverse_scale);
-                }
-                UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
-            }
-        }
-        let authored_interval_point = match (axis, scroll_thumb) {
-            (UiSliderAxis::Horizontal, None) => Vec2::new((ratio - 0.5) * track.size().x, 0.0),
-            (UiSliderAxis::Vertical, None) => Vec2::new(0.0, (0.5 - ratio) * track.size().y),
-            (UiSliderAxis::Horizontal, Some(thumb)) => {
-                Vec2::new((ratio - 0.5) * (track.size().x - thumb).max(0.0), 0.0)
-            }
-            (UiSliderAxis::Vertical, Some(thumb)) => {
-                Vec2::new(0.0, (ratio - 0.5) * (track.size().y - thumb).max(0.0))
-            }
-            (UiSliderAxis::Both, _) => unreachable!("effective_axis resolves both"),
-        };
-        let desired_thumb_centre = track_transform
-            .affine()
-            .transform_point2(authored_interval_point);
-        let current_thumb_centre = thumb_transform.affine().transform_point2(Vec2::ZERO);
-        // `UiTransform` translation is in logical pixels but the transforms
-        // are physical; without `inverse_scale` HiDPI overshoots every frame.
-        let correction = track_transform.affine().matrix2.inverse()
-            * (desired_thumb_centre - current_thumb_centre)
-            * inverse_scale;
-        let translation = match axis {
-            UiSliderAxis::Horizontal => Val2::new(
-                px(translation_pixels(transform.translation.x) + correction.x),
-                transform.translation.y,
-            ),
-            UiSliderAxis::Vertical => Val2::new(
-                transform.translation.x,
-                px(translation_pixels(transform.translation.y) + correction.y),
-            ),
+        let axis = effective_axis(scroll.axis, track.size());
+        let (track_length, viewport, content) = match axis {
+            UiSliderAxis::Horizontal => (track.size().x, owner.size().x, owner.content_size().x),
+            UiSliderAxis::Vertical => (track.size().y, owner.size().y, owner.content_size().y),
             UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
         };
-        if transform.translation != translation {
-            transform.translation = translation;
+        let length = track_length * track.inverse_scale_factor();
+        if length <= 0.0 {
+            continue;
+        }
+        let proportion = if content > viewport { viewport / content } else { 1.0 };
+        let minimum = policy.minimum_thumb_size.max(0.0).min(length);
+        let size = px((length * proportion).clamp(minimum, length));
+        match axis {
+            UiSliderAxis::Horizontal => {
+                if node.width != size { node.width = size; }
+            }
+            UiSliderAxis::Vertical => {
+                if node.height != size { node.height = size; }
+            }
+            UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
         }
     }
 }
 
-fn translation_pixels(translation: Val) -> f32 {
-    match translation {
-        Val::Px(pixels) => pixels,
-        _ => 0.0,
+/// Projects progress onto this frame's layout before clipping and pixel snapping.
+pub(super) fn present_slider_values(
+    sliders: Query<(
+        Entity, &UiSliderPresentation, &UiSliderPolicy,
+        &UiMinimum, &UiMaximum, &UiValue, Option<&UiScrollDecoration>,
+    )>,
+    children: Query<&Children>,
+    scroll_owners: Query<(&ComputedNode, &ScrollPosition)>,
+    mut nodes: ParamSet<(
+        Query<(&ComputedNode, &UiGlobalTransform, Option<&UiNodeId>)>,
+        Query<&mut UiGlobalTransform>,
+    )>,
+) {
+    for (slider, presentation, policy, minimum, maximum, value, scroll) in &sliders {
+        if presentation.thumb == AssetId::default() { continue; }
+        let geometry = nodes.p0();
+        let Ok((track, track_transform, _)) = geometry.get(presentation.track) else {
+            continue;
+        };
+        let Some(thumb) = children.iter_descendants(slider).find(|entity| {
+            geometry.get(*entity).is_ok_and(|(_, _, id)| {
+                id.is_some_and(|id| id.id == presentation.thumb)
+            })
+        }) else {
+            continue;
+        };
+        let Ok((thumb_node, thumb_transform, _)) = geometry.get(thumb) else {
+            continue;
+        };
+        let axis = effective_axis(scroll.map_or(policy.axis, |scroll| scroll.axis), track.size());
+        let ratio = if let Some(scroll) = scroll {
+            let Ok((owner, position)) = scroll_owners.get(scroll.owner) else { continue; };
+            let overflow = (owner.content_size() - owner.size()).max(Vec2::ZERO)
+                * owner.inverse_scale_factor();
+            let (offset, limit) = match axis {
+                UiSliderAxis::Horizontal => (position.x, overflow.x),
+                UiSliderAxis::Vertical => (position.y, overflow.y),
+                UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
+            };
+            if limit > 0.0 { (offset / limit).clamp(0.0, 1.0) } else { 0.0 }
+        } else {
+            value_ratio(value.0, minimum.0, maximum.0)
+        };
+        let (track_length, thumb_length) = match axis {
+            UiSliderAxis::Horizontal => (track.size().x, thumb_node.size().x),
+            UiSliderAxis::Vertical => (track.size().y, thumb_node.size().y),
+            UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
+        };
+        let travel = if scroll.is_some() { (track_length - thumb_length).max(0.0) } else { track_length };
+        let offset = if axis == UiSliderAxis::Vertical && scroll.is_none() {
+            (0.5 - ratio) * travel
+        } else {
+            (ratio - 0.5) * travel
+        };
+        let Some(inverse_track) = track_transform.try_inverse() else {
+            continue;
+        };
+        let current = thumb_transform.affine().translation;
+        let mut point = inverse_track.transform_point2(current);
+        match axis {
+            UiSliderAxis::Horizontal => point.x = offset,
+            UiSliderAxis::Vertical => point.y = offset,
+            UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
+        }
+        let delta = track_transform.affine().transform_point2(point) - current;
+        // Layout reconstructs these transforms each frame. Local translations
+        // remain authored, so rounded render coordinates never feed back into them.
+        let mut transforms = nodes.p1();
+        for entity in std::iter::once(thumb).chain(children.iter_descendants(thumb)) {
+            let Ok(mut transform) = transforms.get_mut(entity) else { continue; };
+            let mut next = transform.affine();
+            next.translation += delta;
+            let next = UiGlobalTransform::from(next);
+            if *transform != next { *transform = next; }
+        }
     }
 }
 

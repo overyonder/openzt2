@@ -273,13 +273,7 @@ impl Plugin for GameUiPlugin {
                         graph_presentation::regenerate_visible_authored_graph_presentations_from_canonical_histories,
                         held_button_repeat::repeat_held_buttons,
                         authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
-                        scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values
-                            .after(authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel),
-                        slider::present_slider_values.after(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
-                        slider::present_slider_value_labels.after(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
-                        scrollbar_synchronization::present_authored_scrollbar_decorations_from_owned_bevy_overflow
-                            .after(projection::project_ui_documents)
-                            .after(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
+                        slider::size_scrollbar_thumbs,
                         authored_window_interaction::drag_authored_windows_from_accumulated_pointer_motion,
                         authored_drag_gesture::apply_authored_drag_gestures_to_bevy_layout_or_scroll_position,
                         authored_tooltip_presentation::update_authored_tooltip_presentations,
@@ -332,7 +326,16 @@ impl Plugin for GameUiPlugin {
                 PostUpdate,
                 (
                     focused_or_selected_node_scroll_reveal::scroll_nearest_ancestor_to_reveal_focused_or_selected_node
-                        .after(bevy::ui::UiSystems::Layout),
+                        .after(bevy::ui::UiSystems::Layout)
+                        .before(scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values),
+                    (
+                        scrollbar_synchronization::project_owned_bevy_scroll_positions_into_authored_scrollbar_values,
+                        slider::present_slider_values,
+                        slider::present_slider_value_labels,
+                        scrollbar_synchronization::present_authored_scrollbar_decorations_from_owned_bevy_overflow,
+                    ).chain()
+                        .after(bevy::ui::UiSystems::Layout)
+                        .before(bevy::ui::UiSystems::PostLayout),
                     authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels
                         .after(bevy::ui::UiSystems::PostLayout),
                     authored_ui_canvas_scaling_and_clipping::project_authored_scaled_canvas_clip_rectangles
