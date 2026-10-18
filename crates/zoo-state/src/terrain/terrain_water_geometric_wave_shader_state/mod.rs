@@ -84,7 +84,7 @@ pub enum WaterWakePresentationPath {
     GeometricWave,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct NativeTerrainWaterImpactWaveConfiguration {
     minimum_amplitude_ratio: f32,
     maximum_amplitude_ratio: f32,
@@ -96,6 +96,32 @@ struct NativeTerrainWaterImpactWaveConfiguration {
     speed_metres_per_second: f32,
     ramp_minimum_metres: f32,
     ramp_maximum_metres: f32,
+}
+
+impl NativeTerrainWaterImpactWaveConfiguration {
+    fn from_authored(ripple: TerrainWaterRippleWavePresentation) -> Self {
+        let attack = ripple.startup_seconds / RIPPLE_STARTUP_DIVISOR;
+        Self {
+            minimum_amplitude_ratio: map_percent(
+                ripple.minimum_amplitude_percent,
+                RIPPLE_AMPLITUDE_SCALE,
+                AMPLITUDE_BIAS,
+            ),
+            maximum_amplitude_ratio: map_percent(
+                ripple.maximum_amplitude_percent,
+                RIPPLE_AMPLITUDE_SCALE,
+                AMPLITUDE_BIAS,
+            ),
+            chop: ripple.chop_percent / 100.0 * CHOP_SCALE + RIPPLE_CHOP_BIAS,
+            lifespan_seconds: ripple.lifespan_seconds,
+            activation_transition_seconds: attack * 2.0,
+            attack_seconds: attack,
+            release_seconds: (ripple.lifespan_seconds * 0.5).min(ripple.lifespan_seconds - attack),
+            speed_metres_per_second: ripple.speed_metres_per_second,
+            ramp_minimum_metres: ripple.ramp_minimum_metres,
+            ramp_maximum_metres: ripple.ramp_maximum_metres,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -117,12 +143,37 @@ struct NativeTerrainWaterGeometricWaveChannel {
 }
 
 impl NativeTerrainWaterGeometricWaveShaderState {
+    pub fn reconfigure(
+        &mut self,
+        geometric: TerrainWaterGeometricWavePresentation,
+        ripple: TerrainWaterRippleWavePresentation,
+        random_unit: &mut impl FnMut() -> f64,
+    ) {
+        if self.geometric_minimum_amplitude_ratio
+            != map_percent(
+                geometric.minimum_amplitude_percent,
+                GEOMETRIC_AMPLITUDE_SCALE,
+                AMPLITUDE_BIAS,
+            )
+            || self.geometric_maximum_amplitude_ratio
+                != map_percent(
+                    geometric.maximum_amplitude_percent,
+                    GEOMETRIC_AMPLITUDE_SCALE,
+                    AMPLITUDE_BIAS,
+                )
+            || self.geometric_chop_percent != geometric.chop_percent
+            || self.ripple_configuration
+                != NativeTerrainWaterImpactWaveConfiguration::from_authored(ripple)
+        {
+            *self = Self::from_authored_geometric_wave(geometric, ripple, random_unit);
+        }
+    }
+
     pub fn from_authored_geometric_wave(
         geometric: TerrainWaterGeometricWavePresentation,
         ripple: TerrainWaterRippleWavePresentation,
         random_unit: &mut impl FnMut() -> f64,
     ) -> Self {
-        let startup_divisor_seconds = ripple.startup_seconds / RIPPLE_STARTUP_DIVISOR;
         let mut state = Self {
             channels: [NativeTerrainWaterGeometricWaveChannel::cleared(); 4],
             geometric_minimum_amplitude_ratio: map_percent(
@@ -136,27 +187,7 @@ impl NativeTerrainWaterGeometricWaveShaderState {
                 AMPLITUDE_BIAS,
             ),
             geometric_chop_percent: geometric.chop_percent,
-            ripple_configuration: NativeTerrainWaterImpactWaveConfiguration {
-                minimum_amplitude_ratio: map_percent(
-                    ripple.minimum_amplitude_percent,
-                    RIPPLE_AMPLITUDE_SCALE,
-                    AMPLITUDE_BIAS,
-                ),
-                maximum_amplitude_ratio: map_percent(
-                    ripple.maximum_amplitude_percent,
-                    RIPPLE_AMPLITUDE_SCALE,
-                    AMPLITUDE_BIAS,
-                ),
-                chop: ripple.chop_percent / 100.0 * CHOP_SCALE + RIPPLE_CHOP_BIAS,
-                lifespan_seconds: ripple.lifespan_seconds,
-                activation_transition_seconds: startup_divisor_seconds * 2.0,
-                attack_seconds: startup_divisor_seconds,
-                release_seconds: (ripple.lifespan_seconds * 0.5)
-                    .min(ripple.lifespan_seconds - startup_divisor_seconds),
-                speed_metres_per_second: ripple.speed_metres_per_second,
-                ramp_minimum_metres: ripple.ramp_minimum_metres,
-                ramp_maximum_metres: ripple.ramp_maximum_metres,
-            },
+            ripple_configuration: NativeTerrainWaterImpactWaveConfiguration::from_authored(ripple),
             pending_impact: None,
             next_impact_channel_index: 0,
         };
@@ -596,9 +627,11 @@ mod geometric_wave_state_tests {
                     assert!((-100.0..=0.0).contains(&channel.centre_y));
                     assert!(channel.phase.is_finite());
                 }
-                assert!(state
-                    .maximum_horizontal_and_vertical_shader_displacement(50.0)
-                    .is_some());
+                assert!(
+                    state
+                        .maximum_horizontal_and_vertical_shader_displacement(50.0)
+                        .is_some()
+                );
             }
         }
     }

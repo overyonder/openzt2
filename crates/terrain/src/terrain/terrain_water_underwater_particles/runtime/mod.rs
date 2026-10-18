@@ -3,15 +3,15 @@ use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     effect::{
+        ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
         effect_document_runtime_queries::collect_root_effect_emitter_ids,
         explicit_particle_emission::{AppendParticleEffectPoints, ParticleEffectPointEmitter},
-        ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
     },
     graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings},
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
 };
 use openzt2_game_data::particle::{
-    authored_particle_system::AuthoredParticleSystemModifier, ParticleEffectDocument,
+    ParticleEffectDocument, authored_particle_system::AuthoredParticleSystemModifier,
 };
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::{
@@ -37,6 +37,32 @@ fn water_quality(settings: &GraphicsSettings) -> u32 {
     }
 }
 
+fn configured_particle_effects<'a>(
+    terrain: &'a TerrainAsset,
+    water: &openzt2_game_data::terrain::TerrainBiomeWaterPresentation,
+    quality: u32,
+) -> (
+    Option<&'a Handle<ParticleEffectDocumentAsset>>,
+    Option<&'a Handle<ParticleEffectDocumentAsset>>,
+) {
+    let configuration = &water.surface_material.configuration;
+    let suspension = configuration
+        .suspension
+        .as_ref()
+        .and_then(|config| config.system.as_deref())
+        .filter(|system| !system.is_empty())
+        .and_then(|system| terrain.water_particle_effect(system));
+    let bubbles = (quality > 0)
+        .then(|| {
+            select_bubble_detail(&configuration.bubbles, quality)
+                .unwrap_or(&configuration.bubbles_fallback)
+        })
+        .and_then(|detail| detail.system.as_deref())
+        .filter(|system| !system.is_empty())
+        .and_then(|system| terrain.water_particle_effect(system));
+    (suspension, bubbles)
+}
+
 pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
     mut commands: Commands,
     phase: Res<State<GamePhase>>,
@@ -57,6 +83,17 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
                 indexes
                     .iter()
                     .any(|index| index.terrain() == source.terrain().id())
+                    && terrains.get(source.terrain()).is_some_and(|terrain| {
+                        source
+                            .biome(terrain)
+                            .and_then(|biome| biome.water_presentation.as_ref())
+                            .is_some_and(|water| {
+                                let (suspension, bubbles) =
+                                    configured_particle_effects(terrain, water, quality);
+                                state.suspension_effect.as_ref() == suspension
+                                    && state.bubble_effect.as_ref() == bubbles
+                            })
+                    })
             });
         if !valid {
             commands.entity(entity).despawn();
@@ -66,12 +103,6 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
         return;
     }
     for (owner, source) in regions.iter() {
-        if roots
-            .iter()
-            .any(|(_, parent, state)| parent.parent() == owner && state.quality == quality)
-        {
-            continue;
-        }
         if !indexes
             .iter()
             .any(|index| index.terrain() == source.terrain().id())
@@ -87,21 +118,15 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
         else {
             continue;
         };
-        let configuration = &water.surface_material.configuration;
-        let suspension = configuration
-            .suspension
-            .as_ref()
-            .and_then(|config| config.system.as_deref())
-            .filter(|system| !system.is_empty())
-            .and_then(|system| terrain.water_particle_effect(system));
-        let bubbles = (quality > 0).then(|| {
-            select_bubble_detail(&configuration.bubbles, quality)
-                .unwrap_or(&configuration.bubbles_fallback)
-        });
-        let bubble_effect = bubbles
-            .and_then(|detail| detail.system.as_deref())
-            .filter(|system| !system.is_empty())
-            .and_then(|system| terrain.water_particle_effect(system));
+        let (suspension, bubble_effect) = configured_particle_effects(terrain, water, quality);
+        if roots.iter().any(|(_, parent, state)| {
+            parent.parent() == owner
+                && state.quality == quality
+                && state.suspension_effect.as_ref() == suspension
+                && state.bubble_effect.as_ref() == bubble_effect
+        }) {
+            continue;
+        }
         if suspension
             .into_iter()
             .chain(bubble_effect)
@@ -114,7 +139,11 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
         };
         let root = commands
             .spawn((
-                TerrainWaterParticleEffects { quality },
+                TerrainWaterParticleEffects {
+                    quality,
+                    suspension_effect: suspension.cloned(),
+                    bubble_effect: bubble_effect.cloned(),
+                },
                 Transform::from_matrix(transform.to_matrix().inverse()),
                 Visibility::Inherited,
                 ChildOf(owner),

@@ -23,6 +23,12 @@ pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's> {
 
 #[derive(SystemParam)]
 pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's> {
+    pub(super) commands: Commands<'w, 's>,
+    pub(super) terrain_index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    pub(super) terrain_assets: Res<'w, Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
+    pub(super) terrain_chunks: Query<'w, 's, &'static ViewVisibility, With<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk>>,
+    pub(super) water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery<'w, 's>,
+    pub(super) water_memberships: Query<'w, 's, &'static openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex>,
     pub(super) asset_server: Res<'w, AssetServer>,
     pub(super) transforms: Query<'w, 's, &'static GlobalTransform>,
     pub(super) sound_resolution: super::authored_animation_sound_resolution::AuthoredAnimationSoundResolution<'w, 's>,

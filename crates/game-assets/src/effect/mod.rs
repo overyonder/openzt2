@@ -2,11 +2,11 @@
 
 use bevy::{asset::AssetApp, prelude::*};
 use openzt2_game_data::{
-    particle::{
-        authored_particle_system::ParticleEffectSimulationClock,
-        ParticleEffectDocument as ParticleDocument,
-    },
     AssetId,
+    particle::{
+        ParticleEffectDocument as ParticleDocument,
+        authored_particle_system::ParticleEffectSimulationClock,
+    },
 };
 
 pub mod authored_particle_system_hanabi_effect_preparation;
@@ -19,6 +19,7 @@ pub mod effect_source_reloading;
 pub mod explicit_particle_emission;
 pub mod hanabi_custom_particle_modifiers;
 pub mod legacy_nif_hanabi_effect_preparation;
+pub mod particle_plane_binding;
 pub mod particle_system_emitter_graph_validation;
 pub mod particle_system_emitter_lowering;
 pub mod particle_system_modifier_lowering;
@@ -88,10 +89,12 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
-            .add_systems(PostUpdate,
+            .add_systems(
+                PostUpdate,
                 effect_instance_runtime_systems::align_attached_particle_effects_to_world_axes
                     .after(bevy::app::AnimationSystems)
-                    .before(bevy::transform::TransformSystems::Propagate))
+                    .before(bevy::transform::TransformSystems::Propagate),
+            )
             .init_asset_loader::<EffectAssetLoader>()
             .init_resource::<PreparedHanabiEffectAssets>()
             .add_message::<SpawnParticleEffectEmitter>()
@@ -122,6 +125,11 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
                 )
                     .chain()
                     .after(bevy_hanabi::prelude::EffectSystems::TickSpawners),
+            )
+            .add_systems(
+                PostUpdate,
+                particle_plane_binding::upload_particle_effect_planes
+                    .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
             )
             .add_systems(
                 PostUpdate,

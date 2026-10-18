@@ -4,11 +4,12 @@ mod locomotion_root_motion;
 mod animation_playback_controller_ancestor_lookup;
 mod animation_playback_time_advancement;
 mod animation_traversal_transition_request_projection;
+mod animation_water_effect_binding;
 mod authored_animation_audio_and_effect_text_action_execution;
-mod authored_animation_sound_resolution;
 mod authored_animation_control_text_action_execution;
 mod authored_animation_event_cursor_types;
 mod authored_animation_event_execution;
+mod authored_animation_sound_resolution;
 mod authored_animation_text_action_execution;
 mod authored_animation_text_action_execution_context;
 mod model_joint_attachment_binding;
@@ -41,6 +42,10 @@ pub struct AnimationPlaybackPlugin;
 impl Plugin for AnimationPlaybackPlugin {
     fn build(&self, application: &mut App) {
         application
+            .add_systems(PostUpdate,
+                animation_water_effect_binding::update_animation_water_effect_planes
+                    .after(bevy::app::AnimationSystems)
+                    .before(openzt2_game_assets::effect::particle_plane_binding::upload_particle_effect_planes))
             .add_systems(PostUpdate,
                 (sampled_animation_joint_pose_blending::blend_sampled_animation_joint_poses,
                 crate::animation_playback::locomotion_root_motion::remove_consumed_root_trajectory).chain()

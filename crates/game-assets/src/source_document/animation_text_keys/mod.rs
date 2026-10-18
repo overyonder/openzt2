@@ -229,7 +229,14 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
             attach_to_target: lower.contains(" attach"),
             stop_attached_effects: lower.contains(" stop"),
             disable_distance_culling: lower.contains(" nocull"),
-            water_height_offset: option_f32(body, "water"),
+            water_height_offset: body
+                .split_ascii_whitespace()
+                .any(|word| {
+                    word.split_once('=')
+                        .map_or(word, |(name, _)| name)
+                        .eq_ignore_ascii_case("water")
+                })
+                .then(|| option_f32(body, "water").unwrap_or(0.0)),
         }
     } else if lower.starts_with("attachps ") {
         AuthoredAnimationTextAction::AttachParticleSystem {

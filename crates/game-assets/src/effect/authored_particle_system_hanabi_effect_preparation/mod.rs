@@ -25,6 +25,9 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
     wave_surface: bool,
 ) -> HanabiEffectAsset {
     let expression_writer = ExprWriter::new();
+    let plane_override_property =
+        expression_writer.add_property("particle_plane_override", Vec4::ZERO.into());
+    let plane_override = expression_writer.prop(plane_override_property).expr();
     let mut particle_initialization_modifiers: Vec<BoxedModifier> = Vec::new();
     let mut particle_update_modifiers: Vec<BoxedModifier> = Vec::new();
     let mut particle_render_modifiers: Vec<Box<dyn RenderModifier>> = Vec::new();
@@ -293,6 +296,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                     AuthoredParticleUpdateModifier::KillPlane {
                         normal: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*normal)),
                         distance: *distance,
+                        override_plane: plane_override,
                     },
                 ))
             }
@@ -308,6 +312,7 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                     AuthoredParticleUpdateModifier::SpawnOnPlane {
                         normal: Vec3::from_array(crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(*normal)),
                         distance: *distance,
+                        override_plane: plane_override,
                         probability: *probability,
                         min_count: *min_count,
                         max_count: *max_count,

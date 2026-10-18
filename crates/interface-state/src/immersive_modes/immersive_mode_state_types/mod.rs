@@ -22,6 +22,12 @@ pub struct ActiveImmersiveMode {
     pub restore_camera_on_exit: bool,
 }
 
+/// The animal-training child activity of a first-person controller.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct FirstPersonTraining {
+    pub subject: Entity,
+}
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlledEntity {
     pub controller: Entity,

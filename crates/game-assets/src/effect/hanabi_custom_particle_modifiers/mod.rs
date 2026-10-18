@@ -1,8 +1,10 @@
 //! Custom Hanabi initialization and update modifiers required by authored particle effects.
 
 use bevy::prelude::*;
+use bevy_hanabi::graph::EvalContext;
 use bevy_hanabi::prelude::{
-    Attribute, BoxedModifier, ExprError, Modifier, ModifierContext, Module, ShaderWriter,
+    Attribute, BoxedModifier, ExprError, ExprHandle, Modifier, ModifierContext, Module,
+    ShaderWriter,
 };
 use openzt2_game_data::AssetId;
 
@@ -181,10 +183,12 @@ pub(super) enum AuthoredParticleUpdateModifier {
     KillPlane {
         normal: Vec3,
         distance: f32,
+        override_plane: ExprHandle,
     },
     SpawnOnPlane {
         normal: Vec3,
         distance: f32,
+        override_plane: ExprHandle,
         probability: f32,
         min_count: u32,
         max_count: u32,
@@ -214,7 +218,7 @@ impl Modifier for AuthoredParticleUpdateModifier {
 
     fn apply(
         &self,
-        _expression_module: &mut Module,
+        expression_module: &mut Module,
         shader_writer: &mut ShaderWriter,
     ) -> Result<(), ExprError> {
         match self {
@@ -239,27 +243,34 @@ impl Modifier for AuthoredParticleUpdateModifier {
                     velocity.x, velocity.y, velocity.z,
                 );
             }
-            Self::KillPlane { normal, distance } => {
+            Self::KillPlane {
+                normal,
+                distance,
+                override_plane,
+            } => {
+                let plane = shader_writer.eval(expression_module, *override_plane)?;
                 shader_writer.main_code += &format!(
-                    "if dot(particle.position, vec3<f32>({},{},{})) >= {} {{ particle.age = particle.lifetime; }}\n",
-                    normal.x, normal.y, normal.z, distance,
+                    "{{ let plane = select(vec4<f32>({},{},{},{}), {plane}, dot({plane}.xyz, {plane}.xyz) > 0.0); if dot(particle.position, plane.xyz) + plane.w >= 0.0 {{ particle.age = particle.lifetime; }} }}\n",
+                    normal.x, normal.y, normal.z, -distance,
                 );
             }
             Self::SpawnOnPlane {
                 normal,
                 distance,
+                override_plane,
                 probability,
                 min_count,
                 max_count,
                 child_index,
             } => {
+                let plane = shader_writer.eval(expression_module, *override_plane)?;
                 shader_writer.main_code += &format!(
-                    "let plane_normal_{0} = vec3<f32>({1},{2},{3}); let previous_position_{0} = particle.position - particle.velocity * sim_params.delta_time; if dot(previous_position_{0}, plane_normal_{0}) < {4} && dot(particle.position, plane_normal_{0}) >= {4} && frand() <= {5} {{ let spawn_count_{0} = u32(floor(frand() * f32({6} - {7} + 1u))) + {7}u; append_spawn_events_{0}((*effect_metadata).base_child_index, particle_index, spawn_count_{0}); }}\n",
+                    "let plane_{0} = select(vec4<f32>({1},{2},{3},{4}), {plane}, dot({plane}.xyz, {plane}.xyz) > 0.0); let previous_position_{0} = particle.position - particle.velocity * sim_params.delta_time; if dot(previous_position_{0}, plane_{0}.xyz) + plane_{0}.w < 0.0 && dot(particle.position, plane_{0}.xyz) + plane_{0}.w >= 0.0 && frand() <= {5} {{ let spawn_count_{0} = u32(floor(frand() * f32({6} - {7} + 1u))) + {7}u; append_spawn_events_{0}((*effect_metadata).base_child_index, particle_index, spawn_count_{0}); }}\n",
                     child_index,
                     normal.x,
                     normal.y,
                     normal.z,
-                    distance,
+                    -distance,
                     probability,
                     max_count,
                     min_count,

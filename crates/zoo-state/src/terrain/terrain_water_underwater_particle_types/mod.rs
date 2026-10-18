@@ -27,6 +27,8 @@ impl TerrainWaterRegionLight {
 #[derive(Component)]
 pub struct TerrainWaterParticleEffects {
     pub quality: u32,
+    pub suspension_effect: Option<Handle<openzt2_game_assets::effect::ParticleEffectDocumentAsset>>,
+    pub bubble_effect: Option<Handle<openzt2_game_assets::effect::ParticleEffectDocumentAsset>>,
 }
 
 #[derive(Component)]

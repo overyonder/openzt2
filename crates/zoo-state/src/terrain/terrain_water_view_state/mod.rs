@@ -11,9 +11,18 @@ pub struct TerrainWaterViewState {
     surface_height: Option<f32>,
     selection_resolved: bool,
     alternate_regions_visible: bool,
+    training_opacity_mix: f32,
 }
 
 impl TerrainWaterViewState {
+    pub fn training_opacity_mix(&self) -> f32 {
+        self.training_opacity_mix
+    }
+
+    pub fn advance_training_opacity(&mut self, active: bool, seconds: f32) {
+        let rate = if active { 1.0 } else { -1.0 };
+        self.training_opacity_mix = (self.training_opacity_mix + rate * seconds).clamp(0.0, 1.0);
+    }
     pub fn camera_position(&self) -> Option<Vec3> {
         self.camera_position
     }

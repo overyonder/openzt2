@@ -1,7 +1,7 @@
 use crate::terrain::terrain_water_material_binding::bind_authored_water_frame_base_tints;
+use bevy::camera::CameraProjection;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::RenderLayers;
-use bevy::camera::CameraProjection;
 use bevy::math::Vec3A;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -36,12 +36,9 @@ pub(super) fn initialize_authored_terrain_water_region_material_state(
     mut random: ResMut<NativeVisualRandomStream>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
-    initialized: Query<(), With<NativeTerrainWaterGeometricWaveShaderState>>,
+    mut initialized: Query<&mut NativeTerrainWaterGeometricWaveShaderState>,
 ) {
     for (entity, source) in regions.iter() {
-        if initialized.contains(entity) {
-            continue;
-        }
         let Some(presentation) = terrain_assets
             .get(source.terrain())
             .and_then(|asset| source.biome(asset))
@@ -49,6 +46,14 @@ pub(super) fn initialize_authored_terrain_water_region_material_state(
         else {
             continue;
         };
+        if let Ok(mut state) = initialized.get_mut(entity) {
+            state.reconfigure(
+                presentation.surface_material.geometric_waves,
+                presentation.surface_material.ripple_waves,
+                &mut || random.unit_f64(),
+            );
+            continue;
+        }
         commands.entity(entity).insert(
             NativeTerrainWaterGeometricWaveShaderState::from_authored_geometric_wave(
                 presentation.surface_material.geometric_waves,
@@ -721,6 +726,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                 !above || fallback,
                 (!fallback && fraction > 0.0).then_some(fraction),
                 (!above && scroll.is_none() && fraction > 0.0).then_some(fraction),
+                view.as_ref()
+                    .map_or(0.0, |view| view.training_opacity_mix()),
             );
             if let Some(scroll) = scroll {
                 let offsets = scroll.offsets;
@@ -750,7 +757,15 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
                     );
                     material.bind_float_vector_effect_semantic(
                         "ReflectOpacity",
-                        Vec4::new(1.0, 0.5, 0.0, 0.05),
+                        Vec4::new(
+                            1.0,
+                            0.5 - 1.5
+                                * view
+                                    .as_ref()
+                                    .map_or(0.0, |view| view.training_opacity_mix()),
+                            0.0,
+                            0.05,
+                        ),
                     );
                 }
             }
@@ -1042,8 +1057,10 @@ mod water_target_demand_tests {
             Transform::from_xyz(-60.0, 20.0, 0.0)
                 .looking_at(Vec3::new(-60.0, 0.0, 0.0), Vec3::NEG_Z),
         );
-        assert!(!surface
-            .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), &wave_state));
+        assert!(
+            !surface
+                .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), &wave_state)
+        );
         assert!(
             surface.intersects_camera_frustum(&projection.compute_frustum(&camera), &wave_state)
         );

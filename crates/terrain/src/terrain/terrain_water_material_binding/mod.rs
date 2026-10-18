@@ -98,6 +98,7 @@ pub(super) fn bind_authored_water_frame_base_tints(
     underwater: bool,
     capture_fraction: Option<f32>,
     below_plane_capture_fraction: Option<f32>,
+    training_opacity_mix: f32,
 ) {
     let rgb = |colour: [u8; 3]| {
         Vec3::from_array(colour.map(|value| f32::from(value) / 255.0)) * ambient_colour
@@ -131,6 +132,8 @@ pub(super) fn bind_authored_water_frame_base_tints(
             (1.0 - opacity.y) * fraction + opacity.y
         };
     }
+    opacity.x += (1.0 - opacity.x) * training_opacity_mix;
+    opacity.y += (-1.0 - opacity.y) * training_opacity_mix;
     pass.bind_float_vector_effect_semantic("ReflectOpacity", opacity);
 }
 

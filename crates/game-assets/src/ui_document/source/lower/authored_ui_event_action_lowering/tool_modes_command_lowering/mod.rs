@@ -1,4 +1,5 @@
 use crate::source_document::ui::model::SourceUiEvent;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::animal_health::{
     UiAnimalHealthAction, UiAnimalHealthActionRecord,
 };
@@ -24,7 +25,6 @@ use openzt2_game_data::ui_document::action::staff_management::{
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
-use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_tool_modes_command(
@@ -147,6 +147,12 @@ pub(super) fn lower_tool_modes_command(
                 UiEnterImmersiveModeActionRecord {
                     trigger,
                     mode: UiImmersiveModeKind::SuperStaff,
+                },
+            )),
+            "mode_fp_training" => Ok(UiActionRecord::EnterImmersiveMode(
+                UiEnterImmersiveModeActionRecord {
+                    trigger,
+                    mode: UiImmersiveModeKind::AnimalTraining,
                 },
             )),
             "mode_guest_view" => Ok(UiActionRecord::EnterImmersiveMode(

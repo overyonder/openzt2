@@ -124,6 +124,7 @@ fn remove_active_immersive_mode_state_and_restore_camera(
     }
     commands.entity(controller_entity).remove::<(
         ActiveImmersiveMode,
+        super::immersive_mode_state_types::FirstPersonTraining,
         PendingImmersiveEntry,
         EquippedInteractionTool,
         AllowedInteractionActions,

@@ -95,14 +95,15 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                 attach_to_target,
                 stop_attached_effects: false,
                 water_height_offset,
-                ..
+                disable_distance_culling,
             } => self
                 .audio_and_effect_text_action_execution
                 .run_authored_animation_presentation_effect(
                     resolved_action_target_entity,
                     presentation_effect_asset_key,
                     *attach_to_target,
-                    water_height_offset.unwrap_or(0.0),
+                    *water_height_offset,
+                    *disable_distance_culling,
                 ),
             AuthoredAnimationTextAction::DetachParticleSystem { .. }
             | AuthoredAnimationTextAction::RunPresentationEffect {

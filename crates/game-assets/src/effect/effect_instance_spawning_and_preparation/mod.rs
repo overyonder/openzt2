@@ -3,14 +3,16 @@
 use bevy::prelude::*;
 use bevy_hanabi::prelude::{EffectAsset as HanabiEffectAsset, ParticleEffect};
 use openzt2_game_data::{
-    particle::{
-        legacy_nif_particle_effect::LegacyNifParticleModifier,
-        ParticleEffectDocument as ParticleDocument,
-    },
     AssetId,
+    particle::{
+        ParticleEffectDocument as ParticleDocument,
+        legacy_nif_particle_effect::LegacyNifParticleModifier,
+    },
 };
 
 use super::{
+    LiveParticleEffectInstance, ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
+    SpawnParticleEffectEmitter,
     effect_document_runtime_queries::{
         calculate_effect_emitter_tree_lifetime_seconds, collect_all_effect_emitter_ids,
         collect_root_effect_emitter_ids, create_collision_spawn_initialization,
@@ -21,8 +23,6 @@ use super::{
         PendingEffectMaterialBinding, PendingEffectMeshBinding,
     },
     prepared_effect_asset_cache::PreparedHanabiEffectAssets,
-    LiveParticleEffectInstance, ParticleEffectDocumentAsset, SpawnCompleteParticleEffectDocument,
-    SpawnParticleEffectEmitter,
 };
 
 pub(super) fn enqueue_requested_effect_instances_for_preparation(
@@ -42,16 +42,23 @@ pub(super) fn enqueue_requested_effect_instances_for_preparation(
         );
     }
     for spawn_request in complete_effect_requests.read() {
-        spawn_pending_effect_instance(
-            &mut commands,
-            spawn_request.particle_effect_asset.clone(),
-            None,
-            spawn_request.parent_entity,
-            spawn_request.inherit_parent_rotation,
-            spawn_request.effect_transform,
-            spawn_request.manual_particle_count,
-        );
+        spawn_complete_particle_effect_document(&mut commands, spawn_request);
     }
+}
+
+pub fn spawn_complete_particle_effect_document(
+    commands: &mut Commands,
+    request: &SpawnCompleteParticleEffectDocument,
+) -> Entity {
+    spawn_pending_effect_instance(
+        commands,
+        request.particle_effect_asset.clone(),
+        None,
+        request.parent_entity,
+        request.inherit_parent_rotation,
+        request.effect_transform,
+        request.manual_particle_count,
+    )
 }
 
 fn spawn_pending_effect_instance(
@@ -62,7 +69,7 @@ fn spawn_pending_effect_instance(
     inherit_parent_rotation: bool,
     effect_transform: Transform,
     manual_particle_count: u32,
-) {
+) -> Entity {
     let mut pending_effect_entity = commands.spawn((
         PendingEffectInstance {
             effect_asset,
@@ -78,6 +85,7 @@ fn spawn_pending_effect_instance(
             pending_effect_entity.insert(super::effect_runtime_types::WorldAlignedParticleEffect);
         }
     }
+    pending_effect_entity.id()
 }
 
 pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(

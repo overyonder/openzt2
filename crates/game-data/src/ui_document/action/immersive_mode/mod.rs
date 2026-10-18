@@ -20,4 +20,5 @@ pub enum UiImmersiveModeKind {
     /// Walk through the zoo in first person as the super-staff avatar, the
     /// default child of the first-person mode.
     SuperStaff,
+    AnimalTraining,
 }

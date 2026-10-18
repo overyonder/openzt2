@@ -76,6 +76,7 @@ impl Plugin for ImmersiveModesPlugin {
                     tranquilizer_control_execution::initialize_tranquilizer_tool_from_active_world_definitions,
                     active_immersive_mode_lifecycle::request_immersive_mode_exit_when_subject_or_tool_is_removed,
                     active_immersive_mode_lifecycle::apply_requested_immersive_mode_exit_and_remove_owned_state,
+                    immersive_mode_entry_ui_action_routing::retire_inactive_first_person_training,
                 )
                     .chain()
                     .in_set(ImmersiveModeTransitions)
