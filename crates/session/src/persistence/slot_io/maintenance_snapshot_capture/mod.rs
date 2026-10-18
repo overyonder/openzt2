@@ -3,13 +3,15 @@ use super::{
     maintenance_snapshot_section_encoding::{
         validate_habitat_waste_records, MAXIMUM_WASTE_RECORDS,
     },
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
+    maintenance_snapshot_types::{HabitatWasteSnapshotRecord, MaintainedObjectSnapshotRecord},
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{
+    AnimalHabitatWaste, FacilityContainedWaste, MaintainableObjectConditionPermille,
+};
 
 /// Whole waste entities, excluding resource entities as for animals.
 pub(in crate::persistence) type HabitatWasteSnapshotEntities<'w, 's> =
@@ -46,4 +48,42 @@ pub(super) fn capture_habitat_waste_records(
     records.sort_unstable_by_key(|record| record.persistent_identifier);
     validate_habitat_waste_records(&records)?;
     Ok(records)
+}
+
+/// Objects carrying worn condition or retained bin waste.
+pub(in crate::persistence) type MaintainedObjectSnapshotEntities<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static PersistentId,
+        Option<&'static MaintainableObjectConditionPermille>,
+        Option<&'static FacilityContainedWaste>,
+    ),
+    (
+        Or<(
+            With<MaintainableObjectConditionPermille>,
+            With<FacilityContainedWaste>,
+        )>,
+        Without<IsResource>,
+    ),
+>;
+
+pub(super) fn capture_maintained_object_records(
+    objects: &MaintainedObjectSnapshotEntities,
+) -> Vec<MaintainedObjectSnapshotRecord> {
+    let mut records = objects
+        .iter()
+        .map(|(id, condition, waste)| MaintainedObjectSnapshotRecord {
+            persistent_identifier: id.0,
+            condition_permille: condition.map(|condition| condition.0),
+            contained_waste: waste.map(|waste| {
+                [
+                    waste.contained_waste_units,
+                    waste.contained_waste_capacity_units,
+                ]
+            }),
+        })
+        .collect::<Vec<_>>();
+    records.sort_unstable_by_key(|record| record.persistent_identifier);
+    records
 }

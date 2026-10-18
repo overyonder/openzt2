@@ -1,6 +1,6 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
+    maintenance_snapshot_types::{HabitatWasteSnapshotRecord, MaintainedObjectSnapshotRecord},
 };
 use avian3d::prelude::RigidBody;
 use bevy::{
@@ -18,7 +18,9 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{
+    AnimalHabitatWaste, FacilityContainedWaste, MaintainableObjectConditionPermille,
+};
 
 pub(super) fn resolve_habitat_waste_prefabs(
     records: &[HabitatWasteSnapshotRecord],
@@ -132,4 +134,28 @@ pub(super) fn apply_habitat_waste_records(
         ));
     }
     Ok(())
+}
+
+/// Restores saved condition and bin contents onto their objects. Authored
+/// initial facts only fill values that are still absent.
+pub(super) fn apply_maintained_object_records(
+    commands: &mut Commands,
+    records: &[MaintainedObjectSnapshotRecord],
+    restored_identities: &std::collections::BTreeMap<u64, Entity>,
+) {
+    for record in records {
+        let Some(&entity) = restored_identities.get(&record.persistent_identifier) else {
+            continue;
+        };
+        let mut object = commands.entity(entity);
+        if let Some(condition) = record.condition_permille {
+            object.insert(MaintainableObjectConditionPermille(condition));
+        }
+        if let Some([units, capacity]) = record.contained_waste {
+            object.insert(FacilityContainedWaste {
+                contained_waste_units: units,
+                contained_waste_capacity_units: capacity,
+            });
+        }
+    }
 }

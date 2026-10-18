@@ -6,9 +6,11 @@ use super::{
     maintenance_snapshot_application::apply_habitat_waste_records,
     maintenance_snapshot_capture::{capture_habitat_waste_records, HabitatWasteSnapshotEntities},
     maintenance_snapshot_section_encoding::{
-        decode_habitat_waste_records, encode_habitat_waste_records,
+        decode_maintenance_snapshot, encode_maintenance_snapshot,
     },
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
+    maintenance_snapshot_types::{
+        HabitatWasteSnapshotRecord, MaintainedObjectSnapshotRecord, MaintenanceSnapshot,
+    },
 };
 use bevy::{ecs::system::SystemState, prelude::*};
 use openzt2_game_assets::{
@@ -98,8 +100,19 @@ fn restore(
 }
 
 fn round_trip(records: &[HabitatWasteSnapshotRecord]) -> Vec<HabitatWasteSnapshotRecord> {
+    let snapshot = MaintenanceSnapshot {
+        waste: records.to_vec(),
+        objects: Vec::new(),
+    };
+    decode_section(
+        &encode_maintenance_snapshot(&snapshot).unwrap(),
+        records.len(),
+    )
+    .waste
+}
+
+fn decode_section(payload: &[u8], count: usize) -> MaintenanceSnapshot {
     let profile = AssetId([7; 16]);
-    let payload = encode_habitat_waste_records(records).unwrap();
     let mut bytes = Vec::new();
     initialize_empty_world_snapshot_container(&mut bytes, profile);
     for kind in WorldSnapshotSectionKind::ENCODING_ORDER {
@@ -107,28 +120,67 @@ fn round_trip(records: &[HabitatWasteSnapshotRecord]) -> Vec<HabitatWasteSnapsho
             &mut bytes,
             kind,
             if kind == WorldSnapshotSectionKind::Maintenance {
-                records.len() as u32
+                count as u32
             } else {
                 0
             },
             |bytes| {
                 if kind == WorldSnapshotSectionKind::Maintenance {
-                    bytes.extend_from_slice(&payload);
+                    bytes.extend_from_slice(payload);
                 }
             },
         )
         .unwrap();
     }
-    finalize_world_snapshot_container_header_and_checksum(&mut bytes, records.len() as u32)
-        .unwrap();
+    finalize_world_snapshot_container_header_and_checksum(&mut bytes, count as u32).unwrap();
     let validated =
         validate_world_snapshot_container_and_section_directory(&bytes, profile).unwrap();
     assert_eq!(validated.container_header.format_version, 13);
-    decode_habitat_waste_records(
+    decode_maintenance_snapshot(
         &bytes,
         validated.section_directory_entry(WorldSnapshotSectionKind::Maintenance),
     )
     .unwrap()
+}
+
+#[test]
+fn object_condition_and_bin_contents_round_trip_beside_legacy_waste_arrays() {
+    let waste = HabitatWasteSnapshotRecord {
+        persistent_identifier: 5,
+        definition: AssetId([3; 16]),
+        translation: [1.0, 2.0, 3.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0; 3],
+        units: 2,
+    };
+    let snapshot = MaintenanceSnapshot {
+        waste: vec![waste.clone()],
+        objects: vec![
+            MaintainedObjectSnapshotRecord {
+                persistent_identifier: 7,
+                condition_permille: Some(640),
+                contained_waste: None,
+            },
+            MaintainedObjectSnapshotRecord {
+                persistent_identifier: 9,
+                condition_permille: Some(1_000),
+                contained_waste: Some([3, 10]),
+            },
+        ],
+    };
+    assert_eq!(
+        decode_section(&encode_maintenance_snapshot(&snapshot).unwrap(), 3),
+        snapshot
+    );
+    // Saves written before object state hold a bare waste array.
+    let legacy = serde_json::to_vec(&vec![waste.clone()]).unwrap();
+    assert_eq!(
+        decode_section(&legacy, 1),
+        MaintenanceSnapshot {
+            waste: vec![waste],
+            objects: Vec::new(),
+        }
+    );
 }
 
 #[test]

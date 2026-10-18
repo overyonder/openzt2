@@ -55,6 +55,8 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
     pub(super) donations: super::donation_snapshot_section::DonationSnapshotEntities<'w, 's>,
     pub(super) habitat_waste:
         super::maintenance_snapshot_capture::HabitatWasteSnapshotEntities<'w, 's>,
+    pub(super) maintained_objects:
+        super::maintenance_snapshot_capture::MaintainedObjectSnapshotEntities<'w, 's>,
     pub(super) animals: super::animal_snapshot_capture::AnimalSnapshotEntities<'w, 's>,
     pub(super) native_crates:
         super::native_crate_snapshot_links::NativeCrateSnapshotEntities<'w, 's>,

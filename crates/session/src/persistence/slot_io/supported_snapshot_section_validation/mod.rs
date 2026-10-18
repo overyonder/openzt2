@@ -35,7 +35,7 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
         let section_byte_range =
             validated_snapshot_container.section_directory_entry(snapshot_section);
         if snapshot_section == WorldSnapshotSectionKind::Maintenance {
-            super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
+            super::maintenance_snapshot_section_encoding::decode_maintenance_snapshot(
                 snapshot_container_bytes,
                 section_byte_range,
             )?;

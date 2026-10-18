@@ -152,12 +152,13 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     {
         return Ok(false);
     }
-    let habitat_waste_records =
-        super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
-            snapshot_container_bytes,
-            validated_snapshot_container
-                .section_directory_entry(WorldSnapshotSectionKind::Maintenance),
-        )?;
+    let super::maintenance_snapshot_types::MaintenanceSnapshot {
+        waste: habitat_waste_records,
+        objects: maintained_object_records,
+    } = super::maintenance_snapshot_section_encoding::decode_maintenance_snapshot(
+        snapshot_container_bytes,
+        validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Maintenance),
+    )?;
     let staff_snapshot_records =
         super::staff_snapshot_section_encoding::decode_staff_snapshot_records(
             snapshot_container_bytes,
@@ -382,6 +383,11 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         persistent_identifier_allocator,
         &baseline_waste,
     )?;
+    super::maintenance_snapshot_application::apply_maintained_object_records(
+        commands,
+        &maintained_object_records,
+        &restored_identities,
+    );
     super::staff_snapshot_application::apply_staff_snapshot_records(
         commands,
         &staff_snapshot_records,

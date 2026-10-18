@@ -181,6 +181,12 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                     continue;
                 }
             };
+        let maintenance_snapshot = super::maintenance_snapshot_types::MaintenanceSnapshot {
+            waste: habitat_waste_records,
+            objects: super::maintenance_snapshot_capture::capture_maintained_object_records(
+                &world_snapshot_capture_queries.maintained_objects,
+            ),
+        };
         let mut animal_snapshot_records =
             match super::animal_snapshot_capture::capture_animal_snapshot_records(
                 &world_snapshot_capture_queries.animals,
@@ -376,7 +382,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 scenario_snapshot.as_ref(),
                 animal_adoption_offer_inventory,
                 &animal_snapshot_records,
-                &habitat_waste_records,
+                &maintenance_snapshot,
                 &staff_snapshot_records,
                 &tank_snapshot_records,
                 &economy_snapshot_records,
