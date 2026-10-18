@@ -3,24 +3,27 @@
 use bevy::prelude::*;
 use bevy_hanabi::prelude::{EffectMaterial, EffectMesh};
 use openzt2_game_data::particle::{
+    ParticleEffectDocument,
     authored_particle_system::{
         AuthoredParticleSystemModifier as EffectModifier,
         ParticleEffectSimulationClock as EffectClock,
     },
-    ParticleEffectDocument,
 };
 
 use super::{
+    LiveParticleEffectInstance, ParticleEffectDocumentAsset, StopParticleEffectsAttachedToEntity,
     effect_runtime_types::{
         ControlledEffectEmissionState, FiniteEffectInstanceLifetime, PendingEffectMaterialBinding,
         PendingEffectMeshBinding,
     },
-    LiveParticleEffectInstance, ParticleEffectDocumentAsset, StopParticleEffectsAttachedToEntity,
 };
 use crate::material::material_asset_types::MaterialAsset;
 
 pub(super) fn align_attached_particle_effects_to_world_axes(
-    attached: Query<(Entity, &ChildOf), With<super::effect_runtime_types::WorldAlignedParticleEffect>>,
+    attached: Query<
+        (Entity, &ChildOf),
+        With<super::effect_runtime_types::WorldAlignedParticleEffect>,
+    >,
     mut transforms: ParamSet<(
         bevy::transform::helper::TransformHelper,
         Query<&mut Transform, With<super::effect_runtime_types::WorldAlignedParticleEffect>>,
@@ -40,15 +43,35 @@ pub(super) fn align_attached_particle_effects_to_world_axes(
 pub(super) fn stop_effect_instances_attached_to_requested_entities(
     mut commands: Commands,
     mut stop_requests: MessageReader<StopParticleEffectsAttachedToEntity>,
-    effect_instances: Query<(Entity, Option<&ChildOf>), With<LiveParticleEffectInstance>>,
+    effect_instances: Query<
+        (
+            Entity,
+            &ChildOf,
+            Option<&LiveParticleEffectInstance>,
+            Option<&super::effect_runtime_types::PendingEffectInstance>,
+            Option<&super::effect_runtime_types::ParticleEffectDocumentInstance>,
+        ),
+        Or<(
+            With<LiveParticleEffectInstance>,
+            With<super::effect_runtime_types::PendingEffectInstance>,
+            With<super::effect_runtime_types::ParticleEffectDocumentInstance>,
+        )>,
+    >,
 ) {
     for stop_request in stop_requests.read() {
         effect_instances
             .iter()
-            .filter(|(_, parent)| {
-                parent.is_some_and(|parent| parent.parent() == stop_request.attached_entity)
+            .filter(|(_, parent, live, pending, document)| {
+                parent.parent() == stop_request.attached_entity
+                    && stop_request.effect_asset.is_none_or(|requested| {
+                        document
+                            .map(|document| document.0.id())
+                            .or_else(|| live.map(|live| live.effect_asset.id()))
+                            .or_else(|| pending.map(|pending| pending.effect_asset.id()))
+                            == Some(requested)
+                    })
             })
-            .for_each(|(effect_entity, _)| commands.entity(effect_entity).despawn());
+            .for_each(|(effect_entity, ..)| commands.entity(effect_entity).despawn());
     }
 }
 

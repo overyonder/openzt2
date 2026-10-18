@@ -50,7 +50,7 @@ pub fn spawn_complete_particle_effect_document(
     commands: &mut Commands,
     request: &SpawnCompleteParticleEffectDocument,
 ) -> Entity {
-    spawn_pending_effect_instance(
+    let entity = spawn_pending_effect_instance(
         commands,
         request.particle_effect_asset.clone(),
         None,
@@ -58,7 +58,13 @@ pub fn spawn_complete_particle_effect_document(
         request.inherit_parent_rotation,
         request.effect_transform,
         request.manual_particle_count,
-    )
+    );
+    commands
+        .entity(entity)
+        .insert(super::effect_runtime_types::ParticleEffectDocumentInstance(
+            request.particle_effect_asset.clone(),
+        ));
+    entity
 }
 
 fn spawn_pending_effect_instance(

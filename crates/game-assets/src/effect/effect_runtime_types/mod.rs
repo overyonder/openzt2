@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 use super::{
-    hanabi_custom_particle_modifiers::CollisionSpawnParticleInitialization,
     ParticleEffectDocumentAsset,
+    hanabi_custom_particle_modifiers::CollisionSpawnParticleInitialization,
 };
 use crate::material::material_asset_types::MaterialAsset;
 
@@ -16,6 +16,10 @@ pub(super) struct PendingEffectInstance {
     pub(super) manual_particle_count: u32,
     pub(super) collision_spawn_context: Option<CollisionSpawnParticleInitialization>,
 }
+
+/// Identity retained on a complete document root, including multi-emitter roots.
+#[derive(Component)]
+pub(super) struct ParticleEffectDocumentInstance(pub(super) Handle<ParticleEffectDocumentAsset>);
 
 #[derive(Component)]
 pub(super) struct FiniteEffectInstanceLifetime(pub(super) Timer);

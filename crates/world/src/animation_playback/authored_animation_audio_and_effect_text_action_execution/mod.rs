@@ -9,6 +9,10 @@ use openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioC
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationAudioAndEffectTextActionExecutionContext;
 
 impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
+    fn particle_effect_asset(&self, path: &str) -> Handle<ParticleEffectDocumentAsset> {
+        self.asset_server
+            .load(path.replace('\\', "/").to_ascii_lowercase())
+    }
     pub(super) fn play_authored_animation_sound(
         &mut self,
         animation_playback_controller_entity: Entity,
@@ -74,11 +78,10 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
         } else {
             Quat::IDENTITY
         };
+        let particle_effect_asset = self.particle_effect_asset(effect_asset_path);
         self.effect_messages
             .write(SpawnCompleteParticleEffectDocument {
-                particle_effect_asset: self
-                    .asset_server
-                    .load::<ParticleEffectDocumentAsset>(effect_asset_path.to_owned()),
+                particle_effect_asset,
                 parent_entity: None,
                 inherit_parent_rotation: true,
                 effect_transform: transform,
@@ -93,11 +96,10 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
         use_target_rotation: bool,
         uniform_scale: f32,
     ) {
+        let particle_effect_asset = self.particle_effect_asset(effect_asset_path);
         self.effect_messages
             .write(SpawnCompleteParticleEffectDocument {
-                particle_effect_asset: self
-                    .asset_server
-                    .load::<ParticleEffectDocumentAsset>(effect_asset_path.to_owned()),
+                particle_effect_asset,
                 parent_entity: Some(effect_target_entity),
                 inherit_parent_rotation: use_target_rotation,
                 effect_transform: Transform::from_scale(Vec3::splat(uniform_scale)),
@@ -147,9 +149,7 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
             None
         };
         let request = SpawnCompleteParticleEffectDocument {
-            particle_effect_asset: self
-                .asset_server
-                .load::<ParticleEffectDocumentAsset>(effect_asset_path.to_owned()),
+            particle_effect_asset: self.particle_effect_asset(effect_asset_path),
             parent_entity: attach_to_target.then_some(effect_target_entity),
             inherit_parent_rotation: true,
             effect_transform: if attach_to_target {
@@ -180,10 +180,13 @@ impl AuthoredAnimationAudioAndEffectTextActionExecutionContext<'_, '_> {
     pub(super) fn stop_authored_animation_effects_attached_to_target(
         &mut self,
         effect_target_entity: Entity,
+        effect_asset_path: &str,
     ) {
+        let effect_asset = self.particle_effect_asset(effect_asset_path).id();
         self.stop_effect_messages
             .write(StopParticleEffectsAttachedToEntity {
                 attached_entity: effect_target_entity,
+                effect_asset: Some(effect_asset),
             });
     }
 }

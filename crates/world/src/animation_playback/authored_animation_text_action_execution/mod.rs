@@ -105,13 +105,19 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     *water_height_offset,
                     *disable_distance_culling,
                 ),
-            AuthoredAnimationTextAction::DetachParticleSystem { .. }
+            AuthoredAnimationTextAction::DetachParticleSystem {
+                particle_system_asset_key: effect_asset_key,
+            }
             | AuthoredAnimationTextAction::RunPresentationEffect {
+                presentation_effect_asset_key: effect_asset_key,
                 stop_attached_effects: true,
                 ..
             } => self
                 .audio_and_effect_text_action_execution
-                .stop_authored_animation_effects_attached_to_target(resolved_action_target_entity),
+                .stop_authored_animation_effects_attached_to_target(
+                    resolved_action_target_entity,
+                    effect_asset_key,
+                ),
             AuthoredAnimationTextAction::PlayAnimationGraphNode {
                 animation_graph_node_asset_key,
                 blend_duration_seconds,

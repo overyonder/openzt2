@@ -82,6 +82,8 @@ pub struct SpawnCompleteParticleEffectDocument {
 #[derive(Message, Clone, Copy, Debug)]
 pub struct StopParticleEffectsAttachedToEntity {
     pub attached_entity: Entity,
+    /// None stops all documents attached to the entity.
+    pub effect_asset: Option<bevy::asset::AssetId<ParticleEffectDocumentAsset>>,
 }
 
 pub struct ParticleEffectAssetAndRuntimePlugin;

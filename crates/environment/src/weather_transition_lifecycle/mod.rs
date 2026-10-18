@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::{world_definitions::environment::WeatherDefinition, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::environment::WeatherDefinition};
 use openzt2_zoo_state::environment::environment_state_types::Wind;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
@@ -337,6 +337,7 @@ pub(super) fn project_weather_audio_and_effects(
     }
     stop_effects.write(StopParticleEffectsAttachedToEntity {
         attached_entity: environment_entity,
+        effect_asset: None,
     });
     let effect_asset_identifier = definition.effect_asset;
     let effect_emitter_identifier = definition.effect_emitter;
