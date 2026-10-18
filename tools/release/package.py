@@ -108,7 +108,7 @@ def bundle_windows_shared_libraries(binary, destination):
         imports = subprocess.check_output([os.environ.get("OPENZT2_OBJDUMP", "objdump"), "-p", str(current)], text=True)
         for name in re.findall(r"DLL Name:\s*(\S+)", imports):
             staged = destination / name
-            source = str(staged) if staged.is_file() else shutil.which(name)
+            source = str(staged) if staged.is_file() else shutil.which(name, mode=os.F_OK)
             windows_directory = Path(os.environ["SystemRoot"]).resolve()
             if not source and not name.lower().startswith(("api-ms-", "ext-ms-")):
                 raise RuntimeError(f"Missing Windows runtime library: {name}")
