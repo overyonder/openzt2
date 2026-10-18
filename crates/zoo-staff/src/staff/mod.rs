@@ -30,6 +30,7 @@ mod staff_placement_interaction;
 use openzt2_zoo_state::staff::staff_presentation_variant_selection;
 mod staff_request_candidate_cleanup;
 mod staff_wage_lifecycle;
+mod tank_cleaning_requests;
 mod ui_actions;
 mod worker_duty_assignment;
 
@@ -92,6 +93,7 @@ impl Plugin for StaffPlugin {
                     worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default,
                     staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities,
                     staff_assignment_cleanup::clear_assignments_to_despawned_world_entities,
+                    tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks,
                     staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs
                         .in_set(StaffJobRequestCreation),
                     staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval,
