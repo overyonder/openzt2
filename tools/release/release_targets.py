@@ -83,7 +83,8 @@ def collect_release_packages(root, output, version):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("matrix")
+    matrix = commands.add_parser("matrix")
+    matrix.add_argument("--target", choices=["all", *TARGETS], default="all")
     environment = commands.add_parser("environment")
     environment.add_argument("identifier", choices=TARGETS)
     checksums = commands.add_parser("checksums")
@@ -97,7 +98,8 @@ def main():
     arguments = parser.parse_args()
     version = workspace_version()
     if arguments.command == "matrix":
-        matrix = {"include": [release_target(identifier) for identifier in TARGETS]}
+        identifiers = TARGETS if arguments.target == "all" else [arguments.target]
+        matrix = {"include": [release_target(identifier) for identifier in identifiers]}
         rust = re.search(r'rust-bin.stable."([0-9.]+)"', (WORKSPACE / "flake.nix").read_text())[1]
         values = {"matrix": json.dumps(matrix, separators=(",", ":")), "rust": rust,
                   "alpine_image": PACKAGING["alpine_image"], "wix_version": PACKAGING["wix_version"]}

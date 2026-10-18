@@ -1,6 +1,11 @@
 name: Native release builds
 on:
   workflow_dispatch:
+    inputs:
+      target:
+        description: Release target to build, or all
+        default: all
+        type: string
   push:
     tags: ['v[0-9]*']
 
@@ -21,7 +26,7 @@ jobs:
         with:
           python-version: '3.13'
       - id: targets
-        run: python3 tools/release/release_targets.py matrix
+        run: python3 tools/release/release_targets.py matrix --target '${{ inputs.target || 'all' }}'
 
   package:
     needs: targets
@@ -96,6 +101,14 @@ jobs:
         if: matrix.platform == 'windows'
         with:
           arch: ${{ matrix.msvc_arch }}
+      - name: Select the Visual Studio linker
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $linker = Join-Path $env:VCToolsInstallDir "bin/Host$env:VSCMD_ARG_HOST_ARCH/$env:VSCMD_ARG_TGT_ARCH/link.exe"
+          if (-not (Test-Path $linker)) { throw "Missing Visual Studio linker: $linker" }
+          $target = '${{ matrix.rust_target }}'.ToUpper().Replace('-', '_')
+          "CARGO_TARGET_${target}_LINKER=$linker" >> $env:GITHUB_ENV
       - uses: msys2/setup-msys2@v2
         if: matrix.platform == 'windows'
         with:
