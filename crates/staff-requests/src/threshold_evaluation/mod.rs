@@ -8,6 +8,7 @@ use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::animal_welfare::types::HealthNeed;
 use openzt2_zoo_state::animal_welfare::types::Hunger;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
@@ -200,7 +201,7 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&DrinkContainer>,
     )>,
     animal_needs: Query<
-        (Option<&Hunger>, Option<&Thirst>),
+        (Option<&Hunger>, Option<&Thirst>, Option<&HealthNeed>),
         (With<Animal>, Without<Dead>, Without<WorldEntityIsCrated>),
     >,
     jobs: Query<(Entity, &StaffJob)>,
@@ -228,14 +229,21 @@ pub(super) fn evaluate_staff_request_rows(
                 sample
             } else if row.attribute_key == Some(AssetId::from_key("hunger"))
                 || row.attribute_key == Some(AssetId::from_key("thirst"))
+                || row.attribute_key == Some(AssetId::from_key("health"))
             {
-                let wellness = animal_needs.get(entity).ok().and_then(|(hunger, thirst)| {
-                    if row.attribute_key == Some(AssetId::from_key("hunger")) {
-                        hunger.map(|hunger| hunger.0)
-                    } else {
-                        thirst.map(|thirst| thirst.0)
-                    }
-                });
+                let wellness =
+                    animal_needs
+                        .get(entity)
+                        .ok()
+                        .and_then(|(hunger, thirst, health)| {
+                            if row.attribute_key == Some(AssetId::from_key("hunger")) {
+                                hunger.map(|hunger| hunger.0)
+                            } else if row.attribute_key == Some(AssetId::from_key("thirst")) {
+                                thirst.map(|thirst| thirst.0)
+                            } else {
+                                health.map(|health| health.0)
+                            }
+                        });
                 let Some(wellness) = wellness else {
                     // A dead, crated or no-longer-initialized animal cannot own
                     // feeding work. Resume with a fresh sample if it returns.
@@ -405,6 +413,8 @@ fn job_kind(token: AssetId) -> Option<StaffJobKind> {
         Some(StaffJobKind::Feed)
     } else if token == AssetId::from_key("t_wateranimal") {
         Some(StaffJobKind::RefillWater)
+    } else if token == AssetId::from_key("t_healanimal") {
+        Some(StaffJobKind::Treat)
     } else if token == empty_trash_token() || token == empty_recycling_bin_token() {
         Some(StaffJobKind::EmptyBin)
     } else {

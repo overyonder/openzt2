@@ -42,7 +42,10 @@ pub(crate) fn request_animal_health_effects_after_authored_staff_behavior_finish
         if !matches!(job.kind, StaffJobKind::Treat | StaffJobKind::Capture) {
             continue;
         }
-        if job.kind == StaffJobKind::Treat && job.token == Some(AssetId::from_key("t_cureanimal")) {
+        if job.kind == StaffJobKind::Treat
+            && (job.token == Some(AssetId::from_key("t_cureanimal"))
+                || job.token == Some(AssetId::from_key("t_healanimal")))
+        {
             continue;
         }
         let Ok((disease, escaped, tranquilized)) = animals.get(job.target) else {

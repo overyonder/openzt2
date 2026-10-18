@@ -177,7 +177,9 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
         {
             continue;
         }
-        if (job.kind == StaffJobKind::Treat && job.token == Some(AssetId::from_key("t_cureanimal")))
+        if (job.kind == StaffJobKind::Treat
+            && (job.token == Some(AssetId::from_key("t_cureanimal"))
+                || job.token == Some(AssetId::from_key("t_healanimal"))))
             || (job.kind == StaffJobKind::Feed
                 && job.token == Some(AssetId::from_key("t_feedanimal")))
             || (job.kind == StaffJobKind::RefillWater
@@ -186,7 +188,7 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
             if cancelled_jobs.contains(&current_job.job) || !live_animals.contains(job.target) {
                 continue;
             }
-            // The authored cure or food placement already applied its effect.
+            // The authored cure, heal or food placement already applied its effect.
             // Do not start a second, definition-driven effect after completion;
             // a new request needs a fresh threshold crossing.
             completed_jobs.write(StaffJobCompleted {

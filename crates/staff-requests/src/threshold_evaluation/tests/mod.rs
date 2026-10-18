@@ -190,3 +190,30 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
         Some(StaffRequestJobEvent::Cancelled { .. })
     ));
 }
+
+#[test]
+fn authored_health_controller_raises_keeper_treatment() {
+    let mut row = number_row(Comparison::RisesAbove, false);
+    row.attribute_key = Some(AssetId::from_key("health"));
+    row.threshold = StaffRequestThresholdValue::Number(50.0);
+    row.request.token = Some(AssetId::from_key("t_healanimal"));
+    let mut state = StaffRequestRuntimeState {
+        row: StaffRequestRowIdentity {
+            definition: row.id,
+            binder: row.binder,
+            attribute_key: row.attribute_key,
+            token: row.request.token,
+            ordinal: 0,
+        },
+        previous: Some(StaffRequestControllerSample::NumberQ16(50 * 65_536)),
+    };
+    let Some(StaffRequestJobEvent::Raised { key, .. }) = evaluate_staff_request_row(
+        &row,
+        &mut state,
+        Entity::from_bits(9),
+        Some(StaffRequestControllerSample::NumberQ16(51 * 65_536)),
+    ) else {
+        panic!("health deprivation above 50 must request a heal");
+    };
+    assert_eq!(key.kind, StaffJobKind::Treat);
+}
