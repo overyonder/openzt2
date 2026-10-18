@@ -28,6 +28,8 @@ fn presentation(
         scale: 1.0,
         required: true,
         initially_visible,
+        attach_node: None,
+        inherit_attach_rotation: false,
     }
 }
 

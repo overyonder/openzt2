@@ -205,7 +205,7 @@ pub struct WorldObjectDetachActionDefinition {
     clippy::derive_partial_eq_without_eq,
     reason = "authored scale is floating point"
 )]
-#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectNamedPhysicalPresentationDefinition {
     pub name: AssetId,
     pub prefab: AssetId,
@@ -216,6 +216,14 @@ pub struct WorldObjectNamedPhysicalPresentationDefinition {
     /// state change only toggles its visibility.
     #[serde(default = "named_physical_presentation_is_initially_visible")]
     pub initially_visible: bool,
+    /// Node of the object's main model this binder hangs on through
+    /// `physObjParenting` (for example `Link_Fire01`). None spawns it at the
+    /// object's origin.
+    #[serde(default)]
+    pub attach_node: Option<String>,
+    /// `rottype="use"`: the binder turns with its node, not just follows it.
+    #[serde(default)]
+    pub inherit_attach_rotation: bool,
 }
 
 const fn named_physical_presentation_is_initially_visible() -> bool {
