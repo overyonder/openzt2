@@ -27,6 +27,8 @@ pub enum BehaviorAction {
     Dock(action::docking::BehaviorDockAction),
     DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),
+    /// `BFBehFaceTarget`: turn the actor toward its task target.
+    FaceTarget,
     WaitInteractionQueue(action::queue::BehaviorQueueWaitAction),
     DockQueue(action::queue::BehaviorDockQueueAction),
     SynchronizedSets(action::synchronized_sets::BehaviorSynchronizedSetsAction),

@@ -18,6 +18,10 @@ pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
 ) {
     for containment_change in containment_changes.read() {
         if containment_change.is_contained {
+            // An animal back inside its habitat is no longer escaped.
+            commands
+                .entity(containment_change.affected_entity)
+                .remove::<Escaped>();
             continue;
         }
         let Ok(existing_escape_state) = animals.get(containment_change.affected_entity) else {

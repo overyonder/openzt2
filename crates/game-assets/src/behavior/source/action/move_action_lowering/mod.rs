@@ -137,6 +137,27 @@ pub(super) fn lower_move_action_source_node(
     })))
 }
 
+/// `rotError` is a turn tolerance and `allowShuffle` a foot-shuffle clip;
+/// the live turn is exact and immediate, so both are accepted unmapped.
+pub(super) fn lower_face_target_action_source_node(
+    source_node: &DataNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if source_node.name != "BFBehFaceTarget" {
+        return Ok(None);
+    }
+    if source_node
+        .attributes
+        .iter()
+        .any(|attribute| !matches!(attribute.name(), "rotError" | "allowShuffle"))
+        || source_node.element_children().next().is_some()
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehFaceTarget has unsupported authored policy",
+        ));
+    }
+    Ok(Some(BehaviorAction::FaceTarget))
+}
+
 fn validate_supported_bfbehmove_default_policies(source_node: &DataNode) -> io::Result<()> {
     if read_optional_float_attribute(source_node, "pathRadius")?.is_some_and(|value| value != 0.0) {
         return Err(invalid_behavior_source_data(

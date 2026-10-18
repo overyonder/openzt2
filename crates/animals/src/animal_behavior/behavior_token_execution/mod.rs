@@ -7,7 +7,10 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::{
+    behavior::{action::token::BehaviorTokenRecipient, action_record::BehaviorAction},
+    AssetId,
+};
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -91,6 +94,7 @@ fn execute_current_self_token_deliveries(
         ),
         (Without<Dead>, Without<PendingBehaviorTaskFailure>),
     >,
+    recipients: Query<Has<BehaviorTaskExecutionState>, Without<Dead>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -137,13 +141,34 @@ fn execute_current_self_token_deliveries(
                     .tick
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
             };
+            let recipient = match delivery.recipient {
+                BehaviorTokenRecipient::Subject => actor,
+                BehaviorTokenRecipient::Target => {
+                    let Some(target) = task.target().filter(|target| recipients.contains(*target))
+                    else {
+                        continue;
+                    };
+                    target
+                }
+            };
+            // The recipient drops its current task so the token is considered
+            // now, as a keeper's dart interrupts an escaped animal.
+            if delivery.reconsider
+                && recipient != actor
+                && recipients.get(recipient).is_ok_and(|busy| busy)
+            {
+                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+                    recipient,
+                    &mut commands,
+                );
+            }
             commands.spawn((
                 BehaviorSelfToken {
                     name: delivery.token,
                     available_at: at_tick(delivery.delay),
                     expires_at: at_tick(delivery.lifetime),
                 },
-                ChildOf(actor),
+                ChildOf(recipient),
             ));
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);
