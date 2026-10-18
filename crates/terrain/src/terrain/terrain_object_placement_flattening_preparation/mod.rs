@@ -12,13 +12,18 @@ use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 
+use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
+use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainEditDelta;
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::terrain_sample_rectangle_length;
+use openzt2_zoo_state::terrain::terrain_edit_types::CommitTerrainEdit;
+use openzt2_zoo_state::terrain::terrain_edit_types::FlattenTerrainUnderBehaviorPlacement;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit;
+use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditAcknowledged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPreparationRejected;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPrepared;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
@@ -37,11 +42,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
     active_definitions: Res<WorldDefinitions>,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    chunks: Query<(
-        &TerrainChunk,
-        Option<&EditedTerrainSamples>,
-        &TerrainChunkId,
-    )>,
+    chunks: TerrainChunks,
     mut prepared: MessageWriter<TerrainEditPrepared>,
     mut rejected: MessageWriter<TerrainEditPreparationRejected>,
 ) {
@@ -62,48 +63,16 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         {
             continue;
         }
-        let mut occupied_cells = Vec::new();
-        let Some(occupied_cells) = collect_occupied_placement_cells_for_transform(
+        let Some(deltas) = prepare_authored_object_placement_terrain_flattening_deltas(
             definition,
             &preview.transform,
-            &mut occupied_cells,
+            &terrain_index,
+            &terrain_assets,
+            &chunks,
         ) else {
             reject_authored_object_placement_terrain_flattening(&mut rejected, request.transaction);
             continue;
         };
-        let target_height_centimetres = preview.transform.translation.y * 100.0;
-        if !target_height_centimetres.is_finite()
-            || target_height_centimetres < f32::from(i16::MIN)
-            || target_height_centimetres > f32::from(i16::MAX)
-        {
-            reject_authored_object_placement_terrain_flattening(&mut rejected, request.transaction);
-            continue;
-        }
-        let target_height_centimetres = target_height_centimetres.round() as i16;
-        let Some(flattened_world_sample_positions) =
-            collect_authored_object_placement_flattened_world_sample_positions(
-                occupied_cells,
-                &terrain_index,
-                &chunks,
-            )
-        else {
-            reject_authored_object_placement_terrain_flattening(&mut rejected, request.transaction);
-            continue;
-        };
-        let mut deltas = chunks
-            .iter()
-            .filter_map(|(chunk, edited, persistent)| {
-                prepare_authored_object_placement_terrain_flattening_delta(
-                    persistent,
-                    chunk,
-                    terrain_assets.get(&chunk.asset)?,
-                    edited,
-                    &flattened_world_sample_positions,
-                    target_height_centimetres,
-                )
-            })
-            .collect::<Vec<_>>();
-        deltas.sort_unstable_by_key(|delta| delta.chunk.0);
         if deltas.is_empty() {
             continue;
         }
@@ -118,14 +87,132 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
     }
 }
 
+type TerrainChunks<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static TerrainChunk,
+        Option<&'static EditedTerrainSamples>,
+        &'static TerrainChunkId,
+    ),
+>;
+
+/// The deltas flattening an object's occupied cells to its height. `None`
+/// rejects the placement; an empty result needs no edit.
+fn prepare_authored_object_placement_terrain_flattening_deltas(
+    definition: &PlaceableDefinition,
+    transform: &Transform,
+    terrain_index: &TerrainIndex,
+    terrain_assets: &Assets<TerrainAsset>,
+    chunks: &TerrainChunks,
+) -> Option<Vec<TerrainEditDelta>> {
+    let mut occupied_cells = Vec::new();
+    let occupied_cells =
+        collect_occupied_placement_cells_for_transform(definition, transform, &mut occupied_cells)?;
+    let target_height_centimetres = transform.translation.y * 100.0;
+    if !target_height_centimetres.is_finite()
+        || target_height_centimetres < f32::from(i16::MIN)
+        || target_height_centimetres > f32::from(i16::MAX)
+    {
+        return None;
+    }
+    let target_height_centimetres = target_height_centimetres.round() as i16;
+    let flattened_world_sample_positions =
+        collect_authored_object_placement_flattened_world_sample_positions(
+            occupied_cells,
+            terrain_index,
+            chunks,
+        )?;
+    let mut deltas = chunks
+        .iter()
+        .filter_map(|(chunk, edited, persistent)| {
+            prepare_authored_object_placement_terrain_flattening_delta(
+                persistent,
+                chunk,
+                terrain_assets.get(&chunk.asset)?,
+                edited,
+                &flattened_world_sample_positions,
+                target_height_centimetres,
+            )
+        })
+        .collect::<Vec<_>>();
+    deltas.sort_unstable_by_key(|delta| delta.chunk.0);
+    Some(deltas)
+}
+
+/// The edit entity of a behavior placement's flattening. It belongs to no
+/// construction transaction, so it is not undoable and is discarded once
+/// applied.
+#[derive(Component)]
+pub(super) struct BehaviorPlacementTerrainFlattening;
+
+/// Flattens under objects a behavior put down, such as a keeper's food pile,
+/// through the same terrain edit a player placement commits.
+pub(super) fn flatten_terrain_under_behavior_placed_objects(
+    mut commands: Commands,
+    mut requests: MessageReader<FlattenTerrainUnderBehaviorPlacement>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    terrain_index: Res<TerrainIndex>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    chunks: TerrainChunks,
+    mut commits: MessageWriter<CommitTerrainEdit>,
+) {
+    let Some(catalogue) = active_definitions.get(&definitions) else {
+        return;
+    };
+    for request in requests.read() {
+        let Some(deltas) = resolve_object_placeable_definition(catalogue, request.definition)
+            .filter(|definition| {
+                definition
+                    .constraints
+                    .contains_all(PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT)
+            })
+            .and_then(|definition| {
+                prepare_authored_object_placement_terrain_flattening_deltas(
+                    definition,
+                    &request.transform,
+                    &terrain_index,
+                    &terrain_assets,
+                    &chunks,
+                )
+            })
+            .filter(|deltas| !deltas.is_empty())
+        else {
+            continue;
+        };
+        let transaction = commands
+            .spawn((
+                TerrainEdit {
+                    deltas,
+                    water_regions: Vec::new(),
+                },
+                BehaviorPlacementTerrainFlattening,
+            ))
+            .id();
+        commits.write(CommitTerrainEdit {
+            transaction,
+            application: EditApplication::InitialCommit,
+        });
+    }
+}
+
+pub(super) fn discard_applied_behavior_placement_terrain_flattening(
+    mut commands: Commands,
+    mut acknowledged: MessageReader<TerrainEditAcknowledged>,
+    edits: Query<(), With<BehaviorPlacementTerrainFlattening>>,
+) {
+    for acknowledgement in acknowledged.read() {
+        if edits.contains(acknowledgement.transaction) {
+            commands.entity(acknowledgement.transaction).despawn();
+        }
+    }
+}
+
 fn collect_authored_object_placement_flattened_world_sample_positions(
     occupied_cells: &[IVec2],
     terrain_index: &TerrainIndex,
-    chunks: &Query<(
-        &TerrainChunk,
-        Option<&EditedTerrainSamples>,
-        &TerrainChunkId,
-    )>,
+    chunks: &TerrainChunks,
 ) -> Option<Vec<Vec2>> {
     let mut positions = Vec::with_capacity(occupied_cells.len().saturating_mul(4));
     for cell in occupied_cells {

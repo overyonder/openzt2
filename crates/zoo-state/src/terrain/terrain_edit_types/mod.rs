@@ -33,6 +33,14 @@ pub struct TerrainEditPreparationRejected {
     pub reason: PlacementFailure,
 }
 
+/// A behavior put down an object whose placement flattens terrain, outside
+/// any construction transaction.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct FlattenTerrainUnderBehaviorPlacement {
+    pub definition: openzt2_game_data::AssetId,
+    pub transform: Transform,
+}
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommitTerrainEdit {
     pub transaction: Entity,

@@ -58,6 +58,8 @@ use crate::terrain::terrain_ground_path_surface_projection::retain_ground_path_s
 use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
 use crate::terrain::terrain_live_brush_application::roll_back_cancelled_live_terrain_brush_edit;
+use crate::terrain::terrain_object_placement_flattening_preparation::discard_applied_behavior_placement_terrain_flattening;
+use crate::terrain::terrain_object_placement_flattening_preparation::flatten_terrain_under_behavior_placed_objects;
 use crate::terrain::terrain_object_placement_flattening_preparation::prepare_authored_object_placement_terrain_flattening;
 use crate::terrain::terrain_water_geometric_wave_shader_state::apply_authored_water_impact_events_to_geometric_wave_channels;
 use crate::terrain::terrain_water_renderer_inputs::update_authored_terrain_water_renderer_inputs;
@@ -110,6 +112,7 @@ impl Plugin for TerrainPlugin {
             .add_message::<TerrainEditPrepared>()
             .add_message::<TerrainEditPreparationRejected>()
             .add_message::<CommitTerrainEdit>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::FlattenTerrainUnderBehaviorPlacement>()
             .add_message::<TerrainEditAcknowledged>()
             .configure_sets(
                 Update,
@@ -237,9 +240,18 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                apply_committed_terrain_sample_deltas_and_publish_changed_regions
+                (
+                    flatten_terrain_under_behavior_placed_objects,
+                    apply_committed_terrain_sample_deltas_and_publish_changed_regions,
+                )
+                    .chain()
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                     .in_set(FixedConstructionSet::Apply),
+            )
+            .add_systems(
+                FixedUpdate,
+                discard_applied_behavior_placement_terrain_flattening
+                    .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(
                 FixedUpdate,

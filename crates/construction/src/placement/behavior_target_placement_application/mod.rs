@@ -2,11 +2,13 @@
 //!
 //! The site is the recipient's ground position, turned to face the subject.
 //! The object is paid for through its authored `build` transaction when the
-//! placement set returns, and only then enters the world. A behavior placement
-//! never edits terrain, so definitions that flatten or need a path, wall or
-//! headroom are rejected rather than placed without that policy.
+//! placement set returns, and only then enters the world. A definition that
+//! flattens terrain flattens it under the created object, as a player placement
+//! would; definitions that need a path, wall or headroom are rejected rather
+//! than placed without that policy.
 
 use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use openzt2_zoo_state::terrain::terrain_edit_types::FlattenTerrainUnderBehaviorPlacement;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
@@ -122,6 +124,7 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
     allocator: ResMut<'w, PersistentIdAllocator>,
     committed: MessageWriter<'w, ObjectPlacementCommitted>,
     payments: MessageWriter<'w, TransactionRequest>,
+    flattening: MessageWriter<'w, FlattenTerrainUnderBehaviorPlacement>,
 }
 
 pub(super) fn apply_behavior_target_placements(
@@ -152,7 +155,13 @@ pub(super) fn apply_behavior_target_placements(
             continue;
         }
         let next = match &pending.stage {
-            BehaviorTargetPlacementStage::Siting => {
+            BehaviorTargetPlacementStage::Siting { prefab } => {
+                if prefab.is_none() {
+                    let prefab = catalogue
+                        .find_object(pending.definition)
+                        .and_then(|object| catalogue.scene(object.prefab));
+                    pending.stage = BehaviorTargetPlacementStage::Siting { prefab };
+                }
                 match choose_behavior_target_placement_site(
                     actor,
                     &pending,
@@ -362,6 +371,10 @@ fn choose_behavior_target_placement_site(
     };
     if prefab.canonical_scene_prefab_document().entities.is_empty() {
         return SiteChoice::Rejected;
+    }
+    // Automatic footprints come from the loaded prefab's bounds.
+    if definition.automatic_footprint && definition.footprint.is_empty() {
+        return SiteChoice::Pending;
     }
     if let Some(model) = first_missing_prefab_collider_model_asset_id(prefab, &world.models) {
         let failed = prefab.loaded_model_asset_handle(model).is_none_or(|model| {
@@ -607,6 +620,17 @@ fn create_behavior_target_placement_object(
         &mut creation.committed,
     );
     let entity = edit.applied_entity.filter(|_| accepted)?;
+    if definition
+        .constraints
+        .contains_all(PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT)
+    {
+        creation
+            .flattening
+            .write(FlattenTerrainUnderBehaviorPlacement {
+                definition: pending.definition,
+                transform: site.transform,
+            });
+    }
     created.insert(entity, pending.definition);
     Some(entity)
 }
@@ -652,8 +676,7 @@ fn behavior_placement_supports_definition(definition: &PlaceableDefinition) -> b
     !definition.moving_footprint
         && definition.minimum_headroom_metres <= 0.0
         && !definition.constraints.contains_any(
-            PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT
-                .with_additional_flags(PlacementConstraints::REQUIRE_PATH)
+            PlacementConstraints::REQUIRE_PATH
                 .with_additional_flags(PlacementConstraints::REQUIRE_WALL),
         )
 }
