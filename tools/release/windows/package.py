@@ -36,6 +36,7 @@ def build_msi(payload, destination, version):
     element(menu, "Directory", Id="OpenZT2Menu", Name="OpenZT2")
     feature = element(package, "Feature", Id="Game", Title="OpenZT2", Level="1")
     directories = {Path("."): install}
+    executable_component = None
     for index, source in enumerate(sorted(payload.rglob("*"))):
         if not source.is_file():
             continue
@@ -54,10 +55,15 @@ def build_msi(payload, destination, version):
         element(component, "RegistryValue", Root="HKCU", Key="Software\\OpenZT2\\Installer",
                 Name=identifier, Type="string", Value=version, KeyPath="yes")
         if relative.as_posix() == "openzt2.exe":
+            executable_component = component
             element(file, "Shortcut", Id="StartMenuShortcut", Directory="OpenZT2Menu",
                     Name="OpenZT2", WorkingDirectory="INSTALLFOLDER", Advertise="no")
-            element(component, "RemoveFolder", Id="OpenZT2Menu", On="uninstall")
         element(feature, "ComponentRef", Id=identifier)
+    if executable_component is None:
+        raise RuntimeError("The installer payload has no openzt2.exe")
+    for identifier in ["LocalPrograms", "OpenZT2Menu", *(node.get("Id") for node in directories.values())]:
+        element(executable_component, "RemoveFolder", Id=f"Cleanup{identifier}",
+                Directory=identifier, On="uninstall")
     source = destination.with_suffix(".wxs")
     XML.ElementTree(root).write(source, encoding="utf-8", xml_declaration=True)
     subprocess.run(["wix", "build", "-arch", "x64", "-o", str(destination), str(source)], check=True)
