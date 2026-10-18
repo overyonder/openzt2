@@ -35,3 +35,7 @@ pub(super) struct PendingEffectMeshBinding {
     pub(super) model_asset: Handle<bevy::gltf::Gltf>,
     pub(super) named_mesh_asset_path: String,
 }
+
+/// Attached emitters whose orientation stays aligned with the world axes.
+#[derive(Component)]
+pub(super) struct WorldAlignedParticleEffect;

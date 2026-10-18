@@ -135,6 +135,7 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
     } else if lower.starts_with("runps ") {
         AuthoredAnimationTextAction::RunParticleSystem {
             particle_system_asset_key: token(rest("runps")?),
+            use_target_rotation: lower.contains(" userot"),
             use_target_z_axis_rotation: lower.contains(" usezrot"),
             particle_scale: option("scale"),
         }
@@ -234,6 +235,7 @@ fn parse_command(command: &str) -> Option<AuthoredAnimationTextCommand> {
         AuthoredAnimationTextAction::AttachParticleSystem {
             particle_system_asset_key: token(rest("attachps")?),
             use_target_rotation: lower.contains(" userot"),
+            particle_scale: option("scale"),
         }
     } else if lower.starts_with("detachps ") {
         AuthoredAnimationTextAction::DetachParticleSystem {

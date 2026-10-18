@@ -10,6 +10,7 @@ use openzt2_world_state::animation_playback::animation_event_message_types::Anim
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         id,

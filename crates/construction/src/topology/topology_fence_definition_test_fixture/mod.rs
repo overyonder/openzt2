@@ -20,6 +20,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
     let object = AssetId([42; 16]);
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
             supports_show_tricks: false,

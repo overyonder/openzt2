@@ -36,6 +36,7 @@ pub(super) fn enqueue_requested_effect_instances_for_preparation(
             spawn_request.particle_effect_asset.clone(),
             Some(spawn_request.emitter_id),
             spawn_request.parent_entity,
+            true,
             spawn_request.effect_transform,
             spawn_request.manual_particle_count,
         );
@@ -46,6 +47,7 @@ pub(super) fn enqueue_requested_effect_instances_for_preparation(
             spawn_request.particle_effect_asset.clone(),
             None,
             spawn_request.parent_entity,
+            spawn_request.inherit_parent_rotation,
             spawn_request.effect_transform,
             spawn_request.manual_particle_count,
         );
@@ -57,6 +59,7 @@ fn spawn_pending_effect_instance(
     effect_asset: Handle<ParticleEffectDocumentAsset>,
     requested_emitter: Option<AssetId>,
     parent_entity: Option<Entity>,
+    inherit_parent_rotation: bool,
     effect_transform: Transform,
     manual_particle_count: u32,
 ) {
@@ -71,6 +74,9 @@ fn spawn_pending_effect_instance(
     ));
     if let Some(parent_entity) = parent_entity {
         pending_effect_entity.insert(ChildOf(parent_entity));
+        if !inherit_parent_rotation {
+            pending_effect_entity.insert(super::effect_runtime_types::WorldAlignedParticleEffect);
+        }
     }
 }
 
@@ -99,6 +105,7 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
                     pending_effect_instance.effect_asset.clone(),
                     Some(root_emitter_id),
                     Some(effect_entity),
+                    true,
                     Transform::IDENTITY,
                     pending_effect_instance.manual_particle_count,
                 );

@@ -19,6 +19,24 @@ use super::{
 };
 use crate::material::material_asset_types::MaterialAsset;
 
+pub(super) fn align_attached_particle_effects_to_world_axes(
+    attached: Query<(Entity, &ChildOf), With<super::effect_runtime_types::WorldAlignedParticleEffect>>,
+    mut transforms: ParamSet<(
+        bevy::transform::helper::TransformHelper,
+        Query<&mut Transform, With<super::effect_runtime_types::WorldAlignedParticleEffect>>,
+    )>,
+) {
+    for (entity, parent) in &attached {
+        let Ok(parent_transform) = transforms.p0().compute_global_transform(parent.parent()) else {
+            continue;
+        };
+        let mut local_transforms = transforms.p1();
+        if let Ok(mut transform) = local_transforms.get_mut(entity) {
+            transform.rotation = parent_transform.compute_transform().rotation.inverse();
+        }
+    }
+}
+
 pub(super) fn stop_effect_instances_attached_to_requested_entities(
     mut commands: Commands,
     mut stop_requests: MessageReader<StopParticleEffectsAttachedToEntity>,

@@ -73,6 +73,7 @@ pub struct SpawnParticleEffectEmitter {
 pub struct SpawnCompleteParticleEffectDocument {
     pub particle_effect_asset: Handle<ParticleEffectDocumentAsset>,
     pub parent_entity: Option<Entity>,
+    pub inherit_parent_rotation: bool,
     pub effect_transform: Transform,
     pub manual_particle_count: u32,
 }
@@ -87,6 +88,10 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
+            .add_systems(PostUpdate,
+                effect_instance_runtime_systems::align_attached_particle_effects_to_world_axes
+                    .after(bevy::app::AnimationSystems)
+                    .before(bevy::transform::TransformSystems::Propagate))
             .init_asset_loader::<EffectAssetLoader>()
             .init_resource::<PreparedHanabiEffectAssets>()
             .add_message::<SpawnParticleEffectEmitter>()

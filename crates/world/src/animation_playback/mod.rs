@@ -5,6 +5,7 @@ mod animation_playback_controller_ancestor_lookup;
 mod animation_playback_time_advancement;
 mod animation_traversal_transition_request_projection;
 mod authored_animation_audio_and_effect_text_action_execution;
+mod authored_animation_sound_resolution;
 mod authored_animation_control_text_action_execution;
 mod authored_animation_event_cursor_types;
 mod authored_animation_event_execution;

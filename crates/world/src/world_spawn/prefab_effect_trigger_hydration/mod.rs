@@ -58,6 +58,7 @@ pub(super) fn hydrate_prefab_effect_triggers(
         spawn.write(SpawnCompleteParticleEffectDocument {
             particle_effect_asset: trigger.handle.clone(),
             parent_entity: Some(entity),
+            inherit_parent_rotation: true,
             effect_transform: Transform::IDENTITY,
             manual_particle_count: 0,
         });

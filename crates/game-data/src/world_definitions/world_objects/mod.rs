@@ -236,6 +236,9 @@ pub struct WorldObjectPresentationCausticPolicy {
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectDefinition {
     pub id: AssetId,
+    /// Most-specific authored sound-name prefixes, followed by their base types.
+    #[serde(default)]
+    pub audio_cue_prefixes: Vec<String>,
     pub kind: WorldObjectKind,
     /// The resolved source family contains a `ZTAITrickComponent`. Native
     /// isInShow is false without this capability, regardless of proximity.

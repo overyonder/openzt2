@@ -69,6 +69,7 @@ pub(super) fn present_authored_water_surface_spray_samples(
                     world_position: position,
                     selection: *selection,
                     priority: 0,
+                    force_looped: false,
                     listener_above_water: above,
                     listener_below_water: below,
                     admission: None,
@@ -81,6 +82,7 @@ pub(super) fn present_authored_water_surface_spray_samples(
         particles.write(SpawnCompleteParticleEffectDocument {
             particle_effect_asset: effect.clone(),
             parent_entity: None,
+            inherit_parent_rotation: true,
             effect_transform: Transform {
                 translation: position,
                 rotation: authored_splash_rotation(sample.direction, sample.normal, &mut random),

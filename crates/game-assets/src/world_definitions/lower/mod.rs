@@ -2,6 +2,19 @@
 
 pub mod authored_presentation_physics_source_lowering;
 
+fn authored_audio_cue_prefixes(record: &RecordView<'_, '_>) -> Vec<String> {
+    let mut names = vec![record.key.to_owned()];
+    for name in record.type_tokens().into_iter().rev() {
+        if !names.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+            names.push(name);
+        }
+        if names.len() == 3 {
+            break;
+        }
+    }
+    names
+}
+
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument as DataDocument,
     OrderedSourceDocumentSpan as DocumentSpan,

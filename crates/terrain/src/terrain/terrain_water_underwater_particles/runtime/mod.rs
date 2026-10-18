@@ -406,6 +406,7 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
                     world_position: position,
                     selection: emitter_entity.to_bits(),
                     priority: 0,
+                    force_looped: false,
                     listener_above_water: false,
                     listener_below_water: true,
                     admission: Some(PositionedAudioAdmission {

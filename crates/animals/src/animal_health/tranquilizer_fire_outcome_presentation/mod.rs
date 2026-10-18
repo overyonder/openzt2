@@ -55,6 +55,7 @@ pub(super) fn present_tranquilizer_fire_audio_and_particle_effects(
         particle_effect_requests.write(SpawnCompleteParticleEffectDocument {
             particle_effect_asset: particle_effect_asset.clone(),
             parent_entity: Some(camera),
+            inherit_parent_rotation: true,
             effect_transform: Transform::from_translation(Vec3::new(
                 tranquilizer_mode.shot_effect_offset_cm[0] as f32 / 100.0,
                 tranquilizer_mode.shot_effect_offset_cm[1] as f32 / 100.0,

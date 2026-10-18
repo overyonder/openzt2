@@ -48,19 +48,13 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
         requests.clear();
         return;
     }
-    let Some(view) = view_state else {
-        requests.clear();
-        return;
-    };
-    let Some(listener_is_underwater) = view.underwater_status() else {
-        requests.clear();
-        return;
-    };
+    let listener_is_underwater = view_state.as_ref().and_then(|view| view.underwater_status());
+    let camera_position = view_state.as_ref().and_then(|view| view.camera_position());
     let mut pending: Vec<
         Option<openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue>,
     > = Vec::new();
     let mut admitted = Vec::new();
-    if let Some(camera) = view.camera_position() {
+    if let Some(camera) = camera_position {
         for (entity, metadata, transform, children) in &emitters {
             if children.is_some_and(|children| !children.is_empty()) {
                 if let Some(group) = metadata.admission_group {
@@ -75,15 +69,16 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
         }
     }
     for request in requests.read() {
-        if !(if listener_is_underwater {
-            request.listener_below_water
-        } else {
-            request.listener_above_water
-        }) {
+        let audible = match listener_is_underwater {
+            Some(true) => request.listener_below_water,
+            Some(false) => request.listener_above_water,
+            None => request.listener_above_water && request.listener_below_water,
+        };
+        if !audible {
             continue;
         }
         if let Some(policy) = request.admission {
-            let Some(camera) = view.camera_position() else {
+            let Some(camera) = camera_position else {
                 continue;
             };
             let distance_squared = request.world_position.distance_squared(camera);
@@ -134,7 +129,7 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
             emitter: Some(emitter),
             selection: request.selection,
             priority: request.priority,
-            force_looped: false,
+            force_looped: request.force_looped,
         });
     }
 }

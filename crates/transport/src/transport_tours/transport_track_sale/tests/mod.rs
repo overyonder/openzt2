@@ -59,6 +59,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let definition = AssetId::from_key("track");
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
+            audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
             id: definition,

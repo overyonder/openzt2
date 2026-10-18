@@ -33,6 +33,7 @@ fn presentation(
 
 fn marker_object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
+        audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         supports_show_tricks: false,

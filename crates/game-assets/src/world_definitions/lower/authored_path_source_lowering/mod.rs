@@ -123,6 +123,7 @@ pub(super) fn bind_authored_path(
             record,
         )?;
     output.document.objects.push(WorldObjectDefinition {
+        audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(

@@ -124,6 +124,7 @@ pub(super) fn install_definitions(
     ]
     .into_iter()
     .map(|(name, content)| WorldObjectDefinition {
+        audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
         id: AssetId::from_key(name),

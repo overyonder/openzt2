@@ -16,15 +16,18 @@ pub(super) struct AuthoredAnimationTextActionExecutionContext<'w, 's> {
     pub(super) named_animation_joint_targets:
         Query<'w, 's, (Entity, &'static AnimationJointTarget)>,
     pub(super) audio_and_effect_text_action_execution:
-        AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w>,
+        AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's>,
     pub(super) animation_control_text_action_execution:
         AuthoredAnimationControlTextActionExecutionContext<'w, 's>,
 }
 
 #[derive(SystemParam)]
-pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w> {
+pub(super) struct AuthoredAnimationAudioAndEffectTextActionExecutionContext<'w, 's> {
     pub(super) asset_server: Res<'w, AssetServer>,
+    pub(super) transforms: Query<'w, 's, &'static GlobalTransform>,
+    pub(super) sound_resolution: super::authored_animation_sound_resolution::AuthoredAnimationSoundResolution<'w, 's>,
     pub(super) audio_messages: MessageWriter<'w, PlayAudioCue>,
+    pub(super) positioned_audio_messages: MessageWriter<'w, openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue>,
     pub(super) effect_messages: MessageWriter<'w, SpawnCompleteParticleEffectDocument>,
     pub(super) stop_effect_messages: MessageWriter<'w, StopParticleEffectsAttachedToEntity>,
 }

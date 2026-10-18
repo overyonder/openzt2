@@ -16,6 +16,7 @@ pub struct PlayPositionedAudioCue {
     pub world_position: Vec3,
     pub selection: u64,
     pub priority: u8,
+    pub force_looped: bool,
     pub listener_above_water: bool,
     pub listener_below_water: bool,
     pub admission: Option<PositionedAudioAdmission>,

@@ -23,6 +23,8 @@ pub enum AuthoredAnimationTextAction {
     },
     RunParticleSystem {
         particle_system_asset_key: String,
+        #[serde(default)]
+        use_target_rotation: bool,
         use_target_z_axis_rotation: bool,
         particle_scale: Option<f32>,
     },
@@ -73,6 +75,8 @@ pub enum AuthoredAnimationTextAction {
     AttachParticleSystem {
         particle_system_asset_key: String,
         use_target_rotation: bool,
+        #[serde(default)]
+        particle_scale: Option<f32>,
     },
     DetachParticleSystem {
         particle_system_asset_key: String,

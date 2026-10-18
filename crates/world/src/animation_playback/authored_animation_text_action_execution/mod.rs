@@ -3,7 +3,9 @@ use openzt2_game_data::animation::animation_text_key::AuthoredAnimationTextActio
 
 use crate::animation_playback::authored_animation_control_text_action_execution::set_animation_playback_controller_speed_from_authored_percent;
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
-use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_world_state::animation_playback::animation_playback_controller_types::{
+    AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
+};
 
 impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
     pub(super) fn execute_one_crossed_authored_animation_text_command(
@@ -31,17 +33,19 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
         match &authored_animation_text_command.animation_text_action {
             AuthoredAnimationTextAction::PlaySound {
                 audio_asset_key,
+                use_terrain_surface_sound,
                 playback_is_looped,
                 update_sound_position_during_playback,
                 ..
             } => self
                 .audio_and_effect_text_action_execution
                 .play_authored_animation_sound(
-                    animation_playback_controller_entity,
+                    resolved_action_target_entity,
                     event_time_milliseconds,
                     audio_asset_key,
                     *playback_is_looped,
                     *update_sound_position_during_playback,
+                    *use_terrain_surface_sound,
                 ),
             AuthoredAnimationTextAction::AttachPendingObject
             | AuthoredAnimationTextAction::SpawnObject
@@ -63,22 +67,28 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
             AuthoredAnimationTextAction::RunParticleSystem {
                 particle_system_asset_key,
                 particle_scale,
-                ..
+                use_target_rotation,
+                use_target_z_axis_rotation,
             } => self
                 .audio_and_effect_text_action_execution
                 .run_authored_animation_particle_system(
                     resolved_action_target_entity,
                     particle_system_asset_key,
                     particle_scale.unwrap_or(1.0),
+                    *use_target_rotation,
+                    *use_target_z_axis_rotation,
                 ),
             AuthoredAnimationTextAction::AttachParticleSystem {
                 particle_system_asset_key,
-                ..
+                use_target_rotation,
+                particle_scale,
             } => self
                 .audio_and_effect_text_action_execution
                 .attach_authored_animation_particle_system(
                     resolved_action_target_entity,
                     particle_system_asset_key,
+                    *use_target_rotation,
+                    particle_scale.unwrap_or(1.0),
                 ),
             AuthoredAnimationTextAction::RunPresentationEffect {
                 presentation_effect_asset_key,
@@ -141,8 +151,12 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
                     animation_playback_controller_entity,
                     *enabled,
                 ),
-            AuthoredAnimationTextAction::ExitAnimation
-            | AuthoredAnimationTextAction::SendArtificialIntelligenceCommand(_)
+            AuthoredAnimationTextAction::ExitAnimation => {
+                // Finish at the clip boundary and retain the owning task's completion identity.
+                animation_playback_controller.playback_repetition_policy =
+                    AnimationPlaybackRepetitionPolicy::PlayOnce;
+            }
+            AuthoredAnimationTextAction::SendArtificialIntelligenceCommand(_)
             | AuthoredAnimationTextAction::ApplyWhapImpulse { .. }
             | AuthoredAnimationTextAction::SetGroundFit(_)
             | AuthoredAnimationTextAction::SetDockControllerEnabled(_)
