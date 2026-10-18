@@ -12,6 +12,7 @@ mod authored_animation_text_action_execution;
 mod authored_animation_text_action_execution_context;
 mod model_joint_attachment_binding;
 mod named_model_animation_joint_target_binding;
+mod sampled_animation_joint_pose_blending;
 mod standard_bevy_animation_graph_cache_invalidation;
 mod standard_bevy_animation_player_projection;
 mod standard_bevy_animation_player_projection_types;
@@ -40,9 +41,13 @@ impl Plugin for AnimationPlaybackPlugin {
     fn build(&self, application: &mut App) {
         application
             .add_systems(PostUpdate,
-                crate::animation_playback::locomotion_root_motion::remove_consumed_root_trajectory
+                (sampled_animation_joint_pose_blending::blend_sampled_animation_joint_poses,
+                crate::animation_playback::locomotion_root_motion::remove_consumed_root_trajectory).chain()
                     .after(bevy::app::AnimationSystems)
                     .before(bevy::transform::TransformSystems::Propagate))
+            .add_systems(PostUpdate,
+                bind_new_named_model_entities_and_new_animation_playback_controller_descendants
+                    .before(bevy::app::AnimationSystems))
             .init_resource::<StandardBevyAnimationGraphsByAnimationSetAsset>()
             .add_message::<AnimationCompleted>()
             .add_message::<openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand>()
@@ -54,6 +59,7 @@ impl Plugin for AnimationPlaybackPlugin {
                     advance_simulation_clock_animation_playback_controllers,
                     execute_crossed_authored_animation_events,
                 ).chain()
+                    .in_set(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .before(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery)
                     .in_set(FixedGameSet::Act),
             )
@@ -65,7 +71,6 @@ impl Plugin for AnimationPlaybackPlugin {
                     execute_crossed_authored_animation_events,
                     project_authored_animation_traversal_transitions_to_graph_node_playback_requests,
                     invalidate_standard_bevy_animation_graphs_and_player_bindings_after_asset_changes,
-                    bind_new_named_model_entities_and_new_animation_playback_controller_descendants,
                     crate::animation_playback::model_joint_attachment_binding::bind_model_joint_attachments,
                     project_animation_playback_controller_state_to_standard_bevy_animation_players,
                 )

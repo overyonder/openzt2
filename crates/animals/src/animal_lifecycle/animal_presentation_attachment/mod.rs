@@ -99,17 +99,25 @@ pub(super) fn attach_selected_species_variant_models_to_animal_entities(
             if authored.model.0 != appearance.model.0 {
                 continue;
             }
-            commands.entity(entity).insert((
-                AnimalPresentationOwner(animal_entity),
-                PendingModelAnimationAssets {
-                    pending_model_animation_set_asset_handles: vec![animation_set_handle.clone()]
-                        .into_boxed_slice(),
-                    requested_initial_animation_clip_asset_key: variant
-                        .initial_animation_clip_asset_key
-                        .clone(),
-                },
-            ));
+            commands
+                .entity(entity)
+                .insert(AnimalPresentationOwner(animal_entity))
+                .remove::<PendingModelAnimationAssets>();
         }
+        // Every skin samples the animal's one playback clock, including skins
+        // whose scene instances finish loading after playback has started.
+        commands.entity(animal_entity).insert((
+            AnimationPresentationOwner {
+                gameplay_entity: animal_entity,
+            },
+            PendingModelAnimationAssets {
+                pending_model_animation_set_asset_handles: vec![animation_set_handle.clone()]
+                    .into_boxed_slice(),
+                requested_initial_animation_clip_asset_key: variant
+                    .initial_animation_clip_asset_key
+                    .clone(),
+            },
+        ));
         commands
             .entity(animal_entity)
             .insert(AnimalPresentationAttached)
@@ -121,11 +129,7 @@ pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_at
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     newly_resolved_animation_controllers: Query<
-        (
-            Entity,
-            &AnimalPresentationOwner,
-            &AnimationPlaybackController,
-        ),
+        (Entity, &AnimationPlaybackController),
         Added<ModelAnimationAttachmentResolved>,
     >,
     animals: Query<&AnimalVariant, With<Animal>>,
@@ -134,8 +138,8 @@ pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_at
     let Some(species_index) = species_index.get(&species_assets) else {
         return;
     };
-    for (animation_controller_entity, owner, _) in &newly_resolved_animation_controllers {
-        let Ok(selected_variant) = animals.get(owner.0) else {
+    for (animation_controller_entity, _) in &newly_resolved_animation_controllers {
+        let Ok(selected_variant) = animals.get(animation_controller_entity) else {
             continue;
         };
         let Some(variant) = species_index.find_variant(selected_variant.0) else {
@@ -156,21 +160,5 @@ pub(super) fn apply_authored_initial_animal_animation_repetition_policy_after_at
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
         });
-    }
-}
-
-/// Model animation attachment names the model's direct parent as its gameplay
-/// owner, which for an animal is its prefab root. Behaviors address the
-/// animal itself, so its clip requests and completions must follow the animal.
-pub(super) fn project_animal_animation_owners(
-    mut controllers: Query<
-        (&AnimalPresentationOwner, &mut AnimationPresentationOwner),
-        Changed<AnimationPresentationOwner>,
-    >,
-) {
-    for (animal, mut owner) in &mut controllers {
-        if owner.gameplay_entity != animal.0 {
-            owner.gameplay_entity = animal.0;
-        }
     }
 }

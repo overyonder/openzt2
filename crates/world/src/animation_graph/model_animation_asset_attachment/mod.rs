@@ -13,37 +13,48 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
+use openzt2_zoo_state::animal_lifecycle::types::SelectedAnimalPresentationModel;
 
-pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
+pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     mut animation_set_assets: ResMut<Assets<AnimationSetAsset>>,
     presentation_owners: Query<&AnimationPresentationOwner>,
     parents: Query<&ChildOf>,
-    pending_prefab_models: Query<
+    pending_animation_subjects: Query<
         (
             Entity,
-            &PrefabModel,
+            Option<&PrefabModel>,
+            Option<&SelectedAnimalPresentationModel>,
             Option<&ChildOf>,
             &PendingModelAnimationAssets,
+            Has<ModelExpanded>,
         ),
         (
-            With<ModelExpanded>,
             Without<AnimationPlaybackController>,
             Without<ModelAnimationAttachmentResolved>,
         ),
     >,
 ) {
     // Model owners can retire while loaded asset results await deferred application.
-    for (prefab_model_entity, prefab_model, prefab_model_parent, pending_model_animation_assets) in
-        &pending_prefab_models
+    for (
+        animation_subject_entity,
+        prefab_model,
+        animal_model,
+        animation_subject_parent,
+        pending_model_animation_assets,
+        expanded,
+    ) in &pending_animation_subjects
     {
+        if prefab_model.is_some() && !expanded {
+            continue;
+        }
         let pending_model_animation_set_asset_handles = pending_model_animation_assets
             .pending_model_animation_set_asset_handles
             .clone();
         let Some(_) = pending_model_animation_set_asset_handles.first() else {
             commands
-                .entity(prefab_model_entity)
+                .entity(animation_subject_entity)
                 .try_insert(ModelAnimationAttachmentResolved)
                 .try_remove::<PendingModelAnimationAssets>();
             continue;
@@ -62,19 +73,22 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
         else {
             continue;
         };
+        let subject_model = prefab_model
+            .map(|model| model.model)
+            .or_else(|| animal_model.map(|model| model.model));
         assert!(
             initial_animation_set_asset.model_asset_path.is_empty()
-                || openzt2_game_data::AssetId::from_virtual_path(
+                || subject_model.is_none_or(|model| openzt2_game_data::AssetId::from_virtual_path(
                     &AssetPath::new(&initial_animation_set_asset.model_asset_path).key(),
-                ) == prefab_model.model
+                ) == model)
                 // Archive paths are case-insensitive: manifests store them
                 // lowercased while prefabs keep the authored casing.
-                || initial_animation_set_asset
+                || prefab_model.is_some_and(|model| initial_animation_set_asset
                     .model_asset_path
-                    .eq_ignore_ascii_case(&prefab_model.model_path),
+                    .eq_ignore_ascii_case(&model.model_path)),
             "model-specific animation set {:?} does not belong to its prefab model {:?}",
             initial_animation_set_asset.model_asset_path,
-            prefab_model.model_path,
+            prefab_model.map(|model| &model.model_path),
         );
         let initial_animation_clip_asset_key = match pending_model_animation_assets
             .requested_initial_animation_clip_asset_key
@@ -86,7 +100,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             Some(animation_clip_asset_key) => animation_clip_asset_key,
             None => {
                 commands
-                    .entity(prefab_model_entity)
+                    .entity(animation_subject_entity)
                     .try_insert(ModelAnimationAttachmentResolved)
                     .try_remove::<PendingModelAnimationAssets>();
                 continue;
@@ -96,7 +110,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             .animation_clip_asset_load_has_failed(&initial_animation_clip_asset_key)
         {
             commands
-                .entity(prefab_model_entity)
+                .entity(animation_subject_entity)
                 .try_insert(ModelAnimationAttachmentResolved)
                 .try_remove::<PendingModelAnimationAssets>();
             continue;
@@ -117,7 +131,7 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
                     );
                 if !animation_clip_asset_load_was_requested {
                     commands
-                        .entity(prefab_model_entity)
+                        .entity(animation_subject_entity)
                         .try_insert(ModelAnimationAttachmentResolved)
                         .try_remove::<PendingModelAnimationAssets>();
                 }
@@ -145,17 +159,24 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
                 }
                 state
             });
-        let mut prefab_model_commands = commands.entity(prefab_model_entity);
-        prefab_model_commands.try_insert((
+        let mut animation_subject_commands = commands.entity(animation_subject_entity);
+        animation_subject_commands.try_insert((
             ModelAnimationAttachmentResolved,
             AnimationPresentationOwner {
-                gameplay_entity: prefab_model_parent.map_or(prefab_model_entity, |parent| {
-                    std::iter::successors(Some(parent.parent()), |entity| {
-                        parents.get(*entity).ok().map(ChildOf::parent)
-                    })
-                    .find_map(|entity| presentation_owners.get(entity).ok())
-                    .map_or(parent.parent(), |owner| owner.gameplay_entity)
-                }),
+                gameplay_entity: presentation_owners
+                    .get(animation_subject_entity)
+                    .map_or_else(
+                        |_| {
+                            animation_subject_parent.map_or(animation_subject_entity, |parent| {
+                                std::iter::successors(Some(parent.parent()), |entity| {
+                                    parents.get(*entity).ok().map(ChildOf::parent)
+                                })
+                                .find_map(|entity| presentation_owners.get(entity).ok())
+                                .map_or(parent.parent(), |owner| owner.gameplay_entity)
+                            })
+                        },
+                        |owner| owner.gameplay_entity,
+                    ),
             },
             ModelAnimationAssetLibrary {
                 loaded_model_animation_set_asset_handles,
@@ -174,12 +195,12 @@ pub(crate) fn attach_loaded_animation_set_assets_to_prefab_model_entities(
             },
         ));
         if animation_clip_targets_are_external_to_the_model_scene {
-            prefab_model_commands.try_insert(AnimationPlayer::default());
+            animation_subject_commands.try_insert(AnimationPlayer::default());
         }
         if let Some(animation_graph_playback_state) = initial_animation_graph_playback_state {
-            prefab_model_commands.try_insert(animation_graph_playback_state);
+            animation_subject_commands.try_insert(animation_graph_playback_state);
         }
-        prefab_model_commands.try_remove::<PendingModelAnimationAssets>();
+        animation_subject_commands.try_remove::<PendingModelAnimationAssets>();
     }
 }
 

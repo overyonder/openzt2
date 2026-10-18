@@ -18,6 +18,7 @@ mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
 mod pathfinding;
 mod person_walk_animation;
+mod sampled_animation_motion_projection;
 mod spatial_index_and_docking_operations;
 mod terrain_edit_navigation_refresh;
 mod topology_navigation_edge_invalidation;
@@ -110,6 +111,7 @@ impl Plugin for LocomotionPlugin {
                     avian_navigation_agent_driving::
                         drive_avian_navigation_agent_velocities_and_complete_routes,
                 )
+                    .after(openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling)
                     .after(openzt2_zoo_state::topology::gate_operation_types::GateOperationSet)
                     .in_set(FixedGameSet::Act),
             )

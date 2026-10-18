@@ -42,7 +42,7 @@ pub(super) fn lower_parsed_blue_fang_animation_to_glb_and_authored_clip_metadata
         .animation_nodes
         .iter()
         .map(|animation_node| Node {
-            name: Some(animation_node.skeleton_joint_name.clone()),
+            name: Some(animation_node.skeleton_joint_name.to_ascii_lowercase()),
             ..Default::default()
         })
         .collect();

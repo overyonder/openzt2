@@ -38,6 +38,8 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             &mut Route,
             &Destination,
             Option<&Docking>,
+            Option<&openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion>,
+            Option<&openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
         ),
         (Without<DirectLocomotion>, Without<RigidBody>),
     >,
@@ -54,14 +56,22 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         mut planned_route,
         destination,
         docking,
+        motion,
+        controller,
     ) in &mut non_physics_navigation_agents
     {
-        let requested_velocity_change = steering.desired_velocity - local_velocity.0;
+        let (desired_velocity, sampled_rotation) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, navigation_agent.max_speed_mps, fixed_delta_seconds, &local_transform, motion.zip(controller));
+        let requested_velocity_change = desired_velocity - local_velocity.0;
         local_velocity.0 += requested_velocity_change
             .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        local_velocity.0 = local_velocity
-            .0
-            .clamp_length_max(navigation_agent.max_speed_mps);
+        if motion
+            .zip(controller)
+            .is_none_or(|(motion, controller)| !motion.owns_playback(controller))
+        {
+            local_velocity.0 = local_velocity
+                .0
+                .clamp_length_max(navigation_agent.max_speed_mps);
+        }
         let previous_translation = local_transform.translation;
         let next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;
         if fences.gate_blocks_movement(
@@ -88,8 +98,16 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         }
         let horizontal_velocity = Vec2::new(local_velocity.0.x, local_velocity.0.z);
         if horizontal_velocity.length_squared() > 0.0001 {
+            let direction = if motion
+                .zip(controller)
+                .is_some_and(|(motion, controller)| motion.owns_playback(controller))
+            {
+                steering.desired_velocity.xz()
+            } else {
+                horizontal_velocity
+            };
             local_transform.rotation =
-                Quat::from_rotation_y(horizontal_velocity.x.atan2(horizontal_velocity.y));
+                Quat::from_rotation_y(direction.x.atan2(direction.y)) * sampled_rotation;
         }
         if !local_transform.translation.is_finite() {
             local_transform.translation = previous_translation;

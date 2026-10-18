@@ -1,10 +1,12 @@
 //! Model and animation format conversion.
 
 pub mod animation;
+mod bf_animation_cubic_keyframe_sampling;
 pub mod bf_animation_glb_and_metadata_lowering;
 pub mod bf_animation_keyframe_decoding;
 pub mod bf_animation_keyframe_interpolation;
 pub mod bf_animation_primitive_reading;
+mod bf_animation_quaternion_keyframe_sampling;
 pub mod bf_animation_root_motion_calculation;
 pub mod bf_animation_source_parsing;
 pub mod bf_animation_source_types;

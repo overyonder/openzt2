@@ -1,0 +1,27 @@
+# diagnostic: inspect a male lion's head and body through several gait cycles.
+start freeform-map
+move 800 400
+wheel 1 14
+until steady camera_height_m 30
+click "animals"
+until rows "Animal Typelist" >= 1
+wheel-to-catalogue "Lion"
+select-catalogue "Lion" in "Animal Typelist"
+click "Male button"
+wait 2
+select-catalogue "Lion" in "Animal Typelist"
+move 900 420
+until placement_valid_previews == 1
+click 900 420
+until animals > 0
+key ESCAPE
+capture lion-walking
+wait 90
+capture lion-next-cycle
+key P
+wait 30
+capture lion-paused
+key P
+wait 90
+capture lion-resumed
+return-to-menu

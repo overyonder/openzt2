@@ -15,7 +15,7 @@ use crate::animation_graph::animation_graph_clip_request_execution::execute_expl
 use crate::animation_graph::animation_graph_node_request_execution::execute_animation_graph_node_playback_requests;
 use crate::animation_graph::animation_graph_transition_completion::complete_animation_graph_transitions_after_animation_clip_completion;
 use crate::animation_graph::embedded_gltf_animation_asset_resolution::resolve_loaded_gltf_animations_into_animation_set_assets;
-use crate::animation_graph::model_animation_asset_attachment::attach_loaded_animation_set_assets_to_prefab_model_entities;
+use crate::animation_graph::model_animation_asset_attachment::attach_loaded_animation_set_assets_to_animation_subject_entities;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestRejected;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationGraphNodePlaybackRequest;
@@ -38,7 +38,7 @@ impl Plugin for AnimationGraphPlugin {
                 Update,
                 (
                     resolve_loaded_gltf_animations_into_animation_set_assets,
-                    attach_loaded_animation_set_assets_to_prefab_model_entities,
+                    attach_loaded_animation_set_assets_to_animation_subject_entities,
                 )
                     .chain()
                     .in_set(GameSet::Intent),

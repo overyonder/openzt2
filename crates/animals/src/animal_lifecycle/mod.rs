@@ -97,11 +97,6 @@ impl Plugin for AnimalLifecyclePlugin {
                     .after(ObjectPlacementPreviewUpdateSet),
             )
             .add_systems(
-                Update,
-                animal_presentation_attachment::project_animal_animation_owners
-                    .in_set(GameSet::Presentation),
-            )
-            .add_systems(
                 FixedUpdate,
                 animal_ageing_execution::
                     advance_animal_life_stages_from_elapsed_simulation_time

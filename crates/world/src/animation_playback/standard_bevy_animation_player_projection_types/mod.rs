@@ -22,4 +22,11 @@ pub(super) struct StandardBevyAnimationPlayerBinding {
     pub(super) animation_set_asset_id: bevy::asset::AssetId<AnimationSetAsset>,
     pub(super) animation_graph_id: bevy::asset::AssetId<AnimationGraph>,
     pub(super) animation_clip_asset_key: String,
+    pub(super) playback_generation: u64,
+}
+
+#[derive(Component, Clone, Copy)]
+pub(super) struct StandardBevyAnimationJointBlendPose {
+    pub(super) playback_generation: u64,
+    pub(super) pose: Transform,
 }

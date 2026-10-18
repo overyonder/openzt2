@@ -98,6 +98,8 @@ pub(super) fn integrate_non_physics_direct_locomotion(
             &Steering,
             &DirectLocomotion,
             Option<&WorldMember>,
+            Option<&openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion>,
+            Option<&openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController>,
         ),
         Without<RigidBody>,
     >,
@@ -112,14 +114,22 @@ pub(super) fn integrate_non_physics_direct_locomotion(
         steering,
         _,
         world_member,
+        motion,
+        controller,
     ) in &mut direct_locomotion_agents
     {
-        let requested_velocity_change = steering.desired_velocity - local_velocity.0;
+        let (desired_velocity, _) = super::sampled_animation_motion_projection::project_sampled_animation_motion_to_steering(steering.desired_velocity, navigation_agent.max_speed_mps, fixed_delta_seconds, &local_transform, motion.zip(controller));
+        let requested_velocity_change = desired_velocity - local_velocity.0;
         local_velocity.0 += requested_velocity_change
             .clamp_length_max(navigation_agent.acceleration_mps2 * fixed_delta_seconds);
-        local_velocity.0 = local_velocity
-            .0
-            .clamp_length_max(navigation_agent.max_speed_mps);
+        if motion
+            .zip(controller)
+            .is_none_or(|(motion, controller)| !motion.owns_playback(controller))
+        {
+            local_velocity.0 = local_velocity
+                .0
+                .clamp_length_max(navigation_agent.max_speed_mps);
+        }
         let previous_translation = local_transform.translation;
         let mut next_translation = previous_translation + local_velocity.0 * fixed_delta_seconds;
         // These actors have no Avian body, so world-edge colliders cannot

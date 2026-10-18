@@ -18,7 +18,6 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_world_state::animation_playback::locomotion_root_motion::clip_motion_velocity;
 use openzt2_world_state::animation_playback::locomotion_root_motion::ConsumedLocomotionRootMotion;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::animal_lifecycle::types::AnimalPresentationOwner;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::{
@@ -33,7 +32,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 /// Identifies only navigation created here; other agent owners are untouched.
 #[derive(Component, Clone, Copy)]
 pub(super) struct AnimalNavigationAnimationOwner {
-    controller: Entity,
     move_request_id: Option<usize>,
     requested_generation: u64,
     rate_source: Option<openzt2_game_data::AssetId>,
@@ -61,11 +59,14 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     >,
     mut animations: ResMut<Assets<AnimationSetAsset>>,
     asset_server: Res<AssetServer>,
-    controllers: Query<(
-        Entity,
-        &AnimalPresentationOwner,
-        &AnimationPlaybackController,
-    )>,
+    mut controllers: Query<
+        (
+            Entity,
+            &AnimationPlaybackController,
+            Option<&mut ConsumedLocomotionRootMotion>,
+        ),
+        With<Animal>,
+    >,
     children: Query<&Children>,
     joints: Query<(&AnimationJointTarget, &ChildOf)>,
     transforms: Query<&GlobalTransform>,
@@ -124,10 +125,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         return;
     };
     for (animal, _, agent, ..) in &animals {
-        if !controllers
-            .iter()
-            .any(|(_, presentation, _)| presentation.0 == animal)
-        {
+        if !controllers.contains(animal) {
             wait(
                 animal,
                 agent.is_some(),
@@ -135,7 +133,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
         }
     }
-    for (controller_entity, presentation, controller) in &controllers {
+    for (controller_entity, controller, consumed) in &mut controllers {
         let Ok((
             animal_entity,
             selected_variant,
@@ -145,18 +143,13 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             navigating,
             direct,
             task_animation,
-        )) = animals.get_mut(presentation.0)
+        )) = animals.get_mut(controller_entity)
         else {
             continue;
         };
         let has_agent = agent.is_some();
         let task_animation = task_animation || docking_poses.contains(animal_entity);
         if agent.is_some() && owner.is_none() {
-            continue;
-        }
-        if owner.as_ref().is_some_and(|owner| {
-            owner.controller != controller_entity && controllers.get(owner.controller).is_ok()
-        }) {
             continue;
         }
         if mode.is_some_and(|mode| !matches!(*mode, LocomotionMode::Ground | LocomotionMode::Swim))
@@ -393,6 +386,15 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         };
+        let actor_from_root_parent = transforms
+            .get(animal_entity)
+            .map_or(bevy::math::Affine3A::IDENTITY, |actor| {
+                actor.affine().inverse()
+            })
+            * parent.affine();
+        if let Some(mut consumed) = consumed {
+            consumed.update_root_parent_transform(actor_from_root_parent);
+        }
         let Some(default_velocity) = clip_motion_velocity(clip, parent, 1000) else {
             wait(
                 animal_entity,
@@ -409,9 +411,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         let mut ownership = owner
             .as_deref()
             .copied()
-            .filter(|owner| owner.controller == controller_entity)
             .unwrap_or(AnimalNavigationAnimationOwner {
-                controller: controller_entity,
                 move_request_id: None,
                 requested_generation: controller.playback_generation,
                 rate_source: None,
@@ -470,9 +470,10 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             ownership.requested_generation = controller.playback_generation;
             commands
                 .entity(controller_entity)
-                .insert(ConsumedLocomotionRootMotion {
-                    playback_request_id: request.id,
-                });
+                .insert(ConsumedLocomotionRootMotion::new(
+                    request.id,
+                    actor_from_root_parent,
+                ));
         } else if !moving && ownership.move_request_id.take().is_some() {
             commands
                 .entity(controller_entity)

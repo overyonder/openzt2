@@ -28,7 +28,7 @@ pub(super) fn lower_parsed_netimmerse_kf_animation_to_glb_and_authored_clip_meta
         .skeleton_joint_names
         .iter()
         .map(|skeleton_joint_name| Node {
-            name: Some(skeleton_joint_name.clone()),
+            name: Some(skeleton_joint_name.to_ascii_lowercase()),
             ..Default::default()
         })
         .collect();
@@ -108,6 +108,8 @@ pub(super) fn lower_parsed_netimmerse_kf_animation_to_glb_and_authored_clip_meta
         samplers: animation_samplers,
     });
 
+    let (root_motion_joint, root_motion_transform) =
+        calculate_kf_root_motion_metadata(&parsed_netimmerse_kf_animation);
     let authored_animation_clip_metadata = AuthoredAnimationClipMetadata {
         animation_clip_asset_path: animation_clip_asset_path.to_owned(),
         animation_clip_asset_key: parsed_netimmerse_kf_animation.animation_clip_asset_key,
@@ -117,8 +119,8 @@ pub(super) fn lower_parsed_netimmerse_kf_animation_to_glb_and_authored_clip_meta
             .max(1),
         playback_is_looped: parsed_netimmerse_kf_animation.playback_is_looped,
         additive_blending_is_enabled: false,
-        root_motion_transform: None,
-        root_motion_joint: None,
+        root_motion_transform,
+        root_motion_joint,
         animation_markers: parsed_netimmerse_kf_animation.animation_markers,
         authored_animation_text_keys: authored_animation_text_keys.to_vec(),
     };
@@ -127,6 +129,81 @@ pub(super) fn lower_parsed_netimmerse_kf_animation_to_glb_and_authored_clip_meta
         binary_buffer.finish(gltf_root)?,
         authored_animation_clip_metadata,
     ))
+}
+
+fn calculate_kf_root_motion_metadata(
+    animation: &ParsedNetImmerseKfAnimation,
+) -> (
+    Option<openzt2_game_data::animation::animation_clip_metadata::AuthoredAnimationRootMotionJoint>,
+    Option<
+        openzt2_game_data::animation::animation_clip_metadata::AuthoredAnimationRootMotionTransform,
+    >,
+) {
+    use bevy::math::{Quat, Vec3};
+    use openzt2_game_data::animation::animation_clip_metadata::{
+        AuthoredAnimationRootMotionJoint, AuthoredAnimationRootMotionTransform,
+    };
+    let Some(index) = animation
+        .skeleton_joint_names
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case(&animation.accumulation_root_name))
+        .or_else(|| {
+            animation
+                .skeleton_joint_names
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case("bip01"))
+        })
+    else {
+        return (None, None);
+    };
+    let tracks = || {
+        animation
+            .sampled_animation_tracks
+            .iter()
+            .filter(|track| track.skeleton_joint_node_index == index)
+    };
+    let translation = tracks().find(|track| {
+        matches!(
+            track.animation_channel,
+            NetImmerseKfAnimationChannel::Translation
+        )
+    });
+    let rotation = tracks().find(|track| {
+        matches!(
+            track.animation_channel,
+            NetImmerseKfAnimationChannel::Rotation
+        )
+    });
+    let initial_translation = translation
+        .and_then(|track| track.keyframe_values.get(..3))
+        .and_then(|value| <[f32; 3]>::try_from(value).ok())
+        .unwrap_or([0.0; 3]);
+    let final_translation = translation
+        .and_then(|track| track.keyframe_values.last_chunk::<3>())
+        .copied()
+        .unwrap_or(initial_translation);
+    let initial_rotation = rotation
+        .and_then(|track| track.keyframe_values.first_chunk::<4>())
+        .copied()
+        .unwrap_or_else(|| Quat::IDENTITY.to_array());
+    let final_rotation = rotation
+        .and_then(|track| track.keyframe_values.last_chunk::<4>())
+        .copied()
+        .unwrap_or(initial_rotation);
+    (
+        Some(AuthoredAnimationRootMotionJoint {
+            joint_asset_key: animation.skeleton_joint_names[index].clone(),
+            initial_translation,
+        }),
+        Some(AuthoredAnimationRootMotionTransform {
+            translation_from_first_to_last_frame: (Vec3::from_array(final_translation)
+                - Vec3::from_array(initial_translation))
+            .to_array(),
+            rotation_from_first_to_last_frame: (Quat::from_array(final_rotation)
+                * Quat::from_array(initial_rotation).inverse())
+            .to_array(),
+        }),
+    )
 }
 
 fn gltf_animation_interpolation(

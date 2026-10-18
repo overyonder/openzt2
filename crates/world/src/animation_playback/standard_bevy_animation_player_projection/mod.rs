@@ -1,5 +1,4 @@
-use std::time::Duration;
-
+use bevy::animation::AnimatedBy;
 use bevy::animation::RepeatAnimation;
 use bevy::prelude::*;
 
@@ -9,6 +8,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use crate::animation_playback::animation_playback_controller_ancestor_lookup::find_animation_playback_controller_ancestor;
 use crate::animation_playback::standard_bevy_animation_player_projection_types::StandardBevyAnimationGraphAndClipNodeIndexes;
 use crate::animation_playback::standard_bevy_animation_player_projection_types::StandardBevyAnimationGraphsByAnimationSetAsset;
+use crate::animation_playback::standard_bevy_animation_player_projection_types::StandardBevyAnimationJointBlendPose;
 use crate::animation_playback::standard_bevy_animation_player_projection_types::StandardBevyAnimationPlayerBinding;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
@@ -25,10 +25,11 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
         Option<&AnimationGraphPlaybackState>,
     )>,
     entity_parents: Query<&ChildOf>,
+    joints: Query<(Entity, &AnimatedBy, &Transform)>,
     mut animation_players: Query<(
         Entity,
         &mut AnimationPlayer,
-        Option<&mut AnimationTransitions>,
+        Has<AnimationTransitions>,
         Option<&StandardBevyAnimationPlayerBinding>,
     )>,
 ) {
@@ -107,41 +108,39 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
             animation_clip_asset_key: animation_playback_controller
                 .animation_clip_asset_key
                 .clone(),
+            playback_generation: animation_playback_controller.playback_generation,
         };
         let animation_player_binding_changed =
             current_animation_player_binding != Some(&requested_animation_player_binding);
-        let bound_animation_graph_changed = current_animation_player_binding
-            .is_some_and(|binding| binding.animation_graph_id != animation_graph_id);
-        let authored_blend_duration = animation_graph_playback_state
-            .and_then(AnimationGraphPlaybackState::active_blend_duration_milliseconds)
-            .map_or(Duration::ZERO, |milliseconds| {
-                Duration::from_millis(u64::from(milliseconds))
-            });
-
-        let mut newly_created_animation_transitions = None;
+        if animation_transitions {
+            commands
+                .entity(animation_player_entity)
+                .remove::<AnimationTransitions>();
+        }
+        let clip_entry_changed = current_animation_player_binding.is_some_and(|binding| {
+            binding.playback_generation != requested_animation_player_binding.playback_generation
+                || binding.animation_clip_asset_key
+                    != requested_animation_player_binding.animation_clip_asset_key
+        });
+        if clip_entry_changed
+            && animation_graph_playback_state
+                .and_then(AnimationGraphPlaybackState::active_blend_duration_milliseconds)
+                .is_some_and(|duration| duration > 0)
+        {
+            for (joint, player, transform) in &joints {
+                if player.0 == animation_player_entity {
+                    commands
+                        .entity(joint)
+                        .insert(StandardBevyAnimationJointBlendPose {
+                            playback_generation: animation_playback_controller.playback_generation,
+                            pose: *transform,
+                        });
+                }
+            }
+        }
         let active_bevy_animation = if animation_player_binding_changed {
-            if bound_animation_graph_changed {
-                animation_player.stop_all();
-            }
-            match animation_transitions {
-                Some(mut animation_transitions) if !bound_animation_graph_changed => {
-                    animation_transitions.play(
-                        &mut animation_player,
-                        requested_bevy_animation_graph_node,
-                        authored_blend_duration,
-                    )
-                }
-                _ => {
-                    let mut animation_transitions = AnimationTransitions::new();
-                    let active_bevy_animation = animation_transitions.play(
-                        &mut animation_player,
-                        requested_bevy_animation_graph_node,
-                        Duration::ZERO,
-                    );
-                    newly_created_animation_transitions = Some(animation_transitions);
-                    active_bevy_animation
-                }
-            }
+            animation_player.stop_all();
+            animation_player.start(requested_bevy_animation_graph_node)
         } else {
             let Some(active_bevy_animation) =
                 animation_player.animation_mut(requested_bevy_animation_graph_node)
@@ -182,9 +181,6 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
                 ),
                 requested_animation_player_binding,
             ));
-            if let Some(newly_created_animation_transitions) = newly_created_animation_transitions {
-                animation_player_commands.insert(newly_created_animation_transitions);
-            }
         }
     }
 }
@@ -192,49 +188,67 @@ pub(super) fn project_animation_playback_controller_state_to_standard_bevy_anima
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::animation::animation_curves::{AnimatableCurve, AnimatableKeyframeCurve};
+    use bevy::animation::{animated_field, AnimationTargetId};
+    use bevy::asset::AssetPlugin;
     use openzt2_game_assets::animation::animation_set_asset_types::AnimationClipRecord;
-    use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackClock;
-    use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
+    use openzt2_world_state::animation_playback::animation_playback_controller_types::{
+        AnimationPlaybackClock, AnimationPlaybackState,
+    };
+    use std::time::Duration;
 
     #[test]
-    fn standard_player_samples_controller_time_without_a_second_clock_advance() {
+    fn clip_changes_and_restarts_sample_the_authored_seek_positions(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut app = App::new();
-        app.init_resource::<Assets<AnimationSetAsset>>()
-            .init_resource::<Assets<AnimationClip>>()
-            .init_resource::<Assets<AnimationGraph>>()
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), AnimationPlugin))
+            .init_resource::<Assets<AnimationSetAsset>>()
             .init_resource::<StandardBevyAnimationGraphsByAnimationSetAsset>()
-            .init_resource::<Time>()
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_millis(100),
+            ))
             .add_systems(
                 Update,
-                (
-                    project_animation_playback_controller_state_to_standard_bevy_animation_players,
-                    bevy::animation::advance_animations,
-                )
-                    .chain(),
+                project_animation_playback_controller_state_to_standard_bevy_animation_players,
             );
-        let mut clip = AnimationClip::default();
-        clip.set_duration(2.0);
-        let clip = app
-            .world_mut()
-            .resource_mut::<Assets<AnimationClip>>()
-            .add(clip);
-        let set = AnimationSetAsset::create_ready_animation_set_asset(
-            String::new(),
-            String::new(),
-            vec![AnimationClipRecord::create_embedded_animation_clip_record(
-                "idle".to_owned(),
+        app.finish();
+        app.cleanup();
+        let target = AnimationTargetId::from_name(&Name::new("root"));
+        let mut records = Vec::new();
+        for (key, offset) in [("walk", 0.0), ("run", 10.0)] {
+            let mut clip = AnimationClip::default();
+            clip.add_curve_to_target(
+                target,
+                AnimatableCurve::new(
+                    animated_field!(Transform::translation),
+                    AnimatableKeyframeCurve::new([
+                        (0.0, Vec3::X * offset),
+                        (2.0, Vec3::X * (offset + 4.0)),
+                    ])?,
+                ),
+            );
+            let clip = app
+                .world_mut()
+                .resource_mut::<Assets<AnimationClip>>()
+                .add(clip);
+            records.push(AnimationClipRecord::create_embedded_animation_clip_record(
+                key.to_owned(),
                 clip,
                 2000,
-            )],
-            Vec::new(),
-            Vec::new(),
-            Vec::new(),
-            None,
-        );
+            ));
+        }
         let set = app
             .world_mut()
             .resource_mut::<Assets<AnimationSetAsset>>()
-            .add(set);
+            .add(AnimationSetAsset::create_ready_animation_set_asset(
+                String::new(),
+                String::new(),
+                records,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+            ));
         let actor = app
             .world_mut()
             .spawn((
@@ -243,24 +257,49 @@ mod tests {
                     playback_generation: 0,
                     explicit_clip_request_id: None,
                     animation_set_asset: set,
-                    animation_clip_asset_key: "idle".to_owned(),
+                    animation_clip_asset_key: "walk".to_owned(),
                     elapsed_milliseconds: 500,
                     playback_speed_permille: 1000,
                     playback_state: AnimationPlaybackState::Playing,
-                    playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
+                    playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
                     playback_clock: AnimationPlaybackClock::Simulation,
                 },
             ))
             .id();
-        app.world_mut()
-            .resource_mut::<Time>()
-            .advance_by(Duration::from_millis(100));
-        for _ in 0..2 {
+        let joint = app
+            .world_mut()
+            .spawn((Transform::default(), target, AnimatedBy(actor)))
+            .id();
+        // Bevy threads newly created graph assets after their asset event is delivered.
+        app.update();
+        // The two independently specified curves are x = 2t and x = 10 + 2t.
+        // Render time advances each update, while the authored seek stays fixed.
+        for (key, generation, time, expected) in [
+            ("walk", 0, 500, 1.0),
+            ("run", 1, 500, 11.0),
+            ("run", 2, 0, 10.0),
+            ("walk", 3, 1000, 2.0),
+        ] {
+            {
+                let mut controller = app
+                    .world_mut()
+                    .get_mut::<AnimationPlaybackController>(actor)
+                    .ok_or("missing playback controller")?;
+                controller.animation_clip_asset_key = key.to_owned();
+                controller.playback_generation = generation;
+                controller.elapsed_milliseconds = time;
+            }
             app.update();
-            let player = app.world().get::<AnimationPlayer>(actor).unwrap();
-            let (_, active) = player.playing_animations().next().unwrap();
-            assert_eq!(active.seek_time(), 0.5);
-            assert!(active.is_paused());
+            let translation = app
+                .world()
+                .get::<Transform>(joint)
+                .ok_or("missing posed joint")?
+                .translation;
+            assert!(
+                translation.abs_diff_eq(Vec3::X * expected, 1e-5),
+                "{key} generation {generation}: {translation:?}"
+            );
         }
+        Ok(())
     }
 }

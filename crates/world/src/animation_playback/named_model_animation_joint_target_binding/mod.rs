@@ -1,11 +1,12 @@
 use bevy::animation::AnimatedBy;
 use bevy::animation::AnimationTargetId;
 use bevy::ecs::system::SystemParam;
-use bevy::platform::collections::HashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
 
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 
+use super::standard_bevy_animation_player_projection_types::StandardBevyAnimationJointBlendPose;
 use crate::animation_playback::animation_playback_controller_ancestor_lookup::find_animation_playback_controller_ancestor;
 use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -28,7 +29,12 @@ pub(super) struct AnimationJointBindingChanges<'w, 's> {
 pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controller_descendants(
     mut commands: Commands,
     mut changes: AnimationJointBindingChanges,
-    named_entities: Query<(&Name, Option<&AnimationJointTarget>, Option<&AnimatedBy>)>,
+    named_entities: Query<(
+        &Name,
+        Option<&AnimationJointTarget>,
+        Option<&AnimatedBy>,
+        Option<&StandardBevyAnimationJointBlendPose>,
+    )>,
     children: Query<&Children>,
     entity_parents: Query<&ChildOf>,
     animation_players: Query<(), With<AnimationPlayer>>,
@@ -39,6 +45,7 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
     mut visited_entities: Local<HashSet<Entity>>,
 ) {
     visited_entities.clear();
+    let mut inherited_blend_poses = None;
     let AnimationJointBindingChanges {
         renamed_entities,
         reparented_entities,
@@ -64,7 +71,7 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
         if !visited_entities.insert(named_entity) {
             continue;
         }
-        let Ok((entity_name, binding, animated_by)) = named_entities.get(named_entity) else {
+        let Ok((entity_name, binding, animated_by, _)) = named_entities.get(named_entity) else {
             continue;
         };
         let Some((animation_playback_controller_entity, _, _)) =
@@ -75,9 +82,12 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
             )
         else {
             if binding.is_some() {
-                commands
-                    .entity(named_entity)
-                    .remove::<(AnimationJointTarget, AnimationTargetId, AnimatedBy)>();
+                commands.entity(named_entity).remove::<(
+                    AnimationJointTarget,
+                    AnimationTargetId,
+                    AnimatedBy,
+                    StandardBevyAnimationJointBlendPose,
+                )>();
             }
             continue;
         };
@@ -90,12 +100,36 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
         {
             continue;
         }
+        let target_id =
+            AnimationTargetId::from_name(&Name::new(entity_name.as_str().to_ascii_lowercase()));
+        let blend_poses = inherited_blend_poses.get_or_insert_with(|| {
+            named_entities
+                .iter()
+                .filter_map(|(name, binding, _, snapshot)| {
+                    let binding = binding?;
+                    let snapshot = snapshot?;
+                    Some((
+                        (
+                            binding.animation_playback_controller_entity,
+                            AnimationTargetId::from_name(&Name::new(
+                                name.as_str().to_ascii_lowercase(),
+                            )),
+                        ),
+                        *snapshot,
+                    ))
+                })
+                .collect::<HashMap<_, _>>()
+        });
         insert_animation_joint_target_binding(
             &mut commands,
             named_entity,
             entity_name,
             animation_playback_controller_entity,
             &animation_players,
+            blend_poses
+                .get(&(animation_playback_controller_entity, target_id))
+                .copied(),
+            target_id,
         );
     }
 }
@@ -106,17 +140,21 @@ fn insert_animation_joint_target_binding(
     entity_name: &Name,
     animation_playback_controller_entity: Entity,
     animation_players: &Query<(), With<AnimationPlayer>>,
+    blend_pose: Option<StandardBevyAnimationJointBlendPose>,
+    target_id: AnimationTargetId,
 ) {
     let mut named_entity_commands = commands.entity(named_entity);
+    if let Some(blend_pose) = blend_pose {
+        named_entity_commands.insert(blend_pose);
+    } else {
+        named_entity_commands.remove::<StandardBevyAnimationJointBlendPose>();
+    }
     named_entity_commands.insert(AnimationJointTarget {
         animation_playback_controller_entity,
         joint_asset_key: entity_name.as_str().to_owned(),
     });
     if animation_players.contains(animation_playback_controller_entity) {
-        named_entity_commands.insert((
-            AnimationTargetId::from_name(entity_name),
-            AnimatedBy(animation_playback_controller_entity),
-        ));
+        named_entity_commands.insert((target_id, AnimatedBy(animation_playback_controller_entity)));
     } else {
         named_entity_commands.remove::<(AnimationTargetId, AnimatedBy)>();
     }
@@ -178,7 +216,7 @@ mod tests {
         app.update();
         assert_eq!(
             app.world().get::<AnimationTargetId>(joint),
-            Some(&AnimationTargetId::from_name(&Name::new("Spine")))
+            Some(&AnimationTargetId::from_name(&Name::new("spine")))
         );
         app.world_mut().entity_mut(model).remove::<ChildOf>();
         app.update();
