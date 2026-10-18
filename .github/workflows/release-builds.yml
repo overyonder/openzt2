@@ -189,6 +189,7 @@ jobs:
       - name: Package Alpine release
         if: matrix.libc == 'musl'
         run: |
+          mkdir -p build/artifacts
           docker run --rm --volume "$PWD:/workspace" --volume "$RUNNER_TEMP:/ci-temp" --workdir /workspace \
             --env RUNNER_TEMP=/ci-temp --env OPENZT2_RUST_VERSION --env CARGO_BUILD_JOBS \
             --env OPENZT2_APK_SIGNING_KEY_BASE64 --env GITHUB_REF_TYPE \
