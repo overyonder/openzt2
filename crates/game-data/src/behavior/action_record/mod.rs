@@ -27,6 +27,7 @@ pub enum BehaviorAction {
     Dock(action::docking::BehaviorDockAction),
     DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),
+    Pursuit(action::movement::BehaviorPursuitAction),
     WaitInteractionQueue(action::queue::BehaviorQueueWaitAction),
     DockQueue(action::queue::BehaviorDockQueueAction),
     SynchronizedSets(action::synchronized_sets::BehaviorSynchronizedSetsAction),

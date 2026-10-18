@@ -1,7 +1,7 @@
 use std::io;
 
 use openzt2_game_data::behavior::{
-    action::movement::{BehaviorMoveAction, BehaviorMoveLocomotionSpeed},
+    action::movement::{BehaviorMoveAction, BehaviorMoveLocomotionSpeed, BehaviorPursuitAction},
     action_record::BehaviorAction,
 };
 
@@ -70,6 +70,27 @@ mod tests {
     }
 
     #[test]
+    fn keeper_heal_pursuit_lowers_its_radii() {
+        let source = parse_blue_fang_source_document(
+            AssetPath::new("tasks.tsk"),
+            br#"<tasks><BFBehPursuit hitRadius="10" pursuitRadius="30" failureRadius="1000" locoSpeed="fast"/></tasks>"#,
+        )
+        .expect("source");
+        let Some(BehaviorAction::Pursuit(pursuit)) = lower_pursuit_action_source_node(
+            source.root.element_children().next().expect("action"),
+        )
+        .expect("lower") else {
+            panic!("pursuit action");
+        };
+        assert_eq!(pursuit.hit_radius_cm, 1_000);
+        assert_eq!(pursuit.failure_radius_cm, Some(100_000));
+        assert_eq!(
+            pursuit.locomotion_speed,
+            Some(BehaviorMoveLocomotionSpeed::Fast)
+        );
+    }
+
+    #[test]
     fn native_default_route_policies_and_ignored_fields_are_preserved() {
         assert!(lower_one_authored_action(
             br#"<tasks><BFBehMove pathRadius="0" closestApproach="false" depthBelowSurface="-1" heightAboveFloor="-1" hitRadius="8" depthAboveBottom="1"/></tasks>"#,
@@ -134,6 +155,46 @@ pub(super) fn lower_move_action_source_node(
         ),
         move_radius_cm: read_optional_centimetres_attribute(move_action_source_node, "moveRadius")?
             .unwrap_or(200),
+    })))
+}
+
+/// `pursuitRadius` only bounds how far the native pursuer looks ahead; the
+/// live route always targets the current target position, so it is accepted
+/// without a separate mapping.
+pub(super) fn lower_pursuit_action_source_node(
+    source_node: &DataNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if source_node.name != "BFBehPursuit" {
+        return Ok(None);
+    }
+    if source_node.attributes.iter().any(|attribute| {
+        !matches!(
+            attribute.name(),
+            "locoSpeed" | "hitRadius" | "pursuitRadius" | "failureRadius"
+        )
+    }) || source_node.element_children().next().is_some()
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehPursuit has unsupported authored policy",
+        ));
+    }
+    let locomotion_speed = match read_optional_trimmed_string_attribute(source_node, "locoSpeed")
+        .map(|speed| speed.to_ascii_lowercase())
+        .as_deref()
+    {
+        None | Some("variable") => None,
+        Some("fast") => Some(BehaviorMoveLocomotionSpeed::Fast),
+        Some(_) => {
+            return Err(invalid_behavior_source_data(
+                "BFBehPursuit locoSpeed has no live NavAgent mode mapping",
+            ))
+        }
+    };
+    Ok(Some(BehaviorAction::Pursuit(BehaviorPursuitAction {
+        locomotion_speed,
+        hit_radius_cm: read_optional_centimetres_attribute(source_node, "hitRadius")?
+            .unwrap_or(200),
+        failure_radius_cm: read_optional_centimetres_attribute(source_node, "failureRadius")?,
     })))
 }
 

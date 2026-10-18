@@ -30,6 +30,7 @@ pub(crate) mod behavior_target_placement_execution;
 use openzt2_zoo_state::animal_behavior::behavior_target_placement_types;
 mod behavior_target_test_execution;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition;
+mod behavior_pursuit_execution;
 mod behavior_task_phase_transition_execution;
 mod behavior_termination_execution;
 mod behavior_token_execution;
@@ -61,6 +62,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
         behavior_wander_execution::register_wander_execution(application);
+        behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_token_execution::register_token_execution(application);
         behavior_water_docking_execution::register(application);
         application.add_systems(

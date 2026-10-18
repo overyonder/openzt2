@@ -9,6 +9,17 @@ pub struct BehaviorMoveAction {
     pub move_radius_cm: u32,
 }
 
+/// Native `BFBehPursuit`: approach the task target, following it while it
+/// moves, until within the hit radius.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BehaviorPursuitAction {
+    pub locomotion_speed: Option<BehaviorMoveLocomotionSpeed>,
+    /// Success distance from the target, in centimetres.
+    pub hit_radius_cm: u32,
+    /// The pursuit fails once the target is farther than this, in centimetres.
+    pub failure_radius_cm: Option<u32>,
+}
+
 /// Named locomotion mode. Mode-specific speeds are not yet supported.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub enum BehaviorMoveLocomotionSpeed {
