@@ -144,6 +144,7 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
         advance_route_cursor(
             &mut planned_route,
             transform.translation,
+            locomotion_mode.copied().unwrap_or_default(),
             destination.arrival_radius_m,
             navigation_agent.radius_m,
         );

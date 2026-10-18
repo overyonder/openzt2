@@ -119,6 +119,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         advance_route_cursor(
             &mut planned_route,
             local_transform.translation,
+            locomotion_mode,
             destination.arrival_radius_m,
             navigation_agent.radius_m,
         );

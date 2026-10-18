@@ -228,6 +228,7 @@ pub(super) fn fit_to_terrain(
 pub(super) fn advance_route_cursor(
     route: &mut Route,
     position: Vec3,
+    locomotion_mode: LocomotionMode,
     arrival_radius_m: f32,
     agent_radius_m: f32,
 ) {
@@ -237,7 +238,12 @@ pub(super) fn advance_route_cursor(
         } else {
             agent_radius_m.max(0.05)
         };
-        if position.distance_squared(point) > radius * radius {
+        let mut offset = point - position;
+        // Surface steering follows terrain height rather than waypoint height.
+        if locomotion_mode != LocomotionMode::Flight {
+            offset.y = 0.0;
+        }
+        if offset.length_squared() > radius * radius {
             break;
         }
         route.cursor += 1;
