@@ -22,6 +22,7 @@ def prepare_release_license_bundle(workspace, native_prefix, destination, target
                 f"Native dependency source or notice is missing: {relative}; rebuild the native prefix"
             )
     shutil.copytree(native_licenses, destination)
+    destination.chmod(0o755)
     for name in ("LICENSE", "THIRD-PARTY-NOTICES"):
         shutil.copy2(workspace / name, destination / name)
     shutil.copy2(workspace / "crates/ui/assets/fonts/ComicNeue-OFL.txt", destination)
