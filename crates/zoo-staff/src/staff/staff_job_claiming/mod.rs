@@ -5,8 +5,9 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_health::types::Rampaging;
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry;
 use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
-use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
+use openzt2_zoo_state::habitat::habitat_types::{Containment, HabitatMember};
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
@@ -40,6 +41,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     spatial_grid: Res<SpatialGrid>,
     terrain_surfaces: TerrainDrySurfaceEligibility,
+    tanks: Query<&TankGeometry>,
     staff: Query<
         (
             Entity,
@@ -64,6 +66,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         &GlobalTransform,
         Option<&ChildOf>,
         Option<&HabitatMember>,
+        Option<&Containment>,
         Option<&Rampaging>,
         &DefinitionId,
         Option<&FoodContainer>,
@@ -92,6 +95,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             target_transform,
             parent,
             habitat,
+            containment,
             target_rampaging,
             target_definition,
             food,
@@ -120,7 +124,8 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_parent = parent.map(ChildOf::parent);
         let target_area = habitat.map(|habitat| habitat.habitat_entity);
         let target_rampaging = target_rampaging.is_some();
-        let target_on_land = terrain_surfaces.on_land(target_position.xz());
+        let target_on_land =
+            target_on_land(&terrain_surfaces, &tanks, habitat, containment, target_position);
         let candidate_facts = StaffCandidateEligibilityFacts {
             target_food_level_q16: food
                 .map(|container| container.amount_q16)
@@ -242,7 +247,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         else {
             continue;
         };
-        let Ok((target_transform, _, _, rampaging, definition, food, drink)) =
+        let Ok((target_transform, _, habitat, containment, rampaging, definition, food, drink)) =
             targets.get(job.target)
         else {
             continue;
@@ -250,7 +255,13 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_in_show = catalogue
             .find_object(definition.0)
             .and_then(|definition| (!definition.supports_show_tricks).then_some(false));
-        let target_on_land = terrain_surfaces.on_land(target_transform.translation().xz());
+        let target_on_land = target_on_land(
+            &terrain_surfaces,
+            &tanks,
+            habitat,
+            containment,
+            target_transform.translation(),
+        );
         let Some(behavior_task) = catalogue.find_staff(staff_role.0).and_then(|role| {
             find_highest_priority_compatible_staff_behavior_task(
                 behavior_declarations,
@@ -289,5 +300,25 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         claimed_jobs[claim_count] = Some(candidate.job);
         claimed_staff[claim_count] = Some(candidate.staff);
         claim_count += 1;
+    }
+}
+
+/// Tank water is not terrain water: a target inside a tank is in water below
+/// that tank's water surface, and on its raised floor above it.
+fn target_on_land(
+    terrain_surfaces: &TerrainDrySurfaceEligibility,
+    tanks: &Query<&TankGeometry>,
+    habitat: Option<&HabitatMember>,
+    containment: Option<&Containment>,
+    position: Vec3,
+) -> Option<bool> {
+    let tank = habitat
+        .map(|habitat| habitat.habitat_entity)
+        .into_iter()
+        .chain(containment.map(|containment| containment.habitat_entity))
+        .find_map(|habitat| tanks.get(habitat).ok());
+    match tank {
+        Some(tank) => Some(position.y >= tank.water_height),
+        None => terrain_surfaces.on_land(position.xz()),
     }
 }
