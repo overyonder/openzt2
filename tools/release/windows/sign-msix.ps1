@@ -12,10 +12,10 @@ try {
     } else {
         $publisher = if ($env:OPENZT2_MSIX_PUBLISHER) { $env:OPENZT2_MSIX_PUBLISHER } else { 'CN=OpenZT2' }
         $certificate = New-SelfSignedCertificate -Type Custom -Subject $publisher -KeyUsage DigitalSignature -FriendlyName 'OpenZT2 manual build' -CertStoreLocation Cert:\CurrentUser\My -TextExtension @('2.5.29.37={text}1.3.6.1.5.5.7.3.3','2.5.29.19={text}')
-        Export-Certificate -Cert $certificate -FilePath ([IO.Path]::ChangeExtension($PackagePath, '.test.cer')) | Out-Null
     }
     if (-not $certificate) { throw 'The MSIX certificate needs a private key.' }
     if ($env:OPENZT2_MSIX_PUBLISHER -and $certificate.Subject -ne $env:OPENZT2_MSIX_PUBLISHER) { throw 'The certificate subject differs from OPENZT2_MSIX_PUBLISHER.' }
+    Export-Certificate -Cert $certificate -FilePath (Join-Path (Split-Path $PackagePath) 'openzt2-windows.cer') | Out-Null
     $arguments = @('sign', '/fd', 'SHA256', '/sha1', $certificate.Thumbprint, '/s', 'My')
     if ($env:GITHUB_REF_TYPE -eq 'tag') {
         $arguments += @('/tr', 'http://timestamp.digicert.com', '/td', 'SHA256')

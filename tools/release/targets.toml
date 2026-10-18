@@ -55,6 +55,7 @@ msystem = "MINGW64"
 mingw_prefix = "mingw-w64-x86_64"
 mingw_bin = "C:/msys64/mingw64/bin"
 formats = ["zip", "msi", "msix"]
+public_key = "openzt2-windows.cer"
 
 [targets.windows-arm64]
 runner = "windows-11-arm"

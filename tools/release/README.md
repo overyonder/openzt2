@@ -67,6 +67,9 @@ Manual runs can create a temporary MSIX certificate and APK key. Their public
 certificate or key accompanies the workflow artifacts for installation testing.
 Tagged releases require the configured credentials.
 
+Windows packages include `openzt2-windows.cer`. Install this public certificate
+in the local computer's Trusted People store before installing the MSIX.
+
 Windows installer versions preserve prerelease ordering. For `alpha.N`,
 `beta.N` and `rc.N`, the revision is respectively `N`, `200 + N` and `400 + N`.
 A final release uses revision 999. An omitted sequence is zero. MSI uses

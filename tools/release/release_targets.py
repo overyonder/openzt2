@@ -133,9 +133,6 @@ def main():
         destination.mkdir(parents=True, exist_ok=True)
         for name in [*artifact_names(arguments.identifier, version), "SHA256SUMS"]:
             shutil.copy2(output / name, destination / name)
-        if os.environ.get("GITHUB_REF_TYPE") != "tag":
-            for certificate in output.glob("*.test.cer"):
-                shutil.copy2(certificate, destination / certificate.name)
     else:
         collect_release_packages(arguments.input, arguments.output, version)
 
