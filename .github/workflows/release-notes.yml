@@ -16,7 +16,7 @@ jobs:
     timeout-minutes: 5
     permissions:
       contents: write
-      issues: read
+      issues: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GH_REPO: ${{ github.repository }}
@@ -45,7 +45,9 @@ jobs:
           gh api --paginate --slurp \
             "repos/$GH_REPO/issues?state=all&milestone=$milestone_number&per_page=100" \
             > "$temporary_directory/issues.json"
-          jq '[.[][] | select(has("pull_request") | not)] | sort_by(.number)' \
+          jq '[.[][] | select(has("pull_request") | not) |
+              select((.state == "closed" and .state_reason == "completed") or
+                     any(.labels[]; .name == "awaiting-release"))] | sort_by(.number)' \
             "$temporary_directory/issues.json" > "$temporary_directory/fixed-issues.json"
           if [[ $(jq 'length' "$temporary_directory/fixed-issues.json") == 0 ]]; then
             echo 'No milestone issues; notes unchanged.'
@@ -78,4 +80,22 @@ jobs:
           else
             gh api --method PATCH "repos/$GH_REPO/releases/$release_id" \
               --input "$temporary_directory/update.json" > /dev/null
+          fi
+
+          jq -r '.[] | select(.state == "open") | .number' \
+            "$temporary_directory/fixed-issues.json" |
+          while IFS= read -r issue_number; do
+            gh issue close "$issue_number" --repo "$GH_REPO" --reason completed
+          done
+          jq -r '.[] | .number as $number | .labels[] |
+            select(.name | IN("awaiting-triage", "backlog", "in-progress", "under-pr",
+                              "awaiting-verification", "awaiting-release", "blocked")) |
+            [$number, .name] | @tsv' "$temporary_directory/fixed-issues.json" |
+          while IFS=$'\t' read -r issue_number status_label; do
+            gh issue edit "$issue_number" --repo "$GH_REPO" --remove-label "$status_label"
+          done
+          if gh api "repos/$GH_REPO/issues?state=open&milestone=$milestone_number&per_page=1" \
+              --jq 'length == 0' | grep -qx true; then
+            gh api --method PATCH "repos/$GH_REPO/milestones/$milestone_number" \
+              -f state=closed > /dev/null
           fi
