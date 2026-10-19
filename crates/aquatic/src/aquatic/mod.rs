@@ -12,8 +12,10 @@ use openzt2_zoo_state::aquatic::tank_floor_edit_types;
 mod tank_floor_edit_validation;
 mod tank_geometry_projection;
 mod tank_normalized_fact_clamping;
+mod tank_presentation;
 mod tank_water_quality_decay_calculation;
 mod tank_water_quality_decay_execution;
+mod tank_wall_enclosure_promotion;
 
 use bevy::prelude::*;
 
@@ -97,12 +99,22 @@ impl Plugin for AquaticPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    tank_wall_enclosure_promotion::promote_habitats_enclosed_by_tank_walls,
                     project_changed_habitat_and_terrain_geometry_into_tanks,
                     invalidate_terminal_aquatic_animal_homes,
                     invalidate_aquatic_homes_after_tank_or_habitat_region_removal,
                 )
                     .chain()
                     .in_set(FixedGameSet::Cleanup),
+            )
+            .add_systems(
+                Update,
+                (
+                    tank_presentation::remove_orphaned_tank_presentations,
+                    tank_presentation::present_changed_tank_water_and_glass,
+                )
+                    .chain()
+                    .run_if(in_state(GamePhase::InGame)),
             );
     }
 }
