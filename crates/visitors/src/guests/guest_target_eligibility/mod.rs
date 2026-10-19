@@ -10,6 +10,7 @@ pub(super) fn satisfies_guest_target_fact(
     fact: &BehaviorCandidateEligibilityFact,
     actor_position: Vec3,
     target_position: Vec3,
+    target_elevated_path: Option<bool>,
 ) -> bool {
     let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
         return false;
@@ -33,8 +34,19 @@ pub(super) fn satisfies_guest_target_fact(
                 inside
             }
         }
-        BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::SupportedSurface) => {
-            let actual = 1 << 16;
+        BehaviorEligibilityFactInput::Spatial(
+            kind @ (BehaviorSpatialEligibilityFact::SupportedSurface
+            | BehaviorSpatialEligibilityFact::ElevatedPath),
+        ) => {
+            let actual = if kind == BehaviorSpatialEligibilityFact::ElevatedPath {
+                // Only path targets know whether they are elevated.
+                let Some(elevated) = target_elevated_path else {
+                    return false;
+                };
+                i32::from(elevated) << 16
+            } else {
+                1 << 16
+            };
             match fact.comparison {
                 BehaviorEligibilityFactComparison::Equal => actual == expected,
                 BehaviorEligibilityFactComparison::NotEqual => actual != expected,

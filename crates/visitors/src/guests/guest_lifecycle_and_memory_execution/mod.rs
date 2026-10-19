@@ -77,6 +77,7 @@ pub(crate) fn apply_guest_reactions(
             &mut GuestMemories,
             Option<&Viewing>,
             Option<&super::guest_simulation_types::GuestViewReactionReceipt>,
+            Option<&BehaviorTaskExecutionState>,
         ),
         With<Guest>,
     >,
@@ -92,8 +93,16 @@ pub(crate) fn apply_guest_reactions(
     let mut reactions: Vec<_> = incoming.read().copied().collect();
     reactions.sort_by_key(|reaction| reaction.view_event.map_or(0, |origin| origin.event_id));
     for reaction in &reactions {
-        let Ok((archetype, phase, mut satisfaction, mut education, mut memories, viewing, receipt)) =
-            guests.get_mut(reaction.guest)
+        let Ok((
+            archetype,
+            phase,
+            mut satisfaction,
+            mut education,
+            mut memories,
+            viewing,
+            receipt,
+            task,
+        )) = guests.get_mut(reaction.guest)
         else {
             continue;
         };
@@ -106,17 +115,24 @@ pub(crate) fn apply_guest_reactions(
             let Some(origin) = reaction.view_event else {
                 continue;
             };
-            if viewing != Some(&origin.viewing)
-                || origin.viewing.subject != reaction.subject
-                || *phase != GuestPhase::Visiting
-                || interruptions.contains(reaction.guest)
-                || !observations
+            // A guest watches either from a viewing destination it reached,
+            // or through its authored view task (`ZTBehViewAnimals`) at the
+            // path that task targets.
+            let watching_from_destination = !interruptions.contains(reaction.guest)
+                && observations
                     .get(reaction.guest)
                     .is_ok_and(|(destination, request)| {
                         destination.purpose == GuestVisitPurpose::View
                             && Some(destination.entity) == origin.viewing.area
                             && request.is_none_or(|request| request.0.is_none())
-                    })
+                    });
+            let watching_through_task = task.is_some_and(|task| {
+                origin.viewing.area.is_some() && task.target() == origin.viewing.area
+            });
+            if viewing != Some(&origin.viewing)
+                || origin.viewing.subject != reaction.subject
+                || *phase != GuestPhase::Visiting
+                || !(watching_from_destination || watching_through_task)
             {
                 continue;
             }
@@ -150,8 +166,24 @@ pub(crate) fn apply_guest_reactions(
             {
                 continue;
             }
-            let Some(policy) = find_reaction(definition, GuestMemoryKind::AnimalView) else {
-                continue;
+            // Archetypes lowered from the original carry no reaction policy;
+            // they react with the event's own authored view score instead.
+            let deltas = match find_reaction(definition, GuestMemoryKind::AnimalView) {
+                Some(policy) => (policy.satisfaction_delta, policy.education_delta),
+                None => {
+                    let Some(row) = definitions
+                        .find_object(event.source_definition)
+                        .and_then(|definition| {
+                            definition
+                                .view_data
+                                .iter()
+                                .find(|row| row.name == event.view_key)
+                        })
+                    else {
+                        continue;
+                    };
+                    (row.view_score.round().clamp(-1_000.0, 1_000.0) as i16, 0)
+                }
             };
             if survey_policy.is_none() {
                 continue;
@@ -167,8 +199,10 @@ pub(crate) fn apply_guest_reactions(
                 super::guest_simulation_types::GuestViewReactionReceipt(*last),
             );
             // Read current policy rather than accepting deltas queued before a reload.
-            reaction.satisfaction_delta_permille = policy.satisfaction_delta;
-            reaction.education_delta_permille = policy.education_delta;
+            (
+                reaction.satisfaction_delta_permille,
+                reaction.education_delta_permille,
+            ) = deltas;
         }
         let education_delta = survey_policy
             .map(|policy| {

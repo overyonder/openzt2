@@ -116,6 +116,7 @@ impl Plugin for GuestsPlugin {
                     begin_viewing.in_set(GuestViewingBegin),
                     guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     advance_viewing,
+                    view_event_execution::deliver_view_events_to_current_viewers,
                     apply_guest_reactions.in_set(GuestReactionApplication),
                     cancel_failed_guest_destinations,
                 )

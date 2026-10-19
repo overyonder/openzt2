@@ -1,4 +1,4 @@
-//! Emits authored view events. Recipient delivery is not implemented yet.
+//! Emits authored view events and delivers them to the guests watching.
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -11,7 +11,13 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use bevy::prelude::*;
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::{
+    behavior::action_record::BehaviorAction,
+    world_definitions::guest_simulation_definitions::GuestMemoryKind, AssetId,
+};
+use openzt2_zoo_state::guests::guest_simulation_types::{
+    Guest, GuestReaction, GuestViewReactionOrigin, GuestViewers, Viewing,
+};
 
 /// References immutable authored data rather than copying feedback or view rows.
 #[derive(Message)]
@@ -79,5 +85,37 @@ pub(super) fn emit_authored_view_events(
             view_key: event.view_key,
         });
         advance_behavior_task_to_next_action(&mut task, clock.tick);
+    }
+}
+
+/// Every guest watching the source when it emits receives the event, with the
+/// observation it was watching through. Reaction application owns the
+/// authored deltas and every validity check, in this same fixed step.
+pub(super) fn deliver_view_events_to_current_viewers(
+    mut emitted: MessageReader<BehaviorViewEventEmitted>,
+    viewers: Query<&GuestViewers>,
+    viewings: Query<&Viewing, With<Guest>>,
+    mut reactions: MessageWriter<GuestReaction>,
+) {
+    for event in emitted.read() {
+        let Ok(watching) = viewers.get(event.source) else {
+            continue;
+        };
+        for guest in watching.iter() {
+            let Ok(viewing) = viewings.get(guest) else {
+                continue;
+            };
+            reactions.write(GuestReaction {
+                view_event: Some(GuestViewReactionOrigin {
+                    event_id: event.event_id,
+                    viewing: *viewing,
+                }),
+                guest,
+                subject: event.source,
+                kind: GuestMemoryKind::AnimalView,
+                satisfaction_delta_permille: 0,
+                education_delta_permille: 0,
+            });
+        }
     }
 }
