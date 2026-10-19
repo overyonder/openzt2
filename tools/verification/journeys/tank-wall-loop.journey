@@ -1,0 +1,22 @@
+# #124: a closed loop of one tank wall type becomes a tank.
+start freeform-map
+click "construction"
+click "Tank Tools Tab"
+select-catalogue "tankseg_mm"
+snapshot tank-start
+click 1000 220
+click 1350 220
+until fences > @tank-start
+snapshot tank-step
+click 1350 470
+until fences > @tank-step
+snapshot tank-step
+click 1000 470
+until fences > @tank-step
+snapshot tank-step
+click 1000 220                  # close the loop
+until fences > @tank-step
+key ESCAPE
+until placement_previews == 0
+until tanks == 1 within 600
+capture tank-built
