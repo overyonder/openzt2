@@ -26,6 +26,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
@@ -70,7 +71,7 @@ pub(crate) struct VerificationWorldFactQueries<'w, 's> {
     cursors: Query<'w, 's, &'static ConstructionCursor>,
     previews: Query<'w, 's, (&'static ConstructionPreview, &'static Visibility)>,
     fences: Query<'w, 's, (), With<FenceEdge>>,
-    habitats: Query<'w, 's, (), With<Habitat>>,
+    habitats: Query<'w, 's, Option<&'static TankGeometry>, With<Habitat>>,
     animals:
         Query<'w, 's, (Option<&'static Containment>, Option<&'static AnimalSex>), With<Animal>>,
     staff: Query<'w, 's, (), With<Employment>>,
@@ -345,6 +346,16 @@ pub(crate) fn collect_requested_verification_facts(
     );
     fact("fences", count(world.fences.iter().count()));
     fact("habitats", count(world.habitats.iter().count()));
+    fact("tanks", count(world.habitats.iter().flatten().count()));
+    fact(
+        "tank_wall_height_m",
+        world
+            .habitats
+            .iter()
+            .flatten()
+            .map(|tank| f64::from(tank.wall_height))
+            .fold(0.0, f64::max),
+    );
     fact("animals", count(world.animals.iter().count()));
     fact(
         "contained_animals",

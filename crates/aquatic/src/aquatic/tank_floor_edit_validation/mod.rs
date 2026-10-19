@@ -20,6 +20,8 @@ pub(super) fn tank_floor_edit_matches_authored_depth_bounds(
         && geometry.depth() >= minimum
         && geometry.depth() <= maximum
         && edit.before.area == edit.after.area
-        && edit.before.wall_height == edit.after.wall_height
-        && edit.before.water_height == edit.after.water_height
+        // A floor edit keeps the rim and water; a wall edit keeps the floor.
+        && ((edit.before.wall_height == edit.after.wall_height
+            && edit.before.water_height == edit.after.water_height)
+            || edit.before.floor_height == edit.after.floor_height)
 }

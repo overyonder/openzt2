@@ -291,3 +291,23 @@ fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_e
         .resource::<Messages<TransactionRequest>>()
         .is_empty());
 }
+
+#[test]
+fn raising_the_wall_lifts_the_water_with_the_rim_and_keeps_the_floor() {
+    let (mut app, tank, _) = tank_floor_construction_fixture(TankEditKind::RaiseWall);
+    let before = *app.world().get::<TankGeometry>(tank).unwrap();
+    pointer_step(&mut app, true, true, false, 0.0);
+    pointer_step(&mut app, true, false, false, 1.0);
+    pointer_step(&mut app, false, false, true, 0.0);
+    app.world_mut().run_schedule(FixedUpdate);
+    app.world_mut().run_schedule(TankProjectionStep);
+    assert_eq!(
+        *app.world().get::<TankGeometry>(tank).unwrap(),
+        TankGeometry {
+            wall_height: 5.0,
+            water_height: 5.0,
+            volume: 20.0,
+            ..before
+        }
+    );
+}

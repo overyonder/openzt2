@@ -1,0 +1,24 @@
+# #124: the tank panel's rectangle and octagon methods close a tank in two clicks.
+start freeform-map
+click "construction"
+click "Tank Tools Tab"
+select-catalogue "tankseg_mm"
+click "rectangle1"
+snapshot shape-start
+click 1000 260
+move 1400 300
+click 1400 300
+until fences > @shape-start
+until tanks == 1 within 600
+snapshot rectangle
+click "octagon1"
+select-catalogue "tankseg_mm"
+click 1100 500
+move 1480 530
+click 1480 530
+until fences > @rectangle
+key ESCAPE
+until placement_previews == 0
+until tanks == 2 within 600
+wait 30
+capture shaped-tanks

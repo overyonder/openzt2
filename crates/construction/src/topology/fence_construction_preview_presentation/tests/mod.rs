@@ -31,6 +31,7 @@ fn fence_preview_app() -> App {
         .init_resource::<TopologyGrid>()
         .init_resource::<PrimaryPointerInputState>()
         .init_resource::<UiPointerCapture>()
+        .init_resource::<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>()
         .insert_resource(ConstructionTool::Fence(AssetId::from_key("fence")))
         .add_message::<PlaceFence>()
         .add_message::<PlacePath>()

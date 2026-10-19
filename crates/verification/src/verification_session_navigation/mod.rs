@@ -47,6 +47,7 @@ const KNOWN_STATE_FACTS: &[&str] = &[
     "camera_fov_deg",
     "fences",
     "habitats",
+    "tanks",
     "animals",
     "staff",
     "facilities",

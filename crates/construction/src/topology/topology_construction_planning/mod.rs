@@ -17,6 +17,7 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_construction_preview_types::PathPreview;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
@@ -49,11 +50,19 @@ pub(super) fn calculate_fence_construction_plan(
         return Err(PlacementFailure::InvalidTopology);
     }
     let segment_cell_span = segment_length_cm / spacing_cm;
-    let cells = calculate_heading_quantized_fence_segment_cells_between_endpoints(
-        preview.from,
-        preview.to,
-        segment_cell_span,
-    )?;
+    let waypoints = calculate_fence_preview_waypoints(preview, i32::from(segment_cell_span))?;
+    let mut cells = vec![waypoints[0]];
+    for leg in waypoints.windows(2) {
+        cells.extend(
+            calculate_heading_quantized_fence_segment_cells_between_endpoints(
+                leg[0],
+                leg[1],
+                segment_cell_span,
+            )?
+            .into_iter()
+            .skip(1),
+        );
+    }
     if cells.len() < 2 {
         return Err(PlacementFailure::InvalidTopology);
     }
@@ -103,6 +112,51 @@ pub(super) fn calculate_fence_construction_plan(
         .checked_mul(segments)
         .ok_or(PlacementFailure::InvalidTopology)?;
     Ok((cells, Money(cost), gate))
+}
+
+/// The corners a fence preview runs through: its two ends, or a closed
+/// rectangle or octagon with `from` and `to` as opposite corners. Closed
+/// shapes snap to whole segments so each side ends on its corner.
+fn calculate_fence_preview_waypoints(
+    preview: &FencePreview,
+    span: i32,
+) -> Result<Vec<IVec3>, PlacementFailure> {
+    let (from, to) = (preview.from, preview.to);
+    let width = (to.x - from.x) / span * span;
+    let depth = (to.y - from.y) / span * span;
+    let at = |x: i32, y: i32| IVec3::new(from.x + x, from.y + y, from.z);
+    if preview.shape != FencePlacementShape::Freeform && (width == 0 || depth == 0) {
+        return Err(PlacementFailure::InvalidTopology);
+    }
+    Ok(match preview.shape {
+        FencePlacementShape::Freeform => vec![from, to],
+        FencePlacementShape::Rectangle => {
+            vec![
+                at(0, 0),
+                at(width, 0),
+                at(width, depth),
+                at(0, depth),
+                at(0, 0),
+            ]
+        }
+        FencePlacementShape::Octagon => {
+            // ponytail: a third of the shorter side, the original's exact
+            // chamfer is not authored.
+            let chamfer = width.abs().min(depth.abs()) / 3 / span * span;
+            let (x, y) = (chamfer * width.signum(), chamfer * depth.signum());
+            vec![
+                at(x, 0),
+                at(width - x, 0),
+                at(width, y),
+                at(width, depth - y),
+                at(width - x, depth),
+                at(x, depth),
+                at(0, depth - y),
+                at(0, y),
+                at(x, 0),
+            ]
+        }
+    })
 }
 
 /// Existing fence edges a gate can replace, with their gate and protection state.
@@ -298,6 +352,56 @@ fn calculate_ground_path_construction_cells(
         }
     }
     Ok(cells)
+}
+
+#[cfg(test)]
+mod fence_shape_waypoint_tests {
+    use super::*;
+
+    fn waypoints(shape: FencePlacementShape, to: IVec3) -> Result<Vec<IVec3>, PlacementFailure> {
+        calculate_fence_preview_waypoints(
+            &FencePreview {
+                definition: AssetId::default(),
+                from: IVec3::ZERO,
+                to,
+                shape,
+            },
+            3,
+        )
+    }
+
+    #[test]
+    fn a_rectangle_snaps_to_whole_segments_and_closes_on_its_anchor() {
+        let corners = waypoints(FencePlacementShape::Rectangle, IVec3::new(10, -7, 0)).unwrap();
+        assert_eq!(
+            corners,
+            [
+                IVec3::ZERO,
+                IVec3::new(9, 0, 0),
+                IVec3::new(9, -6, 0),
+                IVec3::new(0, -6, 0),
+                IVec3::ZERO,
+            ]
+        );
+    }
+
+    #[test]
+    fn an_octagon_cuts_diagonal_corners_and_closes() {
+        let corners = waypoints(FencePlacementShape::Octagon, IVec3::new(9, 12, 0)).unwrap();
+        assert_eq!(corners.len(), 9);
+        assert_eq!(corners.first(), corners.last());
+        assert_eq!(corners[1] - corners[0], IVec3::new(3, 0, 0));
+        assert_eq!(corners[2] - corners[1], IVec3::new(3, 3, 0));
+    }
+
+    #[test]
+    fn a_flat_closed_shape_is_rejected() {
+        assert!(waypoints(FencePlacementShape::Rectangle, IVec3::new(9, 1, 0)).is_err());
+        assert_eq!(
+            waypoints(FencePlacementShape::Freeform, IVec3::new(9, 1, 0)).unwrap(),
+            [IVec3::ZERO, IVec3::new(9, 1, 0)]
+        );
+    }
 }
 
 #[cfg(test)]

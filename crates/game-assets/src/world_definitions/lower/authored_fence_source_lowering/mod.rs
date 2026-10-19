@@ -19,6 +19,7 @@ use crate::source_document::source_document_semantic_name::{
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
+use openzt2_game_data::world_definitions::aquatic_habitats::TankDefinition;
 use openzt2_game_data::world_definitions::fences_and_gates::{
     FenceDefinition, FenceFittingCurve, FenceSegmentPrefabs, FenceTraversalBlockingFlags,
 };
@@ -225,6 +226,21 @@ pub(super) fn bind_authored_fence(
         },
         gate_policy,
     });
+    if record.has_type_token("tankwallsegment") {
+        // ponytail: the original authors no per-wall tank record; depth bounds
+        // are ZTFenceMode's 0..18 m base depth plus 0..18 m wall height, and
+        // filtration comes from placed filter objects, not the wall.
+        output.document.tanks.push(TankDefinition {
+            id: object_id,
+            wall: object_id,
+            floor_material: AssetId::default(),
+            water_material: AssetId::default(),
+            min_depth_cm: 0,
+            max_depth_cm: 3_600,
+            capacity_litres_per_cell: 0,
+            filtration_per_day: 0,
+        });
+    }
     let (presentation_caustic_policies, surface_effect_strength) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,

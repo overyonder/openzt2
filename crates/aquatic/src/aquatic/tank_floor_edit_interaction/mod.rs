@@ -65,11 +65,7 @@ pub(super) fn update_tank_floor_gesture(
     mut commits: MessageWriter<CommitConstruction>,
 ) {
     let cancelled = cancellations.read().count() != 0;
-    let supported = *tool == ConstructionTool::TankEdit
-        && matches!(
-            policy.tank_edit,
-            TankEditKind::RaiseFloor | TankEditKind::LowerFloor
-        );
+    let supported = *tool == ConstructionTool::TankEdit;
     if cancelled || !supported || ui.over_ui || modal.0.is_some() {
         for (entity, _, _, _) in &previews {
             commands.entity(entity).despawn();
@@ -101,14 +97,31 @@ pub(super) fn update_tank_floor_gesture(
         if pointer.pressed {
             let seconds = time.delta_secs();
             if seconds.is_finite() && seconds > 0.0 {
-                let direction = if gesture.kind == TankEditKind::RaiseFloor {
+                let direction = if matches!(
+                    gesture.kind,
+                    TankEditKind::RaiseFloor | TankEditKind::RaiseWall
+                ) {
                     1.0
                 } else {
                     -1.0
                 };
-                edit.after.floor_height +=
-                    direction * edit_policy.floor_mm_per_second as f32 / 1000.0 * seconds;
-                edit.after.volume = edit.after.area * edit.after.depth();
+                let after = &mut edit.after;
+                if matches!(
+                    gesture.kind,
+                    TankEditKind::RaiseFloor | TankEditKind::LowerFloor
+                ) {
+                    after.floor_height +=
+                        direction * edit_policy.floor_mm_per_second as f32 / 1000.0 * seconds;
+                } else {
+                    // The original keeps a tank full: water follows the rim.
+                    let water_offset = definitions
+                        .tank_surface_policy()
+                        .map_or(0.0, |policy| policy.water_height_offset_cm as f32 / 100.0);
+                    after.wall_height +=
+                        direction * edit_policy.wall_mm_per_second as f32 / 1000.0 * seconds;
+                    after.water_height = (after.wall_height - water_offset).max(after.floor_height);
+                }
+                after.volume = after.area * after.depth();
             }
         }
         preview.validity = if edit.before != edit.after

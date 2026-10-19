@@ -66,7 +66,11 @@ fn prepare_fence_construction_snapshots(
     let mut snapshots = Vec::with_capacity(cells.len() * 2 - 1);
     let mut node_ids = Vec::with_capacity(cells.len());
     for (&cell, existing_id) in cells.iter().zip(existing_ids) {
-        if let Some(id) = existing_id {
+        // A closed shape returns to its first, still unbuilt node.
+        let revisited = node_ids
+            .iter()
+            .find_map(|(visited, id)| (*visited == cell).then_some(*id));
+        if let Some(id) = existing_id.or(revisited) {
             node_ids.push((cell, id));
         } else {
             let id = ids
