@@ -9,12 +9,14 @@ on:
   push:
     branches: [dev]
     tags: ['v[0-9]*']
+  pull_request:
+    branches: [dev]
   schedule:
     - cron: '0 16 * * *'
 
 concurrency:
   group: native-builds-${{ github.ref }}-${{ inputs.target || 'all' }}
-  cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/dev' || github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -59,17 +61,17 @@ jobs:
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
-    environment: ${{ github.ref == 'refs/heads/dev' && 'development' || 'release' }}
+    environment: ${{ github.ref_type == 'tag' && 'release' || 'development' }}
     env:
       OPENZT2_RELEASE_HOST: '1'
       OPENZT2_RUST_VERSION: ${{ needs.targets.outputs.rust }}
       CARGO_BUILD_JOBS: ${{ matrix.id == 'darwin-arm64' && '2' || '4' }}
       CARGO_INCREMENTAL: '0'
       DOTNET_ROLL_FORWARD: Major
-      OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 }}
-      OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD }}
-      OPENZT2_MSIX_PUBLISHER: ${{ vars.OPENZT2_MSIX_PUBLISHER }}
-      OPENZT2_APK_SIGNING_KEY_BASE64: ${{ secrets.OPENZT2_APK_SIGNING_KEY_BASE64 }}
+      OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 || '' }}
+      OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD || '' }}
+      OPENZT2_MSIX_PUBLISHER: ${{ github.ref_type == 'tag' && vars.OPENZT2_MSIX_PUBLISHER || '' }}
+      OPENZT2_APK_SIGNING_KEY_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_APK_SIGNING_KEY_BASE64 || '' }}
     defaults:
       run:
         shell: bash
@@ -245,10 +247,10 @@ jobs:
           retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
-          name: OpenZT2-${{ matrix.id }}
+          name: OpenZT2-${{ github.event_name == 'pull_request' && format('pr-{0}-', github.event.number) || '' }}${{ matrix.id }}
           path: build/artifacts/${{ matrix.id }}/
           if-no-files-found: error
-          retention-days: ${{ github.ref == 'refs/heads/dev' && 14 || 90 }}
+          retention-days: ${{ github.ref_type == 'tag' && 90 || 14 }}
 
   publish:
     needs: [targets, package]
