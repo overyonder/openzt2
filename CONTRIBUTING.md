@@ -348,9 +348,16 @@ is squashed before a public push; ask about the boundary if it isn't clear.
 
 ## AI use and submitted material
 
-AI use must be disclosed with the contribution. Contributors must confirm that
-a person has reviewed all code they are responsible for, fixed any problems
-found, and takes responsibility for the result.
+Disclose AI assistance in the pull request description, or in the issue for
+other contributions. State each model and version used, using the model
+identifier shown by the provider, and explain which parts it helped write or
+review. An application name or session link alone is not enough. Code quality
+and common mistakes vary between models; knowing the model helps reviewers
+decide where to look more closely.
+
+For code contributions, explicitly confirm that a person has finished reviewing
+all submitted code, fixed the problems found, and takes responsibility for the
+result.
 
 AI-generated art must be explicitly labelled, including images, textures,
 models, audio and video. Our organisation's governance is still in development.
