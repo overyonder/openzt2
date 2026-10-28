@@ -17,12 +17,17 @@ pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
     animals: Query<Option<&Escaped>, (With<Animal>, Without<Dead>)>,
 ) {
     for containment_change in containment_changes.read() {
-        if containment_change.is_contained {
-            continue;
-        }
         let Ok(existing_escape_state) = animals.get(containment_change.affected_entity) else {
             continue;
         };
+        if containment_change.is_contained {
+            if existing_escape_state.is_some() {
+                commands
+                    .entity(containment_change.affected_entity)
+                    .remove::<Escaped>();
+            }
+            continue;
+        }
         if existing_escape_state.is_none() {
             commands
                 .entity(containment_change.affected_entity)

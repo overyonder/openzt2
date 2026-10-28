@@ -15,6 +15,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectAuthoredEntrance;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -26,7 +27,12 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
     mut behavior_tasks: Query<
-        (Entity, Option<&NavAgent>, &mut BehaviorTaskExecutionState),
+        (
+            Entity,
+            Option<&NavAgent>,
+            Option<&LocomotionMode>,
+            &mut BehaviorTaskExecutionState,
+        ),
         (
             Without<PendingBehaviorDockingCompletion>,
             Without<PendingBehaviorTaskFailure>,
@@ -47,7 +53,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    for (actor, navigation_agent, mut behavior_task) in &mut behavior_tasks {
+    for (actor, navigation_agent, locomotion_mode, mut behavior_task) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
@@ -304,6 +310,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 subject_node_local_position,
                 actor_global_transform,
                 target_global_transform,
+                locomotion_mode.copied().unwrap_or_default(),
             );
         }
         occupancy.begin_redocking(actor);
@@ -374,11 +381,10 @@ fn align_subject_attachment_with_target_dock(
     subject_node_local_position: Vec3,
     actor_transform: &GlobalTransform,
     target_transform: &GlobalTransform,
+    locomotion_mode: LocomotionMode,
 ) -> Vec3 {
-    // Native docking subtracts the subject attachment after applying the
-    // subject scale and final world orientation. DockAt instead takes a point
-    // in target-local space: convert the offset back through that target,
-    // including its independent scale, only after doing this world-space sum.
+    // Resolve the scaled attachment in the final world orientation before
+    // converting its offset through the target's independent transform.
     let target_affine = target_transform.affine();
     let world_forward = target_affine.transform_vector3(local_forward);
     let horizontal_forward = Vec2::new(world_forward.x, world_forward.z).normalize_or_zero();
@@ -388,7 +394,15 @@ fn align_subject_attachment_with_target_dock(
         Quat::from_rotation_y(horizontal_forward.x.atan2(horizontal_forward.y))
     };
     let (actor_scale, _, _) = actor_transform.to_scale_rotation_translation();
-    let world_offset = rotation * (actor_scale * subject_node_local_position);
+    let mut world_offset = rotation * (actor_scale * subject_node_local_position);
+    // Ground actors use the attachment's horizontal reach without lowering
+    // their root beneath the dock. Swimming and flight retain 3D alignment.
+    if matches!(
+        locomotion_mode,
+        LocomotionMode::Ground | LocomotionMode::Vehicle
+    ) {
+        world_offset.y = 0.0;
+    }
     local_point - target_affine.inverse().transform_vector3(world_offset)
 }
 
@@ -405,10 +419,31 @@ mod tests {
             scale: Vec3::splat(3.0),
         });
         let socket = Vec3::new(0.0, 0.0, 2.0);
-        let point =
-            align_subject_attachment_with_target_dock(socket, Vec3::Z, Vec3::Z, &actor, &target);
-        let subject_attachment_world = target.transform_point(point) + Vec3::X * 0.5;
-        assert!(subject_attachment_world.abs_diff_eq(target.transform_point(socket), 1.0e-5));
+        let mouth = Vec3::new(0.0, 1.45, 2.0);
+        for mode in [
+            LocomotionMode::Ground,
+            LocomotionMode::Vehicle,
+            LocomotionMode::Swim,
+            LocomotionMode::Flight,
+        ] {
+            let point = align_subject_attachment_with_target_dock(
+                socket,
+                Vec3::Z,
+                mouth,
+                &actor,
+                &target,
+                mode,
+            );
+            let root = target.transform_point(point);
+            let dock = target.transform_point(socket);
+            let subject_attachment_world = root + Vec3::new(1.0, 0.725, 0.0);
+            assert!(subject_attachment_world.xz().abs_diff_eq(dock.xz(), 1.0e-5));
+            if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle) {
+                assert!((root.y - dock.y).abs() < 1.0e-5);
+            } else {
+                assert!(subject_attachment_world.abs_diff_eq(dock, 1.0e-5));
+            }
+        }
     }
 
     #[test]

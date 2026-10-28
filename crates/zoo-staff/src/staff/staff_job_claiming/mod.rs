@@ -124,7 +124,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_parent = parent.map(ChildOf::parent);
         let target_area = habitat.map(|habitat| habitat.habitat_entity);
         let target_rampaging = target_rampaging.is_some();
-        let target_on_land = terrain_surfaces.on_land(target_position.xz());
+        let target_on_land = terrain_surfaces.on_land_at_position(target_position);
         let candidate_facts = StaffCandidateEligibilityFacts {
             target_food_level_q16: food
                 .map(|container| container.amount_q16)
@@ -259,7 +259,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         let target_in_show = definition
             .and_then(|definition| catalogue.find_object(definition.0))
             .and_then(|definition| (!definition.supports_show_tricks).then_some(false));
-        let target_on_land = terrain_surfaces.on_land(target_transform.translation().xz());
+        let target_on_land = terrain_surfaces.on_land_at_position(target_transform.translation());
         let Some(behavior_task) = catalogue.find_staff(staff_role.0).and_then(|role| {
             find_highest_priority_compatible_staff_behavior_task(
                 behavior_declarations,

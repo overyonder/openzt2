@@ -81,6 +81,7 @@ pub(super) struct BehaviorTargetPlacementRefund;
 
 #[derive(SystemParam)]
 pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
+    surfaces: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
     server: Res<'w, AssetServer>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
     models: Res<'w, Assets<Gltf>>,
@@ -511,7 +512,7 @@ fn site_is_still_valid(
                 edited,
                 position,
             )
-            .filter(|point| point.water_height_m.is_none())
+            .filter(|_| world.surfaces.on_land(position) == Some(true))
         },
         |cell| {
             paths_block(cell)
@@ -709,5 +710,5 @@ fn sample_behavior_placement_terrain(
         edited,
         position,
     )?;
-    Some((point.height_m, point.water_height_m.is_some()))
+    Some((point.height_m, !world.surfaces.on_land(position)?))
 }

@@ -75,7 +75,7 @@ pub struct DrySurfaceEligibility<'w, 's> {
 }
 
 impl DrySurfaceEligibility<'_, '_> {
-    /// Ground height under a world position, tank floors included.
+    /// Terrain height under a world position.
     pub fn ground_height(&self, world: Vec2) -> Option<f32> {
         self.terrain.ground_height(world)
     }
@@ -97,6 +97,18 @@ impl DrySurfaceEligibility<'_, '_> {
             .and_then(|habitat| self.tanks.get(habitat).ok());
         match tank {
             Some(tank) => Some(self.terrain.ground_height(world)? >= tank.water_height),
+            None => self.terrain.on_land(world),
+        }
+    }
+
+    /// Entity qualifiers compare the target's height with tank water, so an
+    /// animal above the surface is not classified as submerged by the ground.
+    pub fn on_land_at_position(&self, position: Vec3) -> Option<bool> {
+        let world = position.xz();
+        let tank = locate_habitat_at_world_position(&self.habitats, world, *self.topology)
+            .and_then(|habitat| self.tanks.get(habitat).ok());
+        match tank {
+            Some(tank) => Some(position.y >= tank.water_height),
             None => self.terrain.on_land(world),
         }
     }
