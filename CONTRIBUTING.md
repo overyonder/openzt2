@@ -2,6 +2,17 @@
 
 These rules apply to all OpenZT2 contributions.
 
+## Development builds and pull requests
+
+Submit pull requests against `dev`, the default branch. Accepted changes are
+integrated there for testing; `main` holds the code selected for releases.
+
+Native packages build automatically when `dev` changes. A nightly run retries
+any changes that haven't had a successful build. To test a development build,
+open a successful `dev` run under [Native builds](https://github.com/overyonder/openzt2/actions/workflows/release-builds.yml?query=branch%3Adev)
+and download your platform's package from **Artifacts**. GitHub requires you to
+sign in to download these files. Development artifacts are kept for 14 days.
+
 ## Building
 
 ### Toolchain and libraries

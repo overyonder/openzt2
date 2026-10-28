@@ -4,6 +4,8 @@
 The workflow, packager, artifact staging and publication checks read that file.
 `flake.nix` owns the Rust version and `flake.lock` pins the native shader sources.
 
+For packages from `dev`, see [development builds](../../CONTRIBUTING.md#development-builds-and-pull-requests).
+
 ## Targets
 
 | Target | Runner | Packages |

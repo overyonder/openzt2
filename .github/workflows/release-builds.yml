@@ -1,4 +1,4 @@
-name: Native release builds
+name: Native builds
 on:
   workflow_dispatch:
     inputs:
@@ -7,7 +7,14 @@ on:
         default: all
         type: string
   push:
+    branches: [dev]
     tags: ['v[0-9]*']
+  schedule:
+    - cron: '0 16 * * *'
+
+concurrency:
+  group: native-builds-${{ github.ref }}-${{ inputs.target || 'all' }}
+  cancel-in-progress: ${{ github.ref == 'refs/heads/dev' }}
 
 permissions:
   contents: read
@@ -16,12 +23,28 @@ jobs:
   targets:
     runs-on: ubuntu-24.04
     outputs:
+      build: ${{ steps.development.outputs.build }}
       matrix: ${{ steps.targets.outputs.matrix }}
       rust: ${{ steps.targets.outputs.rust }}
       alpine_image: ${{ steps.targets.outputs.alpine_image }}
       wix_version: ${{ steps.targets.outputs.wix_version }}
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@v4
+      - name: Select development build
+        id: development
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          build=true
+          if [[ "$GITHUB_EVENT_NAME" == schedule ]]; then
+            previous=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-builds.yml/runs?branch=dev&status=success&per_page=20" \
+              --jq '[.workflow_runs[] | select(.event == "push" or .event == "schedule")][0].head_sha // empty')
+            if [[ "$previous" == "$GITHUB_SHA" ]]; then build=false; fi
+          fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -30,12 +53,13 @@ jobs:
 
   package:
     needs: targets
+    if: needs.targets.outputs.build == 'true'
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
-    environment: release
+    environment: ${{ github.ref == 'refs/heads/dev' && 'development' || 'release' }}
     env:
       OPENZT2_RELEASE_HOST: '1'
       OPENZT2_RUST_VERSION: ${{ needs.targets.outputs.rust }}
@@ -224,6 +248,7 @@ jobs:
           name: OpenZT2-${{ matrix.id }}
           path: build/artifacts/${{ matrix.id }}/
           if-no-files-found: error
+          retention-days: ${{ github.ref == 'refs/heads/dev' && 14 || 90 }}
 
   publish:
     needs: [targets, package]
