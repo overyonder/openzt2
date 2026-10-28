@@ -15,8 +15,8 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use crate::habitat::habitat_region_derivation::HabitatFenceSegment;
 use crate::habitat::habitat_region_derivation::derive_enclosed_habitat_regions_from_fence_segments;
+use crate::habitat::habitat_region_derivation::HabitatFenceSegment;
 use crate::habitat::habitat_terrain_summary_calculation::calculate_habitat_terrain_summary_from_topology_cells;
 use crate::habitat::habitat_terrain_summary_refresh::derive_dominant_habitat_climate;
 use crate::habitat::habitat_terrain_summary_refresh::read_terrain_fact_for_topology_cell;

@@ -87,6 +87,9 @@ pub(super) fn calculate_direct_locomotion_steering(
 pub(super) fn integrate_non_physics_direct_locomotion(
     animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
+    navigation_graph: Option<
+        Res<openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
+    >,
     fences: FenceNavigationPolicy,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -166,13 +169,25 @@ pub(super) fn integrate_non_physics_direct_locomotion(
 
         let locomotion_mode = locomotion_mode.copied().unwrap_or_default();
         if locomotion_mode != LocomotionMode::Flight {
-            fit_to_terrain(
-                locomotion_mode,
-                &mut local_transform.translation,
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
-            );
+            let path_height = navigation_graph.as_deref().and_then(|graph| {
+                super::spatial_index_and_docking_operations::connected_path_surface_height(
+                    graph.terrain_derived_navigation_graph(),
+                    previous_translation,
+                    local_transform.translation,
+                    locomotion_mode,
+                )
+            });
+            if let Some(height) = path_height {
+                local_transform.translation.y = height;
+            } else {
+                fit_to_terrain(
+                    locomotion_mode,
+                    &mut local_transform.translation,
+                    &terrain_index,
+                    &terrain_assets,
+                    &terrain_chunks,
+                );
+            }
             local_velocity.0.y = 0.0;
         }
         // The immersive controller owns look rotation. Strafing must not turn

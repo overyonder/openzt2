@@ -234,7 +234,10 @@ pub(super) struct ActiveProfileSettings<'w> {
     bindings: Res<'w, GameActionInputBindings>,
     display: Res<'w, DisplaySettings>,
     graphics: Res<'w, GraphicsSettings>,
-    online_messages: Res<'w, openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy>,
+    online_messages: Res<
+        'w,
+        openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
+    >,
 }
 
 impl ActiveProfileSettings<'_> {

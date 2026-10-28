@@ -72,7 +72,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
     mut navigation_requests: MessageWriter<NavigateTo>,
     mut land_approach: KeeperLandApproach,
     animal_actors: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
-    water_targets: Query<&super::natural_water_targets::SelectedNaturalWaterTarget>,
+    water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     waters: super::natural_water_targets::NaturalWaterTargets,
 ) {
     for (actor, mut behavior_task, staff_role, navigation_agent) in &mut behavior_tasks {
@@ -91,10 +91,9 @@ pub(super) fn start_current_supported_behavior_move_actions(
         }
         let definitions = active_world_definitions.get(&world_definition_assets);
         if !animal_actors.contains(actor)
-            && !keeper_fast_mode_uses_configured_navigation_speed(
+            && !staff_mode_has_authored_locomotion(
                 move_action.locomotion_speed,
                 staff_role,
-                navigation_agent,
                 definitions,
             )
         {
@@ -135,7 +134,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             if water.region == target
                 && matches!(
                     water.kind,
-                    super::natural_water_targets::NaturalWaterTargetKind::Surface { .. }
+                    openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind::Surface { .. }
                 )
             {
                 if !waters.valid(water) || move_action.target_node_name.is_some() {
@@ -260,7 +259,7 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
     mut commands: Commands,
     mut arrivals: MessageReader<Arrived>,
     simulation_clock: Res<ZooClock>,
-    water_targets: Query<&super::natural_water_targets::SelectedNaturalWaterTarget>,
+    water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     water_contact: Query<(
         &openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact,
         &openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode,
@@ -289,7 +288,7 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
             if behavior_task.target() == Some(water.region)
                 && matches!(
                     water.kind,
-                    super::natural_water_targets::NaturalWaterTargetKind::Surface { .. }
+                    openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind::Surface { .. }
                 )
             {
                 let arrived_in_water = water_contact.get(actor).is_ok_and(|(contact, mode)| {
@@ -334,30 +333,24 @@ fn move_start_has_navigation_agent(navigation_agent: Option<&NavAgent>) -> bool 
     navigation_agent.is_some()
 }
 
-fn keeper_fast_mode_uses_configured_navigation_speed(
+fn staff_mode_has_authored_locomotion(
     locomotion_speed: Option<
         openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed,
     >,
     staff_role: Option<&StaffRole>,
-    navigation_agent: Option<&NavAgent>,
     definitions: Option<WorldDefinitionsView<'_>>,
 ) -> bool {
-    match locomotion_speed {
-        None => true,
-        Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Fast) => {
-            let (Some(staff_role), Some(navigation_agent), Some(definitions)) =
-                (staff_role, navigation_agent, definitions)
-            else {
-                return false;
-            };
-            let Some(staff_definition) = definitions.find_staff(staff_role.0) else {
-                return false;
-            };
-            staff_definition.role == StaffRoleKind::Keeper
-                && navigation_agent.max_speed_mps == staff_definition.move_speed_mps
-        }
-        Some(_) => false,
+    if locomotion_speed.is_none() {
+        return true;
     }
+    staff_role
+        .and_then(|role| definitions?.find_staff(role.0))
+        .is_some_and(|role| {
+            role.locomotion_tables.iter().any(|table| {
+                table.binder == openzt2_game_data::AssetId::from_key("ground")
+                    && !table.rows.is_empty()
+            })
+        })
 }
 
 #[cfg(test)]

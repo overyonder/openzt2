@@ -334,6 +334,14 @@ fn execute_food_prop_attachments(
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             }
+            if let Some(modifier) = action.locomotion_modifier {
+                commands.entity(actor).insert(
+                    openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
+                        modifier,
+                        item,
+                    },
+                );
+            }
             commands.entity(item).insert((
                 ContainedObject {
                     holder_definition: actor_definition.0,

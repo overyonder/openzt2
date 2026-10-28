@@ -19,7 +19,7 @@ use super::{
     economy_snapshot_types::EconomySnapshotRecords,
     photo_snapshot_types::{PhotoChallengeProgressSnapshotRecord, PhotoSnapshotRecord},
     show_snapshot_types::ShowSnapshotRecords,
-    tank_snapshot_types::TankSnapshotRecord,
+    tank_snapshot_types::{LoadedTankSnapshotIdentity, LoadedTankSnapshotRecord},
     transport_snapshot_types::TransportSnapshotRecords,
 };
 
@@ -27,16 +27,15 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     scenario_snapshot: Option<&super::scenario_snapshot_section::ScenarioSnapshot>,
     animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
     baseline_animals: &Query<Entity, With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
-    habitat_waste_records: &[super::maintenance_snapshot_types::HabitatWasteSnapshotRecord],
-    baseline_waste: &Query<
-        Entity,
-        With<openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste>,
-    >,
+    loose_waste_records: &[super::maintenance_snapshot_types::LooseWasteSnapshotRecord],
+    baseline_waste: &Query<Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
     staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
     baseline_staff: &[Entity],
     baseline_placements: &[Entity],
+    baseline_topology: &[Entity],
+    topology_snapshot_records: &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
     placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
-    tank_snapshot_records: &[TankSnapshotRecord],
+    tank_snapshot_records: &[LoadedTankSnapshotRecord],
     economy_snapshot_records: &EconomySnapshotRecords,
     progression_snapshot_records: &ProgressionSnapshotRecords,
     show_snapshot_records: &ShowSnapshotRecords,
@@ -70,7 +69,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                 id.0 != record.persistent_identifier || baseline_animals.contains(entity)
             })
     });
-    let waste_identifiers_are_available = habitat_waste_records.iter().all(|record| {
+    let waste_identifiers_are_available = loose_waste_records.iter().all(|record| {
         entities_with_persistent_identifiers
             .iter()
             .all(|(entity, id)| {
@@ -91,6 +90,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                 && !baseline_waste.contains(*entity)
                 && !baseline_staff.contains(entity)
                 && !baseline_placements.contains(entity)
+                && !baseline_topology.contains(entity)
         })
         .map(|(_, persistent_identifier)| *persistent_identifier)
         .collect::<Vec<_>>();
@@ -100,65 +100,73 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
             .any(|candidate| *candidate == persistent_identifier)
     };
 
-    let every_required_existing_entity_is_present = tank_snapshot_records.iter().all(|record| {
-        tank_persistent_identifiers
+    let every_required_existing_entity_is_present =
+        tank_snapshot_records
             .iter()
-            .any(|persistent_identifier| *persistent_identifier == record.persistent_identifier)
-    }) && economy_snapshot_records
-        .facility_economy_records
-        .iter()
-        .all(|record| {
-            placement_snapshot_records
+            .all(|record| match record.identity {
+                LoadedTankSnapshotIdentity::HabitatSeedCell(_) => true,
+                LoadedTankSnapshotIdentity::LegacyPersistentEntity(id) => {
+                    tank_persistent_identifiers
+                        .iter()
+                        .any(|candidate| *candidate == id)
+                }
+            })
+            && economy_snapshot_records
+                .facility_economy_records
                 .iter()
-                .any(|placement| placement.persistent_identifier == record.persistent_identifier.0)
-                || facility_persistent_identifiers
+                .all(|record| {
+                    placement_snapshot_records.iter().any(|placement| {
+                        placement.persistent_identifier == record.persistent_identifier.0
+                    }) || facility_persistent_identifiers
+                        .iter()
+                        .any(|persistent_identifier| {
+                            *persistent_identifier == record.persistent_identifier
+                                && persistent_identifier_exists(*persistent_identifier)
+                        })
+                })
+            && show_snapshot_records.stage_records.iter().all(|record| {
+                show_stages_with_mutable_snapshot_state.iter_mut().any(
+                    |(_, persistent_identifier, ..)| {
+                        *persistent_identifier == record.persistent_identifier
+                    },
+                )
+            })
+            && photo_snapshot_records.iter().all(|record| {
+                photo_album_persistent_identifiers
                     .iter()
                     .any(|persistent_identifier| {
-                        *persistent_identifier == record.persistent_identifier
-                            && persistent_identifier_exists(*persistent_identifier)
-                    })
-        })
-        && show_snapshot_records.stage_records.iter().all(|record| {
-            show_stages_with_mutable_snapshot_state.iter_mut().any(
-                |(_, persistent_identifier, ..)| {
-                    *persistent_identifier == record.persistent_identifier
-                },
-            )
-        })
-        && photo_snapshot_records.iter().all(|record| {
-            photo_album_persistent_identifiers
-                .iter()
-                .any(|persistent_identifier| {
-                    *persistent_identifier == record.album_persistent_identifier
-                })
-        })
-        && show_snapshot_records
-            .scheduled_show_records
-            .iter()
-            .all(|record| {
-                persistent_identifier_exists(record.stage_persistent_identifier)
-                    && record.performance_records.iter().all(|performance_record| {
-                        persistent_identifier_exists(
-                            performance_record.performer_persistent_identifier,
-                        ) || animal_snapshot_records
-                            .binary_search_by_key(
-                                &performance_record.performer_persistent_identifier.0,
-                                |record| record.persistent_identifier,
-                            )
-                            .is_ok()
+                        *persistent_identifier == record.album_persistent_identifier
                     })
             })
-        && show_snapshot_records
-            .scheduled_break_records
-            .iter()
-            .all(|record| persistent_identifier_exists(record.stage_persistent_identifier))
-        && photo_challenge_progress_snapshot_records
-            .iter()
-            .all(|record| {
-                photo_challenges_with_mutable_progress
-                    .iter_mut()
-                    .any(|(challenge, _)| challenge.id == record.challenge_definition_identifier)
-            });
+            && show_snapshot_records
+                .scheduled_show_records
+                .iter()
+                .all(|record| {
+                    persistent_identifier_exists(record.stage_persistent_identifier)
+                        && record.performance_records.iter().all(|performance_record| {
+                            persistent_identifier_exists(
+                                performance_record.performer_persistent_identifier,
+                            ) || animal_snapshot_records
+                                .binary_search_by_key(
+                                    &performance_record.performer_persistent_identifier.0,
+                                    |record| record.persistent_identifier,
+                                )
+                                .is_ok()
+                        })
+                })
+            && show_snapshot_records
+                .scheduled_break_records
+                .iter()
+                .all(|record| persistent_identifier_exists(record.stage_persistent_identifier))
+            && photo_challenge_progress_snapshot_records
+                .iter()
+                .all(|record| {
+                    photo_challenges_with_mutable_progress
+                        .iter_mut()
+                        .any(|(challenge, _)| {
+                            challenge.id == record.challenge_definition_identifier
+                        })
+                });
 
     let photo_persistent_identifiers = photo_snapshot_records
         .iter()
@@ -201,6 +209,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     let mut imported_persistent_identifiers = photo_snapshot_records
         .iter()
         .map(|record| record.persistent_identifier)
+        .chain(topology_snapshot_records.iter().map(|record| record.id()))
         .chain(
             super::scenario_snapshot_section::persistent_ids(scenario_snapshot).map(PersistentId),
         )
@@ -264,7 +273,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                 .map(|record| PersistentId(record.persistent_identifier)),
         )
         .chain(
-            habitat_waste_records
+            loose_waste_records
                 .iter()
                 .map(|record| PersistentId(record.persistent_identifier)),
         )

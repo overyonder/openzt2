@@ -44,6 +44,10 @@ pub(super) fn bind_staff(
         job_overrides,
         presentation_variants: Vec::new(),
         virtual_nodes: Vec::new(),
+        state_variables: Vec::new(),
+        swimming: None,
+        locomotion_tables: Vec::new(),
+        tank_gate_animations: None,
     });
     Ok(())
 }

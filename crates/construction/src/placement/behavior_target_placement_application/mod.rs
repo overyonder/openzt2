@@ -2,9 +2,10 @@
 //!
 //! The site is the recipient's ground position, turned to face the subject.
 //! The object is paid for through its authored `build` transaction when the
-//! placement set returns, and only then enters the world. A behavior placement
-//! never edits terrain, so definitions that flatten or need a path, wall or
-//! headroom are rejected rather than placed without that policy.
+//! placement set returns, and only then enters the world. Behavior placement
+//! never edits terrain: an object that a player placement would flatten under
+//! is put down on the terrain as it stands. Definitions that need a path, wall
+//! or headroom are rejected rather than placed without that policy.
 
 use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
@@ -152,7 +153,13 @@ pub(super) fn apply_behavior_target_placements(
             continue;
         }
         let next = match &pending.stage {
-            BehaviorTargetPlacementStage::Siting => {
+            BehaviorTargetPlacementStage::Siting { prefab } => {
+                if prefab.is_none() {
+                    let prefab = catalogue
+                        .find_object(pending.definition)
+                        .and_then(|object| catalogue.scene(object.prefab));
+                    pending.stage = BehaviorTargetPlacementStage::Siting { prefab };
+                }
                 match choose_behavior_target_placement_site(
                     actor,
                     &pending,
@@ -362,6 +369,19 @@ fn choose_behavior_target_placement_site(
     };
     if prefab.canonical_scene_prefab_document().entities.is_empty() {
         return SiteChoice::Rejected;
+    }
+    // Automatic footprints are hydrated from the loaded prefab's bounds; a
+    // prefab without bounds can never supply one.
+    if definition.automatic_footprint && definition.footprint.is_empty() {
+        return if prefab
+            .canonical_scene_prefab_document()
+            .automatic_placement_bounds_xz
+            .is_some()
+        {
+            SiteChoice::Pending
+        } else {
+            SiteChoice::Rejected
+        };
     }
     if let Some(model) = first_missing_prefab_collider_model_asset_id(prefab, &world.models) {
         let failed = prefab.loaded_model_asset_handle(model).is_none_or(|model| {
@@ -652,8 +672,7 @@ fn behavior_placement_supports_definition(definition: &PlaceableDefinition) -> b
     !definition.moving_footprint
         && definition.minimum_headroom_metres <= 0.0
         && !definition.constraints.contains_any(
-            PlacementConstraints::FLATTEN_TERRAIN_TO_PLACEMENT_HEIGHT
-                .with_additional_flags(PlacementConstraints::REQUIRE_PATH)
+            PlacementConstraints::REQUIRE_PATH
                 .with_additional_flags(PlacementConstraints::REQUIRE_WALL),
         )
 }

@@ -1,62 +1,81 @@
 use bevy::{platform::collections::HashSet, prelude::*};
-use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_game_data::{
+    behavior::{
+        action::modification::{BehaviorFact, BehaviorFactModificationOperation},
+        action_record::BehaviorAction,
+    },
+    world_definitions::staff_management::StaffJobKind,
+};
 
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterQuality;
 
 use super::{
-    staff_job_types::{JobClaim, JobProgress, StaffJob},
-    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted, TankWaterCleaned},
+    staff_job_types::{
+        JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask, TankCleaningRequestSite,
+    },
+    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
 };
 
+/// Applies the claimed task's own water-dirtiness change to its tank once
+/// the task finishes: `ZTBehChangeWaterDirtiness Clean="true"` leaves the
+/// water without dirt. A task that changes dirtiness any other way has no
+/// supported effect, so its job is withdrawn rather than completed.
 pub(crate) fn apply_completed_tank_maintenance_work(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    mut jobs: Query<(Entity, &StaffJob, &JobProgress, &JobClaim)>,
+    documents: Res<Assets<BehaviorDocumentAsset>>,
+    jobs: Query<(Entity, &StaffJob, &JobClaim, &StaffJobBehaviorTask), With<JobProgress>>,
+    sites: Query<&TankCleaningRequestSite>,
     mut tank_water_quality: Query<&mut WaterQuality>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
-    mut cleaned_tank_water: MessageWriter<TankWaterCleaned>,
-    mut cancellations: MessageReader<CancelStaffJobRequest>,
+    mut cancellations: ParamSet<(
+        MessageReader<CancelStaffJobRequest>,
+        MessageWriter<CancelStaffJobRequest>,
+    )>,
     mut cancelled_jobs: Local<HashSet<Entity>>,
 ) {
     cancelled_jobs.clear();
-    cancelled_jobs.extend(cancellations.read().map(|request| request.job));
-    let Some(catalogue) = active_definitions.get(&definitions) else {
-        return;
-    };
-    for (job_entity, job, _, claim) in &mut jobs {
+    cancelled_jobs.extend(cancellations.p0().read().map(|request| request.job));
+    for (job_entity, job, claim, behavior_task) in &jobs {
         // Cancellation is settled in Cleanup, after this terminal effect in Act.
         if job.kind != StaffJobKind::MaintainTank || cancelled_jobs.contains(&job_entity) {
             continue;
         }
-        let applied = match job.kind {
-            StaffJobKind::MaintainTank => catalogue.staff_water_cleaning().is_some_and(|policy| {
-                tank_water_quality
-                    .get_mut(job.target)
-                    .is_ok_and(|mut water_quality| {
-                        let quality_permille =
-                            (policy.value.clamp(0.0, 1.0) * 1000.0).round() as u16;
-                        water_quality.0 = quality_permille;
-                        cleaned_tank_water.write(TankWaterCleaned {
-                            staff: claim.staff,
-                            tank: job.target,
-                            policy: AssetId(policy.token.0),
-                            quality_permille,
-                            localization_key: AssetId(policy.localization_key.0),
-                        });
-                        true
+        let Some(operation) = documents
+            .get(&behavior_task.document)
+            .and_then(|document| document.behavior_task_at_index(behavior_task.declaration_index))
+            .filter(|task| task.id == behavior_task.task)
+            .and_then(|task| {
+                task.execution
+                    .lowered_actions()
+                    .iter()
+                    .filter_map(|action| match action {
+                        BehaviorAction::FactModifications(modifications) => Some(modifications),
+                        _ => None,
                     })
-            }),
-            _ => false,
+                    .flatten()
+                    .find(|modification| modification.modified_fact == BehaviorFact::WaterDirtiness)
+                    .map(|modification| modification.modification_operation)
+            })
+        else {
+            continue;
         };
-        if applied {
-            completed_jobs.write(StaffJobCompleted {
-                staff: claim.staff,
-                job: job_entity,
-                kind: job.kind,
-                target: job.target,
-            });
+        // A keeper cleans the tank the manager's request site lies in.
+        let tank = sites.get(job.target).map_or(job.target, |site| site.tank);
+        let Ok(mut water_quality) = tank_water_quality.get_mut(tank) else {
+            continue;
+        };
+        if operation != BehaviorFactModificationOperation::Clear {
+            cancellations
+                .p1()
+                .write(CancelStaffJobRequest { job: job_entity });
+            continue;
         }
+        water_quality.0 = 1000;
+        completed_jobs.write(StaffJobCompleted {
+            staff: claim.staff,
+            job: job_entity,
+            kind: job.kind,
+            target: job.target,
+        });
     }
 }

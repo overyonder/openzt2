@@ -1,7 +1,12 @@
 pub mod behavior_candidate_selection;
 pub mod behavior_entity_role_resolution;
+pub mod behavior_natural_water_target_types;
+pub mod behavior_pursuit_types;
 pub mod behavior_random_stream_state;
 pub mod behavior_set_start_request_types;
+pub mod behavior_synchronized_set_types;
 pub mod behavior_target_placement_types;
+pub mod behavior_task_effective_score_types;
 pub mod behavior_task_failure_transition;
+pub mod behavior_token_types;
 pub mod interaction_container_occupancy;

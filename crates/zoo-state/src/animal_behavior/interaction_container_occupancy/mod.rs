@@ -7,7 +7,7 @@ use openzt2_game_data::{
     world_definitions::world_objects::WorldObjectInteractionSlotDefinition, AssetId,
 };
 
-#[derive(Resource, Default)]
+#[derive(Resource, Default, Clone)]
 pub struct InteractionContainerOccupancy {
     members: HashMap<Entity, Vec<(Entity, usize)>>,
     docked: HashMap<Entity, Entity>,

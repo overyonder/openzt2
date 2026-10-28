@@ -7,7 +7,9 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::behavior::{
+    action::token::BehaviorTokenRecipient, action_record::BehaviorAction,
+};
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
@@ -15,24 +17,15 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     animal_health::types::Dead,
     behavior_task_execution_types::{
-        advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        abandon_behavior_task_for_reconsideration, advance_behavior_task_to_next_action,
+        find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
 };
 
-/// ChildOf identifies the recipient; the task's object references its token entity.
-#[derive(Component)]
-pub(super) struct BehaviorSelfToken {
-    pub(super) name: AssetId,
-    pub(super) available_at: u64,
-    pub(super) expires_at: u64,
-}
-
-#[derive(Component)]
-pub(super) struct ClaimedBehaviorSelfToken {
-    pub(super) execution_id: u64,
-}
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+};
 
 pub(super) fn register_token_execution(application: &mut App) {
     application.add_systems(
@@ -91,6 +84,7 @@ fn execute_current_self_token_deliveries(
         ),
         (Without<Dead>, Without<PendingBehaviorTaskFailure>),
     >,
+    recipients: Query<Has<BehaviorTaskExecutionState>, Without<Dead>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -137,13 +131,28 @@ fn execute_current_self_token_deliveries(
                     .tick
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
             };
+            let recipient = match delivery.recipient {
+                BehaviorTokenRecipient::Subject => actor,
+                BehaviorTokenRecipient::Target => {
+                    let Some(target) = task.target().filter(|target| recipients.contains(*target))
+                    else {
+                        continue;
+                    };
+                    target
+                }
+            };
+            // Reconsideration drops the recipient's current task before it
+            // chooses again with the delivered token.
+            if delivery.reconsider && recipients.get(recipient).is_ok_and(|busy| busy) {
+                abandon_behavior_task_for_reconsideration(recipient, &mut commands);
+            }
             commands.spawn((
                 BehaviorSelfToken {
                     name: delivery.token,
                     available_at: at_tick(delivery.delay),
-                    expires_at: at_tick(delivery.lifetime),
+                    expires_at: delivery.lifetime.map_or(u64::MAX, at_tick),
                 },
-                ChildOf(actor),
+                ChildOf(recipient),
             ));
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);

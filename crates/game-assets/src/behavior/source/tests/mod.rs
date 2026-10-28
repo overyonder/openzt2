@@ -178,6 +178,7 @@ fn spawn_set_preserves_authored_entity_joint_and_clip() {
         entity,
         subject_node,
         animation,
+        ..
     }] = sets[0].actions.lowered_actions()
     else {
         panic!("spawn expected");

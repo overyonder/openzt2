@@ -15,6 +15,7 @@ use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::Interac
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorCandidateRanking;
+use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::behavior_task_execution_types::SynchronizedBehaviorParticipant;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
@@ -107,7 +108,7 @@ pub(super) fn select_idle_guest_tasks(
     targets: Query<(Entity, &DefinitionId, &GlobalTransform, &WorldMember)>,
     held: Query<&DefinitionId>,
     occupancy: Res<InteractionContainerOccupancy>,
-    paths: Query<(Entity, &GlobalTransform, &WorldMember), With<PathTile>>,
+    paths: Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
     viewable_animals: Query<
         (&GlobalTransform, &Visibility, &WorldMember),
         (With<Animal>, With<HabitatMember>),
@@ -145,7 +146,7 @@ pub(super) fn select_idle_guest_tasks(
             let range_squared = viewing.ground_range_m * viewing.ground_range_m;
             paths
                 .iter()
-                .filter(|(_, path, path_world)| {
+                .filter(|(_, path, path_world, _)| {
                     viewable_animals
                         .iter()
                         .any(|(animal, visibility, animal_world)| {
@@ -158,8 +159,11 @@ pub(super) fn select_idle_guest_tasks(
                                     <= range_squared
                         })
                 })
-                .map(|(path, transform, path_world)| {
-                    (path, transform.translation(), path_world.root)
+                .map(|(path, transform, path_world, tile)| {
+                    let elevated = definitions
+                        .find_path(tile.definition)
+                        .is_some_and(|definition| definition.elevated);
+                    (path, transform.translation(), path_world.root, elevated)
                 })
                 .collect::<Vec<_>>()
         })
@@ -262,8 +266,9 @@ pub(super) fn select_idle_guest_tasks(
             let mut consider_target =
                 |target: Entity,
                  target_definition: Option<&WorldObjectDefinition>,
-                 is_path: bool,
+                 elevated_path: Option<bool>,
                  target_position: Vec3| {
+                    let is_path = elevated_path.is_some();
                     let is_self = target == guest;
                     if !candidate_requirements_are_satisfied(
                         &task.candidate_eligibility_requirements,
@@ -294,6 +299,7 @@ pub(super) fn select_idle_guest_tasks(
                                     fact,
                                     transform.translation(),
                                     target_position,
+                                    elevated_path,
                                 );
                             }
                             need_facts.satisfies(
@@ -369,13 +375,13 @@ pub(super) fn select_idle_guest_tasks(
                     );
                 };
             if task.targets[0] == "self" {
-                consider_target(guest, None, false, transform.translation());
+                consider_target(guest, None, None, transform.translation());
             } else if task.targets[0] == "path" {
                 // Other path sensors, such as litter disposal, are not modelled.
                 if task.sensor_tag == Some(view_sensor) {
-                    for &(path, position, root) in &viewing_paths {
+                    for &(path, position, root, elevated) in &viewing_paths {
                         if root == world.root {
-                            consider_target(path, None, true, position);
+                            consider_target(path, None, Some(elevated), position);
                         }
                     }
                 }
@@ -390,12 +396,13 @@ pub(super) fn select_idle_guest_tasks(
                     let Some(object) = definitions.find_object(target_definition.0) else {
                         continue;
                     };
-                    consider_target(target, Some(object), false, target_transform.translation());
+                    consider_target(target, Some(object), None, target_transform.translation());
                 }
             }
         }
         // The supported candidate subset cannot prove native singleton status.
-        let Some((document, declaration, task, target, object)) = ranking.finish(false) else {
+        let Some(((document, declaration, task, target, object), score)) = ranking.finish(false)
+        else {
             debug!(?guest, "idle guest found no task scoring above the minimum");
             continue;
         };
@@ -426,8 +433,15 @@ pub(super) fn select_idle_guest_tasks(
         }
         debug!(?guest, task = %task.name, ?target, self_target = target == guest,
             "idle guest chose a task");
+        let execution_id = executions.next();
+        commands.entity(guest).insert(BehaviorTaskEffectiveScore {
+            execution_id,
+            template_score: Some(task.priority.unwrap_or_default()),
+            linked_score: None,
+            selected_candidate_score: Some(score),
+        });
         commands.entity(guest).insert(BehaviorTaskExecutionState {
-            execution_id: executions.next(),
+            execution_id,
             program: task.id,
             target: Some(target),
             document: document.clone(),

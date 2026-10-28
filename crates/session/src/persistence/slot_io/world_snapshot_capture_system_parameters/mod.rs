@@ -50,11 +50,16 @@ use super::super::{
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
+    pub(super) behavior: super::behavior_snapshot_capture::BehaviorSnapshotCapture<'w, 's>,
+    pub(super) topology:
+        super::fence_topology_snapshot_section::FenceTopologySnapshotEntities<'w, 's>,
     pub(super) scenario: super::scenario_snapshot_section::ScenarioSnapshotCapture<'w, 's>,
     pub(super) placements: super::placement_snapshot_section::PlacementSnapshotEntities<'w, 's>,
     pub(super) donations: super::donation_snapshot_section::DonationSnapshotEntities<'w, 's>,
     pub(super) habitat_waste:
-        super::maintenance_snapshot_capture::HabitatWasteSnapshotEntities<'w, 's>,
+        super::maintenance_snapshot_capture::LooseWasteSnapshotEntities<'w, 's>,
+    pub(super) maintained_objects:
+        super::maintenance_snapshot_capture::MaintainedObjectSnapshotEntities<'w, 's>,
     pub(super) animals: super::animal_snapshot_capture::AnimalSnapshotEntities<'w, 's>,
     pub(super) native_crates:
         super::native_crate_snapshot_links::NativeCrateSnapshotEntities<'w, 's>,
@@ -79,10 +84,10 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
         'w,
         's,
         (
-            &'static PersistentId,
             &'static Tank,
             &'static TankGeometry,
             Option<&'static WaterQuality>,
+            &'static openzt2_zoo_state::habitat::habitat_types::HabitatRegion,
         ),
     >,
     pub(super) show_stages_with_snapshot_state: Query<

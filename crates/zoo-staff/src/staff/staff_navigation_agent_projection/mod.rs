@@ -40,7 +40,13 @@ pub(crate) fn project_authored_staff_locomotion_onto_staff_entities(
             max_speed_mps: staff_role_definition.move_speed_mps,
             // Staff movement has no authored acceleration limit.
             acceleration_mps2: f32::MAX,
-            capabilities: NavFlags::STAFF,
+            // An employee with authored swimming crosses water, such as a
+            // keeper entering a tank; routes keep the others on dry ground.
+            capabilities: if staff_role_definition.swimming.is_some() {
+                NavFlags(NavFlags::STAFF.0 | NavFlags::AMPHIBIOUS.0)
+            } else {
+                NavFlags::STAFF
+            },
         };
         if current_agent == Some(&agent) {
             continue;

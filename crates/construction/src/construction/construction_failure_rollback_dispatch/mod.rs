@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::CommitTankFloorEdit;
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEdit;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::CommitTankGeometryEdit;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEdit;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
 use openzt2_zoo_state::shows::show_platform_upgrade_types::CommitShowPlatformUpgradeEdit;
@@ -26,7 +26,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
     construction_transactions: Query<
         (
             Entity,
-            Option<&TankFloorEdit>,
+            Option<&TankGeometryEdit>,
             Option<&TerrainEdit>,
             Option<&TopologyEdit>,
             Option<&PreparedObjectPlacementEdit>,
@@ -37,7 +37,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
         ),
         Without<RollbackDispatched>,
     >,
-    mut tank_requests: MessageWriter<CommitTankFloorEdit>,
+    mut tank_requests: MessageWriter<CommitTankGeometryEdit>,
     mut terrain_rollback_requests: MessageWriter<CommitTerrainEdit>,
     mut topology_rollback_requests: MessageWriter<CommitTopologyEdit>,
     mut object_placement_rollback_requests: MessageWriter<ApplyPreparedObjectPlacementEditRequest>,
@@ -71,7 +71,7 @@ pub(crate) fn dispatch_construction_failure_rollback_to_changed_domains_once(
             }
         };
         if tank_edit.is_some() && domain_was_changed(progress.aquatic) {
-            tank_requests.write(CommitTankFloorEdit {
+            tank_requests.write(CommitTankGeometryEdit {
                 transaction: transaction_entity,
                 application: EditApplication::FailureRollback,
             });

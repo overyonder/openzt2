@@ -3,7 +3,7 @@ use bevy::{
     platform::collections::{HashMap, HashSet},
     prelude::*,
 };
-use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffRoleKind};
+use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
 
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;

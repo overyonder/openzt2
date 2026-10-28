@@ -1,23 +1,29 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    maintenance_snapshot_section_encoding::{
-        validate_habitat_waste_records, MAXIMUM_WASTE_RECORDS,
+    maintenance_snapshot_section_encoding::{validate_loose_waste_records, MAXIMUM_WASTE_RECORDS},
+    maintenance_snapshot_types::{
+        LooseWasteSnapshotKind, LooseWasteSnapshotRecord, MaintainedObjectSnapshotRecord,
     },
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{
+    AnimalHabitatWaste, AnimalWasteProductionSchedule, FacilityContainedWaste, LooseLitterWaste,
+    MaintainableObjectConditionPermille,
+};
+
+pub(in crate::persistence) type LooseWasteSnapshotFilter =
+    Or<(With<AnimalHabitatWaste>, With<LooseLitterWaste>)>;
 
 /// Whole waste entities, excluding resource entities as for animals.
-pub(in crate::persistence) type HabitatWasteSnapshotEntities<'w, 's> =
-    Query<'w, 's, EntityRef<'static>, (With<AnimalHabitatWaste>, Without<IsResource>)>;
+pub(in crate::persistence) type LooseWasteSnapshotEntities<'w, 's> =
+    Query<'w, 's, EntityRef<'static>, (LooseWasteSnapshotFilter, Without<IsResource>)>;
 
-pub(super) fn capture_habitat_waste_records(
-    waste: &HabitatWasteSnapshotEntities,
-) -> Result<Vec<HabitatWasteSnapshotRecord>, WorldSnapshotPersistenceFailure> {
+pub(super) fn capture_loose_waste_records(
+    waste: &LooseWasteSnapshotEntities,
+) -> Result<Vec<LooseWasteSnapshotRecord>, WorldSnapshotPersistenceFailure> {
     let count = waste.iter().len();
     if count > MAXIMUM_WASTE_RECORDS {
         return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
@@ -33,17 +39,75 @@ pub(super) fn capture_habitat_waste_records(
             return Err(failure);
         }
         let transform = entity.get::<Transform>().ok_or(failure)?;
-        let waste = entity.get::<AnimalHabitatWaste>().ok_or(failure)?;
-        records.push(HabitatWasteSnapshotRecord {
+        let (kind, units) = match (
+            entity.get::<AnimalHabitatWaste>(),
+            entity.get::<LooseLitterWaste>(),
+        ) {
+            (Some(waste), None) => (
+                LooseWasteSnapshotKind::AnimalHabitat,
+                waste.uncontained_waste_units,
+            ),
+            (None, Some(waste)) => (
+                LooseWasteSnapshotKind::Litter,
+                waste.uncontained_waste_units,
+            ),
+            _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
+        };
+        records.push(LooseWasteSnapshotRecord {
+            kind,
             persistent_identifier: id.0,
             definition: definition.0,
             translation: transform.translation.to_array(),
             rotation: transform.rotation.to_array(),
             scale: transform.scale.to_array(),
-            units: waste.uncontained_waste_units,
+            units,
         });
     }
     records.sort_unstable_by_key(|record| record.persistent_identifier);
-    validate_habitat_waste_records(&records)?;
+    validate_loose_waste_records(&records)?;
     Ok(records)
+}
+
+/// Entities carrying worn condition, retained bin waste or waste-production deadlines.
+pub(in crate::persistence) type MaintainedObjectSnapshotEntities<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static PersistentId,
+        Option<&'static MaintainableObjectConditionPermille>,
+        Option<&'static FacilityContainedWaste>,
+        Option<&'static AnimalWasteProductionSchedule>,
+    ),
+    (
+        Or<(
+            With<MaintainableObjectConditionPermille>,
+            With<FacilityContainedWaste>,
+            With<AnimalWasteProductionSchedule>,
+        )>,
+        Without<IsResource>,
+    ),
+>;
+
+pub(super) fn capture_maintained_object_records(
+    objects: &MaintainedObjectSnapshotEntities,
+) -> Vec<MaintainedObjectSnapshotRecord> {
+    let mut records = objects
+        .iter()
+        .map(
+            |(id, condition, waste, production)| MaintainedObjectSnapshotRecord {
+                persistent_identifier: id.0,
+                condition_permille: condition.map(|condition| condition.0),
+                contained_waste: waste.map(|waste| {
+                    [
+                        waste.contained_waste_units,
+                        waste.contained_waste_capacity_units,
+                    ]
+                }),
+                next_waste_production_tick: production
+                    .map(|production| production.next_production_tick),
+            },
+        )
+        .collect::<Vec<_>>();
+    records.sort_unstable_by_key(|record| record.persistent_identifier);
+    records
 }

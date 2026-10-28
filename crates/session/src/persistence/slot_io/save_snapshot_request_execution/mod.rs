@@ -165,8 +165,8 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
             );
             continue;
         }
-        let habitat_waste_records =
-            match super::maintenance_snapshot_capture::capture_habitat_waste_records(
+        let loose_waste_records =
+            match super::maintenance_snapshot_capture::capture_loose_waste_records(
                 &world_snapshot_capture_queries.habitat_waste,
             ) {
                 Ok(records) => records,
@@ -181,6 +181,28 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                     continue;
                 }
             };
+        let topology_snapshot_records =
+            match super::fence_topology_snapshot_section::capture_fence_topology_records(
+                &world_snapshot_capture_queries.topology,
+            ) {
+                Ok(records) => records,
+                Err(failure_reason) => {
+                    snapshot_scratch_storage.clear_logical_contents();
+                    publish_persistence_failure_for_slot_operation(
+                        &mut persistence_failures,
+                        WorldSnapshotPersistenceOperation::SaveToSlot,
+                        save_request.save_slot_identifier,
+                        failure_reason,
+                    );
+                    continue;
+                }
+            };
+        let maintenance_snapshot = super::maintenance_snapshot_types::MaintenanceSnapshot {
+            waste: loose_waste_records,
+            objects: super::maintenance_snapshot_capture::capture_maintained_object_records(
+                &world_snapshot_capture_queries.maintained_objects,
+            ),
+        };
         let mut animal_snapshot_records =
             match super::animal_snapshot_capture::capture_animal_snapshot_records(
                 &world_snapshot_capture_queries.animals,
@@ -369,6 +391,19 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 continue;
             }
         };
+        let behavior_snapshot_records = match world_snapshot_capture_queries.behavior.capture() {
+            Ok(records) => records,
+            Err(failure_reason) => {
+                snapshot_scratch_storage.clear_logical_contents();
+                publish_persistence_failure_for_slot_operation(
+                    &mut persistence_failures,
+                    WorldSnapshotPersistenceOperation::SaveToSlot,
+                    save_request.save_slot_identifier,
+                    failure_reason,
+                );
+                continue;
+            }
+        };
         let snapshot_container_encoding_result =
             append_captured_world_snapshot_sections_and_finalize_container(
                 &mut snapshot_scratch_storage.snapshot_container_bytes,
@@ -376,9 +411,10 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 scenario_snapshot.as_ref(),
                 animal_adoption_offer_inventory,
                 &animal_snapshot_records,
-                &habitat_waste_records,
+                &maintenance_snapshot,
                 &staff_snapshot_records,
                 &tank_snapshot_records,
+                &topology_snapshot_records,
                 &economy_snapshot_records,
                 &donation_snapshot_records,
                 &placement_snapshot_records,
@@ -390,6 +426,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &transport_snapshot_records,
                 &photo_snapshot_records,
                 &photo_challenge_progress_snapshot_records,
+                &behavior_snapshot_records,
             );
         if let Err(failure_reason) = snapshot_container_encoding_result {
             snapshot_scratch_storage.clear_logical_contents();

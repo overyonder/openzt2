@@ -7,10 +7,27 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 pub struct StaffJob {
     pub kind: StaffJobKind,
     pub target: Entity,
-    pub urgency: u16,
+    pub urgency: u32,
     /// Lowercase authored request token. Distinct tokens on one target are
     /// distinct jobs; a missing token cannot select a behavior task.
     pub token: Option<AssetId>,
+}
+
+/// Urgency of an authored staff request. A lower authored priority is served
+/// first, and a request without a positive priority is never dispatched.
+/// Positive floats have the same bit ordering as their numeric ordering.
+pub fn authored_staff_request_urgency(priority: f32) -> Option<u32> {
+    if !priority.is_finite() || priority <= 0.0 {
+        return None;
+    }
+    Some(u32::MAX - priority.to_bits())
+}
+
+/// The point in a dirty tank where the water-cleaning manager asks a keeper
+/// to work. It is the job's target: the keeper's own task moves there.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TankCleaningRequestSite {
+    pub tank: Entity,
 }
 
 /// The winning shipped behavior-task declaration selected when this job is claimed.

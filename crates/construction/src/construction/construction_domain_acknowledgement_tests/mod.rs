@@ -39,7 +39,7 @@ fn applying_initial_commit_progress_with_domain_statuses(
 fn construction_acknowledgement_test_application() -> App {
     let mut application = App::new();
     application
-        .add_message::<openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditAcknowledged>()
+        .add_message::<openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditAcknowledged>()
         .add_message::<TerrainEditAcknowledged>()
         .add_message::<TopologyEditAcknowledged>()
         .add_message::<ObjectPlacementEditApplicationAcknowledged>()

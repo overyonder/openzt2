@@ -54,6 +54,10 @@ pub(super) type PlacementSnapshotEntities<'w, 's> = Query<
         Has<PlacedObjectDefinitionReference>,
         Option<&'static ChildOf>,
     ),
+    (
+        Without<openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste>,
+        Without<openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste>,
+    ),
 >;
 
 fn placement_owns_definition(definitions: WorldDefinitionsView<'_>, id: AssetId) -> bool {

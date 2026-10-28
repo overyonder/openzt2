@@ -31,6 +31,7 @@ fn fence_preview_app() -> App {
         .init_resource::<TopologyGrid>()
         .init_resource::<PrimaryPointerInputState>()
         .init_resource::<UiPointerCapture>()
+        .init_resource::<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>()
         .insert_resource(ConstructionTool::Fence(AssetId::from_key("fence")))
         .add_message::<PlaceFence>()
         .add_message::<PlacePath>()
@@ -57,6 +58,8 @@ fn fence_preview_app() -> App {
             units: TerrainUnits {
                 cell_size_metres: 1.0,
                 base_height_metres: 0.0,
+                maximum_height_metres: f32::MAX,
+                minimum_water_height_metres: None,
             },
             presentation: TerrainPresentation {
                 water_distance_fade: Default::default(),

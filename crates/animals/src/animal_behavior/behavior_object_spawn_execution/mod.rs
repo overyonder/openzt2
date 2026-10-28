@@ -2,6 +2,7 @@
 
 mod delivery;
 mod preparation;
+mod spawn_pose;
 mod types;
 
 use delivery::deliver_behavior_object_spawns;

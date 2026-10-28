@@ -18,13 +18,9 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
     nodes[0].eligibility_flags.0 |= NavFlags::WATER.0;
     nodes[4].clearance_centimetres = 10;
     nodes[8].eligibility_flags = NavFlags::GUEST;
-    let mut navigation = ActiveTerrainDerivedNavigationGraph::new(TerrainDerivedNavigationGraph {
-        terrain_cell_size_centimetres: 100,
-        terrain_cells_per_tile: 4,
-        terrain_tile_size_centimetres: 400,
-        terrain_tile_grid_dimensions: [1, 1],
-        navigation_nodes: nodes.into_boxed_slice(),
-    });
+    let mut navigation = ActiveTerrainDerivedNavigationGraph::new(
+        TerrainDerivedNavigationGraph::from_terrain_nodes(100, 4, [1, 1], nodes.into_boxed_slice()),
+    );
     let region = HabitatRegion {
         topology_cells: [
             IVec2::new(3, -1),

@@ -67,6 +67,7 @@ pub(super) fn bind_fence(
             ),
             diagonal_curve_135: asset(record, &["diagonalCurve135Prefab", "fence45curve135"]),
         },
+        top_segments: None,
         gate_policy: FenceGatePolicy {
             prefab: asset(record, &["gatePrefab", "gate", "gateDefinition"]),
             open_animation: record

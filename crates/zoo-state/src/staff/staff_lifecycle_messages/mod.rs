@@ -5,7 +5,7 @@ use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, Asset
 pub struct StaffJobRequest {
     pub kind: StaffJobKind,
     pub target: Entity,
-    pub urgency: u16,
+    pub urgency: u32,
     /// Lowercase authored request token. Distinct tokens on one target are
     /// distinct jobs; a missing token cannot select a behavior task.
     pub token: Option<AssetId>,
@@ -55,14 +55,4 @@ pub struct StaffJobCancelled {
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CancelStaffJobRequest {
     pub job: Entity,
-}
-
-/// Reports application of the authored staff cleanliness policy to a tank.
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TankWaterCleaned {
-    pub staff: Entity,
-    pub tank: Entity,
-    pub policy: AssetId,
-    pub quality_permille: u16,
-    pub localization_key: AssetId,
 }

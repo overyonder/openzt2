@@ -627,11 +627,9 @@ mod geometric_wave_state_tests {
                     assert!((-100.0..=0.0).contains(&channel.centre_y));
                     assert!(channel.phase.is_finite());
                 }
-                assert!(
-                    state
-                        .maximum_horizontal_and_vertical_shader_displacement(50.0)
-                        .is_some()
-                );
+                assert!(state
+                    .maximum_horizontal_and_vertical_shader_displacement(50.0)
+                    .is_some());
             }
         }
     }

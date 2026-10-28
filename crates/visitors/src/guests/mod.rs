@@ -22,6 +22,7 @@ mod guest_task_need_facts;
 mod guest_task_progress_diagnostics;
 mod guest_task_target_loss;
 mod guest_view_animals_execution;
+mod guest_view_event_meter_application;
 mod guest_viewing_lifecycle;
 pub(crate) mod view_event_execution;
 
@@ -89,10 +90,12 @@ impl Plugin for GuestsPlugin {
                 FixedUpdate,
                 (
                     initialize_spawned_guests,
+                    guest_view_event_meter_application::initialize_guest_species_view_counts,
                     guest_task_target_loss::fail_guest_tasks_whose_target_is_gone,
                     hydrate_viewing_opportunities,
                     decay_guest_needs,
-                    guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications,
+                    guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications
+                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
                     guest_task_need_facts::observe_guest_need_triggers,
                     survey_guest_needs,
                     react_to_visible_litter,
@@ -116,7 +119,9 @@ impl Plugin for GuestsPlugin {
                     begin_viewing.in_set(GuestViewingBegin),
                     guest_viewing_lifecycle::revoke_unowned_guest_observations,
                     advance_viewing,
+                    view_event_execution::deliver_view_events_to_current_viewers,
                     apply_guest_reactions.in_set(GuestReactionApplication),
+                    guest_view_event_meter_application::apply_accepted_view_events_to_view_meters,
                     cancel_failed_guest_destinations,
                 )
                     .chain()

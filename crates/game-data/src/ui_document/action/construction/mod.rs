@@ -111,6 +111,8 @@ pub enum UiTankEditMode {
     LowerWall,
     RaiseFloor,
     LowerFloor,
+    Fill,
+    Drain,
 }
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UiTerrainEditMode {

@@ -30,3 +30,12 @@ pub struct PendingWagePayment {
     pub staff: Entity,
     pub due_tick: u64,
 }
+
+/// A depth below the water surface that a behavior, such as a keeper
+/// cleaning a tank, holds a swimming employee at.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct StaffSubmergedDepth(pub f32);
+
+/// The gate traversal owner controls the employee's height while climbing.
+#[derive(Component, Debug)]
+pub struct StaffClimbingTankGate;

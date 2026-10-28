@@ -4,7 +4,7 @@ use openzt2_game_data::world_definitions::object_placement::PlacementConstraints
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEdit;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEdit;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
@@ -32,7 +32,7 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<&ConstructionPreview, Without<TankFloorEdit>>,
+    previews: Query<&ConstructionPreview, Without<TankGeometryEdit>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     terrain_index: Res<TerrainIndex>,

@@ -11,6 +11,8 @@ fn valid_test_tank_geometry() -> TankGeometry {
         floor_height: 0.0,
         wall_height: 5.0,
         water_height: 2.0,
+        water_height_limit: 1_000_000.0,
+        wall_base_height: 0.0,
         area: 10.0,
         volume: 20.0,
     }

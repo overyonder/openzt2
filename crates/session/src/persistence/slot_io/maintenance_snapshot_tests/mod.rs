@@ -3,12 +3,14 @@ use super::{
         snapshot_container_encoding_and_validation::*,
         snapshot_container_types::WorldSnapshotSectionKind,
     },
-    maintenance_snapshot_application::apply_habitat_waste_records,
-    maintenance_snapshot_capture::{capture_habitat_waste_records, HabitatWasteSnapshotEntities},
+    maintenance_snapshot_application::apply_loose_waste_records,
+    maintenance_snapshot_capture::{capture_loose_waste_records, LooseWasteSnapshotEntities},
     maintenance_snapshot_section_encoding::{
-        decode_habitat_waste_records, encode_habitat_waste_records,
+        decode_maintenance_snapshot, encode_maintenance_snapshot,
     },
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
+    maintenance_snapshot_types::{
+        LooseWasteSnapshotRecord, MaintainedObjectSnapshotRecord, MaintenanceSnapshot,
+    },
 };
 use bevy::{ecs::system::SystemState, prelude::*};
 use openzt2_game_assets::{
@@ -64,26 +66,26 @@ fn fixture() -> (App, Entity) {
     (app, root)
 }
 
-fn capture(world: &mut World) -> Vec<HabitatWasteSnapshotRecord> {
-    let mut state = SystemState::<HabitatWasteSnapshotEntities>::new(world);
-    capture_habitat_waste_records(&state.get(world).unwrap()).unwrap()
+fn capture(world: &mut World) -> Vec<LooseWasteSnapshotRecord> {
+    let mut state = SystemState::<LooseWasteSnapshotEntities>::new(world);
+    capture_loose_waste_records(&state.get(world).unwrap()).unwrap()
 }
 
 fn restore(
     app: &mut App,
     root: Entity,
-    records: &[HabitatWasteSnapshotRecord],
+    records: &[LooseWasteSnapshotRecord],
     prefabs: &[Option<Handle<ScenePrefabAsset>>],
 ) {
     let mut state = SystemState::<(
         Commands,
         ResMut<PersistentIdAllocator>,
         Res<Assets<ScenePrefabAsset>>,
-        Query<Entity, With<AnimalHabitatWaste>>,
+        Query<Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
     )>::new(app.world_mut());
     {
         let (mut commands, mut ids, assets, baseline) = state.get_mut(app.world_mut()).unwrap();
-        apply_habitat_waste_records(
+        apply_loose_waste_records(
             &mut commands,
             records,
             prefabs,
@@ -97,9 +99,20 @@ fn restore(
     state.apply(app.world_mut());
 }
 
-fn round_trip(records: &[HabitatWasteSnapshotRecord]) -> Vec<HabitatWasteSnapshotRecord> {
+fn round_trip(records: &[LooseWasteSnapshotRecord]) -> Vec<LooseWasteSnapshotRecord> {
+    let snapshot = MaintenanceSnapshot {
+        waste: records.to_vec(),
+        objects: Vec::new(),
+    };
+    decode_section(
+        &encode_maintenance_snapshot(&snapshot).unwrap(),
+        records.len(),
+    )
+    .waste
+}
+
+fn decode_section(payload: &[u8], count: usize) -> MaintenanceSnapshot {
     let profile = AssetId([7; 16]);
-    let payload = encode_habitat_waste_records(records).unwrap();
     let mut bytes = Vec::new();
     initialize_empty_world_snapshot_container(&mut bytes, profile);
     for kind in WorldSnapshotSectionKind::ENCODING_ORDER {
@@ -107,28 +120,204 @@ fn round_trip(records: &[HabitatWasteSnapshotRecord]) -> Vec<HabitatWasteSnapsho
             &mut bytes,
             kind,
             if kind == WorldSnapshotSectionKind::Maintenance {
-                records.len() as u32
+                count as u32
             } else {
                 0
             },
             |bytes| {
                 if kind == WorldSnapshotSectionKind::Maintenance {
-                    bytes.extend_from_slice(&payload);
+                    bytes.extend_from_slice(payload);
                 }
             },
         )
         .unwrap();
     }
-    finalize_world_snapshot_container_header_and_checksum(&mut bytes, records.len() as u32)
-        .unwrap();
+    finalize_world_snapshot_container_header_and_checksum(&mut bytes, count as u32).unwrap();
     let validated =
         validate_world_snapshot_container_and_section_directory(&bytes, profile).unwrap();
     assert_eq!(validated.container_header.format_version, 13);
-    decode_habitat_waste_records(
+    decode_maintenance_snapshot(
         &bytes,
         validated.section_directory_entry(WorldSnapshotSectionKind::Maintenance),
     )
     .unwrap()
+}
+
+#[test]
+fn object_condition_and_bin_contents_round_trip_beside_legacy_waste_arrays() {
+    let waste = LooseWasteSnapshotRecord {
+        kind: Default::default(),
+        persistent_identifier: 5,
+        definition: AssetId([3; 16]),
+        translation: [1.0, 2.0, 3.0],
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        scale: [1.0; 3],
+        units: 2,
+    };
+    let snapshot = MaintenanceSnapshot {
+        waste: vec![waste.clone()],
+        objects: vec![
+            MaintainedObjectSnapshotRecord {
+                persistent_identifier: 7,
+                condition_permille: Some(640),
+                contained_waste: None,
+                next_waste_production_tick: None,
+            },
+            MaintainedObjectSnapshotRecord {
+                persistent_identifier: 9,
+                condition_permille: Some(1_000),
+                contained_waste: Some([3, 10]),
+                next_waste_production_tick: None,
+            },
+        ],
+    };
+    assert_eq!(
+        decode_section(&encode_maintenance_snapshot(&snapshot).unwrap(), 3),
+        snapshot
+    );
+    // Saves written before object state hold a bare waste array.
+    let mut legacy = serde_json::to_value(&vec![waste.clone()]).unwrap();
+    legacy[0].as_object_mut().unwrap().remove("kind");
+    let legacy = serde_json::to_vec(&legacy).unwrap();
+    assert_eq!(
+        decode_section(&legacy, 1),
+        MaintenanceSnapshot {
+            waste: vec![waste],
+            objects: Vec::new(),
+        }
+    );
+}
+
+#[test]
+fn litter_and_animal_waste_round_trip_with_their_distinct_cleanup_kinds() {
+    use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
+
+    let (mut source, source_root) = fixture();
+    let world = WorldMember { root: source_root };
+    source.world_mut().spawn((
+        PersistentId(11),
+        DefinitionId(AssetId([3; 16])),
+        Transform::from_translation(Vec3::new(2.0, 0.0, 3.0)),
+        world,
+        AnimalHabitatWaste {
+            uncontained_waste_units: 2,
+        },
+    ));
+    source.world_mut().spawn((
+        PersistentId(13),
+        DefinitionId(AssetId([5; 16])),
+        Transform::from_translation(Vec3::new(4.0, 0.0, 5.0)),
+        world,
+        LooseLitterWaste {
+            uncontained_waste_units: 3,
+        },
+    ));
+    let records = round_trip(&capture(source.world_mut()));
+    let (mut destination, destination_root) = fixture();
+    restore(&mut destination, destination_root, &records, &[None, None]);
+    assert_eq!(capture(destination.world_mut()), records);
+}
+
+#[test]
+fn maintained_object_state_and_animal_waste_deadlines_survive_entity_remapping() {
+    use super::maintenance_snapshot_application::apply_maintained_object_records;
+    use super::maintenance_snapshot_capture::{
+        capture_maintained_object_records, MaintainedObjectSnapshotEntities,
+    };
+    use openzt2_zoo_state::maintenance::maintenance_types::{
+        AnimalWasteProductionSchedule, FacilityContainedWaste, MaintainableObjectConditionPermille,
+    };
+
+    let (mut source, _) = fixture();
+    source.world_mut().spawn((
+        PersistentId(7),
+        MaintainableObjectConditionPermille(640),
+        FacilityContainedWaste {
+            contained_waste_units: 3,
+            contained_waste_capacity_units: 10,
+        },
+    ));
+    source.world_mut().spawn((
+        PersistentId(9),
+        AnimalWasteProductionSchedule {
+            next_production_tick: 293,
+        },
+    ));
+    let mut capture = SystemState::<MaintainedObjectSnapshotEntities>::new(source.world_mut());
+    let objects = capture_maintained_object_records(&capture.get(source.world()).unwrap());
+    let snapshot = MaintenanceSnapshot {
+        waste: Vec::new(),
+        objects,
+    };
+    let decoded = decode_section(
+        &encode_maintenance_snapshot(&snapshot).unwrap(),
+        snapshot.objects.len(),
+    );
+
+    let mut destination = App::new();
+    destination.add_plugins(openzt2_zoo_staff::maintenance::MaintenancePlugin);
+    for _ in 0..8 {
+        destination.world_mut().spawn_empty();
+    }
+    let facility = destination
+        .world_mut()
+        .spawn((
+            PersistentId(7),
+            MaintainableObjectConditionPermille(1_000),
+            FacilityContainedWaste {
+                contained_waste_units: 0,
+                contained_waste_capacity_units: 10,
+            },
+        ))
+        .id();
+    let animal = destination.world_mut().spawn(PersistentId(9)).id();
+    let identities = std::collections::BTreeMap::from([(7, facility), (9, animal)]);
+    let mut commands = SystemState::<Commands>::new(destination.world_mut());
+    apply_maintained_object_records(
+        &mut commands.get_mut(destination.world_mut()).unwrap(),
+        &decoded.objects,
+        &identities,
+    );
+    commands.apply(destination.world_mut());
+    let mut capture = SystemState::<MaintainedObjectSnapshotEntities>::new(destination.world_mut());
+    assert_eq!(
+        capture_maintained_object_records(&capture.get(destination.world()).unwrap()),
+        snapshot.objects
+    );
+    let totals = destination
+        .world()
+        .resource::<IncrementalZooCleanlinessTotals>();
+    assert_eq!(totals.maintainable_object_count, 1);
+    assert_eq!(totals.maintainable_condition_permille_sum, 640);
+    assert_eq!(totals.contained_waste_units, 3);
+    assert_eq!(totals.contained_waste_capacity_units, 10);
+}
+
+#[test]
+fn maintenance_encoder_rejects_a_combined_record_count_the_decoder_cannot_read() {
+    let snapshot = MaintenanceSnapshot {
+        waste: vec![LooseWasteSnapshotRecord {
+            kind: Default::default(),
+            persistent_identifier: 1,
+            definition: AssetId([3; 16]),
+            translation: [0.0; 3],
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+            units: 1,
+        }],
+        objects: (0..super::maintenance_snapshot_section_encoding::MAXIMUM_WASTE_RECORDS)
+            .map(|index| MaintainedObjectSnapshotRecord {
+                persistent_identifier: index as u64 + 2,
+                condition_permille: Some(1_000),
+                contained_waste: None,
+                next_waste_production_tick: None,
+            })
+            .collect(),
+    };
+    assert_eq!(
+        encode_maintenance_snapshot(&snapshot),
+        Err(super::super::persistence_failure_types::WorldSnapshotPersistenceFailure::CapacityExceeded)
+    );
 }
 
 #[test]
@@ -338,7 +527,8 @@ fn restored_prefab_preserves_saved_root_pose_and_removes_its_children_with_waste
             rail_camera: None,
             dependencies: vec![],
         }));
-    let record = HabitatWasteSnapshotRecord {
+    let record = LooseWasteSnapshotRecord {
+        kind: Default::default(),
         persistent_identifier: 7,
         definition: AssetId::from_key("test_waste"),
         translation: [9.0, 2.0, 8.0],

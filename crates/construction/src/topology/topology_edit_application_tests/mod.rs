@@ -61,6 +61,7 @@ fn undo_and_redo_restore_stable_identity_and_connectivity() {
                     open: true,
                     locked: false,
                 }),
+                wall_top: None,
             },
         ]
         .into_boxed_slice(),

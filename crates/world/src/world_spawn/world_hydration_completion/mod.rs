@@ -1,9 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_assets::asset_source::AssetArchives;
 use openzt2_interface_state::shell::shell_screen_presentation_types::LoadingScreen;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::{TerrainChunkRejected, TerrainRenderChunk};
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_game_assets::asset_source::AssetArchives;
 use openzt2_world_state::simulation_time::simulation_time_resource_removal::remove_world_simulation_time_resources;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_completion::WorldLoadFinished;
@@ -14,6 +12,10 @@ use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOp
 use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
 use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::{
+    TerrainChunkRejected, TerrainRenderChunk,
+};
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 
 /// Wait for the loading document before cached hydration can occupy the frame.
 pub(super) fn loading_screen_is_ready(
@@ -82,8 +84,10 @@ pub fn complete_or_fail_finished_world_hydration(
         });
         drop(performance_timer);
         performance.finish_and_report(&archives, "failed");
-    } else if pending.is_complete() && unprojected_terrain.is_empty()
-        && !starting_animals.iter().any(|member| member.root == root) {
+    } else if pending.is_complete()
+        && unprojected_terrain.is_empty()
+        && !starting_animals.iter().any(|member| member.root == root)
+    {
         // Surface composition stalls frames for seconds; keep it behind the loading screen.
         commands.entity(root).insert(WorldLoadCompleted);
         finished.write(WorldLoadFinished {

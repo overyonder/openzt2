@@ -96,6 +96,9 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
             | "config/status3.xml"
             | "config/tankmgr.xml"
             | "config/cleantankaction.xml"
+            | "config/freeform_mode.xml"
+            | "config/challenge_mode.xml"
+            | "config/campaign_mode.xml"
     )
 }
 
@@ -414,6 +417,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     index!(Maintenance, maintenance_definitions);
     index!(Staff, staff);
     index!(StaffJob, staff_jobs);
+    index!(StaffTankCleaningRequest, staff_tank_cleaning_requests);
     index!(StaffRequest, staff_requests);
     index!(Guest, guests);
     index!(ViewingOpportunity, viewing_opportunities);
@@ -500,6 +504,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(TankSurface, tank_surface_policy);
     singleton!(TankDepth, tank_depth_policy);
     singleton!(TankEdit, tank_edit_policy);
+    singleton!(FencePlacementMode, fence_placement_mode_policy);
     singleton!(ShowPresentation, show_presentation);
     singleton!(ShowScheduling, show_scheduling);
     singleton!(ShowScoring, show_scoring);

@@ -326,7 +326,7 @@ fn parse_authored_bool(
     }
 }
 
-fn lower_authored_staff_request_data(
+pub(super) fn lower_authored_staff_request_data(
     record: &RecordView<'_, '_>,
     controller: &'_ OrderedSourceDocumentNode,
 ) -> Result<StaffRequestData, BindError> {

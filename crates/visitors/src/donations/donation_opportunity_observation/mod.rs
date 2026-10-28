@@ -66,7 +66,6 @@ pub(super) fn hydrate_animal_donation_opportunities(
 pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
     mut commands: Commands,
     mut reactions: MessageReader<GuestReactionApplied>,
-    mut events: MessageReader<crate::guests::view_event_execution::BehaviorViewEventEmitted>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -80,6 +79,7 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
             &GuestFavouriteAnimal,
             Option<&DonationObservation>,
             Option<&GuestDonationMeters>,
+            &GlobalTransform,
         ),
         (
             With<Guest>,
@@ -88,9 +88,13 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
             Without<DonationPaymentRequested>,
         ),
     >,
-    opportunities: Query<(&DonationOpportunity, &WorldMember, &SpeciesHandle)>,
+    opportunities: Query<(
+        &DonationOpportunity,
+        &WorldMember,
+        &SpeciesHandle,
+        &GlobalTransform,
+    )>,
 ) {
-    let events: Vec<_> = events.read().collect();
     let Some(definitions) = active_definitions.get(&definitions) else {
         reactions.clear();
         return;
@@ -105,7 +109,7 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         if reaction.kind != GuestMemoryKind::AnimalView || issued.contains(&reaction.guest) {
             continue;
         }
-        let Ok((viewing, phase, world, archetype, favourite, observation, stored_meters)) =
+        let Ok((viewing, phase, world, archetype, favourite, observation, stored_meters, position)) =
             guests.get(reaction.guest)
         else {
             continue;
@@ -121,30 +125,26 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         let Some(origin) = reaction.view_event else {
             continue;
         };
-        let Some(event) = events
-            .iter()
-            .find(|event| event.event_id == origin.event_id && event.source == reaction.subject)
-        else {
-            continue;
-        };
         let Some(row) = definitions
-            .find_object(event.source_definition)
+            .find_object(origin.source_definition)
             .and_then(|object| {
                 object
                     .view_data
                     .iter()
-                    .find(|row| row.name == event.view_key)
+                    .find(|row| row.name == origin.view_key)
             })
         else {
             continue;
         };
-        let Some(guest_policy) = definitions
+        let Some((guest_definition, guest_policy, viewing_policy)) = definitions
             .find_guest(archetype.0)
-            .and_then(|guest| guest.donation)
+            .and_then(|guest| Some((guest, guest.donation?, definitions.guest_viewing()?)))
         else {
             continue;
         };
-        let Ok((opportunity, subject_world, handle)) = opportunities.get(reaction.subject) else {
+        let Ok((opportunity, subject_world, handle, subject_position)) =
+            opportunities.get(reaction.subject)
+        else {
             continue;
         };
         if subject_world.root != world.root {
@@ -161,6 +161,14 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         } else {
             1.0
         };
+        let distance_factor =
+            openzt2_zoo_state::guests::guest_simulation_calculations::animal_view_distance_factor(
+                guest_definition.view_scoring,
+                position
+                    .translation()
+                    .distance(subject_position.translation()),
+                viewing_policy.ground_range_m,
+            );
         let meters = changed_meters
             .entry(reaction.guest)
             .or_insert_with(|| stored_meters.cloned().unwrap_or_default());
@@ -169,7 +177,7 @@ pub(super) fn observe_donation_opportunities_after_applied_viewing_reactions(
         // animal factor scales the score; a threshold funds one donation attempt.
         let Some(amount) = advance_species_donation_meter(
             meter,
-            row.donation_score,
+            row.donation_score * distance_factor,
             factor,
             guest_policy.threshold,
             animal_policy.maximum_species_factor,
@@ -206,7 +214,7 @@ fn advance_species_donation_meter(
     {
         return None;
     }
-    let next = (*meter + score * preferred_factor).max(0.0);
+    let next = *meter + score * preferred_factor;
     if !next.is_finite() {
         return None;
     }

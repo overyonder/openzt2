@@ -41,6 +41,7 @@ pub struct ConstructionPlacementPolicy {
     pub terrain_flatten_height_cm: i16,
     pub terrain_flatten_strength_tenths_per_second: u16,
     pub fence_shape: FencePlacementShape,
+    pub fence_heading_eighth_turns: u8,
     pub elevated_path_grade: ElevatedPathGrade,
     pub elevated_path_height_steps: i16,
     pub sky_tower_height_steps: i16,
@@ -70,6 +71,8 @@ pub enum TankEditKind {
     LowerWall,
     RaiseFloor,
     LowerFloor,
+    Fill,
+    Drain,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -99,6 +102,7 @@ impl Default for ConstructionPlacementPolicy {
             terrain_flatten_height_cm: 0,
             terrain_flatten_strength_tenths_per_second: 30,
             fence_shape: FencePlacementShape::Freeform,
+            fence_heading_eighth_turns: 0,
             elevated_path_grade: ElevatedPathGrade::Flat,
             elevated_path_height_steps: 0,
             sky_tower_height_steps: 0,

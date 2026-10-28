@@ -45,6 +45,10 @@ pub(in crate::persistence) struct WorldSnapshotApplicationMessages<'w, 's> {
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
+    pub(super) behavior:
+        super::behavior_snapshot_application::parameters::BehaviorSnapshotApplication<'w, 's>,
+    pub(super) topology:
+        super::fence_topology_snapshot_section::FenceTopologySnapshotApplication<'w, 's>,
     pub(super) scenario: super::scenario_snapshot_section::ScenarioSnapshotApplication<'w, 's>,
     pub(super) placements: super::placement_snapshot_section::PlacementSnapshotEntities<'w, 's>,
     pub(super) placement_models: Res<'w, Assets<bevy::gltf::Gltf>>,
@@ -61,12 +65,8 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
     >,
     pub(super) photo_baseline:
         super::photo_snapshot_baseline_readiness::PhotoSnapshotBaselineReadiness<'w, 's>,
-    pub(super) baseline_waste: Query<
-        'w,
-        's,
-        Entity,
-        With<openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste>,
-    >,
+    pub(super) baseline_waste:
+        Query<'w, 's, Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
     pub(super) prefabs: Res<'w, Assets<openzt2_game_assets::scene_prefab::ScenePrefabAsset>>,
     pub(super) asset_server: Res<'w, AssetServer>,
     pub(super) baseline_animals:

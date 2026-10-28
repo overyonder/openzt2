@@ -1,7 +1,7 @@
 //! Effect parameter and transform register updates.
 
 use super::super::resolved_effect_transform_bindings::{
-    EffectDrawTransforms, EffectRenderViewTransforms, MODEL_INPUT, ResolvedEffectTransformSemantic,
+    EffectDrawTransforms, EffectRenderViewTransforms, ResolvedEffectTransformSemantic, MODEL_INPUT,
     VIEW_INPUT,
 };
 use super::{D3d9ProgrammableShaderStage, EffectPassMaterial};

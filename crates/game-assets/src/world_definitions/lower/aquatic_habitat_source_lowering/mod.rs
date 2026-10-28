@@ -18,6 +18,10 @@ pub(super) fn bind_tank(
         max_depth_cm: required_number(record, &["maxDepthCm", "maximumDepthCm"])?,
         capacity_litres_per_cell: required_number(record, &["capacityLitresPerCell"])?,
         filtration_per_day: required_number(record, &["filtrationPerDay"])?,
+        opaque_wall_material: record
+            .value(&["opaqueMat"])
+            .filter(|value| !value.trim().is_empty())
+            .map(tank_wall_material_asset_path),
     });
     Ok(())
 }
@@ -54,4 +58,18 @@ pub(super) fn bind_aquatic(
             )?,
         });
     Ok(())
+}
+
+pub(super) fn tank_wall_material_asset_path(reference: &str) -> String {
+    let reference = crate::source_document::path::AssetPath::new(reference.trim()).key();
+    let file = if reference.ends_with(".bfmat") {
+        reference
+    } else {
+        format!("{reference}.bfmat")
+    };
+    if file.contains('/') {
+        file
+    } else {
+        format!("materials/{file}")
+    }
 }

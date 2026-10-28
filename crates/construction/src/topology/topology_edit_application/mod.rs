@@ -11,6 +11,11 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
 use crate::topology::topology_edit_outcome_messages::write_topology_edit_acknowledgement;
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::{
+    tank_habitat_seed_cell, PendingTankRestoration, Tank, TankGeometry, TankTopologyRestorations,
+    TankWallTopHeight, WaterQuality,
+};
+use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::gate_operation_types::GateAutoClose;
@@ -20,6 +25,7 @@ use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEdit;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyEditAcknowledged;
 use openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot;
+use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
@@ -28,7 +34,6 @@ use openzt2_zoo_state::topology::topology_graph_types::TileSurface;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
-use openzt2_zoo_state::topology::topology_graph_types::topology_cell_rectangle;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_cell_bounds;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge_world_transform;
 use openzt2_zoo_state::topology::topology_grid_geometry::merge_topology_changed_cell_bounds;
@@ -261,7 +266,14 @@ fn find_adjacent_added_fence_cell(
 pub(super) fn apply_committed_topology_edit(
     mut commands: Commands,
     mut requests: MessageReader<CommitTopologyEdit>,
-    edits: Query<&TopologyEdit>,
+    edits: Query<(&TopologyEdit, Option<&TankTopologyRestorations>)>,
+    tanks: Query<(
+        &Tank,
+        &TankGeometry,
+        &WaterQuality,
+        &HabitatRegion,
+        &WorldMember,
+    )>,
     roots: Query<Entity, With<WorldRoot>>,
     members: Query<&WorldMember>,
     persistent: Query<(Entity, &PersistentId)>,
@@ -283,7 +295,7 @@ pub(super) fn apply_committed_topology_edit(
         return;
     };
     for request in requests.read() {
-        let Ok(edit) = edits.get(request.transaction) else {
+        let Ok((edit, restorations)) = edits.get(request.transaction) else {
             write_topology_edit_acknowledgement(request, false, &mut acknowledged);
             continue;
         };
@@ -358,6 +370,46 @@ pub(super) fn apply_committed_topology_edit(
                 .count(),
         );
 
+        let mut restorations = restorations.cloned().unwrap_or_default();
+        let mut captured = Vec::new();
+        for (tank, geometry, quality, region, member) in &tanks {
+            if member.root != root
+                || !remove.iter().any(|snapshot| {
+                    current
+                        .get(&snapshot.id().0)
+                        .is_some_and(|entity| region.boundary_fence_entities.contains(entity))
+                })
+            {
+                continue;
+            }
+            let Some(seed_cell) = tank_habitat_seed_cell(region) else {
+                continue;
+            };
+            captured.push(PendingTankRestoration {
+                seed_cell,
+                definition: tank.definition,
+                geometry: *geometry,
+                water_quality: *quality,
+                water_limit_missing: false,
+            });
+        }
+        let restoring_created = std::ptr::eq(add, &edit.created);
+        let restore = if restoring_created {
+            &restorations.created
+        } else {
+            &restorations.removed
+        };
+        for image in restore.iter() {
+            commands.spawn((*image, WorldMember { root }));
+        }
+        if !captured.is_empty() {
+            if restoring_created {
+                restorations.removed = captured.into_boxed_slice();
+            } else {
+                restorations.created = captured.into_boxed_slice();
+            }
+        }
+        commands.entity(request.transaction).insert(restorations);
         let mut resolved = current;
         let mut bounds: Option<IRect> = None;
         for snapshot in remove {
@@ -412,6 +464,7 @@ pub(super) fn apply_committed_topology_edit(
                     a,
                     b,
                     gate,
+                    wall_top,
                 } => {
                     let (Some(&a_entity), Some(&b_entity)) =
                         (resolved.get(&a.0), resolved.get(&b.0))
@@ -440,6 +493,9 @@ pub(super) fn apply_committed_topology_edit(
                         .id();
                     if let Some(gate) = gate {
                         commands.entity(entity).insert(gate);
+                    }
+                    if let Some(top) = wall_top {
+                        commands.entity(entity).insert(top);
                     }
                     let fence = if gate.is_some() {
                         definitions.find_gate_fence(definition)

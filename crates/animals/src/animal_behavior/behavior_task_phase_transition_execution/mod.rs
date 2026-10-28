@@ -69,6 +69,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
                 });
                 commands.entity(actor_entity).remove::<(
                     BehaviorTaskExecutionState,
+                    openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
                     PendingBehaviorTaskFailure,
                     PendingBehaviorAnimationClipCompletion,
                     PendingBehaviorDockingCompletion,
@@ -163,6 +164,7 @@ pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final
         }
         commands.entity(actor_entity).remove::<(
             BehaviorTaskExecutionState,
+            openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
             PendingBehaviorAnimationClipCompletion,
             PendingBehaviorDockingCompletion,
             openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion,

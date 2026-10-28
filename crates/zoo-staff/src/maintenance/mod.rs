@@ -1,6 +1,7 @@
 use openzt2_zoo_state::maintenance::ZooCleanlinessProjection;
 mod animal_habitat_waste_cleaning_staff_job_execution;
 mod animal_waste_production;
+mod authored_trash_level_application;
 mod cleanliness_aggregation_operations;
 mod loose_litter_sweeping_staff_job_execution;
 mod maintainable_object_condition_and_service_effects;
@@ -63,6 +64,7 @@ pub struct MaintenancePlugin;
 impl Plugin for MaintenancePlugin {
     fn build(&self, game_application: &mut App) {
         game_application
+            .add_message::<openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste>()
             .init_resource::<IncrementalZooCleanlinessTotals>()
             .init_resource::<ZooCleanlinessPermille>();
 
@@ -88,6 +90,13 @@ impl Plugin for MaintenancePlugin {
             .on_remove(remove_animal_habitat_waste_from_cleanliness_totals);
 
         game_application
+            .add_systems(
+                FixedUpdate,
+                authored_trash_level_application::request_authored_trash_level_changes
+                    .in_set(FixedGameSet::Think)
+                    .in_set(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 FixedUpdate,
                 (
@@ -123,6 +132,7 @@ impl Plugin for MaintenancePlugin {
                 FixedUpdate,
                 (
                     initialize_animal_waste_production_schedule,
+                    authored_trash_level_application::apply_authored_trash_level_changes,
                     apply_completed_service_maintenance_effects_to_facilities,
                     produce_due_animal_habitat_waste,
                 )

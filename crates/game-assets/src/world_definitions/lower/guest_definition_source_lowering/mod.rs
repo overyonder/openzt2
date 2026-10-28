@@ -122,6 +122,8 @@ pub(super) fn bind_guest(
             record,
             "f_PreferredAnimalViewFactor",
         )?,
+        view_meter_decay_per_second: lower_guest_view_meter_decay_per_second(record)?,
+        view_scoring: lower_guest_view_scoring_policy(record)?,
         starting_cash_cents: array(
             record,
             &["minimumCashCents", "maximumCashCents"],
@@ -319,6 +321,8 @@ fn bind_authored_guest_binder(
         rarity,
         donation: lower_guest_donation_policy(record)?,
         preferred_animal_view_factor_q16,
+        view_meter_decay_per_second: lower_guest_view_meter_decay_per_second(record)?,
+        view_scoring: lower_guest_view_scoring_policy(record)?,
         starting_cash_cents,
         initial_departure_points_q16: departure_points_q16 as i32,
         radius_cm: (radius_m * 100.0).round() as u16,
@@ -498,6 +502,40 @@ fn positive_q16(value: f64, record: &RecordView<'_, '_>, property: &str) -> Resu
         ));
     }
     Ok(scaled as u32)
+}
+
+fn lower_guest_view_meter_decay_per_second(record: &RecordView<'_, '_>) -> Result<f32, BindError> {
+    let value =
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", "f_ViewSpeed")
+            .or_else(|| record.value(&["f_ViewSpeed"]));
+    let rate = value
+        .map(|value| parse::<f32>(value, record, "f_ViewSpeed"))
+        .transpose()?
+        .unwrap_or(1.0);
+    if !rate.is_finite() {
+        return Err(BindError::record(record, "guest view speed is nonfinite"));
+    }
+    Ok(rate)
+}
+
+fn lower_guest_view_scoring_policy(record: &RecordView<'_, '_>) -> Result<openzt2_game_data::world_definitions::guest_simulation_definitions::GuestAnimalViewScoringPolicy, BindError>{
+    let number = |name, default| {
+        let value = authored_type_family_component_attribute(record, "BFAIEntityDataShared", name)
+            .or_else(|| record.value(&[name]))
+            .map(|value| parse::<f32>(value, record, name))
+            .transpose()?
+            .unwrap_or(default);
+        if !value.is_finite() {
+            return Err(BindError::record(record, format!("{name} is nonfinite")));
+        }
+        Ok(value)
+    };
+    Ok(openzt2_game_data::world_definitions::guest_simulation_definitions::GuestAnimalViewScoringPolicy {
+        species_discount: number("f_ViewSpeciesDiscount", 1.0)?,
+        minimum_species_discount: number("f_ViewSpeciesDiscountCap", 0.0)?,
+        near_distance_factor: number("f_ViewDistanceMin", 1.0)?,
+        far_distance_factor: number("f_ViewDistanceMax", 1.0)?,
+    })
 }
 
 fn lower_guest_donation_policy(

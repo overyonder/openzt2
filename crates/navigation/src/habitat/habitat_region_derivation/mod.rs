@@ -3,18 +3,18 @@ use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
 #[derive(Debug, Clone, Copy)]
-pub(super) struct HabitatFenceSegment {
-    pub(crate) fence_entity: Entity,
-    pub(crate) first_topology_node: IVec2,
-    pub(crate) second_topology_node: IVec2,
-    pub(crate) boundary_is_breached: bool,
+pub struct HabitatFenceSegment {
+    pub fence_entity: Entity,
+    pub first_topology_node: IVec2,
+    pub second_topology_node: IVec2,
+    pub boundary_is_breached: bool,
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) struct DerivedHabitatRegion {
-    pub(crate) topology_cells: Vec<IVec2>,
-    pub(crate) boundary_fence_entities: Vec<Entity>,
-    pub(crate) boundary_is_breached: bool,
+pub struct DerivedHabitatRegion {
+    pub topology_cells: Vec<IVec2>,
+    pub boundary_fence_entities: Vec<Entity>,
+    pub boundary_is_breached: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -41,7 +41,7 @@ impl TopologyCellPassage {
     }
 }
 
-pub(super) fn derive_enclosed_habitat_regions_from_fence_segments(
+pub fn derive_enclosed_habitat_regions_from_fence_segments(
     fence_segments: &[HabitatFenceSegment],
     changed_topology_bounds: IRect,
 ) -> Vec<DerivedHabitatRegion> {

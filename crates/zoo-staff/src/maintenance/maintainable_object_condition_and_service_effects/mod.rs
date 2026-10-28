@@ -53,7 +53,9 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
                 .insert_if_new((
                     initial_condition,
                     FacilityContainedWaste {
-                        contained_waste_units: 0,
+                        contained_waste_units: maintenance_definition
+                            .initial_waste_units
+                            .min(maintenance_definition.waste_capacity_units),
                         contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
                     },
                 ))

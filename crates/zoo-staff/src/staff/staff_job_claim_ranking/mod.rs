@@ -6,7 +6,7 @@ pub(crate) const MAXIMUM_RANKED_STAFF_JOB_CANDIDATES: usize = 256;
 pub(crate) struct RankedStaffJobClaimCandidate {
     pub job: Entity,
     pub staff: Entity,
-    pub urgency: u16,
+    pub urgency: u32,
     pub authored_priority: f32,
     pub distance_squared: f32,
 }

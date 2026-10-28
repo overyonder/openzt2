@@ -75,6 +75,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
                 cardinal_curve_135: AssetId::from_key("test/cardinal_curve_135"),
                 diagonal_curve_135: AssetId::from_key("test/diagonal_curve_135"),
             },
+            top_segments: None,
             gate_policy: FenceGatePolicy::default(),
         }],
         ..default()

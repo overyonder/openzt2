@@ -10,6 +10,8 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorTargetPlacementStage;
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::PendingBehaviorTargetPlacement;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 pub(super) fn hydrate_automatic_object_placement_footprints_from_loaded_scene_prefabs(
@@ -19,6 +21,7 @@ pub(super) fn hydrate_automatic_object_placement_footprints_from_loaded_scene_pr
     mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
     previews: Query<(Ref<ConstructionPreview>, Ref<ObjectPlacementPrefabSource>)>,
     placed_objects: Query<(Ref<DefinitionId>, Ref<PrefabSourceAssetHandle>)>,
+    behavior_placements: Query<Ref<PendingBehaviorTargetPlacement>>,
 ) {
     let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let changed_prefabs = prefab_events
@@ -50,6 +53,19 @@ pub(super) fn hydrate_automatic_object_placement_footprints_from_loaded_scene_pr
                 })
                 .map(|(definition, prefab)| (definition.0, prefab.0.clone())),
         )
+        // A keeper's food pile may be put down before anyone placed one.
+        .chain(behavior_placements.iter().filter_map(|placement| {
+            let BehaviorTargetPlacementStage::Siting {
+                prefab: Some(prefab),
+            } = &placement.stage
+            else {
+                return None;
+            };
+            (definitions_changed
+                || changed_prefabs.contains(&prefab.id())
+                || placement.is_changed())
+            .then(|| (placement.definition, prefab.clone()))
+        }))
     {
         let Some(bounds_xz) = prefabs.get(&prefab_handle).and_then(|prefab| {
             prefab

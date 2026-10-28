@@ -8,7 +8,9 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_zoo_state::construction::construction_transaction_types::ConstructionCommitted;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
@@ -24,7 +26,7 @@ use crate::topology::fence_anchor_press_diagnostic_types::InitialFenceAnchorPres
 use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
 use crate::topology::topology_construction_planning::calculate_path_construction_plan;
 use crate::topology::topology_construction_planning::{
-    GateHostEdges, calculate_gate_replacement_plan, fence_definition_is_gate,
+    calculate_gate_replacement_plan, fence_definition_is_gate, GateHostEdges,
 };
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_construction_preview_types::PathPreview;
@@ -67,6 +69,7 @@ mod tests {
                     a: PersistentId(1),
                     b: PersistentId(2),
                     gate: None,
+                    wall_top: None,
                 }]
                 .into_boxed_slice(),
                 removed: Box::default(),
@@ -84,6 +87,8 @@ mod tests {
                     definition,
                     from: IVec3::ZERO,
                     to: IVec3::new(11, 7, 0),
+                    shape: FencePlacementShape::Freeform,
+                    heading_eighth_turns: 0,
                 },
                 Transform::IDENTITY,
             ))
@@ -142,12 +147,16 @@ pub(super) fn apply_fence_placement_requests_to_construction_previews(
     mut previews: Query<&mut FencePreview, With<ConstructionPreview>>,
 ) {
     for request in requests.read() {
-        let preview = FencePreview {
+        let mut preview = FencePreview {
             definition: request.definition,
             from: request.from,
             to: request.to,
+            shape: FencePlacementShape::Freeform,
+            heading_eighth_turns: 0,
         };
         if let Ok(mut current) = previews.get_mut(request.preview) {
+            preview.shape = current.shape;
+            preview.heading_eighth_turns = current.heading_eighth_turns;
             *current = preview;
         } else if let Ok(mut entity) = commands.get_entity(request.preview) {
             entity.insert(preview);
@@ -181,7 +190,7 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     mut commands: Commands,
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     ui_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
-    tool: Res<ConstructionTool>,
+    (tool, policy): (Res<ConstructionTool>, Res<ConstructionPlacementPolicy>),
     grid: Res<TopologyGrid>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -262,6 +271,12 @@ pub fn drive_selected_topology_placement_pointer_sequence(
                         definition,
                         from: cell,
                         to: cell,
+                        shape: if gate {
+                            FencePlacementShape::Freeform
+                        } else {
+                            policy.fence_shape
+                        },
+                        heading_eighth_turns: policy.fence_heading_eighth_turns,
                     });
                 }
                 ConstructionTool::Path(_) => {
@@ -395,21 +410,34 @@ pub(super) fn restart_path_preview_from_committed_endpoint(
 /// interaction-state owner; committed topology is owned independently by the
 /// fence entities created from the transaction snapshots.
 pub(super) fn restart_fence_preview_from_committed_endpoint(
+    mut commands: Commands,
     mut committed: MessageReader<ConstructionCommitted>,
     tool: Res<ConstructionTool>,
     grid: Res<TopologyGrid>,
     edits: Query<&TopologyEdit>,
     nodes: Query<(&PersistentId, &TopologyNode)>,
-    mut previews: Query<(&mut ConstructionPreview, &mut FencePreview, &mut Transform)>,
+    mut previews: Query<(
+        Entity,
+        &mut ConstructionPreview,
+        &mut FencePreview,
+        &mut Transform,
+    )>,
 ) {
     let ConstructionTool::Fence(definition) = *tool else {
         committed.clear();
         return;
     };
-    let Ok((mut construction, mut fence, mut transform)) = previews.single_mut() else {
+    let Ok((preview, mut construction, mut fence, mut transform)) = previews.single_mut() else {
         committed.clear();
         return;
     };
+    // A closed shape is complete; the next one starts from a new anchor.
+    if fence.shape != FencePlacementShape::Freeform {
+        if committed.read().count() != 0 {
+            commands.entity(preview).despawn();
+        }
+        return;
+    }
     for commit in committed.read() {
         let Ok(edit) = edits.get(commit.transaction) else {
             continue;
@@ -499,5 +527,38 @@ pub(super) fn evaluate_topology_construction_preview_validity(
             Ok(cost) => PlacementValidity::Valid { cost },
             Err(reason) => PlacementValidity::Invalid(reason),
         };
+    }
+}
+
+pub(super) fn rotate_closed_fence_placement_heading(
+    mut actions: MessageReader<openzt2_interface_state::input::input_types::ActionRequest>,
+    tool: Res<ConstructionTool>,
+    mut policy: ResMut<ConstructionPlacementPolicy>,
+    mut previews: Query<&mut FencePreview>,
+) {
+    use openzt2_interface_state::input::input_types::GameAction;
+    let turns = actions.read().fold(0_i32, |turns, request| {
+        turns
+            + match request.action {
+                GameAction::RotateLeft | GameAction::RotateObjectLeft => -1,
+                GameAction::RotateRight | GameAction::RotateObjectRight => 1,
+                _ => 0,
+            }
+    });
+    if !matches!(*tool, ConstructionTool::Fence(_))
+        || policy.fence_shape == FencePlacementShape::Freeform
+        || turns == 0
+    {
+        return;
+    }
+    let step = if policy.fence_shape == FencePlacementShape::Octagon {
+        2
+    } else {
+        1
+    };
+    policy.fence_heading_eighth_turns =
+        (i32::from(policy.fence_heading_eighth_turns) + turns * step).rem_euclid(8) as u8;
+    for mut preview in &mut previews {
+        preview.heading_eighth_turns = policy.fence_heading_eighth_turns;
     }
 }

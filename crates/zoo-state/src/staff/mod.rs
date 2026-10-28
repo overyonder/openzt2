@@ -9,3 +9,4 @@ pub mod staff_job_completion_rules;
 pub mod staff_job_types;
 pub mod staff_lifecycle_messages;
 pub mod staff_presentation_variant_selection;
+pub mod staff_tank_gate_types;

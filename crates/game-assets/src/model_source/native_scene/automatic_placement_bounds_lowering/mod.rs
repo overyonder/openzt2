@@ -145,7 +145,13 @@ pub(in crate::model_source) fn lower_netimmerse_automatic_placement_bounds(
 
     let mut points = Vec::with_capacity(colliders.len().saturating_mul(8));
     if colliders.is_empty() {
-        collect_netimmerse_shape_points(document, &parents, seen.iter().copied(), false, &mut points)?;
+        collect_netimmerse_shape_points(
+            document,
+            &parents,
+            seen.iter().copied(),
+            false,
+            &mut points,
+        )?;
     } else {
         for (owner, box_bounds) in colliders {
             let [axis_x, axis_y, axis_z] = <&[[f32; 3]; 3]>::try_from(box_bounds.axes.as_slice())
@@ -357,7 +363,11 @@ fn collect_blue_fang_mesh_points(
             for triangle in mesh.indices[start..end].chunks_exact(3) {
                 append_triangle_below_agent_height(
                     &transformed,
-                    [triangle[0] as usize, triangle[1] as usize, triangle[2] as usize],
+                    [
+                        triangle[0] as usize,
+                        triangle[1] as usize,
+                        triangle[2] as usize,
+                    ],
                     points,
                 )?;
             }
@@ -431,7 +441,11 @@ fn collect_netimmerse_shape_points(
                         for triangle in strip.windows(3) {
                             append_triangle_below_agent_height(
                                 &transformed,
-                                [usize::from(triangle[0]), usize::from(triangle[1]), usize::from(triangle[2])],
+                                [
+                                    usize::from(triangle[0]),
+                                    usize::from(triangle[1]),
+                                    usize::from(triangle[2]),
+                                ],
                                 points,
                             )?;
                         }
@@ -594,7 +608,9 @@ fn append_triangle_below_agent_height(
 ) -> Result<()> {
     let mut triangle = [[0.0; 3]; 3];
     for (point, index) in triangle.iter_mut().zip(indices) {
-        *point = *vertices.get(index).ok_or_else(|| anyhow::anyhow!("collision triangle references a missing vertex"))?;
+        *point = *vertices
+            .get(index)
+            .ok_or_else(|| anyhow::anyhow!("collision triangle references a missing vertex"))?;
         if point.iter().any(|value| !value.is_finite()) {
             bail!("collision triangle is nonfinite");
         }

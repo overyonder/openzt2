@@ -1,7 +1,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[repr(transparent)]
 pub struct NavFlags(pub u16);
 
@@ -25,7 +25,7 @@ impl NavFlags {
     }
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NavAgent {
     pub radius_m: f32,
     /// Current permitted speed. Zero is a valid stationary animation interval;
@@ -47,17 +47,24 @@ impl NavAgent {
     }
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+#[derive(
+    Component, Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize,
+)]
 pub struct Velocity(pub Vec3);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Destination {
     pub request_id: u64,
     pub world: Vec3,
     pub arrival_radius_m: f32,
 }
 
-#[derive(Component, Debug, Clone, PartialEq)]
+#[derive(Component)]
+pub struct RestoredNavigationRoute {
+    pub request_id: u64,
+}
+
+#[derive(Component, Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Route {
     pub points: Vec<Vec3>,
     pub cursor: usize,
@@ -91,7 +98,7 @@ pub struct Steering {
 /// The direction is derived afresh from Avian each fixed tick. `factor` is the
 /// authored deflection strength: sustained obstruction decays it so an agent
 /// can escape a deadlock, then it recovers after a one-second clear interval.
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ContactSteering {
     pub direction: Vec3,
     pub factor: f32,
@@ -129,7 +136,9 @@ impl SpatialCell {
     pub const OUTSIDE: Self = Self(u32::MAX);
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(
+    Component, Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum LocomotionMode {
     #[default]
     Ground,
@@ -140,14 +149,16 @@ pub enum LocomotionMode {
 
 /// Which authored swim animation layer applies while an entity is swimming.
 /// Navigation and aquatic movement own this spatial fact; animation only reads it.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(
+    Component, Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize,
+)]
 pub enum SwimLayer {
     #[default]
     Surface,
     Submerged,
 }
 
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AnimalTerrainWaterContact {
     pub depth_m: Option<f32>,
 }
@@ -184,6 +195,37 @@ pub struct ReachabilityTested {
     pub result: Result<(), NavigationFailure>,
 }
 
+/// Steer straight at a live entity without a planned route, provided the
+/// direct line to it is traversable when the request is accepted. Repeating
+/// the active request's identifier re-tests the line. A blocked line fails the
+/// request with `NoRoute` and, in the same step, routes to the target's
+/// position with `refused_route` unless that route is already the agent's
+/// destination.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct PursueEntity {
+    pub entity: Entity,
+    pub request_id: u64,
+    pub target: Entity,
+    /// Horizontal arrival tolerance around the target's live position.
+    pub arrival_radius_m: f32,
+    pub refused_route: PursuitRefusalRoute,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PursuitRefusalRoute {
+    pub request_id: u64,
+    pub arrival_radius_m: f32,
+}
+
+/// The live target of an accepted `PursueEntity`. It lasts while the agent's
+/// `Destination` carries the same request; locomotion keeps that destination
+/// and its one-point route on the target's current position.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EntityPursuit {
+    pub request_id: u64,
+    pub target: Entity,
+}
+
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
 pub struct DockAt {
     pub entity: Entity,
@@ -212,13 +254,20 @@ pub struct NavigationFailed {
 pub struct NavigationRequestSequence(u64);
 
 impl NavigationRequestSequence {
+    pub fn reserve_restored(&mut self, request_id: u64) {
+        self.0 = self.0.max(request_id);
+    }
+
     pub fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(1).max(1);
+        self.0 = self
+            .0
+            .checked_add(1)
+            .expect("navigation request identity exhausted");
         self.0
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum NavigationFailure {
     OutsideWorld,
     NoStartNode,
@@ -510,7 +559,7 @@ pub struct OpenNode {
     pub estimate: u64,
 }
 
-#[derive(Component, Debug, Clone, Copy)]
+#[derive(Component, Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct MotionProgress {
     pub last_position: Vec3,
     pub stationary_ticks: u16,

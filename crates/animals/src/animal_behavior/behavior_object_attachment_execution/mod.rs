@@ -3,6 +3,7 @@
 mod created;
 mod detach;
 mod events;
+mod held_clip;
 mod held_food_prop;
 mod holder;
 mod presentation;
@@ -21,6 +22,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorHeldAnimationClip;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -51,6 +53,26 @@ struct PendingObjectAttachment {
 /// A valid text-key detach crossed before the corresponding prefab admission.
 #[derive(Component)]
 struct DeliveredAttachmentDetach;
+
+fn release_detached_object_locomotion_modifiers(
+    mut commands: Commands,
+    occupancy: Res<InteractionContainerOccupancy>,
+    actors: Query<(
+        Entity,
+        &openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier,
+    )>,
+    objects: Query<&ContainedObject>,
+) {
+    for (actor, modifier) in &actors {
+        if objects.get(modifier.item).is_err()
+            || occupancy
+                .container_for_member(modifier.item)
+                .is_none_or(|(holder, _)| holder != actor)
+        {
+            commands.entity(actor).remove::<openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier>();
+        }
+    }
+}
 
 impl PendingObjectAttachment {
     fn waiting_for_attachment(
@@ -96,10 +118,15 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
         detach::apply_delivered_detach_after_object_admission,
         created::hydrate_detach_created_objects,
         detach::release_objects_from_destroyed_holders,
+        release_detached_object_locomotion_modifiers,
     ).chain().in_set(FixedGameSet::Think)
         .before(super::interaction_container_cleanup::remove_destroyed_container_memberships)
         .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .run_if(in_state(GamePhase::InGame)))
+        .add_systems(FixedUpdate, held_clip::release_behavior_held_animation_clips
+            .in_set(FixedGameSet::Act)
+            .after(events::receive_object_animation_commands)
+            .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, events::receive_object_animation_commands
             .in_set(openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommandDelivery)
             .in_set(FixedGameSet::Act)
@@ -257,10 +284,18 @@ fn start_or_finish_object_attachment(
                     playback_speed_permille: 1000,
                     playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
                 });
-                commands.entity(actor).insert(PendingObjectAttachment {
-                    request_id: Some(request.id),
-                    ..PendingObjectAttachment::waiting_for_attachment(&task, prefab_handle.clone())
-                });
+                commands.entity(actor).insert((
+                    PendingObjectAttachment {
+                        request_id: Some(request.id),
+                        ..PendingObjectAttachment::waiting_for_attachment(
+                            &task,
+                            prefab_handle.clone(),
+                        )
+                    },
+                    BehaviorHeldAnimationClip {
+                        request_id: request.id,
+                    },
+                ));
                 continue;
             }
             if pending.is_none_or(|pending| pending.joint.is_none()) {
@@ -323,6 +358,14 @@ fn start_or_finish_object_attachment(
                         &prefab.canonical_scene_prefab_document().entities[0].transform,
                     ))
                 });
+            if let Some(modifier) = action.locomotion_modifier {
+                commands.entity(actor).insert(
+                    openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
+                        modifier,
+                        item,
+                    },
+                );
+            }
             commands.entity(item).insert((
                 ContainedObject {
                     holder_definition: actor_definition.0,
@@ -409,6 +452,14 @@ fn start_or_finish_object_attachment(
             commands.entity(item).despawn();
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
+        }
+        if let Some(modifier) = action.locomotion_modifier {
+            commands.entity(actor).insert(
+                openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
+                    modifier,
+                    item,
+                },
+            );
         }
         commands.entity(item).insert((
             ContainedObject {

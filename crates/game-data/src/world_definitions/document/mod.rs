@@ -34,7 +34,7 @@ use super::{
         FossilSlotDefinition,
     },
     facilities_and_maintenance::{CleanlinessPolicy, FacilityDefinition, MaintenanceDefinition},
-    fences_and_gates::FenceDefinition,
+    fences_and_gates::{FenceDefinition, FencePlacementModePolicy},
     guest_simulation_definitions::{
         GuestDefinition, GuestGenerationPolicy, GuestViewingPolicy, PersonNamePool,
         ViewingOpportunityDefinition,
@@ -44,8 +44,9 @@ use super::{
     paths_and_tile_surfaces::GuestPathDefinition,
     simulation_time::SimulationTimingDefinition,
     staff_management::{
-        StaffAquaticTankWaterCleaningPolicy, StaffJobDefinition, StaffManagerPolicy,
-        StaffRequestControllerDefinition, StaffRoleDefinition,
+        StaffAquaticTankCleaningRequestPolicy, StaffAquaticTankWaterCleaningPolicy,
+        StaffJobDefinition, StaffManagerPolicy, StaffRequestControllerDefinition,
+        StaffRoleDefinition,
     },
     terrain_editing_brushes::TerrainEditingBrushDefinition,
     transportation_and_tours::{
@@ -119,6 +120,8 @@ pub struct WorldDefinitionDocument {
     pub tank_surface_policy: Option<TankSurfacePolicy>,
     pub tank_depth_policy: Option<TankDepthPolicy>,
     pub tank_edit_policy: Option<TankEditPolicy>,
+    #[serde(default)]
+    pub fence_placement_mode_policy: Option<FencePlacementModePolicy>,
     pub show_presentation: Option<ShowPresentationPolicy>,
     pub show_scheduling: Option<ShowSchedulingPolicy>,
     pub show_scoring: Option<ShowScoringPolicy>,
@@ -127,6 +130,8 @@ pub struct WorldDefinitionDocument {
     pub show_presentation_icons: Vec<ShowPresentationIcon>,
     pub tour_scoring: Option<TourScoringPolicy>,
     pub staff_water_cleaning: Option<StaffAquaticTankWaterCleaningPolicy>,
+    #[serde(default)]
+    pub staff_tank_cleaning_requests: Vec<StaffAquaticTankCleaningRequestPolicy>,
     pub person_name_pools: Vec<PersonNamePool>,
     pub weather: Vec<WeatherDefinition>,
     pub ambient_spawns: Vec<AmbientSpawnDefinition>,

@@ -1,8 +1,9 @@
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::fences_and_gates::FencePlacementModePolicy;
 use openzt2_game_data::world_definitions::paths_and_tile_surfaces::GuestPathDefinition;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -16,6 +17,7 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_construction_preview_types::PathPreview;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
@@ -49,11 +51,23 @@ pub(super) fn calculate_fence_construction_plan(
         return Err(PlacementFailure::InvalidTopology);
     }
     let segment_cell_span = segment_length_cm / spacing_cm;
-    let cells = calculate_heading_quantized_fence_segment_cells_between_endpoints(
-        preview.from,
-        preview.to,
-        segment_cell_span,
+    let waypoints = calculate_fence_preview_waypoints(
+        preview,
+        i32::from(segment_cell_span),
+        definitions.fence_placement_mode_policy(),
     )?;
+    let mut cells = vec![waypoints[0]];
+    for leg in waypoints.windows(2) {
+        cells.extend(
+            calculate_heading_quantized_fence_segment_cells_between_endpoints(
+                leg[0],
+                leg[1],
+                segment_cell_span,
+            )?
+            .into_iter()
+            .skip(1),
+        );
+    }
     if cells.len() < 2 {
         return Err(PlacementFailure::InvalidTopology);
     }
@@ -103,6 +117,157 @@ pub(super) fn calculate_fence_construction_plan(
         .checked_mul(segments)
         .ok_or(PlacementFailure::InvalidTopology)?;
     Ok((cells, Money(cost), gate))
+}
+
+/// The corners a fence preview runs through: its two ends, or the closed
+/// rectangle or octagon the original's fence mode builds from the anchor
+/// `from` and the cursor `to`. Extents count whole segments of `span` cells,
+/// rounded to the nearest segment.
+fn calculate_fence_preview_waypoints(
+    preview: &FencePreview,
+    span: i32,
+    policy: Option<&FencePlacementModePolicy>,
+) -> Result<Vec<IVec3>, PlacementFailure> {
+    let (from, to) = (preview.from, preview.to);
+    let policy = match (preview.shape, policy) {
+        (FencePlacementShape::Freeform, _) => return Ok(vec![from, to]),
+        (_, Some(policy)) => policy,
+        (_, None) => return Err(PlacementFailure::InvalidTopology),
+    };
+    let segments = |cells: i32| (cells as f32 / span as f32).round_ties_even() as i32;
+    let at = |x: i32, y: i32| IVec3::new(x, y, from.z);
+    // Topology +y is the source's -y; a zero extent grows toward source +y.
+    Ok(
+        if preview.shape == FencePlacementShape::Rectangle && preview.heading_eighth_turns % 2 != 0
+        {
+            // Diagonal rectangle coordinates are half-segments. Matching parity
+            // keeps all four corners on the fence grid.
+            let mut dx = ((to.x - from.x) as f32 / span as f32).round_ties_even() as i32;
+            let mut dy = ((from.y - to.y) as f32 / span as f32).round_ties_even() as i32;
+            if dx.abs() % 2 != dy.abs() % 2 {
+                if dx.abs() < dy.abs() {
+                    dx += if dx < 0 { -1 } else { 1 };
+                } else {
+                    dy += if dy < 0 { -1 } else { 1 };
+                }
+            }
+            let minimum = i32::from(policy.minimum_rectangle_segments);
+            let extent = |value: i32| {
+                if value.abs() >= minimum {
+                    value
+                } else if value < 0 {
+                    -minimum
+                } else {
+                    minimum
+                }
+            };
+            let difference = extent((dx - dy) / 2);
+            let sum = extent((dx + dy) / 2);
+            vec![
+                from,
+                at(from.x + difference * span, from.y + difference * span),
+                at(
+                    from.x + (difference + sum) * span,
+                    from.y + (difference - sum) * span,
+                ),
+                at(from.x + sum * span, from.y - sum * span),
+                from,
+            ]
+        } else if preview.shape == FencePlacementShape::Rectangle {
+            // The axis-aligned builder enlarges each extent to the authored
+            // minimum, keeping its direction.
+            let minimum = i32::from(policy.minimum_rectangle_segments);
+            let width = match segments(to.x - from.x) {
+                width if width.abs() >= minimum => width,
+                width if width < 0 => -minimum,
+                _ => minimum,
+            } * span;
+            let depth = match segments(to.y - from.y) {
+                depth if depth.abs() >= minimum => depth,
+                depth if depth > 0 => minimum,
+                _ => -minimum,
+            } * span;
+            vec![
+                at(from.x, from.y),
+                at(from.x, from.y + depth),
+                at(from.x + width, from.y + depth),
+                at(from.x + width, from.y),
+                at(from.x, from.y),
+            ]
+        } else {
+            // The straight top spans the dragged width from the left end and
+            // the chamfers, a third of the height, stand outside it.
+            let minimum = i32::from(policy.minimum_octagon_segments);
+            let height_segments = segments(to.y - from.y).abs();
+            let height_was_raised = height_segments < minimum;
+            let height = height_segments.max(minimum);
+            let chamfer = height / 3;
+            if chamfer == 0 {
+                return Err(PlacementFailure::InvalidTopology);
+            }
+            let width = segments(to.x - from.x).abs().max(minimum - 2 * chamfer);
+            if width == 0 || height <= 2 * chamfer {
+                return Err(PlacementFailure::InvalidTopology);
+            }
+            let left = from.x.min(to.x);
+            let top = match (height_was_raised, to.y < from.y) {
+                (true, true) => from.y - height * span,
+                (true, false) => from.y,
+                (false, _) => from.y.min(to.y),
+            };
+            let vertex = |x: i32, y: i32| at(left + x * span, top + y * span);
+            vec![
+                vertex(0, 0),
+                vertex(width, 0),
+                vertex(width + chamfer, chamfer),
+                vertex(width + chamfer, height - chamfer),
+                vertex(width, height),
+                vertex(0, height),
+                vertex(-chamfer, height - chamfer),
+                vertex(-chamfer, chamfer),
+                vertex(0, 0),
+            ]
+        },
+    )
+}
+
+/// The top of new tank wall segments placed along `cells`. A rubber-band
+/// wall stands the default wall height above the highest ground it crosses.
+/// A closed shape stands the default height above its anchor's ground, unless
+/// the ground falls by at least the hill threshold below the anchor, when it
+/// stops at the anchor's ground. Joining an existing tank raises the top to
+/// that tank's water plus the water offset.
+pub(super) fn calculate_tank_wall_top_for_fence_path(
+    preview: &FencePreview,
+    cells: &[IVec3],
+    policy: &FencePlacementModePolicy,
+    water_offset_m: f32,
+    ground_height: impl Fn(IVec3) -> Option<f32>,
+    joined_tank_water_height: impl Fn(IVec3) -> Option<f32>,
+) -> Option<f32> {
+    let default_wall_height = policy.default_tank_wall_height_cm as f32 / 100.0;
+    let (mut lowest, mut highest) = (f32::INFINITY, f32::NEG_INFINITY);
+    for cell in cells {
+        let height = ground_height(*cell)?;
+        lowest = lowest.min(height);
+        highest = highest.max(height);
+    }
+    let mut top = if preview.shape == FencePlacementShape::Freeform {
+        default_wall_height + highest
+    } else {
+        let anchor = ground_height(preview.from)?;
+        if anchor - lowest < policy.hill_threshold_cm as f32 / 100.0 {
+            anchor + default_wall_height
+        } else {
+            anchor
+        }
+    };
+    for cell in cells {
+        if let Some(water) = joined_tank_water_height(*cell) {
+            top = top.max(water + water_offset_m);
+        }
+    }
+    Some(top)
 }
 
 /// Existing fence edges a gate can replace, with their gate and protection state.
@@ -386,7 +551,7 @@ fn read_fence_construction_facts(
     ))
 }
 
-fn sample_terrain_height_at_topology_cell(
+pub(super) fn sample_terrain_height_at_topology_cell(
     cell: IVec3,
     grid: TopologyGrid,
     terrain_index: &TerrainIndex,

@@ -19,6 +19,7 @@ use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -107,6 +108,7 @@ pub(super) fn execute_authored_behavior_script_actions(
         let path_stack = RefCell::new(Vec::new());
         let output = RefCell::new(Vec::new());
         let textures = RefCell::new(Vec::new());
+        let crated = RefCell::new(Vec::new());
         let result = vm.lua.scope(|scope| -> mlua::Result<Option<String>> {
             install_lua_script_dependency_loading_functions(
                 &vm.lua,
@@ -191,6 +193,22 @@ pub(super) fn execute_authored_behavior_script_actions(
                             Ok(())
                         })?,
                     )?;
+                    // `CrateAnimal.lua` crates a darted escaped animal.
+                    table.set(
+                        "BFG_SEND_SIGNAL_SHARED",
+                        scope.create_function(|_, (subject, signal): (Table, String)| {
+                            if signal != "ZT_CRATE_ENTITY" {
+                                return Err(mlua::Error::runtime(format!(
+                                    "unmapped behavior entity signal {signal}"
+                                )));
+                            }
+                            let reference: AnyUserData = subject.get("entity")?;
+                            crated
+                                .borrow_mut()
+                                .push(reference.borrow::<BehaviorScriptEntityReference>()?.0);
+                            Ok(())
+                        })?,
+                    )?;
                     table.set("entity", reference)?;
                     Ok(Some(table))
                 })?,
@@ -237,6 +255,9 @@ pub(super) fn execute_authored_behavior_script_actions(
         // preceding a later script error; retain that ordering and effect.
         for request in output.into_inner() {
             presentation_requests.write(request);
+        }
+        for entity in crated.into_inner() {
+            commands.entity(entity).insert(WorldEntityIsCrated);
         }
         match result {
             Ok(Some(result)) if result != "error" && result != "failure" => {

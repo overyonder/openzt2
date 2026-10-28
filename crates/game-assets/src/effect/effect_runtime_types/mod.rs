@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 use super::{
-    ParticleEffectDocumentAsset,
     hanabi_custom_particle_modifiers::CollisionSpawnParticleInitialization,
+    ParticleEffectDocumentAsset,
 };
 use crate::material::material_asset_types::MaterialAsset;
 

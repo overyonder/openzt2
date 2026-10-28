@@ -1,4 +1,6 @@
 use crate::locomotion::locomotion_types::NavFlags;
+use bevy::prelude::*;
+use std::collections::BTreeMap;
 
 /// Pathfinding graph derived from the selected terrain grid and refreshed
 /// from authoritative terrain samples after edits.
@@ -9,6 +11,20 @@ pub struct TerrainDerivedNavigationGraph {
     pub terrain_tile_size_centimetres: u32,
     pub terrain_tile_grid_dimensions: [u32; 2],
     pub navigation_nodes: Box<[TerrainDerivedNavigationGraphNode]>,
+    pub(super) path_surfaces: Vec<NavigationPathSurface>,
+    pub(super) path_surface_edges: BTreeMap<u32, Vec<TerrainDerivedNavigationGraphEdge>>,
+    pub(super) path_surfaces_by_cell: BTreeMap<[u32; 2], Vec<u32>>,
+    pub(super) ground_path_nodes: Vec<u32>,
+}
+
+/// Geometry projected from a path entity into the navigation graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NavigationPathSurface {
+    pub(super) entity: Entity,
+    pub(super) transform: GlobalTransform,
+    pub(super) width_m: f32,
+    pub(super) height_cm: [i16; 5],
+    pub(super) node: TerrainDerivedNavigationGraphNode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -32,11 +32,9 @@ pub(super) fn lower_view_animals_action(
     let finite = |name: &str| -> io::Result<Option<f32>> {
         Ok(read_optional_float_attribute(node, name)?.filter(|value| value.is_finite()))
     };
-    let Some(view_meter_start) = finite("viewMeterStart")? else {
-        return Err(invalid_behavior_source_data(
-            "view animals has no viewMeterStart",
-        ));
-    };
+    let view_meter_start = finite("viewMeterStart")?
+        .filter(|value| *value > 0.0)
+        .unwrap_or(60.0);
     let view_meter_start_range = [
         finite("viewMeterStartMin")?.unwrap_or(view_meter_start),
         finite("viewMeterStartMax")?.unwrap_or(view_meter_start),

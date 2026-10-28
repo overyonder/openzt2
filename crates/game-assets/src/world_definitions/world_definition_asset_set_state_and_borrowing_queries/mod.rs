@@ -3,14 +3,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -38,6 +37,7 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
+    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -52,6 +52,7 @@ pub(super) enum DefinitionKind {
     Maintenance,
     Staff,
     StaffJob,
+    StaffTankCleaningRequest,
     StaffRequest,
     Guest,
     ViewingOpportunity,
@@ -129,6 +130,7 @@ pub(super) enum SingletonKind {
     TankSurface,
     TankDepth,
     TankEdit,
+    FencePlacementMode,
     ShowPresentation,
     ShowScheduling,
     ShowScoring,
@@ -367,6 +369,12 @@ impl<'a> WorldDefinitionsView<'a> {
         )
     }
     finder!(find_staff_job, StaffJob, staff_jobs, StaffJobDefinition);
+    finder!(
+        find_staff_tank_cleaning_request,
+        StaffTankCleaningRequest,
+        staff_tank_cleaning_requests,
+        StaffAquaticTankCleaningRequestPolicy
+    );
     finder!(find_guest, Guest, guests, GuestDefinition);
     /// The guest body's actor manifest, from the asset that declares the guest.
     pub fn load_guest_model_animation_set<T: Asset>(self, guest: AssetId) -> Option<Handle<T>> {
@@ -882,6 +890,12 @@ impl<'a> WorldDefinitionsView<'a> {
         TankDepthPolicy
     );
     singleton!(tank_edit_policy, TankEdit, tank_edit_policy, TankEditPolicy);
+    singleton!(
+        fence_placement_mode_policy,
+        FencePlacementMode,
+        fence_placement_mode_policy,
+        FencePlacementModePolicy
+    );
     singleton!(
         show_presentation,
         ShowPresentation,

@@ -70,7 +70,11 @@ impl Plugin for WorldSpawnPlugin {
             )
                 .chain(),
         );
-        app.configure_sets(Update, WorldLoadPreparationSet::InitializeClock.run_if(world_hydration_completion::loading_screen_is_ready));
+        app.configure_sets(
+            Update,
+            WorldLoadPreparationSet::InitializeClock
+                .run_if(world_hydration_completion::loading_screen_is_ready),
+        );
         app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>();
         app.init_resource::<openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId>()

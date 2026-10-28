@@ -270,6 +270,7 @@ mod tests {
                 cardinal_curve_135: AssetId::from_virtual_path("test/fence90curve135"),
                 diagonal_curve_135: AssetId::from_virtual_path("test/fence45curve135"),
             },
+            top_segments: None,
             gate_policy: FenceGatePolicy::default(),
         }
     }

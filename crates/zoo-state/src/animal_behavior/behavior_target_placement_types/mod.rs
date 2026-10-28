@@ -24,8 +24,11 @@ pub struct PendingBehaviorTargetPlacement {
 
 #[derive(Clone)]
 pub enum BehaviorTargetPlacementStage {
-    /// The placement owner chooses and validates the site.
-    Siting,
+    /// The placement owner chooses and validates the site. It holds the
+    /// object's prefab so the load it demands is not dropped between ticks.
+    Siting {
+        prefab: Option<Handle<ScenePrefabAsset>>,
+    },
     /// A valid site was chosen; the object stays in the holding container.
     Sited(BehaviorTargetPlacementSite),
     /// The subject plays the placement set toward the site marker.

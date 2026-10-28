@@ -18,6 +18,7 @@ pub(crate) fn project_camera_actions_into_camera_intent(
     axes: Res<DeviceControlAxes>,
     pointer: Res<PrimaryPointerInputState>,
     tool: Res<ConstructionTool>,
+    placement_policy: Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>,
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     mut cameras: Query<
         (
@@ -30,15 +31,14 @@ pub(crate) fn project_camera_actions_into_camera_intent(
     >,
 ) {
     let mut digital_turn = 0.0;
+    let construction_owns_rotation = matches!(*tool, ConstructionTool::Place(_))
+        || matches!(*tool, ConstructionTool::Fence(_))
+            && placement_policy.fence_shape != openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape::Freeform;
     let mut digital_zoom = 0.0;
     for request in actions.read() {
         match request.action {
-            GameAction::RotateLeft if !matches!(*tool, ConstructionTool::Place(_)) => {
-                digital_turn -= 1.0
-            }
-            GameAction::RotateRight if !matches!(*tool, ConstructionTool::Place(_)) => {
-                digital_turn += 1.0
-            }
+            GameAction::RotateLeft if !construction_owns_rotation => digital_turn -= 1.0,
+            GameAction::RotateRight if !construction_owns_rotation => digital_turn += 1.0,
             GameAction::ZoomIn => digital_zoom += 1.0,
             GameAction::ZoomOut => digital_zoom -= 1.0,
             _ => {}

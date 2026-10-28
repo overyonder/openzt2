@@ -5,10 +5,6 @@ use openzt2_game_data::AssetId;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum StaffRequestControllerSample {
     NumberQ16(i32),
-    #[allow(
-        dead_code,
-        reason = "native boolean thresholds are retained, but live boolean attribute sampling is not connected yet"
-    )]
     Boolean(bool),
     NoValue,
 }
@@ -48,7 +44,7 @@ pub(super) struct StaffRequestJobKey {
 pub(super) enum StaffRequestJobEvent {
     Raised {
         key: StaffRequestJobKey,
-        urgency: u16,
+        urgency: u32,
     },
     Cancelled {
         key: StaffRequestJobKey,

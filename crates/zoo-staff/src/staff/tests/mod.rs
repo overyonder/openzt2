@@ -328,6 +328,7 @@ fn candidate_requirements_gate_cure_land_water_and_unsupported_facts() {
         target_rampaging: Some(false),
         target_in_show: Some(false),
         target_food_level_q16: None,
+        ..Default::default()
     };
     let selected = select_highest_priority_authored_staff_behavior_task_with_candidate_eligibility(
         StaffRoleKind::Keeper,

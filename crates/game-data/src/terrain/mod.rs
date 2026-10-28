@@ -315,6 +315,10 @@ pub struct TerrainWaterTextureAnimation {
 pub struct TerrainUnits {
     pub cell_size_metres: f32,
     pub base_height_metres: f32,
+    /// Highest terrain node height.
+    pub maximum_height_metres: f32,
+    /// Lowest floor under water, when the terrain authors one.
+    pub minimum_water_height_metres: Option<f32>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]

@@ -113,6 +113,14 @@ pub(crate) fn loading_app() -> (App, Entity) {
     ))
     .insert_state(GamePhase::Loading)
     .init_resource::<ReusableWorldSnapshotByteBuffer>()
+    .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
+    .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
+    .init_resource::<openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy>()
+    .add_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>()
+    .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>()
+    .init_resource::<openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence>()
+    .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>()
+    .add_message::<openzt2_zoo_state::locomotion::locomotion_types::PursueEntity>()
     .init_resource::<Assets<LocalizationAsset>>()
     .init_resource::<LocalizationPrecedenceIndex>()
     .init_resource::<Assets<WorldScenarioDocumentAsset>>()
@@ -329,6 +337,7 @@ pub(crate) fn prepare_photo_snapshot_application(world: &mut World) {
     });
     let pending = world
         .spawn(PendingSnapshotApplication {
+            behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: Some(SCENARIO),
             session_mode: Some(WorldSessionMode::Freeform),
@@ -373,6 +382,7 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
     });
     world
         .spawn(PendingSnapshotApplication {
+            behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: None,
             session_mode: None,
@@ -470,6 +480,7 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
     let pending = app
         .world_mut()
         .spawn(PendingSnapshotApplication {
+            behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: None,
             session_mode: None,
@@ -572,6 +583,7 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
     let pending = app
         .world_mut()
         .spawn(PendingSnapshotApplication {
+            behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: Some(SCENARIO),
             session_mode: Some(WorldSessionMode::Freeform),

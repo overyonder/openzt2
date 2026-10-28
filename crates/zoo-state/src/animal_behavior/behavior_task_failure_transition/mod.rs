@@ -27,5 +27,6 @@ pub fn mark_behavior_task_for_failure_and_stop_navigation(
             PendingBehaviorDockingCompletion,
             crate::behavior_task_execution_types::PendingBehaviorMoveCompletion,
             PendingBehaviorAnimationClipCompletion,
+            super::behavior_pursuit_types::PendingBehaviorPursuit,
         )>();
 }

@@ -12,8 +12,8 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
 };
-use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::shell::shell_screen_presentation_types::LoadingScreen;
+use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect;

@@ -6,6 +6,30 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use openzt2_game_data::world_definitions::aquatic_habitats::{
     TankDepthPolicy, TankEditPolicy, TankSurfacePolicy,
 };
+use openzt2_game_data::world_definitions::fences_and_gates::FencePlacementModePolicy;
+
+/// Lowers the fence placement mode's closed-shape minimums and new tank wall
+/// heights.
+pub(super) fn bind_fence_placement_mode_policy(
+    record: &RecordView<'_, '_>,
+    output: &mut WorldDefinitionLoweringTables,
+) -> Result<(), BindError> {
+    if output.document.fence_placement_mode_policy.is_some() {
+        return Err(BindError::record(
+            record,
+            "duplicate resolved ZTFenceMode policy",
+        ));
+    }
+    let distance = |name: &str| source_distance_cm(required_number(record, &[name])?, record);
+    output.document.fence_placement_mode_policy = Some(FencePlacementModePolicy {
+        minimum_rectangle_segments: required_number(record, &["minRectSize"])?,
+        minimum_octagon_segments: required_number(record, &["minOctagonSize"])?,
+        default_tank_wall_height_cm: distance("defaultTankWallHeight")?,
+        minimum_tank_wall_height_cm: distance("minimumTankWallHeight")?,
+        hill_threshold_cm: distance("hillThreshold")?,
+    });
+    Ok(())
+}
 
 pub(super) fn bind_tank_policy(
     record: &RecordView<'_, '_>,

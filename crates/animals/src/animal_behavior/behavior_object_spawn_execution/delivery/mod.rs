@@ -13,11 +13,15 @@ pub(super) fn deliver_behavior_object_spawns(
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
     joints: Query<(&AnimationJointTarget, &GlobalTransform)>,
+    children: Query<&Children>,
+    named_nodes: super::super::behavior_docking_execution::NamedNodeTransforms,
+    pose_validation: super::spawn_pose::SpawnPoseValidation,
     mut actors: Query<
         (
             &mut BehaviorTaskExecutionState,
             &mut PendingBehaviorObjectSpawn,
             &WorldMember,
+            &mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -25,7 +29,7 @@ pub(super) fn deliver_behavior_object_spawns(
     let mut failed = bevy::platform::collections::HashSet::new();
     for rejection in rejected.read() {
         let actor = rejection.animation_subject_entity;
-        if actors.get(actor).is_ok_and(|(task, pending, _)| {
+        if actors.get(actor).is_ok_and(|(task, pending, _, _)| {
             pending.owns(&task) && pending.request == Some(rejection.request_id)
         }) {
             failed.insert(actor);
@@ -40,7 +44,7 @@ pub(super) fn deliver_behavior_object_spawns(
             continue;
         };
         let actor = owner.gameplay_entity;
-        let Ok((task, mut pending, world)) = actors.get_mut(actor) else {
+        let Ok((task, mut pending, world, mut random)) = actors.get_mut(actor) else {
             continue;
         };
         if failed.contains(&actor)
@@ -56,6 +60,7 @@ pub(super) fn deliver_behavior_object_spawns(
         let Some(BehaviorAction::SpawnObject {
             entity,
             subject_node,
+            pose,
             ..
         }) = documents
             .get(&task.document)
@@ -66,10 +71,24 @@ pub(super) fn deliver_behavior_object_spawns(
         let spawn = (|| {
             let view = definitions.get(&definition_assets)?;
             let object = view.find_object(*entity)?;
-            let (_, transform) = joints.iter().find(|(joint, _)| {
-                joint.animation_playback_controller_entity == event.controller
-                    && joint.joint_asset_key == *subject_node
-            })?;
+            // The spawn node, such as an animal's `Poop`, may be an animated
+            // joint or a plain named node. Without either the spawn fails.
+            let transform = joints
+                .iter()
+                .find(|(joint, _)| {
+                    joint.animation_playback_controller_entity == event.controller
+                        && joint.joint_asset_key == *subject_node
+                })
+                .map(|(_, transform)| transform.compute_transform())
+                .or_else(|| {
+                    super::super::behavior_docking_execution::find_named_descendant_global_transform(
+                        actor,
+                        subject_node,
+                        &children,
+                        &named_nodes,
+                    )
+                    .map(GlobalTransform::compute_transform)
+                })?;
             let presentation = if object.prefab == AssetId::default() {
                 None
             } else {
@@ -77,9 +96,17 @@ pub(super) fn deliver_behavior_object_spawns(
                 Some((handle, prefabs.get(handle)?))
             };
             let id = ids.allocate(world.root).ok()?;
-            let transform = transform
-                .compute_transform()
-                .mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
+            let transform = pose_validation.select_spawn_pose(
+                actor,
+                object.id,
+                transform,
+                pose_validation.actor_pose(actor)?,
+                *pose,
+                view,
+                &mut random,
+            );
+            let transform =
+                transform.mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
             let spawned = if let Some((handle, prefab)) = presentation {
                 spawn_loaded_scene_prefab_as_world_instance(
                     &mut commands,
@@ -130,7 +157,7 @@ pub(super) fn deliver_behavior_object_spawns(
             continue;
         };
         let actor = owner.gameplay_entity;
-        let Ok((mut task, pending, _)) = actors.get_mut(actor) else {
+        let Ok((mut task, pending, _, _)) = actors.get_mut(actor) else {
             continue;
         };
         if failed.contains(&actor)

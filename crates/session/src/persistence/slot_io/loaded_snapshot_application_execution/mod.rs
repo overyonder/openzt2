@@ -154,6 +154,7 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     &mut show_platform_upgrade_restore_requests,
                     &mut pending.maintenance_prefabs,
                     &mut pending.placement_hydration,
+                    &mut pending.behavior_documents,
                 )
             }
             _ => Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference),

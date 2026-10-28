@@ -65,6 +65,67 @@ pub struct StaffRoleDefinition {
     /// dock by, such as the spot a keeper puts food down.
     #[serde(default)]
     pub virtual_nodes: Vec<StaffVirtualNode>,
+    /// Authored `BFAIStateVar` needs, such as `work`, which score the
+    /// employee's own tasks.
+    #[serde(default)]
+    pub state_variables: Vec<StaffStateVariable>,
+    /// Authored `BFSwimComponent` water depths: an employee starts swimming
+    /// in water deeper than `entry_depth_m` and walks again where it is
+    /// shallower than `exit_depth_m`. `None` never swims.
+    #[serde(default)]
+    pub swimming: Option<StaffSwimmingDepths>,
+    #[serde(default)]
+    pub locomotion_tables: Vec<StaffLocomotionTable>,
+    #[serde(default)]
+    pub tank_gate_animations: Option<StaffTankGateAnimations>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, Eq, serde::Serialize)]
+pub struct StaffTankGateAnimations {
+    pub walk_ahead: String,
+    pub get_on_up: String,
+    pub climb_up: String,
+    pub get_off_up: String,
+    pub get_on_down: String,
+    pub climb_down: String,
+    pub get_off_down: String,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffLocomotionTable {
+    pub binder: AssetId,
+    pub stationary_clip: Option<String>,
+    pub rows: Vec<StaffLocomotionRow>,
+}
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffLocomotionRow {
+    pub key: AssetId,
+    pub node: String,
+    pub playback_speed_range: [f32; 2],
+    pub reset_seconds_range: [f32; 2],
+}
+
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffSwimmingDepths {
+    pub entry_depth_m: f32,
+    pub exit_depth_m: f32,
+}
+
+/// One authored staff need and the value above which it is triggered.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffStateVariable {
+    pub name: AssetId,
+    pub value: f32,
+    pub trigger_threshold: f32,
 }
 
 /// One named point in the employee's local space.
@@ -130,6 +191,8 @@ pub struct StaffJobDefinition {
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
 )]
+/// The player's own clean-tank action (`ZTUserStaffAction`). Keeper cleaning
+/// is requested through [`StaffAquaticTankCleaningRequestPolicy`] instead.
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct StaffAquaticTankWaterCleaningPolicy {
     pub token: AssetId,
@@ -176,6 +239,20 @@ impl StaffRequestThresholdComparison {
 pub enum StaffRequestThresholdValue {
     Boolean(bool),
     Number(f32),
+}
+
+/// The water-cleaning manager's keeper request (`ZTAIStaffWaterCleaningMgr`):
+/// a tank at least this dirty is requested, and one cleaner than it is not.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StaffAquaticTankCleaningRequestPolicy {
+    pub id: AssetId,
+    /// Dirtiness on 0..1; the authored `DirtThreshold` is a percentage.
+    pub dirt_threshold: f32,
+    pub request: StaffRequestData,
 }
 
 #[allow(

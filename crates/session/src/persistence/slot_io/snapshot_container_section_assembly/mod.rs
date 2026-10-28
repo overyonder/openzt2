@@ -40,9 +40,10 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
         &openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     >,
     animal_snapshot_records: &[super::animal_snapshot_types::AnimalSnapshotRecord],
-    habitat_waste_records: &[super::maintenance_snapshot_types::HabitatWasteSnapshotRecord],
+    maintenance_snapshot: &super::maintenance_snapshot_types::MaintenanceSnapshot,
     staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
     tank_snapshot_records: &[TankSnapshotRecord],
+    topology_snapshot_records: &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
     economy_snapshot_records: &EconomySnapshotRecords,
     donation_snapshot_records: &[super::donation_snapshot_section::DonationSnapshotRecord],
     placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
@@ -54,6 +55,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     transport_snapshot_records: &TransportSnapshotRecords,
     photo_snapshot_records: &[PhotoSnapshotRecord],
     photo_challenge_progress_snapshot_records: &[PhotoChallengeProgressSnapshotRecord],
+    behavior_snapshot_records: &[super::behavior_snapshot_types::BehaviorActorSnapshot],
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     validate_animal_adoption_offer_inventory_presence_for_session_mode(
         animal_adoption_offer_inventory,
@@ -61,14 +63,21 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     )?;
     let placement_bytes =
         super::placement_snapshot_section::encode_placement_records(placement_snapshot_records)?;
+    let behavior_bytes =
+        super::behavior_snapshot_section_encoding::encode_behavior_actor_snapshots(
+            behavior_snapshot_records,
+        )?;
+    let topology_bytes = super::fence_topology_snapshot_section::encode_fence_topology_records(
+        topology_snapshot_records,
+    )?;
     let scenario_bytes = super::scenario_snapshot_section::encode(scenario_snapshot)?;
     let donation_bytes =
         super::donation_snapshot_section::encode_donation_records(donation_snapshot_records)?;
     let animal_bytes = super::animal_snapshot_section_encoding::encode_animal_snapshot_records(
         animal_snapshot_records,
     )?;
-    let waste_bytes = super::maintenance_snapshot_section_encoding::encode_habitat_waste_records(
-        habitat_waste_records,
+    let waste_bytes = super::maintenance_snapshot_section_encoding::encode_maintenance_snapshot(
+        maintenance_snapshot,
     )?;
     let staff_bytes = super::staff_snapshot_section_encoding::encode_staff_snapshot_records(
         staff_snapshot_records,
@@ -76,6 +85,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     WorldSnapshotSectionKind::ENCODING_ORDER
         .into_iter()
         .try_for_each(|snapshot_section| match snapshot_section {
+            WorldSnapshotSectionKind::Topology => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    topology_snapshot_records.len() as u32,
+                    |bytes| bytes.extend_from_slice(&topology_bytes),
+                )
+            }
             WorldSnapshotSectionKind::World => append_encoded_world_snapshot_section_to_container(
                 snapshot_container_bytes,
                 snapshot_section,
@@ -84,11 +101,21 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                     append_encoded_world_snapshot_section(section_bytes, world_snapshot_record);
                 },
             ),
+            WorldSnapshotSectionKind::Behavior => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    behavior_snapshot_records.len() as u32,
+                    |bytes| bytes.extend_from_slice(&behavior_bytes),
+                )
+            }
             WorldSnapshotSectionKind::Maintenance => {
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
-                    habitat_waste_records.len() as u32,
+                    super::maintenance_snapshot_section_encoding::maintenance_record_count(
+                        maintenance_snapshot,
+                    ) as u32,
                     |bytes| bytes.extend_from_slice(&waste_bytes),
                 )
             }
@@ -266,13 +293,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 snapshot_container_bytes,
                 tank_snapshot_records
                     .len()
+                    .saturating_add(topology_snapshot_records.len())
                     .saturating_add(animal_snapshot_records.len())
                     .saturating_add(
                         super::scenario_snapshot_section::persistent_ids(scenario_snapshot).count(),
                     )
                     .saturating_add(donation_snapshot_records.len())
                     .saturating_add(placement_snapshot_records.len())
-                    .saturating_add(habitat_waste_records.len())
+                    .saturating_add(maintenance_snapshot.waste.len())
                     .saturating_add(staff_snapshot_records.len())
                     .saturating_add(show_stage_snapshot_records.len())
                     .saturating_add(scheduled_show_snapshot_records.len())

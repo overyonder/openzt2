@@ -53,7 +53,8 @@ pub(super) enum ProfileFilesystemTaskCompletion {
         bindings: GameActionInputBindings,
         display: DisplaySettings,
         graphics: GraphicsSettings,
-        online_messages: openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
+        online_messages:
+            openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy,
     },
     SettingsSaved,
     Deleted {

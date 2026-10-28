@@ -6,14 +6,29 @@ use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNav
 
 impl TerrainDerivedNavigationGraph {
     pub fn navigation_node_count(&self) -> usize {
-        self.navigation_nodes.len()
+        self.navigation_nodes.len() + self.path_surfaces.len()
     }
 
     pub fn find_navigation_node(
         &self,
         navigation_node: u32,
     ) -> Option<&TerrainDerivedNavigationGraphNode> {
-        self.navigation_nodes.get(navigation_node as usize)
+        self.navigation_nodes
+            .get(navigation_node as usize)
+            .or_else(|| {
+                self.path_surfaces
+                    .get((navigation_node as usize).checked_sub(self.navigation_nodes.len())?)
+                    .map(|surface| &surface.node)
+            })
+    }
+
+    /// Overlays that own a node fact the terrain does not, such as tank
+    /// water, write it here.
+    pub fn find_navigation_node_mut(
+        &mut self,
+        navigation_node: u32,
+    ) -> Option<&mut TerrainDerivedNavigationGraphNode> {
+        self.navigation_nodes.get_mut(navigation_node as usize)
     }
 
     pub fn update_navigation_node_from_changed_terrain_cell(
@@ -47,6 +62,27 @@ impl TerrainDerivedNavigationGraph {
     pub fn find_candidate_node_indices_in_containing_terrain_tile(
         &self,
         position_centimetres: [i32; 3],
+    ) -> impl Iterator<Item = u32> + '_ {
+        let terrain = self.find_terrain_node_indices_in_containing_tile(position_centimetres);
+        let elevated = terrain
+            .clone()
+            .filter_map(move |node| self.calculate_terrain_cell_for_navigation_node(node))
+            .flat_map(move |cell| {
+                self.path_surfaces_by_cell
+                    .get(&cell)
+                    .into_iter()
+                    .flatten()
+                    .copied()
+                    .filter(move |node| {
+                        self.calculate_terrain_cell_for_navigation_node(*node) == Some(cell)
+                    })
+            });
+        terrain.chain(elevated)
+    }
+
+    fn find_terrain_node_indices_in_containing_tile(
+        &self,
+        position_centimetres: [i32; 3],
     ) -> std::ops::Range<u32> {
         let terrain_tile_size_centimetres =
             i64::from(self.terrain_cell_size_centimetres) * i64::from(self.terrain_cells_per_tile);
@@ -70,6 +106,17 @@ impl TerrainDerivedNavigationGraph {
         &self,
         navigation_node: u32,
     ) -> Option<[i32; 3]> {
+        if let Some(surface) = (navigation_node as usize)
+            .checked_sub(self.navigation_nodes.len())
+            .and_then(|index| self.path_surfaces.get(index))
+        {
+            let position = surface.centre();
+            return Some(
+                position
+                    .to_array()
+                    .map(|value| (value * 100.0).round() as i32),
+            );
+        }
         let terrain_cell = self.calculate_terrain_cell_for_navigation_node(navigation_node)?;
         let height_centimetres = self
             .find_navigation_node(navigation_node)?
@@ -122,6 +169,12 @@ impl TerrainDerivedNavigationGraph {
         &self,
         navigation_node: u32,
     ) -> Option<[u32; 2]> {
+        if let Some(surface) = (navigation_node as usize)
+            .checked_sub(self.navigation_nodes.len())
+            .and_then(|index| self.path_surfaces.get(index))
+        {
+            return self.terrain_cell_at_world_position(surface.centre());
+        }
         let terrain_cells_per_tile = u32::from(self.terrain_cells_per_tile);
         let navigation_nodes_per_tile = terrain_cells_per_tile.checked_pow(2)?;
         ((navigation_node as usize) < self.navigation_nodes.len()).then_some(())?;

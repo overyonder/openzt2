@@ -11,8 +11,8 @@ use openzt2_game_data::{
 /// Ranks candidates by priority and score, retaining tied winners.
 pub struct BehaviorCandidateRanking<T> {
     minimum_score: f32,
-    selected: Option<T>,
-    sole_candidate: Option<T>,
+    selected: Option<(T, f32)>,
+    sole_candidate: Option<(T, f32)>,
     candidate_count: usize,
     best_priority: f32,
     best_score: f32,
@@ -40,7 +40,7 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
         mut random: impl FnMut(u32) -> Option<u32>,
     ) {
         self.candidate_count += 1;
-        self.sole_candidate = Some(candidate);
+        self.sole_candidate = Some((candidate, score));
         if score <= self.minimum_score {
             return;
         }
@@ -59,10 +59,10 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
                 return;
             }
         }
-        self.selected = Some(candidate);
+        self.selected = Some((candidate, score));
     }
 
-    pub fn finish(self, allow_single_candidate_promotion: bool) -> Option<T> {
+    pub fn finish(self, allow_single_candidate_promotion: bool) -> Option<(T, f32)> {
         if allow_single_candidate_promotion && self.candidate_count == 1 {
             self.sole_candidate
         } else {

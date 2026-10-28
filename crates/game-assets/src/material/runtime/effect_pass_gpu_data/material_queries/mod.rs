@@ -10,16 +10,8 @@ impl EffectPassTextureAssets {
     pub(in crate::material::runtime) fn from_ordered_texture_assets(
         texture_assets: [Option<Handle<Image>>; 8],
     ) -> Self {
-        let [
-            texture0,
-            texture1,
-            texture2,
-            texture3,
-            texture4,
-            texture5,
-            texture6,
-            texture7,
-        ] = texture_assets;
+        let [texture0, texture1, texture2, texture3, texture4, texture5, texture6, texture7] =
+            texture_assets;
         Self {
             texture0,
             texture1,

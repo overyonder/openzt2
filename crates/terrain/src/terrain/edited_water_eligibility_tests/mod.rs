@@ -28,6 +28,8 @@ fn saved_water_asset() -> TerrainAsset {
         units: TerrainUnits {
             cell_size_metres: 1.0,
             base_height_metres: 0.0,
+            maximum_height_metres: f32::MAX,
+            minimum_water_height_metres: None,
         },
         presentation: TerrainPresentation {
             water_distance_fade: Default::default(),

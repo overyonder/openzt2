@@ -67,6 +67,9 @@ pub(crate) fn apply_guest_reactions(
     mut applied: MessageWriter<GuestReactionApplied>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    documents: Res<
+        Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
+    >,
     survey: Option<ResMut<GuestSurvey>>,
     mut guests: Query<
         (
@@ -77,6 +80,7 @@ pub(crate) fn apply_guest_reactions(
             &mut GuestMemories,
             Option<&Viewing>,
             Option<&super::guest_simulation_types::GuestViewReactionReceipt>,
+            Option<&BehaviorTaskExecutionState>,
         ),
         With<Guest>,
     >,
@@ -92,8 +96,16 @@ pub(crate) fn apply_guest_reactions(
     let mut reactions: Vec<_> = incoming.read().copied().collect();
     reactions.sort_by_key(|reaction| reaction.view_event.map_or(0, |origin| origin.event_id));
     for reaction in &reactions {
-        let Ok((archetype, phase, mut satisfaction, mut education, mut memories, viewing, receipt)) =
-            guests.get_mut(reaction.guest)
+        let Ok((
+            archetype,
+            phase,
+            mut satisfaction,
+            mut education,
+            mut memories,
+            viewing,
+            receipt,
+            task,
+        )) = guests.get_mut(reaction.guest)
         else {
             continue;
         };
@@ -106,22 +118,37 @@ pub(crate) fn apply_guest_reactions(
             let Some(origin) = reaction.view_event else {
                 continue;
             };
-            if viewing != Some(&origin.viewing)
-                || origin.viewing.subject != reaction.subject
-                || *phase != GuestPhase::Visiting
-                || interruptions.contains(reaction.guest)
-                || !observations
+            // A guest watches either from a viewing destination it reached,
+            // or through its authored view task (`ZTBehViewAnimals`) at the
+            // path that task targets.
+            let watching_from_destination = origin.viewing.task_execution_id.is_none()
+                && !interruptions.contains(reaction.guest)
+                && observations
                     .get(reaction.guest)
                     .is_ok_and(|(destination, request)| {
                         destination.purpose == GuestVisitPurpose::View
                             && Some(destination.entity) == origin.viewing.area
                             && request.is_none_or(|request| request.0.is_none())
-                    })
+                    });
+            let watching_through_task = task.is_some_and(|task| {
+                super::guest_viewing_lifecycle::viewing_owned_by_current_view_action(
+                    task,
+                    &origin.viewing,
+                    &documents,
+                )
+            });
+            if viewing != Some(&origin.viewing)
+                || origin.viewing.subject != reaction.subject
+                || *phase != GuestPhase::Visiting
+                || !(watching_from_destination || watching_through_task)
             {
                 continue;
             }
             let Some(event) = events.iter().find(|event| {
-                event.event_id == origin.event_id && event.source == reaction.subject
+                event.event_id == origin.event_id
+                    && event.source == reaction.subject
+                    && event.source_definition == origin.source_definition
+                    && event.view_key == origin.view_key
             }) else {
                 continue;
             };
@@ -150,12 +177,7 @@ pub(crate) fn apply_guest_reactions(
             {
                 continue;
             }
-            let Some(policy) = find_reaction(definition, GuestMemoryKind::AnimalView) else {
-                continue;
-            };
-            if survey_policy.is_none() {
-                continue;
-            }
+            let policy = find_reaction(definition, GuestMemoryKind::AnimalView);
             let last = receipts
                 .entry(reaction.guest)
                 .or_insert_with(|| receipt.map_or(0, |receipt| receipt.0));
@@ -167,8 +189,9 @@ pub(crate) fn apply_guest_reactions(
                 super::guest_simulation_types::GuestViewReactionReceipt(*last),
             );
             // Read current policy rather than accepting deltas queued before a reload.
-            reaction.satisfaction_delta_permille = policy.satisfaction_delta;
-            reaction.education_delta_permille = policy.education_delta;
+            reaction.satisfaction_delta_permille =
+                policy.map_or(0, |policy| policy.satisfaction_delta);
+            reaction.education_delta_permille = policy.map_or(0, |policy| policy.education_delta);
         }
         let education_delta = survey_policy
             .map(|policy| {

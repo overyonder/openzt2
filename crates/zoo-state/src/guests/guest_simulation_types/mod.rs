@@ -125,6 +125,7 @@ pub struct Viewing {
     /// Generic relationship insertion has no destination owner and is revoked.
     pub area: Option<Entity>,
     pub started_tick: u64,
+    pub task_execution_id: Option<u64>,
 }
 
 /// Bevy maintains this collection from guest-owned observations. Despawning a
@@ -242,6 +243,8 @@ pub struct GuestReaction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestViewReactionOrigin {
     pub event_id: u64,
+    pub source_definition: AssetId,
+    pub view_key: AssetId,
     pub viewing: Viewing,
 }
 

@@ -1,7 +1,6 @@
 //! Validates tank boundaries and links their habitat entities to fence segments.
 
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -33,8 +32,8 @@ enum TankBoundaryFailure {
 pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_changes(
     mut commands: Commands,
     changed_tanks: Query<
-        (Entity, &Tank, &HabitatRegion),
-        Or<(Added<Tank>, Changed<HabitatRegion>)>,
+        (Entity, &HabitatRegion),
+        (With<Tank>, Or<(Added<Tank>, Changed<HabitatRegion>)>),
     >,
     fences: Query<(&FenceEdge, &WorldMember)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -58,18 +57,11 @@ pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_chang
         }
     }
 
-    for (tank_entity, tank, region) in &changed_tanks {
+    for (tank_entity, region) in &changed_tanks {
         if region.boundary_fence_entities.is_empty() {
             continue;
         }
         let Ok(tank_member) = members.get(tank_entity) else {
-            continue;
-        };
-        let Some(wall_definition) = definitions
-            .find_tank(tank.definition)
-            .map(|definition| AssetId(definition.wall.0))
-            .filter(|definition| *definition != AssetId::default())
-        else {
             continue;
         };
 
@@ -84,7 +76,8 @@ pub(super) fn synchronize_tank_boundary_relationships_after_habitat_region_chang
                 if member.root != tank_member.root {
                     return Err(TankBoundaryFailure::InvalidSegment);
                 }
-                if edge.definition != wall_definition {
+                // Any mix of tank wall segment types closes one tank.
+                if definitions.find_tank(edge.definition).is_none() {
                     return Err(TankBoundaryFailure::WrongWallDefinition);
                 }
                 nodes

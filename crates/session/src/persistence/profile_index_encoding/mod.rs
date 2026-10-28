@@ -1,6 +1,6 @@
-use openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::settings::online_message_policy_types::OnlineMessagePolicy;
 
 use openzt2_interface_state::input::input_types::GameActionInputBindings;
 use openzt2_interface_state::input::input_types::InputChord;

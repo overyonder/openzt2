@@ -7,12 +7,12 @@ use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 use openzt2_game_assets::{
     animation::animation_set_asset_types::AnimationSetAsset,
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
-    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
+use openzt2_game_data::behavior::action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -22,42 +22,55 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
+use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
+use openzt2_zoo_state::locomotion::locomotion_types::{
+    Destination, Docking, LocomotionMode, SwimLayer,
+};
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
-use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
-use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
-use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
-/// A medium-following set the actor is playing. Only the ground medium has a
-/// runtime owner, so leaving dry ground fails the set rather than switching.
+/// A medium-following set the actor is playing. When the actor's locomotion
+/// medium changes, the switch runs again and plays the new medium's set.
 #[derive(Component, Debug, Clone)]
 pub(super) struct MediumFollowingBehaviorSet {
     execution_id: u64,
     origin: BehaviorTaskReturnFrame,
+    switch: BehaviorTaskReturnFrame,
     depth: usize,
+    medium: LocomotionMedium,
 }
 
-#[derive(SystemParam)]
-pub(super) struct DryGroundSampling<'w, 's> {
-    index: Res<'w, TerrainIndex>,
-    assets: Res<'w, Assets<TerrainAsset>>,
-    chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
+/// The behavior-table row that a subject's current locomotion selects.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LocomotionMedium {
+    Ground,
+    Water,
+    Underwater,
 }
 
-impl DryGroundSampling<'_, '_> {
-    /// `None` when the position has no loaded terrain.
-    fn is_dry_ground(&self, position: Vec2) -> Option<bool> {
-        let (chunk, edited) = self
-            .chunks
-            .get(terrain_chunk_at(&self.index, position)?)
-            .ok()?;
-        let point = sample_terrain(chunk, self.assets.get(&chunk.asset)?, edited, position)?;
-        Some(point.water_height_m.is_none())
+impl LocomotionMedium {
+    /// Actors without a locomotion mode of their own, such as staff, walk.
+    fn of(mode: Option<&LocomotionMode>, layer: Option<&SwimLayer>) -> Self {
+        match (mode, layer) {
+            (Some(LocomotionMode::Swim), Some(SwimLayer::Submerged)) => Self::Underwater,
+            (Some(LocomotionMode::Swim), _) => Self::Water,
+            _ => Self::Ground,
+        }
+    }
+
+    /// The row for this medium, or the ground row when that one is absent.
+    fn select(self, sets: &BehaviorLocomotionSwitchSetAction) -> Option<AssetId> {
+        match self {
+            Self::Ground => None,
+            Self::Water => sets.water,
+            Self::Underwater => sets.underwater,
+        }
+        .or(sets.ground)
     }
 }
 
@@ -116,20 +129,19 @@ fn enter_selected_behavior_set(
     true
 }
 
-/// Actors on dry terrain play the ground set. Wading, swimming and diving
-/// actors have no medium owner yet, so their switch fails rather than
-/// playing a land behavior in water.
+/// Plays the set authored for the subject's locomotion medium, falling back
+/// to its ground set.
 pub(super) fn play_locomotion_medium_behavior_sets(
     mut commands: Commands,
     lookup: BehaviorSetLookup,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
-    terrain: DryGroundSampling,
     mut actors: Query<
         (
             Entity,
-            &GlobalTransform,
             &mut BehaviorTaskExecutionState,
+            Option<&LocomotionMode>,
+            Option<&SwimLayer>,
             Option<&SpeciesHandle>,
             Option<&StaffRole>,
             Option<&GuestArchetype>,
@@ -137,7 +149,7 @@ pub(super) fn play_locomotion_medium_behavior_sets(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, transform, mut task, species, staff, guest) in &mut actors {
+    for (actor, mut task, mode, layer, species, staff, guest) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -149,13 +161,12 @@ pub(super) fn play_locomotion_medium_behavior_sets(
         else {
             continue;
         };
-        let Some(program) = sets
-            .ground
-            .filter(|_| terrain.is_dry_ground(transform.translation().xz()) == Some(true))
-        else {
+        let medium = LocomotionMedium::of(mode, layer);
+        let Some(program) = medium.select(&sets) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
+        let switch = task.create_return_frame_after_action(task.action);
         let origin = task.create_return_frame_after_action(task.action.saturating_add(1));
         let depth = task.stack.len();
         if !enter_selected_behavior_set(
@@ -173,42 +184,57 @@ pub(super) fn play_locomotion_medium_behavior_sets(
             commands.entity(actor).insert(MediumFollowingBehaviorSet {
                 execution_id: task.execution_id,
                 origin,
+                switch,
                 depth,
+                medium,
             });
+        } else {
+            commands
+                .entity(actor)
+                .remove::<MediumFollowingBehaviorSet>();
         }
     }
 }
 
-/// A medium-following set ends with its frame. While it plays, entering water
-/// would switch to the water set, which has no runtime owner, so it fails.
-pub(super) fn fail_medium_following_sets_after_leaving_dry_ground(
+/// A medium-following set ends with its frame. While it plays, a change of
+/// locomotion medium abandons the playing set's actions and runs the switch
+/// again, which selects the set for the new medium.
+pub(super) fn switch_medium_following_sets_after_medium_changes(
     mut commands: Commands,
-    terrain: DryGroundSampling,
-    actors: Query<(
+    clock: Res<ZooClock>,
+    mut actors: Query<(
         Entity,
-        &GlobalTransform,
         &MediumFollowingBehaviorSet,
-        Option<&BehaviorTaskExecutionState>,
+        Option<&mut BehaviorTaskExecutionState>,
+        Option<&LocomotionMode>,
+        Option<&SwimLayer>,
+        Has<PendingBehaviorTaskFailure>,
     )>,
 ) {
-    for (actor, transform, following, task) in &actors {
-        let playing = task.is_some_and(|task| {
-            task.execution_id == following.execution_id
+    for (actor, following, task, mode, layer, failing) in &mut actors {
+        let Some(mut task) = task.filter(|task| {
+            !failing
+                && task.execution_id == following.execution_id
                 && task.stack.len() > following.depth
                 && task.is_at_or_nested_under(&following.origin, following.depth)
-        });
-        if !playing {
+        }) else {
             commands
                 .entity(actor)
                 .remove::<MediumFollowingBehaviorSet>();
             continue;
+        };
+        if LocomotionMedium::of(mode, layer) == following.medium {
+            continue;
         }
-        if terrain.is_dry_ground(transform.translation().xz()) == Some(false) {
-            commands
-                .entity(actor)
-                .remove::<MediumFollowingBehaviorSet>();
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        }
+        task.restore_suspended_instruction(&following.switch, following.depth, clock.tick);
+        commands.entity(actor).remove::<(
+            MediumFollowingBehaviorSet,
+            Destination,
+            Docking,
+            PendingBehaviorAnimationClipCompletion,
+            PendingBehaviorDockingCompletion,
+            PendingBehaviorMoveCompletion,
+        )>();
     }
 }
 

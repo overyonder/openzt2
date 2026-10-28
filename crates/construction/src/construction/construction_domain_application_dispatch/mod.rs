@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::CommitTankFloorEdit;
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEdit;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::CommitTankGeometryEdit;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEdit;
 use openzt2_zoo_state::placement::placement_transaction_types::ApplyPreparedObjectPlacementEditRequest;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
 use openzt2_zoo_state::shows::show_platform_upgrade_types::CommitShowPlatformUpgradeEdit;
@@ -22,7 +22,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 pub(crate) fn dispatch_authorized_construction_application_to_participating_domains(
     mut authorized_applications: MessageReader<EditApplicationAuthorized>,
     mut construction_transactions: Query<(
-        Option<&TankFloorEdit>,
+        Option<&TankGeometryEdit>,
         Option<&TerrainEdit>,
         Option<&TopologyEdit>,
         Option<&PreparedObjectPlacementEdit>,
@@ -30,7 +30,7 @@ pub(crate) fn dispatch_authorized_construction_application_to_participating_doma
         Option<&PreparedTransportTrackConstructionEdit>,
         &mut EditCommitProgress,
     )>,
-    mut tank_requests: MessageWriter<CommitTankFloorEdit>,
+    mut tank_requests: MessageWriter<CommitTankGeometryEdit>,
     mut terrain_application_requests: MessageWriter<CommitTerrainEdit>,
     mut topology_application_requests: MessageWriter<CommitTopologyEdit>,
     mut object_placement_application_requests: MessageWriter<
@@ -60,7 +60,7 @@ pub(crate) fn dispatch_authorized_construction_application_to_participating_doma
             continue;
         }
         if tank_edit.is_some() && progress.aquatic == DomainAckStatus::Pending {
-            tank_requests.write(CommitTankFloorEdit {
+            tank_requests.write(CommitTankGeometryEdit {
                 transaction: authorized_application.transaction,
                 application: authorized_application.application,
             });

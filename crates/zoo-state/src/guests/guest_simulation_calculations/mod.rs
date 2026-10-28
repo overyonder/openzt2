@@ -7,6 +7,26 @@ use super::guest_simulation_types::{GuestMemories, GuestMemoryEntry};
 pub const PERMILLE_MAX: u16 = 1_000;
 const Q16_ONE: i64 = 1 << 16;
 
+pub fn animal_view_distance_factor(
+    policy: openzt2_game_data::world_definitions::guest_simulation_definitions::GuestAnimalViewScoringPolicy,
+    distance_m: f32,
+    viewing_range_m: f32,
+) -> f32 {
+    let far = if policy.far_distance_factor <= 0.0 {
+        1.0
+    } else {
+        policy.far_distance_factor
+    };
+    let near = policy.near_distance_factor.max(far);
+    if distance_m <= 0.0 {
+        near
+    } else if distance_m >= viewing_range_m {
+        far
+    } else {
+        near - (near - far) * (distance_m / viewing_range_m.max(1.0))
+    }
+}
+
 pub fn apply_q16(value: &mut u16, residual_q16: &mut u16, rate_q16: i32) {
     let total = i64::from(*value) * Q16_ONE + i64::from(*residual_q16) + i64::from(rate_q16);
     let maximum = i64::from(PERMILLE_MAX) * Q16_ONE;

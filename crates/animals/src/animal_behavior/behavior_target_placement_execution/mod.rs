@@ -112,7 +112,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 continue;
             }
             match pending.stage.clone() {
-                BehaviorTargetPlacementStage::Siting
+                BehaviorTargetPlacementStage::Siting { .. }
                 | BehaviorTargetPlacementStage::PuttingDown { .. } => {}
                 BehaviorTargetPlacementStage::Sited(site) => {
                     let Some(BehaviorAction::PlaceTarget(action)) = documents
@@ -224,7 +224,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 recipient,
                 definition,
                 definition_revision: definitions.catalogue_revision(),
-                stage: BehaviorTargetPlacementStage::Siting,
+                stage: BehaviorTargetPlacementStage::Siting { prefab: None },
             });
     }
 }

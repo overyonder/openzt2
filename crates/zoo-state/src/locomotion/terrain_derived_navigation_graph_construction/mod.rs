@@ -150,6 +150,10 @@ impl TerrainDerivedNavigationGraph {
             terrain_tile_size_centimetres,
             terrain_tile_grid_dimensions,
             navigation_nodes: navigation_nodes.into_boxed_slice(),
+            path_surfaces: Vec::new(),
+            path_surface_edges: std::collections::BTreeMap::new(),
+            path_surfaces_by_cell: std::collections::BTreeMap::new(),
+            ground_path_nodes: Vec::new(),
         })
     }
 }

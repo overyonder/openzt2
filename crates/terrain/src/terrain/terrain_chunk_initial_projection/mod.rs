@@ -1,5 +1,5 @@
-use std::collections::hash_map::Entry;
 use bevy::asset::UntypedAssetId;
+use std::collections::hash_map::Entry;
 
 use bevy::camera::visibility::RenderLayers;
 use bevy::gltf::Gltf;

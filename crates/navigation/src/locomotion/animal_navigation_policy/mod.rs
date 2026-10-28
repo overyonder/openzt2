@@ -55,7 +55,12 @@ impl AnimalNavigationPolicy<'_> {
 /// previous collision limits. The destination planner replaces them on its next pass.
 pub(super) fn invalidate_animal_routes_after_policy_changes(
     policy: AnimalNavigationPolicy,
-    mut animals: Query<(Ref<AnimalVariant>, &mut Destination, &mut Route)>,
+    mut animals: Query<(
+        Ref<AnimalVariant>,
+        &mut Destination,
+        &mut Route,
+        Option<&openzt2_zoo_state::locomotion::locomotion_types::RestoredNavigationRoute>,
+    )>,
 ) {
     let source_changed = policy
         .assets
@@ -65,7 +70,10 @@ pub(super) fn invalidate_animal_routes_after_policy_changes(
             .index
             .as_ref()
             .is_some_and(|index| index.is_changed());
-    for (variant, mut destination, mut route) in &mut animals {
+    for (variant, mut destination, mut route, restored) in &mut animals {
+        if restored.is_some_and(|restored| restored.request_id == destination.request_id) {
+            continue;
+        }
         if source_changed || variant.is_changed() {
             route.clear();
             destination.set_changed();

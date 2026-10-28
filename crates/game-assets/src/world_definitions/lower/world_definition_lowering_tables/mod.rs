@@ -1,6 +1,5 @@
 use super::world_definition_source_value_reading_and_conversion::simple_error;
 use crate::source_document::resolved_source_record_index::BindError;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_shows_and_training::ShowPlatformUpgradePolicy;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::environment::EnvironmentDefinition;
@@ -10,6 +9,7 @@ use openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefin
 use openzt2_game_data::world_definitions::transportation_and_tours::{
     TourCategoryScore, TourRatingRange,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -65,6 +65,7 @@ impl WorldDefinitionLoweringTables {
             maintenance_definitions,
             staff,
             staff_jobs,
+            staff_tank_cleaning_requests,
             staff_requests,
             guests,
             viewing_opportunities,
@@ -154,6 +155,7 @@ impl WorldDefinitionLoweringTables {
             tank_surface_policy,
             tank_depth_policy,
             tank_edit_policy,
+            fence_placement_mode_policy,
             show_presentation,
             show_scheduling,
             show_scoring,
@@ -213,6 +215,7 @@ impl WorldDefinitionLoweringTables {
         sort!(maintenance_definitions);
         sort!(staff);
         sort!(staff_jobs);
+        sort!(staff_tank_cleaning_requests);
         // Multiple authored controllers can belong to one definition. Preserve
         // their source order within that owner instead of rejecting its rows.
         self.document.staff_requests.sort_by_key(|record| record.id);

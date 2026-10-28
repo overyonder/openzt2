@@ -12,9 +12,9 @@ use openzt2_game_data::world_definitions::world_objects::WorldObjectNamedPhysica
 use openzt2_game_data::AssetId;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod node_attachment_tests;
+#[cfg(test)]
+mod tests;
 
 #[derive(Component)]
 pub(super) struct NamedPhysicalPresentationsHydrated;

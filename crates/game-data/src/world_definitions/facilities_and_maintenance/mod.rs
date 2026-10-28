@@ -48,6 +48,8 @@ pub struct MaintenanceDefinition {
     pub deterioration_per_zoo_day_permille: u16,
     pub repair_below_permille: u16,
     pub waste_capacity_units: u16,
+    #[serde(default)]
+    pub initial_waste_units: u16,
     pub empty_at_units: u16,
     pub litter_definition: Option<AssetId>,
     pub litter_local_offset_cm: [i16; 3],

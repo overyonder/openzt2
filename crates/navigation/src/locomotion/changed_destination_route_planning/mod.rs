@@ -8,6 +8,7 @@ use crate::locomotion::pathfinding::plan_route;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
+use openzt2_zoo_state::locomotion::locomotion_types::EntityPursuit;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
@@ -34,8 +35,14 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
             &Destination,
             Option<&LocomotionMode>,
             &mut Route,
+            Option<&openzt2_zoo_state::locomotion::locomotion_types::RestoredNavigationRoute>,
         ),
-        (Changed<Destination>, Without<DirectLocomotion>),
+        (
+            Changed<Destination>,
+            Without<DirectLocomotion>,
+            Without<EntityPursuit>,
+            Without<openzt2_zoo_state::behavior_task_execution_types::BehaviorEvasionSteering>,
+        ),
     >,
     mut navigation_failures: MessageWriter<NavigationFailed>,
     terrain_index: Res<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
@@ -70,8 +77,16 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
         destination,
         locomotion_mode,
         mut planned_route,
+        restored_route,
     ) in &mut navigation_agents_with_changed_destinations
     {
+        if let Some(restored) = restored_route {
+            commands.entity(navigation_agent_entity)
+                .remove::<openzt2_zoo_state::locomotion::locomotion_types::RestoredNavigationRoute>();
+            if restored.request_id == destination.request_id && !planned_route.points.is_empty() {
+                continue;
+            }
+        }
         let route_planning_result = animal_policy
             .agent_with_authored_collision_limits(navigation_agent, animal_variant)
             .and_then(|(navigation_agent, maximum_ground_slope_radians)| {

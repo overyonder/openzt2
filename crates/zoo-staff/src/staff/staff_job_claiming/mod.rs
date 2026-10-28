@@ -10,7 +10,8 @@ use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialCell;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
-use openzt2_zoo_state::terrain::dry_surface_eligibility::TerrainDrySurfaceEligibility;
+use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
+use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::{
@@ -27,7 +28,8 @@ use super::{
         StaffCandidateEligibilityFacts,
     },
     staff_job_types::{
-        CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, UnsuccessfulStaffJobCandidates,
+        CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask, TankCleaningRequestSite,
+        UnsuccessfulStaffJobCandidates,
     },
     worker_duty_assignment::maintenance_worker_duties_accept_staff_job,
 };
@@ -39,7 +41,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     spatial_grid: Res<SpatialGrid>,
-    terrain_surfaces: TerrainDrySurfaceEligibility,
+    terrain_surfaces: DrySurfaceEligibility,
     staff: Query<
         (
             Entity,
@@ -65,10 +67,12 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         Option<&ChildOf>,
         Option<&HabitatMember>,
         Option<&Rampaging>,
-        &DefinitionId,
+        Option<&DefinitionId>,
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
     )>,
+    waste: Query<&FacilityContainedWaste>,
+    request_sites: Query<(), With<TankCleaningRequestSite>>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -128,9 +132,14 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
             target_in_water: target_on_land.map(|on_land| !on_land),
             target_on_land,
             target_rampaging: Some(target_rampaging),
-            target_in_show: catalogue
-                .find_object(target_definition.0)
+            target_in_show: target_definition
+                .and_then(|definition| catalogue.find_object(definition.0))
                 .and_then(|definition| (!definition.supports_show_tricks).then_some(false)),
+            target_trash_level_q16: waste
+                .get(job.target)
+                .ok()
+                .map(|waste| i32::from(waste.contained_waste_units) << 16),
+            target_is_request_site: request_sites.contains(job.target),
         };
 
         nearest_staff.clear();
@@ -247,8 +256,8 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         else {
             continue;
         };
-        let target_in_show = catalogue
-            .find_object(definition.0)
+        let target_in_show = definition
+            .and_then(|definition| catalogue.find_object(definition.0))
             .and_then(|definition| (!definition.supports_show_tricks).then_some(false));
         let target_on_land = terrain_surfaces.on_land(target_transform.translation().xz());
         let Some(behavior_task) = catalogue.find_staff(staff_role.0).and_then(|role| {
@@ -265,6 +274,11 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                     target_on_land,
                     target_rampaging: Some(rampaging.is_some()),
                     target_in_show,
+                    target_trash_level_q16: waste
+                        .get(job.target)
+                        .ok()
+                        .map(|waste| i32::from(waste.contained_waste_units) << 16),
+                    target_is_request_site: request_sites.contains(job.target),
                 },
             )
         }) else {

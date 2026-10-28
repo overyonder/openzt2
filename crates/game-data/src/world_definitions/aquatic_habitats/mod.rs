@@ -2,7 +2,7 @@
 
 use crate::AssetId;
 
-#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct TankDefinition {
     pub id: AssetId,
     pub wall: AssetId,
@@ -12,6 +12,9 @@ pub struct TankDefinition {
     pub max_depth_cm: u16,
     pub capacity_litres_per_cell: u32,
     pub filtration_per_day: u32,
+    /// Material asset path for an opaque wall panel.
+    #[serde(default)]
+    pub opaque_wall_material: Option<String>,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct AquaticRequirement {
@@ -25,10 +28,11 @@ pub struct AquaticRequirement {
     pub land_fraction_permille: [u16; 2],
 }
 
-// Authored offsets applied once when a tank surface is hydrated.
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct TankSurfacePolicy {
+    /// A full tank's water stands this far below its lowest wall top.
     pub water_height_offset_cm: i32,
+    /// A new tank's floor lies this far below the mean ground under its walls.
     pub floor_height_offset_cm: i32,
 }
 // Global depth requirements shared by tank construction and show eligibility.

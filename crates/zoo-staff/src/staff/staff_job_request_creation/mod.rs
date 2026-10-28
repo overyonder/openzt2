@@ -17,7 +17,7 @@ pub(crate) struct BatchedStaffJobRequest {
     kind: StaffJobKind,
     target: Entity,
     token: Option<AssetId>,
-    urgency: u16,
+    urgency: u32,
 }
 
 pub(crate) fn create_or_raise_priority_of_requested_staff_jobs(

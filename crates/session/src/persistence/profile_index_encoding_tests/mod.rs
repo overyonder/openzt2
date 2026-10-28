@@ -141,7 +141,6 @@ fn independently_bounded_variables_round_trip_across_profiles() {
     }
 }
 
-
 #[test]
 fn disabled_message_of_the_day_survives_the_profile_index() {
     let profile_identifier = create_test_profile_identifier(1);

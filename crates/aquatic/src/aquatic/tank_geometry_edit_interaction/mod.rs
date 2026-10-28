@@ -19,73 +19,73 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::TankEditKind;
 use openzt2_zoo_state::economy::money_types::Money;
+use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use super::{
-    aquatic_simulation_types::{Tank, TankGeometry, TankSurfaceHydrated},
-    tank_floor_edit_types::{TankFloorEdit, TankFloorGesture},
-    tank_floor_edit_validation::tank_floor_edit_matches_authored_depth_bounds,
+    aquatic_simulation_types::{tank_habitat_seed_cell, Tank, TankGeometry},
+    tank_geometry_edit_types::{TankGeometryEdit, TankGeometryGesture},
+    tank_geometry_rules::{step_tank_geometry_edit, tank_geometry_limits},
+    tank_height_bounds::TankHeightBoundsQueries,
 };
 
-/// Floor edits are deferred until release so cancellation never changes the live surface.
+/// Wall and floor edits are deferred until release so cancellation never
+/// changes the live tank. Each frame of a held gesture moves the edited height
+/// at the authored speed, clamped to the original's limits.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn update_tank_floor_gesture(
+pub(super) fn update_tank_geometry_gesture(
     mut commands: Commands,
-    tool: Res<ConstructionTool>,
-    policy: Res<ConstructionPlacementPolicy>,
-    time: Res<Time>,
-    pointer: Res<PrimaryPointerInputState>,
-    ui: Res<UiPointerCapture>,
-    modal: Res<AuthoredModalInputCapture>,
+    (tool, policy, time): (
+        Res<ConstructionTool>,
+        Res<ConstructionPlacementPolicy>,
+        Res<Time>,
+    ),
+    (pointer, ui, modal): (
+        Res<PrimaryPointerInputState>,
+        Res<UiPointerCapture>,
+        Res<AuthoredModalInputCapture>,
+    ),
     grid: Res<TopologyGrid>,
+    habitat_index: Res<HabitatIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
-    tanks: Query<
-        (
-            Entity,
-            &Tank,
-            &TankGeometry,
-            &HabitatRegion,
-            &HabitatSummary,
-            &WorldMember,
-        ),
-        With<TankSurfaceHydrated>,
-    >,
+    tanks: Query<(
+        &Tank,
+        &TankGeometry,
+        &HabitatRegion,
+        &HabitatSummary,
+        &WorldMember,
+    )>,
     mut previews: Query<(
         Entity,
-        &mut TankFloorEdit,
-        &mut TankFloorGesture,
+        &mut TankGeometryEdit,
+        &mut TankGeometryGesture,
         &mut ConstructionPreview,
     )>,
-    mut cancellations: MessageReader<CancelConstruction>,
-    mut commits: MessageWriter<CommitConstruction>,
+    height_queries: TankHeightBoundsQueries,
+    (mut cancellations, mut commits): (
+        MessageReader<CancelConstruction>,
+        MessageWriter<CommitConstruction>,
+    ),
 ) {
     let cancelled = cancellations.read().count() != 0;
-    let supported = *tool == ConstructionTool::TankEdit
-        && matches!(
-            policy.tank_edit,
-            TankEditKind::RaiseFloor | TankEditKind::LowerFloor
-        );
-    if cancelled || !supported || ui.over_ui || modal.0.is_some() {
-        for (entity, _, _, _) in &previews {
-            commands.entity(entity).despawn();
-        }
-        return;
-    }
-    let Some((definitions, edit_policy)) =
-        active_definitions
-            .get(&definitions)
-            .and_then(|definitions| {
-                definitions
-                    .tank_edit_policy()
-                    .map(|policy| (definitions, policy))
-            })
+    let supported = *tool == ConstructionTool::TankEdit;
+    let rules = active_definitions
+        .get(&definitions)
+        .and_then(|definitions| {
+            Some((
+                definitions.tank_edit_policy()?,
+                tank_geometry_limits(definitions)?,
+            ))
+        });
+    let Some((edit_policy, limits)) =
+        rules.filter(|_| !cancelled && supported && !ui.over_ui && modal.0.is_none())
     else {
-        for (entity, _, _, _) in &previews {
+        for (entity, ..) in &previews {
             commands.entity(entity).despawn();
         }
         return;
@@ -101,19 +101,19 @@ pub(super) fn update_tank_floor_gesture(
         if pointer.pressed {
             let seconds = time.delta_secs();
             if seconds.is_finite() && seconds > 0.0 {
-                let direction = if gesture.kind == TankEditKind::RaiseFloor {
-                    1.0
-                } else {
-                    -1.0
+                let (direction, millimetres_per_second) = match gesture.kind {
+                    TankEditKind::RaiseFloor => (1.0, edit_policy.floor_mm_per_second),
+                    TankEditKind::LowerFloor => (-1.0, edit_policy.floor_mm_per_second),
+                    TankEditKind::RaiseWall => (1.0, edit_policy.wall_mm_per_second),
+                    TankEditKind::LowerWall => (-1.0, edit_policy.wall_mm_per_second),
+                    TankEditKind::Fill => (1.0, edit_policy.water_mm_per_second),
+                    TankEditKind::Drain => (-1.0, edit_policy.water_mm_per_second),
                 };
-                edit.after.floor_height +=
-                    direction * edit_policy.floor_mm_per_second as f32 / 1000.0 * seconds;
-                edit.after.volume = edit.after.area * edit.after.depth();
+                let delta = direction * millimetres_per_second as f32 / 1000.0 * seconds;
+                step_tank_geometry_edit(&mut edit, delta, limits, gesture.bounds);
             }
         }
-        preview.validity = if edit.before != edit.after
-            && tank_floor_edit_matches_authored_depth_bounds(&edit, edit.after, definitions)
-        {
+        preview.validity = if edit.before != edit.after && edit.after.is_valid() {
             PlacementValidity::Valid { cost: Money(0) }
         } else {
             PlacementValidity::Invalid(PlacementFailure::InvalidHabitat)
@@ -145,34 +145,50 @@ pub(super) fn update_tank_floor_gesture(
     let cell = ((cursor.world.xz() - grid.origin) / grid.spacing_m)
         .floor()
         .as_ivec2();
-    let mut candidates = tanks
-        .iter()
-        .filter(|(_, _, geometry, region, summary, member)| {
-            member.root == root
-                && !summary.boundary_is_breached
-                && geometry.is_valid()
-                && region.topology_cells.contains(&cell)
-        });
-    let Some((entity, tank, geometry, _, _, member)) = candidates.next() else {
+    let Some((tank, geometry, region, member)) = habitat_index
+        .habitat_for_topology_cell(cell)
+        .and_then(|habitat| tanks.get(habitat).ok())
+        .filter(|(_, geometry, _, summary, member)| {
+            member.root == root && !summary.boundary_is_breached && geometry.is_valid()
+        })
+        .map(|(tank, geometry, region, _, member)| (tank, geometry, region, member))
+    else {
         return;
     };
-    if candidates.next().is_some() {
+    let (Some(seed_cell), Some(bounds)) = (
+        tank_habitat_seed_cell(region),
+        height_queries.tank_height_bounds(region, limits),
+    ) else {
         return;
-    }
-    let edit = TankFloorEdit {
-        tank: entity,
-        definition: tank.definition,
-        before: *geometry,
-        after: *geometry,
     };
-    if !tank_floor_edit_matches_authored_depth_bounds(&edit, *geometry, definitions) {
+    let Some(mut wall_heights) = height_queries.wall_height_images(region, limits) else {
         return;
+    };
+    for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {
+        if adjacent_member.root == member.root
+            && tank_habitat_seed_cell(adjacent_region) != Some(seed_cell)
+        {
+            height_queries.include_adjacent_tank_water_in_wall_minima(
+                &mut wall_heights,
+                adjacent_region,
+                adjacent_geometry.water_height,
+                limits,
+            );
+        }
     }
     commands.spawn((
-        edit,
-        TankFloorGesture {
+        TankGeometryEdit {
+            seed_cell,
+            kind: policy.tank_edit,
+            definition: tank.definition,
+            before: *geometry,
+            after: *geometry,
+            wall_heights,
+        },
+        TankGeometryGesture {
             kind: policy.tank_edit,
             pending: false,
+            bounds,
         },
         ConstructionPreview {
             definition: tank.definition,

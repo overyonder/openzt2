@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditAcknowledged;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditAcknowledged;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditApplicationAcknowledged;
 use openzt2_zoo_state::shows::show_platform_upgrade_types::ShowPlatformUpgradeEditAcknowledged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditAcknowledged;
@@ -36,7 +36,7 @@ enum ConstructionApplicationDomain {
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn collect_construction_domain_application_acknowledgements(
     mut commands: Commands,
-    mut tank_acknowledgements: MessageReader<TankFloorEditAcknowledged>,
+    mut tank_acknowledgements: MessageReader<TankGeometryEditAcknowledged>,
     mut terrain_acknowledgements: MessageReader<TerrainEditAcknowledged>,
     mut topology_acknowledgements: MessageReader<TopologyEditAcknowledged>,
     mut object_placement_acknowledgements: MessageReader<

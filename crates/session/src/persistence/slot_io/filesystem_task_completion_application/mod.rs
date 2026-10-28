@@ -114,6 +114,7 @@ pub(in super::super) fn apply_completed_persistence_slot_filesystem_tasks(
                         .entity(task_entity)
                         .remove::<PersistenceSlotFilesystemTask>()
                         .insert(PendingSnapshotApplication {
+                            behavior_documents: Vec::new(),
                             save_slot_identifier,
                             scenario_definition_identifier: None,
                             session_mode: None,

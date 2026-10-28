@@ -27,6 +27,19 @@ impl FacilityContainedWaste {
     }
 }
 
+/// An authored `f_TrashLevel` change on a waste container, such as a guest
+/// throwing away trash. The level is the container's contained waste.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AdjustFacilityContainedWaste {
+    pub facility: Entity,
+    pub operation:
+        openzt2_game_data::behavior::action::modification::BehaviorFactModificationOperation,
+    pub delta_q16: i32,
+}
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FacilityWasteBehaviorModification;
+
 /// Four presentation bands used by the authored trash-quantity display.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FacilityContainedWastePresentationLevel {

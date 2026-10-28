@@ -48,7 +48,9 @@ pub(super) fn forward_positioned_audio_cue_playback_requests(
         requests.clear();
         return;
     }
-    let listener_is_underwater = view_state.as_ref().and_then(|view| view.underwater_status());
+    let listener_is_underwater = view_state
+        .as_ref()
+        .and_then(|view| view.underwater_status());
     let camera_position = view_state.as_ref().and_then(|view| view.camera_position());
     let mut pending: Vec<
         Option<openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue>,

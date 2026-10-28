@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditPreparationRejected;
-use openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditPrepared;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditPreparationRejected;
+use openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditPrepared;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejection;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPreparationRejected;
@@ -32,8 +32,8 @@ enum ConstructionPreparationDomain {
 #[allow(clippy::too_many_arguments)]
 pub fn collect_construction_domain_preparation_results(
     mut commands: Commands,
-    mut prepared_tank_edits: MessageReader<TankFloorEditPrepared>,
-    mut rejected_tank_edits: MessageReader<TankFloorEditPreparationRejected>,
+    mut prepared_tank_edits: MessageReader<TankGeometryEditPrepared>,
+    mut rejected_tank_edits: MessageReader<TankGeometryEditPreparationRejected>,
     mut prepared_terrain_edits: MessageReader<TerrainEditPrepared>,
     mut rejected_terrain_edits: MessageReader<TerrainEditPreparationRejected>,
     mut prepared_topology_edits: MessageReader<TopologyEditPrepared>,

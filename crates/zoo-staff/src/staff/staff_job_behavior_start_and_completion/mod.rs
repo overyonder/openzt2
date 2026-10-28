@@ -7,6 +7,7 @@ use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, Asset
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
@@ -93,6 +94,13 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
         behavior_task.execution_id = Some(execution_id);
         commands
             .entity(staff_entity)
+            .insert(BehaviorTaskEffectiveScore {
+                execution_id,
+                template_score: Some(behavior_task_definition.priority.unwrap_or_default()),
+                linked_score: Some(f32::from_bits(u32::MAX - job.urgency))
+                    .filter(|priority| priority.is_finite() && *priority > 0.0),
+                selected_candidate_score: None,
+            })
             .insert(BehaviorTaskExecutionState {
                 execution_id,
                 program: behavior_task_definition.id,
@@ -177,16 +185,21 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
         {
             continue;
         }
-        if (job.kind == StaffJobKind::Treat && job.token == Some(AssetId::from_key("t_cureanimal")))
+        if (job.kind == StaffJobKind::Treat
+            && (job.token == Some(AssetId::from_key("t_cureanimal"))
+                || job.token == Some(AssetId::from_key("t_healanimal"))))
             || (job.kind == StaffJobKind::Feed
                 && job.token == Some(AssetId::from_key("t_feedanimal")))
             || (job.kind == StaffJobKind::RefillWater
                 && job.token == Some(AssetId::from_key("t_wateranimal")))
+            || (job.kind == StaffJobKind::Capture
+                && job.token == Some(AssetId::from_key("t_crateanimal")))
         {
             if cancelled_jobs.contains(&current_job.job) || !live_animals.contains(job.target) {
                 continue;
             }
-            // The authored cure or food placement already applied its effect.
+            // The authored cure, heal, food placement or dart already applied
+            // its effect.
             // Do not start a second, definition-driven effect after completion;
             // a new request needs a fresh threshold crossing.
             completed_jobs.write(StaffJobCompleted {

@@ -32,15 +32,21 @@ pub(super) fn apply_changed_authored_scrollbar_values_to_owned_bevy_scroll_posit
         match decoration.axis {
             UiSliderAxis::Horizontal => {
                 let next = value.clamp(0.0, maximum.x);
-                if position.x != next { position.x = next; }
+                if position.x != next {
+                    position.x = next;
+                }
             }
             UiSliderAxis::Vertical => {
                 let next = value.clamp(0.0, maximum.y);
-                if position.y != next { position.y = next; }
+                if position.y != next {
+                    position.y = next;
+                }
             }
             UiSliderAxis::Both => {
                 let next = Vec2::splat(value).clamp(Vec2::ZERO, maximum);
-                if position.0 != next { position.0 = next; }
+                if position.0 != next {
+                    position.0 = next;
+                }
             }
         }
     }

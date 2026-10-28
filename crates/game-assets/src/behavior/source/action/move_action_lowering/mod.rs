@@ -1,7 +1,8 @@
 use std::io;
 
 use openzt2_game_data::behavior::{
-    action::movement::{BehaviorMoveAction, BehaviorMoveLocomotionSpeed},
+    action::movement::{BehaviorMoveAction, BehaviorMoveLocomotionSpeed, BehaviorPursuitAction},
+    action::wander::BehaviorGroundLocomotionSpeed,
     action_record::BehaviorAction,
 };
 
@@ -134,6 +135,65 @@ pub(super) fn lower_move_action_source_node(
         ),
         move_radius_cm: read_optional_centimetres_attribute(move_action_source_node, "moveRadius")?
             .unwrap_or(200),
+    })))
+}
+
+pub(super) fn lower_pursuit_action_source_node(
+    source_node: &DataNode,
+) -> io::Result<Option<BehaviorAction>> {
+    if source_node.name != "BFBehPursuit" {
+        return Ok(None);
+    }
+    // Attribute names match exactly, so a differently cased key, such as an
+    // authored `locospeed`, is ignored and its default applies. The original
+    // game also ignores the avoidance keys on a pursuit.
+    let pursuit_keys = [
+        "locoSpeed",
+        "hitRadius",
+        "pursuitRadius",
+        "failureRadius",
+        "pollFreq",
+    ];
+    if source_node.attributes.iter().any(|attribute| {
+        let name = attribute.name();
+        !pursuit_keys
+            .iter()
+            .any(|key| key.eq_ignore_ascii_case(name))
+            && !matches!(name, "avoidWater" | "avoidEntityRadius")
+    }) || source_node.element_children().next().is_some()
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehPursuit has unsupported authored policy",
+        ));
+    }
+    // An absent speed means `slow`.
+    let locomotion_speed =
+        match read_optional_trimmed_string_attribute(source_node, "locoSpeed").as_deref() {
+            None | Some("slow") => BehaviorGroundLocomotionSpeed::Slow,
+            Some("medium") => BehaviorGroundLocomotionSpeed::Medium,
+            Some("fast") => BehaviorGroundLocomotionSpeed::Fast,
+            Some(_) => {
+                return Err(invalid_behavior_source_data(
+                    "BFBehPursuit locoSpeed has no live locomotion mapping",
+                ));
+            }
+        };
+    let poll_interval_seconds =
+        read_optional_float_attribute(source_node, "pollFreq")?.unwrap_or(1.0);
+    if !poll_interval_seconds.is_finite() {
+        return Err(invalid_behavior_source_data(
+            "BFBehPursuit has invalid pollFreq",
+        ));
+    }
+    Ok(Some(BehaviorAction::Pursuit(BehaviorPursuitAction {
+        locomotion_speed,
+        hit_radius_cm: read_optional_centimetres_attribute(source_node, "hitRadius")?
+            .unwrap_or(300),
+        pursuit_radius_cm: read_optional_centimetres_attribute(source_node, "pursuitRadius")?
+            .unwrap_or(1_200),
+        failure_radius_cm: read_optional_centimetres_attribute(source_node, "failureRadius")?
+            .unwrap_or(5_000),
+        poll_interval_seconds,
     })))
 }
 

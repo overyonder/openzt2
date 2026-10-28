@@ -15,6 +15,7 @@ openzt2_animals.workspace = true
 openzt2_game_assets.workspace = true
 openzt2_game_data.workspace = true
 openzt2_interface_state.workspace = true
+openzt2_navigation.workspace = true
 openzt2_ui.workspace = true
 openzt2_world.workspace = true
 openzt2_world_state.workspace = true

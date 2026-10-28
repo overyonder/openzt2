@@ -16,6 +16,10 @@ pub struct SamplingBehaviorDockPose;
 pub struct BehaviorTaskExecutionSequence(u64);
 
 impl BehaviorTaskExecutionSequence {
+    pub fn reserve_restored(&mut self, execution_id: u64) {
+        self.0 = self.0.max(execution_id);
+    }
+
     pub fn next(&mut self) -> u64 {
         self.0 = self
             .0
@@ -137,7 +141,7 @@ pub struct BehaviorTaskReturnFrame {
     pub repetitions: u32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum BehaviorTaskExecutionPhase {
     Set,
     Execution,
@@ -147,6 +151,31 @@ pub enum BehaviorTaskExecutionPhase {
 
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingBehaviorTaskFailure;
+
+/// An explicit clip that a behavior action started and does not wait for,
+/// such as lifting an item until its attach key fires. Locomotion leaves the
+/// actor's presentation to it until that request completes, is rejected or
+/// is replaced by another explicit request.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BehaviorHeldAnimationClip {
+    pub request_id: usize,
+}
+
+/// Drops the actor's current task without its failure branch, so the next
+/// selection chooses afresh. Each executor's pending state names its owning
+/// execution and is discarded once that execution is gone.
+pub fn abandon_behavior_task_for_reconsideration(actor: Entity, commands: &mut Commands) {
+    commands.entity(actor).try_remove::<(
+        BehaviorTaskExecutionState,
+        crate::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
+        PendingBehaviorTaskFailure,
+        PendingBehaviorAnimationClipCompletion,
+        PendingBehaviorDockingCompletion,
+        PendingBehaviorMoveCompletion,
+        crate::locomotion::locomotion_types::Destination,
+        crate::locomotion::locomotion_types::Docking,
+    )>();
+}
 
 #[derive(Component, Clone, Debug)]
 pub struct PendingBehaviorAnimationClipCompletion {
@@ -272,6 +301,57 @@ pub struct PendingBehaviorMoveCompletion {
 pub struct SynchronizedBehaviorParticipant {
     pub execution_id: u64,
     pub owner: Entity,
+}
+
+/// A live evasion instruction; navigation combines this horizontal steering
+/// direction with its obstacle and contact response each fixed step.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BehaviorEvasionSteering {
+    pub request_id: u64,
+    pub direction: Vec2,
+    pub obstacle_radius_m: f32,
+    pub avoid_water: bool,
+    pub avoid_land: bool,
+}
+
+#[derive(Component)]
+pub struct BehaviorWanderNavigation {
+    pub execution_id: u64,
+    pub origin: BehaviorTaskReturnFrame,
+    pub depth: usize,
+    pub until_tick: u64,
+    pub request_id: Option<u64>,
+}
+
+impl BehaviorWanderNavigation {
+    pub fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
+        self.execution_id == task.execution_id
+            && self.depth == task.stack.len()
+            && task.is_at_or_nested_under(&self.origin, self.depth)
+    }
+}
+
+#[derive(Component)]
+pub struct BehaviorEvasionNavigation {
+    pub execution_id: u64,
+    pub origin: BehaviorTaskReturnFrame,
+    pub depth: usize,
+    pub until_tick: u64,
+    pub request_id: u64,
+}
+
+impl BehaviorEvasionNavigation {
+    pub fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
+        self.execution_id == task.execution_id
+            && self.depth == task.stack.len()
+            && task.is_at_or_nested_under(&self.origin, self.depth)
+    }
+}
+
+#[derive(Component, Clone, Copy, Debug)]
+pub struct BehaviorLocomotionModifier {
+    pub modifier: openzt2_game_data::AssetId,
+    pub item: Entity,
 }
 
 impl PendingBehaviorMoveCompletion {

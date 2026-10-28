@@ -11,8 +11,8 @@ use d3d9_effects::{
 };
 
 use super::super::resolved_effect_transform_bindings::{
-    EffectDrawTransforms, EffectRenderViewTransforms, FOG_INPUT, LIGHT_INPUT, MODEL_INPUT,
-    ResolvedEffectTransformSemantic, VIEW_INPUT, WIND_INPUT,
+    EffectDrawTransforms, EffectRenderViewTransforms, ResolvedEffectTransformSemantic, FOG_INPUT,
+    LIGHT_INPUT, MODEL_INPUT, VIEW_INPUT, WIND_INPUT,
 };
 use super::EffectPassMaterial;
 use crate::material::authored_material_parameter_lowering::{

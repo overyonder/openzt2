@@ -16,6 +16,7 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::world_definitions::aquatic_habitats::TankDefinition;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
@@ -165,10 +166,16 @@ pub(super) fn bind_authored_fence(
         }
         return Ok(());
     }
-    let fence = record.descendant_named("ZTFence");
-    let gate = fence
-        .and_then(|fence| fence.attribute_named_any(&["gate"]))
-        .filter(|gate| !gate.trim().is_empty())
+    // Tank walls author their gate on the tank segment component.
+    let tank_segment = record.descendant_named("ZTTankSegment");
+    let gate = ["ZTFence", "ZTTankSegment"]
+        .into_iter()
+        .find_map(|component| {
+            record
+                .descendant_named(component)
+                .and_then(|element| element.attribute_named_any(&["gate"]))
+                .filter(|gate| !gate.trim().is_empty())
+        })
         .map(|gate| {
             id(record
                 .find_semantically_equivalent_resolved_source_record_key(gate)
@@ -223,8 +230,35 @@ pub(super) fn bind_authored_fence(
             cardinal_curve_135: prefab("fence90curve135"),
             diagonal_curve_135: prefab("fence45curve135"),
         },
+        top_segments: (prefab("tfence90") != AssetId::default()).then(|| FenceSegmentPrefabs {
+            cardinal_straight: prefab("tfence90"),
+            diagonal_straight: prefab("tfence45"),
+            cardinal_curve_90: prefab("tfence90curve90"),
+            diagonal_curve_90: prefab("tfence45curve90"),
+            cardinal_curve_135: prefab("tfence90curve135"),
+            diagonal_curve_135: prefab("tfence45curve135"),
+        }),
         gate_policy,
     });
+    if record.has_type_token("tankwallsegment") {
+        // Each wall segment type closes a tank. It authors no depth bound or
+        // filtration: depth follows the tank manager and fence mode policies,
+        // and filtration comes from placed filter objects.
+        output.document.tanks.push(TankDefinition {
+            id: object_id,
+            wall: object_id,
+            floor_material: AssetId::default(),
+            water_material: AssetId::default(),
+            min_depth_cm: 0,
+            max_depth_cm: u16::MAX,
+            capacity_litres_per_cell: 0,
+            filtration_per_day: 0,
+            opaque_wall_material: tank_segment
+                .and_then(|segment| segment.attribute_named_any(&["opaqueMat"]))
+                .filter(|material| !material.trim().is_empty())
+                .map(super::aquatic_habitat_source_lowering::tank_wall_material_asset_path),
+        });
+    }
     let (presentation_caustic_policies, surface_effect_strength) =
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,

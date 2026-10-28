@@ -41,9 +41,14 @@ pub(super) struct AuthoredLinkedSkyTowerPresentationProjected {
 pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
 
 fn signed_planar_cross_product(left: Vec3, right: Vec3) -> i8 {
-    (left.x * right.z - left.z * right.x)
-        .signum()
-        .clamp(-1.0, 1.0) as i8
+    let cross_product = left.x * right.z - left.z * right.x;
+    if cross_product > 0.0 {
+        1
+    } else if cross_product < 0.0 {
+        -1
+    } else {
+        0
+    }
 }
 
 fn authored_ground_track_piece_type(direction: Vec3) -> u8 {
@@ -72,8 +77,8 @@ fn authored_ground_track_piece_appearance(piece_type: u8, flags: [i8; 2]) -> u8 
         (2, [0, -1]) => 4,
         (2, [0, 1]) => 5,
         (3, [-1, -1]) => 14,
-        (3, [-1, 1]) => 3,
-        (3, [-1, 0]) => 11,
+        (3, [-1, 1]) => 11,
+        (3, [-1, 0]) => 3,
         (3, [1, -1]) => 9,
         (3, [1, 1]) => 15,
         (3, [1, 0]) => 4,

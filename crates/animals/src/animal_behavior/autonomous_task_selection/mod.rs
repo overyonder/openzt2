@@ -22,6 +22,7 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -39,7 +40,7 @@ use task_cooldowns::{AnimalTaskCooldowns, RunningDelayedAnimalTask};
 use world_object_targets::{
     indexed_world_object_target_requirement, WorldObjectTargetLocation, WorldObjectTargetSources,
 };
-use super::behavior_token_execution::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
 
 pub(super) fn select_idle_animal_tasks(
     documents: Res<LoadedBehaviorDocumentCollection>,
@@ -73,7 +74,7 @@ pub(super) fn select_idle_animal_tasks(
     >,
     mut world_objects: WorldObjectTargetSources,
     shores: super::natural_water_targets::NaturalWaterTargets,
-    mut shore_candidates: Local<Vec<super::natural_water_targets::SelectedNaturalWaterTarget>>,
+    mut shore_candidates: Local<Vec<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
     mut commands: Commands,
 ) {
@@ -276,7 +277,7 @@ pub(super) fn select_idle_animal_tasks(
                                         )
                                     }
                                     (Input::Spatial(Spatial::WaterDepth), Value::Q16(expected)) => {
-                                        if let super::natural_water_targets::NaturalWaterTargetKind::Surface { depth } = shore.kind {
+                                        if let openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind::Surface { depth } = shore.kind {
                                             candidate_facts::compare_q16((depth * 65_536.0) as i32, expected, fact.comparison)
                                         } else { false }
                                     }
@@ -416,7 +417,8 @@ pub(super) fn select_idle_animal_tasks(
         }
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
-        let Some((document, declaration, task, target, object, shore)) = ranking.finish(false)
+        let Some(((document, declaration, task, target, object, shore), score)) =
+            ranking.finish(false)
         else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
@@ -468,10 +470,16 @@ pub(super) fn select_idle_animal_tasks(
         debug!(?animal, task = %task.name, id = ?task.id, ?target, execution_id,
             cooldown_ticks = ?delay_ticks, "animal started task");
         let mut started = commands.entity(animal);
+        started.insert(BehaviorTaskEffectiveScore {
+            execution_id,
+            template_score: Some(task.priority.unwrap_or_default()),
+            linked_score: None,
+            selected_candidate_score: Some(score),
+        });
         if let Some(shore) = shore {
             started.insert(shore);
         } else {
-            started.remove::<super::natural_water_targets::SelectedNaturalWaterTarget>();
+            started.remove::<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>();
         }
         started.insert(BehaviorTaskExecutionState {
             execution_id,

@@ -1,18 +1,18 @@
 use std::io;
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 
 use super::{
     authored_material_parameter_lowering::{
-        MaterialEffectParameterValue, OwnedMaterialEffectParameter,
-        lower_authored_material_effect_parameter,
+        lower_authored_material_effect_parameter, MaterialEffectParameterValue,
+        OwnedMaterialEffectParameter,
     },
     d3d9_effect_program_evaluation::{
-        LiveD3d9EffectIncludeSourceCollector, read_and_repair_winning_d3d9_effect_source,
-        resolve_blue_fang_d3d9_effect_source_path,
+        read_and_repair_winning_d3d9_effect_source, resolve_blue_fang_d3d9_effect_source_path,
+        LiveD3d9EffectIncludeSourceCollector,
     },
     d3d9_effect_source_asset_loading::D3d9EffectSourceAsset,
     material_asset_types::{

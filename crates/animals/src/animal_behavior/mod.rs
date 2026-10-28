@@ -6,6 +6,7 @@ use openzt2_zoo_state::animal_behavior::behavior_candidate_selection;
 mod behavior_clothing_delivery;
 mod behavior_docking_execution;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution;
+mod behavior_face_target_execution;
 mod behavior_fact_modification;
 mod behavior_feedback_dispatch_execution;
 mod behavior_head_look_execution;
@@ -15,6 +16,7 @@ mod behavior_locomotion_switch_set_execution;
 pub(crate) mod behavior_move_execution;
 mod behavior_object_attachment_execution;
 mod behavior_object_spawn_execution;
+mod behavior_pursuit_execution;
 mod behavior_queue_wait_execution;
 mod behavior_random_animation_execution;
 mod behavior_random_choice_execution;
@@ -61,6 +63,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_hide_execution::register_hide_execution(application);
         behavior_synchronized_set_execution::register_synchronized_behavior_execution(application);
         behavior_wander_execution::register_wander_execution(application);
+        behavior_pursuit_execution::register_pursuit_execution(application);
+        behavior_face_target_execution::register_face_target_execution(application);
         behavior_token_execution::register_token_execution(application);
         behavior_water_docking_execution::register(application);
         application.add_systems(
@@ -109,6 +113,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .add_systems(
                 FixedUpdate,
                 behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome
+                    .before(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification)
                     .in_set(FixedGameSet::Think)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -135,7 +140,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 behavior_move_execution::start_current_supported_behavior_move_actions,
                 behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
                 behavior_random_animation_execution::start_next_random_behavior_animation,
-                behavior_fact_modification::apply_supported_current_behavior_fact_modifications,
+                behavior_fact_modification::apply_supported_current_behavior_fact_modifications
+                    .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
                 behavior_trick_learning_execution::apply_current_authored_trick_learning,
                 behavior_show_event_execution::register_current_authored_animal_show_events,
                 behavior_script_execution::execute_authored_behavior_script_actions,
@@ -146,7 +152,8 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             )
                 .chain()
                 .after(
-                    behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome,
+                    behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome
+,
                 )
                 .after(openzt2_zoo_state::feeding::ContainerQuantityHydration)
                 // A stopping walk must see the clip a behavior starts this tick.
@@ -172,7 +179,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                     behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_playback_completion,
                     behavior_animation_clip_execution::finish_behavior_animation_clip_actions_after_play_time,
                 ).chain(),
-                behavior_locomotion_switch_set_execution::fail_medium_following_sets_after_leaving_dry_ground,
+                behavior_locomotion_switch_set_execution::switch_medium_following_sets_after_medium_changes,
             )
                 .in_set(FixedGameSet::Act)
                 .run_if(in_state(GamePhase::InGame)),

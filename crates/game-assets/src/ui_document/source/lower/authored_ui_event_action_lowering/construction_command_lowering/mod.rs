@@ -106,6 +106,8 @@ pub(super) fn lower_construction_command(
                     "lowerWall" => UiTankEditMode::LowerWall,
                     "raiseFloor" => UiTankEditMode::RaiseFloor,
                     "lowerFloor" => UiTankEditMode::LowerFloor,
+                    "fill" => UiTankEditMode::Fill,
+                    "drain" => UiTankEditMode::Drain,
                     value => {
                         return Err(invalid_at(input, format!("unsupported tank edit mode {value:?}")));
                     }

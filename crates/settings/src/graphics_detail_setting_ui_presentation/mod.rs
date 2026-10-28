@@ -1,4 +1,3 @@
-use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use bevy::prelude::*;
 use openzt2_game_assets::{
     graphics_settings_types::{
@@ -17,6 +16,7 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_interface_state::ui::{
     authored_reusable_list_and_table_runtime_types::{SetUiListRowCount, UiListPolicy, UiListRow},

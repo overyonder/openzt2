@@ -197,6 +197,20 @@ pub(super) fn complete_docking(
     }
 }
 
+pub(super) fn connected_path_surface_height(
+    graph: &openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph,
+    from: Vec3,
+    to: Vec3,
+    mode: LocomotionMode,
+) -> Option<f32> {
+    if !matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle) {
+        return None;
+    }
+    let start = graph.navigation_surface_at_world_position(from)?;
+    let next = graph.continue_navigation_surface(start, to)?;
+    graph.path_surface_at_node(next)?.height_at(to.xz())
+}
+
 pub(super) fn fit_to_terrain(
     mode: LocomotionMode,
     position: &mut Vec3,

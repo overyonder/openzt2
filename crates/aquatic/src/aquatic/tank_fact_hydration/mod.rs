@@ -3,9 +3,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
-use super::aquatic_simulation_types::{
-    Tank, TankCapacity, TankFiltration, TankGeometry, TankPopulation, TankSurfaceHydrated,
-};
+use super::aquatic_simulation_types::{Tank, TankCapacity, TankFiltration, TankPopulation};
 
 pub(super) fn hydrate_tank_capacity_population_and_filtration_facts(
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -50,28 +48,29 @@ pub(super) fn hydrate_tank_capacity_population_and_filtration_facts(
     }
 }
 
-pub(super) fn hydrate_new_tank_surface_geometry_from_authored_offsets(
+pub(super) fn initialize_legacy_tank_water_limits(
+    mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    mut tanks: Query<(Entity, &mut TankGeometry), (With<Tank>, Without<TankSurfaceHydrated>)>,
-    mut commands: Commands,
+    mut tanks: Query<
+        (Entity, &mut super::aquatic_simulation_types::TankGeometry),
+        With<super::aquatic_simulation_types::TankWaterLimitNeedsInitialization>,
+    >,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
+    let Some(surface) = active_definitions
+        .get(&definitions)
+        .and_then(|view| view.tank_surface_policy())
+    else {
         return;
     };
-    let Some(policy) = definitions.tank_surface_policy() else {
-        return;
-    };
-    let water_offset = policy.water_height_offset_cm as f32 / 100.0;
-    let floor_offset = policy.floor_height_offset_cm as f32 / 100.0;
     for (entity, mut geometry) in &mut tanks {
-        let mut resolved_geometry = *geometry;
-        resolved_geometry.water_height += water_offset;
-        resolved_geometry.floor_height += floor_offset;
-        resolved_geometry.volume = resolved_geometry.area * resolved_geometry.depth();
-        if resolved_geometry.is_valid() {
-            *geometry = resolved_geometry;
-            commands.entity(entity).insert(TankSurfaceHydrated);
+        if geometry.water_height
+            < geometry.wall_height - surface.water_height_offset_cm as f32 / 100.0 - f32::EPSILON
+        {
+            geometry.water_height_limit = geometry.water_height;
         }
+        commands
+            .entity(entity)
+            .remove::<super::aquatic_simulation_types::TankWaterLimitNeedsInitialization>();
     }
 }

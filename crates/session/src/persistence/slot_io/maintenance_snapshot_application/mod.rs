@@ -1,6 +1,8 @@
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
-    maintenance_snapshot_types::HabitatWasteSnapshotRecord,
+    maintenance_snapshot_types::{
+        LooseWasteSnapshotKind, LooseWasteSnapshotRecord, MaintainedObjectSnapshotRecord,
+    },
 };
 use avian3d::prelude::RigidBody;
 use bevy::{
@@ -18,10 +20,14 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{
+    AnimalHabitatWaste, AnimalWasteProductionSchedule,
+    AnimalWasteProductionScheduleResolutionMarker, FacilityContainedWaste, LooseLitterWaste,
+    MaintainableObjectConditionPermille,
+};
 
-pub(super) fn resolve_habitat_waste_prefabs(
-    records: &[HabitatWasteSnapshotRecord],
+pub(super) fn resolve_loose_waste_prefabs(
+    records: &[LooseWasteSnapshotRecord],
     definitions: WorldDefinitionsView<'_>,
     prefabs: &Assets<ScenePrefabAsset>,
     server: &AssetServer,
@@ -33,9 +39,10 @@ pub(super) fn resolve_habitat_waste_prefabs(
         let object = definitions
             .find_object(record.definition)
             .filter(|object| {
-                object
-                    .properties
-                    .contains_all(WorldObjectPropertyFlags::ANIMAL_WASTE)
+                record.kind == LooseWasteSnapshotKind::Litter
+                    || object
+                        .properties
+                        .contains_all(WorldObjectPropertyFlags::ANIMAL_WASTE)
             })
             .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
         if object.prefab == AssetId::default() {
@@ -63,15 +70,15 @@ pub(super) fn resolve_habitat_waste_prefabs(
     Ok(ready.then_some(resolved))
 }
 
-pub(super) fn apply_habitat_waste_records(
+pub(super) fn apply_loose_waste_records(
     commands: &mut Commands,
-    records: &[HabitatWasteSnapshotRecord],
+    records: &[LooseWasteSnapshotRecord],
     resolved_prefabs: &[Option<Handle<ScenePrefabAsset>>],
     prefabs: &Assets<ScenePrefabAsset>,
     world_root: Entity,
     allocator: &mut PersistentIdAllocator,
-    baseline_waste: &Query<Entity, With<AnimalHabitatWaste>>,
-) -> Result<(), WorldSnapshotPersistenceFailure> {
+    baseline_waste: &Query<Entity, super::maintenance_snapshot_capture::LooseWasteSnapshotFilter>,
+) -> Result<std::collections::BTreeMap<u64, Entity>, WorldSnapshotPersistenceFailure> {
     if records.len() != resolved_prefabs.len()
         || resolved_prefabs
             .iter()
@@ -88,6 +95,7 @@ pub(super) fn apply_habitat_waste_records(
     for entity in baseline_waste {
         commands.entity(entity).despawn();
     }
+    let mut restored_identities = std::collections::BTreeMap::new();
     for (record, prefab) in records.iter().zip(resolved_prefabs) {
         let id = PersistentId(record.persistent_identifier);
         let entity = if let Some(handle) = prefab {
@@ -118,18 +126,63 @@ pub(super) fn apply_habitat_waste_records(
                 ))
                 .id()
         };
+        restored_identities.insert(record.persistent_identifier, entity);
         // The saved root pose already includes the authored root transform and scale.
-        // Insertion fires the cleanliness hook once; Added<AnimalHabitatWaste> rebuilds work.
-        commands.entity(entity).insert((
-            Transform {
-                translation: Vec3::from_array(record.translation),
-                rotation: Quat::from_array(record.rotation),
-                scale: Vec3::from_array(record.scale),
-            },
-            AnimalHabitatWaste {
-                uncontained_waste_units: record.units,
-            },
-        ));
+        // Insertion fires the cleanliness hook and rebuilds the matching cleanup work.
+        let mut restored = commands.entity(entity);
+        restored.insert(Transform {
+            translation: Vec3::from_array(record.translation),
+            rotation: Quat::from_array(record.rotation),
+            scale: Vec3::from_array(record.scale),
+        });
+        match record.kind {
+            LooseWasteSnapshotKind::AnimalHabitat => {
+                restored.insert(AnimalHabitatWaste {
+                    uncontained_waste_units: record.units,
+                });
+            }
+            LooseWasteSnapshotKind::Litter => {
+                restored.insert(LooseLitterWaste {
+                    uncontained_waste_units: record.units,
+                });
+            }
+        }
     }
-    Ok(())
+    Ok(restored_identities)
+}
+
+/// Restores saved condition, bin contents, and animal production deadlines. Authored
+/// initial facts only fill values that are still absent.
+pub(super) fn apply_maintained_object_records(
+    commands: &mut Commands,
+    records: &[MaintainedObjectSnapshotRecord],
+    restored_identities: &std::collections::BTreeMap<u64, Entity>,
+) {
+    for record in records {
+        let Some(&entity) = restored_identities.get(&record.persistent_identifier) else {
+            continue;
+        };
+        let mut object = commands.entity(entity);
+        if let Some(condition) = record.condition_permille {
+            object
+                .remove::<MaintainableObjectConditionPermille>()
+                .insert(MaintainableObjectConditionPermille(condition));
+        }
+        if let Some([units, capacity]) = record.contained_waste {
+            object
+                .remove::<FacilityContainedWaste>()
+                .insert(FacilityContainedWaste {
+                    contained_waste_units: units,
+                    contained_waste_capacity_units: capacity,
+                });
+        }
+        if let Some(next_production_tick) = record.next_waste_production_tick {
+            object.insert((
+                AnimalWasteProductionSchedule {
+                    next_production_tick,
+                },
+                AnimalWasteProductionScheduleResolutionMarker,
+            ));
+        }
+    }
 }

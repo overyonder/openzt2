@@ -8,8 +8,7 @@ pub struct BehaviorAttachObjectAction {
     pub animation: Option<String>,
     pub container: AssetId,
     pub detach_rule: AssetId,
-    /// The authored carrying gait, such as `carry`. Locomotion clips do not
-    /// yet change while an item is carried.
+    /// The authored carrying gait, such as `carry`.
     #[serde(default)]
     pub locomotion_modifier: Option<AssetId>,
     /// The subject's node that holds the item, such as `Bip01 Head` for a hat.

@@ -641,6 +641,7 @@ pub(crate) fn begin_viewing(
                     subject,
                     area: Some(destination.entity),
                     started_tick: clock.tick,
+                    task_execution_id: None,
                 });
                 commands.entity(guest).remove::<GuestViewingTarget>();
             }

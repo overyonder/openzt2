@@ -432,6 +432,13 @@ pub(super) fn bind_authored_placement_object(
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
+    if let Some(maintenance) =
+        super::container_quantity_source_lowering::lower_authored_trash_container_maintenance(
+            record,
+        )?
+    {
+        output.document.maintenance_definitions.push(maintenance);
+    }
     output.document.objects.push(WorldObjectDefinition {
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),

@@ -6,6 +6,7 @@ use crate::construction::construction_transaction_types::EditApplication;
 use crate::economy::money_types::Money;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 
+use crate::aquatic::aquatic_simulation_types::TankWallTopHeight;
 use crate::topology::gate_operation_types::Gate;
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -14,13 +15,13 @@ pub struct TopologyChanged {
     pub bounds: IRect,
 }
 
-#[derive(Component, Debug, Clone, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq)]
 pub struct TopologyEdit {
     pub created: Box<[TopologySnapshot]>,
     pub removed: Box<[TopologySnapshot]>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TopologySnapshot {
     Node {
         id: PersistentId,
@@ -32,6 +33,7 @@ pub enum TopologySnapshot {
         a: PersistentId,
         b: PersistentId,
         gate: Option<Gate>,
+        wall_top: Option<TankWallTopHeight>,
     },
     Path {
         id: PersistentId,

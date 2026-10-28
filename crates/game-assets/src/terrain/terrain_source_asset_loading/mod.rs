@@ -6,7 +6,7 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     gltf::{GltfLoader, GltfLoaderSettings},
     image::ImageLoaderSettings,
     prelude::*,
@@ -24,7 +24,7 @@ use crate::{
             find_authored_terrain_water_material_source_document_paths,
             find_authored_terrain_waterfall_particle_source_document_path,
             lower_authored_terrain_presentation_and_biomes_and_waterfall,
-            normalize_particle_source_document_name, read_authored_terrain_base_height_metres,
+            normalize_particle_source_document_name, read_authored_terrain_heights,
         },
         blue_fang_terrain_source_parsing::parse_blue_fang_terrain_source,
         water_configuration::referenced_configuration_paths,
@@ -158,7 +158,7 @@ impl AssetLoader for TerrainSourceAssetLoader {
             )?;
         let lowered_terrain = lower_blue_fang_terrain_to_domain_grid_and_glb(
             terrain_source,
-            read_authored_terrain_base_height_metres(&source_documents)?,
+            read_authored_terrain_heights(&source_documents)?,
             terrain_presentation,
             terrain_biomes,
             terrain_waterfall,

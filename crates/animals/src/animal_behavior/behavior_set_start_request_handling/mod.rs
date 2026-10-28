@@ -9,6 +9,7 @@ use arrayvec::ArrayVec;
 use bevy::prelude::*;
 
 use super::behavior_set_start_request_types::{PendingBehaviorSet, StartBehaviorSet};
+use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
@@ -55,6 +56,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
         Has<BehaviorTaskExecutionState>,
         Option<&PendingBehaviorDockingCompletion>,
         Option<&PendingBehaviorMoveCompletion>,
+        Option<&PendingBehaviorPursuit>,
     )>,
     navigation: Query<(Option<&Destination>, Option<&Docking>)>,
     mut commands: Commands,
@@ -80,6 +82,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
         has_task,
         pending_dock,
         pending_move,
+        pending_pursuit,
     ) in &pending_behavior_sets
     {
         let subject_type_identifiers =
@@ -106,17 +109,21 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
             }
             continue;
         };
-        if let Some(request_id) = pending_dock
-            .map(|pending| pending.request_id)
-            .or_else(|| pending_move.map(|pending| pending.request_id))
-        {
-            if let Ok((destination, docking)) = navigation.get(actor_entity) {
-                if destination.is_some_and(|value| value.request_id == request_id) {
-                    commands.entity(actor_entity).remove::<Destination>();
-                }
-                if docking.is_some_and(|value| value.request_id == request_id) {
-                    commands.entity(actor_entity).remove::<Docking>();
-                }
+        let [pursuit_request_id, pursuit_route_request_id] =
+            pending_pursuit.map_or([None, None], |pending| pending.leg.navigation_request_ids());
+        let owned_request_ids = [
+            pending_dock.map(|pending| pending.request_id),
+            pending_move.map(|pending| pending.request_id),
+            pursuit_request_id,
+            pursuit_route_request_id,
+        ];
+        if let Ok((destination, docking)) = navigation.get(actor_entity) {
+            if destination.is_some_and(|value| owned_request_ids.contains(&Some(value.request_id)))
+            {
+                commands.entity(actor_entity).remove::<Destination>();
+            }
+            if docking.is_some_and(|value| owned_request_ids.contains(&Some(value.request_id))) {
+                commands.entity(actor_entity).remove::<Docking>();
             }
         }
         commands
@@ -136,9 +143,11 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 stack: ArrayVec::new(),
             })
             .remove::<(
+                openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
                 PendingBehaviorAnimationClipCompletion,
                 PendingBehaviorMoveCompletion,
                 PendingBehaviorDockingCompletion,
+                PendingBehaviorPursuit,
                 PendingBehaviorTaskFailure,
             )>()
             .remove::<PendingBehaviorSet>();

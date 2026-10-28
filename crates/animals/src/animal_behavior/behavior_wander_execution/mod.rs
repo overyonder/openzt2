@@ -8,6 +8,7 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_world_state::{
@@ -19,7 +20,7 @@ use openzt2_zoo_state::{
     animal_lifecycle::types::Animal,
     behavior_task_execution_types::{
         advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     },
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
@@ -29,30 +30,22 @@ use openzt2_zoo_state::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, LocomotionMode, NavAgent,
         NavFlags, NavigateTo, NavigationFailed, NavigationRequestSequence, Route,
     },
+    staff::staff_employment_types::{Staff, StaffSubmergedDepth},
     topology::topology_graph_types::TopologyGrid,
 };
 
-#[derive(Component)]
-struct WanderingForBehavior {
-    execution_id: u64,
-    origin: BehaviorTaskReturnFrame,
-    depth: usize,
-    until_tick: u64,
-    request_id: Option<u64>,
-}
-
-impl WanderingForBehavior {
-    fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        self.execution_id == task.execution_id
-            && self.depth == task.stack.len()
-            && task.is_at_or_nested_under(&self.origin, self.depth)
-    }
-}
+use openzt2_zoo_state::behavior_task_execution_types::{
+    BehaviorEvasionNavigation, BehaviorWanderNavigation,
+};
 
 pub(super) fn register_wander_execution(application: &mut App) {
     application.add_systems(
         FixedUpdate,
-        (finish_wander_navigation_requests, execute_current_wander_actions)
+        (
+            finish_wander_navigation_requests,
+            execute_current_wander_actions,
+            execute_current_evasion_actions,
+        )
             .chain()
             .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
             .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection)
@@ -64,7 +57,7 @@ pub(super) fn register_wander_execution(application: &mut App) {
 fn finish_wander_navigation_requests(
     mut arrivals: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
-    mut wanderers: Query<&mut WanderingForBehavior>,
+    mut wanderers: Query<&mut BehaviorWanderNavigation>,
 ) {
     // A blocked direction ends this leg, allowing another direction next tick.
     for (actor, request_id) in failures
@@ -112,13 +105,14 @@ fn execute_current_wander_actions(
             Option<&NavAgent>,
             Option<&LocomotionMode>,
             Option<&Destination>,
-            Option<&mut WanderingForBehavior>,
+            Option<&mut BehaviorWanderNavigation>,
             Has<PendingBehaviorTaskFailure>,
             Has<WorldEntityIsCrated>,
             Has<Tranquilized>,
             Has<Dead>,
+            Has<Staff>,
         ),
-        With<Animal>,
+        Or<(With<Animal>, With<Staff>)>,
     >,
 ) {
     for (
@@ -134,6 +128,7 @@ fn execute_current_wander_actions(
         crated,
         tranquilized,
         dead,
+        staff,
     ) in &mut animals
     {
         let mut task = task;
@@ -148,7 +143,9 @@ fn execute_current_wander_actions(
             }) {
                 commands.entity(actor).remove::<Destination>();
             }
-            commands.entity(actor).remove::<WanderingForBehavior>();
+            commands
+                .entity(actor)
+                .remove::<(BehaviorWanderNavigation, StaffSubmergedDepth)>();
             wandering = None;
         }
         let Some(task) = task
@@ -177,7 +174,9 @@ fn execute_current_wander_actions(
             }) {
                 commands.entity(actor).remove::<Destination>();
             }
-            commands.entity(actor).remove::<WanderingForBehavior>();
+            commands
+                .entity(actor)
+                .remove::<(BehaviorWanderNavigation, StaffSubmergedDepth)>();
             advance_behavior_task_to_next_action(task, clock.tick);
             continue;
         }
@@ -186,7 +185,9 @@ fn execute_current_wander_actions(
         else {
             continue;
         };
-        if mode != Some(&LocomotionMode::Ground)
+        // Staff walk without a locomotion mode of their own.
+        if !(staff && mode.is_none())
+            && mode != Some(&LocomotionMode::Ground)
             && !(mode == Some(&LocomotionMode::Swim)
                 && agent.capabilities.contains(NavFlags::AMPHIBIOUS))
         {
@@ -274,11 +275,17 @@ fn execute_current_wander_actions(
                     let Some(node) = navigation.find_navigation_node(index) else {
                         continue;
                     };
-                    if !node.eligibility_flags.contains(NavFlags::ANIMAL)
+                    let walker = if staff {
+                        NavFlags::STAFF
+                    } else {
+                        NavFlags::ANIMAL
+                    };
+                    if !node.eligibility_flags.contains(walker)
                         || node
                             .eligibility_flags
                             .contains(NavFlags::DISABLED_BY_DEFAULT)
                         || (action.avoid_water && node.eligibility_flags.contains(NavFlags::WATER))
+                        || (action.avoid_land && !node.eligibility_flags.contains(NavFlags::WATER))
                         || (node.eligibility_flags.contains(NavFlags::WATER)
                             && !agent.capabilities.contains(NavFlags::AMPHIBIOUS))
                         || f32::from(node.clearance_centimetres) * 0.01 < agent.radius_m
@@ -316,6 +323,12 @@ fn execute_current_wander_actions(
             destination,
             arrival_radius_m: agent.radius_m.max(0.1),
         });
+        // A swimming employee keeps each leg within the authored depth band.
+        if staff && mode == Some(&LocomotionMode::Swim) && action.maximum_depth_m > 0.0 {
+            let depth = action.minimum_depth_m
+                + (action.maximum_depth_m - action.minimum_depth_m) * random.0.unit_f32();
+            commands.entity(actor).insert(StaffSubmergedDepth(depth));
+        }
         if let Some(wandering) = wandering.as_deref_mut() {
             wandering.request_id = Some(request_id);
         } else {
@@ -326,7 +339,7 @@ fn execute_current_wander_actions(
                 .as_nanos()
                 .saturating_mul(u128::from(definitions.timing().fixed_hz))
                 .div_ceil(1_000_000_000);
-            commands.entity(actor).insert(WanderingForBehavior {
+            commands.entity(actor).insert(BehaviorWanderNavigation {
                 execution_id: task.execution_id,
                 origin: task.create_return_frame_after_action(task.action),
                 depth: task.stack.len(),
@@ -335,6 +348,188 @@ fn execute_current_wander_actions(
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
                 request_id: Some(request_id),
             });
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn execute_current_evasion_actions(
+    mut commands: Commands,
+    clock: Res<ZooClock>,
+    documents: Res<Assets<BehaviorDocumentAsset>>,
+    definitions: Res<WorldDefinitions>,
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    mut sequence: ResMut<NavigationRequestSequence>,
+    subject_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
+    entities: Query<
+        (Entity, &GlobalTransform, &DefinitionId, &WorldMember),
+        Without<WorldEntityIsCrated>,
+    >,
+    mut actors: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&mut BehaviorTaskExecutionState>,
+            Option<&Destination>,
+            Option<&BehaviorEvasionNavigation>,
+            &mut BehaviorRandomStream,
+            Has<PendingBehaviorTaskFailure>,
+            Has<WorldEntityIsCrated>,
+            Has<Tranquilized>,
+            Has<Dead>,
+        ),
+        Or<(With<Animal>, With<Staff>)>,
+    >,
+) {
+    use openzt2_zoo_state::behavior_task_execution_types::BehaviorEvasionSteering;
+    let definitions = definitions.get(&definition_assets);
+    for (
+        actor,
+        transform,
+        task,
+        destination,
+        evading,
+        mut random,
+        failing,
+        crated,
+        tranquilized,
+        dead,
+    ) in &mut actors
+    {
+        let immobilized = failing || crated || tranquilized || dead;
+        let current = evading
+            .filter(|evading| !immobilized && task.as_ref().is_some_and(|task| evading.owns(task)));
+        if evading.is_some() && current.is_none() {
+            if evading.is_some_and(|evading| {
+                destination.is_some_and(|destination| destination.request_id == evading.request_id)
+            }) {
+                commands.entity(actor).remove::<Destination>();
+            }
+            commands
+                .entity(actor)
+                .remove::<(BehaviorEvasionNavigation, BehaviorEvasionSteering)>();
+        }
+        let Some(mut task) =
+            task.filter(|task| !immobilized && task.next_action_tick <= clock.tick)
+        else {
+            continue;
+        };
+        let Some(definitions) = definitions else {
+            continue;
+        };
+        let Some(BehaviorAction::Evasion(action)) = documents
+            .get(&task.document)
+            .and_then(|document| find_current_behavior_task_action(document, &task))
+        else {
+            continue;
+        };
+        let position = transform.translation();
+        let mut target_direction = Vec2::ZERO;
+        let mut target_near = false;
+        if let Some((_, target, _, _)) = task
+            .target()
+            .filter(|target| *target != actor)
+            .and_then(|target| entities.get(target).ok())
+        {
+            let away = position.xz() - target.translation().xz();
+            target_near = away.length_squared() <= action.radius_m.powi(2);
+            target_direction = away.normalize_or_zero();
+            let forward = transform
+                .affine()
+                .transform_vector3(Vec3::Z)
+                .xz()
+                .normalize_or_zero();
+            if target_direction.dot(forward) >= 0.0 {
+                let right = Vec2::new(forward.y, -forward.x);
+                target_direction =
+                    (forward + right * (random.0.unit_f32() * 2.0 - 1.0)).normalize_or_zero();
+            }
+        }
+        let mut entity_direction = Vec2::ZERO;
+        let mut entity_near = false;
+        if let Ok((_, _, _, world)) = entities.get(actor) {
+            for (entity, other, definition, other_world) in &entities {
+                if entity == actor || other_world.root != world.root {
+                    continue;
+                }
+                let away = position.xz() - other.translation().xz();
+                if away.length_squared() > action.radius_m.powi(2) {
+                    continue;
+                }
+                let types = subject_types.borrow_for(entity);
+                if action.avoided_types.iter().any(|required| {
+                    *required == definition.0
+                        || types.contains(required)
+                        || definitions.find_object(definition.0).is_some_and(|object| {
+                            object.behavior_type_identifiers.contains(required)
+                        })
+                }) {
+                    entity_direction += away;
+                    entity_near = true;
+                }
+            }
+        }
+        let timed_out = current.map_or(action.maximum_duration.is_zero(), |evading| {
+            clock.tick >= evading.until_tick
+        });
+        let clear = !target_near && !entity_near;
+        if clear || timed_out {
+            if current.is_some_and(|evading| {
+                destination.is_some_and(|destination| destination.request_id == evading.request_id)
+            }) {
+                commands.entity(actor).remove::<Destination>();
+            }
+            commands
+                .entity(actor)
+                .remove::<(BehaviorEvasionNavigation, BehaviorEvasionSteering)>();
+            if timed_out && action.fail_on_timeout {
+                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            } else {
+                advance_behavior_task_to_next_action(&mut task, clock.tick);
+            }
+            continue;
+        }
+        let request_id = current.map_or_else(|| sequence.next(), |current| current.request_id);
+        let mut direction = target_direction + entity_direction.normalize_or_zero();
+        if direction.length_squared() <= f32::EPSILON {
+            direction = Vec2::new(random.0.unit_f32() * 2.0 - 1.0, -1.0);
+        }
+        commands.entity(actor).insert(BehaviorEvasionSteering {
+            request_id,
+            direction,
+            obstacle_radius_m: action.obstacle_radius_m,
+            avoid_water: action.avoid_water,
+            avoid_land: action.avoid_land,
+        });
+        if destination.is_none_or(|destination| destination.request_id != request_id) {
+            commands.entity(actor).insert(Destination {
+                request_id,
+                world: position + Vec3::new(direction.x, 0.0, direction.y).normalize_or_zero(),
+                arrival_radius_m: 0.0,
+            });
+        }
+        if current.is_none() {
+            let ticks = action
+                .maximum_duration
+                .as_nanos()
+                .saturating_mul(u128::from(definitions.timing().fixed_hz))
+                .div_ceil(1_000_000_000);
+            commands.entity(actor).insert((
+                BehaviorEvasionNavigation {
+                    execution_id: task.execution_id,
+                    origin: task.create_return_frame_after_action(task.action),
+                    depth: task.stack.len(),
+                    until_tick: clock
+                        .tick
+                        .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+                    request_id,
+                },
+                Destination {
+                    request_id,
+                    world: position + Vec3::new(direction.x, 0.0, direction.y).normalize_or_zero(),
+                    arrival_radius_m: 0.0,
+                },
+            ));
         }
     }
 }

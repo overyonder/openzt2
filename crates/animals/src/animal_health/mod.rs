@@ -113,7 +113,7 @@ impl Plugin for AnimalHealthPlugin {
                     animal_escape_state_execution::
                         detect_animal_containment_breaches_and_mark_newly_escaped_animals,
                     animal_health_staff_job_request_generation::
-                        request_staff_jobs_for_diseased_rampaging_escaped_and_tranquilized_animals,
+                        request_tranquilization_for_rampaging_animals,
                     animal_escape_state_execution::
                         clear_escape_and_rampage_after_tranquilized_animal_reaches_containment,
                     disease_mortality_execution::

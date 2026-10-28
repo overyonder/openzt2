@@ -51,6 +51,10 @@ pub struct GuestMemoryPolicy {
     pub retention_ticks: u64,
     pub replacement: MemoryReplacement,
 }
+
+const fn default_view_meter_decay_per_second() -> f32 {
+    1.0
+}
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.
 #[allow(
     clippy::derive_partial_eq_without_eq,
@@ -80,6 +84,10 @@ pub struct GuestDefinition {
     pub name_pool: AssetId,
     pub rarity: GuestRarity,
     pub preferred_animal_view_factor_q16: u32,
+    #[serde(default = "default_view_meter_decay_per_second")]
+    pub view_meter_decay_per_second: f32,
+    #[serde(default)]
+    pub view_scoring: GuestAnimalViewScoringPolicy,
     pub starting_cash_cents: [i32; 2],
     pub initial_departure_points_q16: i32,
     pub radius_cm: u16,
@@ -93,6 +101,25 @@ pub struct GuestDefinition {
     pub destination_weights: Vec<GuestDestinationWeight>,
     pub reactions: Vec<GuestReactionDefinition>,
     pub memory: GuestMemoryPolicy,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct GuestAnimalViewScoringPolicy {
+    pub species_discount: f32,
+    pub minimum_species_discount: f32,
+    pub near_distance_factor: f32,
+    pub far_distance_factor: f32,
+}
+
+impl Default for GuestAnimalViewScoringPolicy {
+    fn default() -> Self {
+        Self {
+            species_discount: 1.0,
+            minimum_species_discount: 0.0,
+            near_distance_factor: 1.0,
+            far_distance_factor: 1.0,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]

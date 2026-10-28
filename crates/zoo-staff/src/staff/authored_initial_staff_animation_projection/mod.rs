@@ -4,6 +4,7 @@ use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
+use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
@@ -12,7 +13,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::Constructio
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
-use super::staff_employment_types::StaffRole;
+use super::staff_employment_types::{Staff, StaffRole};
 use super::staff_presentation_variant_selection::{StaffAttachedHead, StaffModelAnimationSet};
 
 pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab_models(
@@ -124,5 +125,32 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
                 AnimationPlaybackRepetitionPolicy::UseAuthoredClipPolicy
             },
         });
+    }
+}
+/// Staff tasks address the gameplay entity, whereas attachment records the
+/// body model's prefab node as its owner. An attached head keeps its own
+/// owner so it never plays the body's clips.
+pub(crate) fn project_staff_animation_owners(
+    mut controllers: Query<
+        (Entity, &mut AnimationPresentationOwner),
+        Changed<AnimationPresentationOwner>,
+    >,
+    parents: Query<&ChildOf>,
+    staff: Query<(), With<Staff>>,
+    attached_heads: Query<(), With<StaffAttachedHead>>,
+) {
+    for (controller, mut owner) in &mut controllers {
+        if staff.contains(owner.gameplay_entity) {
+            continue;
+        }
+        let Some(ancestor) = std::iter::once(controller)
+            .chain(parents.iter_ancestors(controller))
+            .find(|entity| staff.contains(*entity) || attached_heads.contains(*entity))
+        else {
+            continue;
+        };
+        if staff.contains(ancestor) {
+            owner.gameplay_entity = ancestor;
+        }
     }
 }

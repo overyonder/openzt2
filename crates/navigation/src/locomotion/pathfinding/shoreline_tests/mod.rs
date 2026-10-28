@@ -18,13 +18,8 @@ fn amphibious_animals_cross_a_water_channel_in_both_directions() {
         node.eligibility_flags.0 |= NavFlags::WATER.0;
         node.water_depth_centimetres = 200;
     }
-    let graph = TerrainDerivedNavigationGraph {
-        terrain_cell_size_centimetres: 100,
-        terrain_cells_per_tile: 4,
-        terrain_tile_size_centimetres: 400,
-        terrain_tile_grid_dimensions: [1, 1],
-        navigation_nodes: nodes.into_boxed_slice(),
-    };
+    let graph =
+        TerrainDerivedNavigationGraph::from_terrain_nodes(100, 4, [1, 1], nodes.into_boxed_slice());
     let mut agent = NavAgent {
         radius_m: 0.25,
         max_speed_mps: 1.0,
@@ -84,13 +79,8 @@ fn ground_endpoint_snapping_rejects_water_but_preserves_dry_approaches() {
     let mut nodes = vec![node; 16];
     nodes[0].eligibility_flags = NavFlags::STAFF;
     nodes[4].eligibility_flags = NavFlags::WATER;
-    let mut graph = TerrainDerivedNavigationGraph {
-        terrain_cell_size_centimetres: 100,
-        terrain_cells_per_tile: 4,
-        terrain_tile_size_centimetres: 400,
-        terrain_tile_grid_dimensions: [1, 1],
-        navigation_nodes: nodes.into_boxed_slice(),
-    };
+    let mut graph =
+        TerrainDerivedNavigationGraph::from_terrain_nodes(100, 4, [1, 1], nodes.into_boxed_slice());
     let agent = NavAgent {
         radius_m: 0.25,
         max_speed_mps: 1.0,

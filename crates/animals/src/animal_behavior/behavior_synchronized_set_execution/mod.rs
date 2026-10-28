@@ -10,21 +10,12 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use bevy::{ecs::system::SystemParam, prelude::*};
 
-#[derive(Component)]
-struct SynchronizedBehaviorOwner {
-    execution_id: u64,
-    target_execution_id: u64,
-    target: Entity,
-    origin: BehaviorTaskReturnFrame,
-    depth: usize,
-    target_outcome: Option<bool>,
-}
+use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::SynchronizedBehaviorOwner;
 
 #[derive(SystemParam)]
 struct SynchronizedBehaviorSources<'w, 's> {

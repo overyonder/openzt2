@@ -19,8 +19,8 @@ use openzt2_zoo_state::construction::construction_transaction_types::Transaction
 fn construction_preparation_test_application() -> App {
     let mut application = App::new();
     application
-        .add_message::<openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditPrepared>()
-        .add_message::<openzt2_zoo_state::aquatic::tank_floor_edit_types::TankFloorEditPreparationRejected>()
+        .add_message::<openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditPrepared>()
+        .add_message::<openzt2_zoo_state::aquatic::tank_geometry_edit_types::TankGeometryEditPreparationRejected>()
         .add_message::<TerrainEditPrepared>()
         .add_message::<TerrainEditPreparationRejected>()
         .add_message::<TopologyEditPrepared>()

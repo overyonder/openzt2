@@ -1,7 +1,7 @@
 //! Event-driven habitat regions derived from fence topology and loaded terrain.
 
 mod habitat_membership_and_containment;
-mod habitat_region_derivation;
+pub mod habitat_region_derivation;
 mod habitat_region_rebuilding;
 mod habitat_terrain_summary_calculation;
 mod habitat_terrain_summary_refresh;
@@ -28,6 +28,17 @@ impl Plugin for HabitatPlugin {
             .add_message::<ContainmentChanged>()
             .add_message::<RebuildHabitatRegionsWithinTopologyBounds>()
             .add_message::<RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds>()
+            .add_systems(
+                Update,
+                (
+                    habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
+                    habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
+                    habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                )
+                    .chain()
+                    .in_set(GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
+            )
             .add_systems(
                 FixedUpdate,
                 (

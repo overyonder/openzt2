@@ -6,20 +6,25 @@ mod animal_navigation_policy;
 mod animal_terrain_slope_tests;
 mod animal_water_contact;
 mod avian_navigation_agent_driving;
+mod behavior_evasion_steering;
 mod changed_destination_route_planning;
 mod contact_steering_projection;
 mod direct_docking_request_execution;
 mod direct_locomotion_execution;
+mod entity_pursuit_execution;
 mod fence_navigation_policy;
 mod kinematic_navigation_agent_motion_integration;
 mod local_steering_calculation;
 mod navigation_agent_initialization;
 mod navigation_destination_request_execution;
 mod navigation_reachability_testing;
+mod path_surface_navigation_projection;
 mod pathfinding;
 mod person_walk_animation;
 mod sampled_animation_motion_projection;
 mod spatial_index_and_docking_operations;
+mod staff_tank_gate_navigation;
+mod tank_water_navigation_overlay;
 mod terrain_edit_navigation_refresh;
 mod topology_navigation_edge_invalidation;
 mod world_navigation_installation;
@@ -32,6 +37,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
+use openzt2_zoo_state::locomotion::locomotion_types::PursueEntity;
 use openzt2_zoo_state::locomotion::locomotion_types::ReachabilityTested;
 use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::locomotion::locomotion_types::TestReachability;
@@ -44,6 +50,7 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 /// Projects animal walk clips onto navigation agents. Behaviors that start an
 /// animal's own clip run before it, so a stop never replaces that clip.
 use openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection;
+use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
 
 pub struct LocomotionPlugin;
 
@@ -57,12 +64,20 @@ impl Plugin for LocomotionPlugin {
             .add_message::<TestReachability>()
             .add_message::<ReachabilityTested>()
             .add_message::<DockAt>()
+            .add_message::<PursueEntity>()
             .add_message::<Arrived>()
             .add_message::<NavigationFailed>()
             .add_systems(
                 Update,
                 world_navigation_installation::
                     install_terrain_derived_navigation_graph_for_loaded_world,
+            )
+            .add_systems(
+                Update,
+                path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
+                    .after(world_navigation_installation::install_terrain_derived_navigation_graph_for_loaded_world)
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
             )
             .add_systems(
                 FixedUpdate,
@@ -74,13 +89,20 @@ impl Plugin for LocomotionPlugin {
                         .in_set(AnimalAnimationNavigationProjection),
                     terrain_edit_navigation_refresh::
                         refresh_navigation_graph_and_invalidate_routes_after_terrain_edits,
+                    path_surface_navigation_projection::project_path_surfaces_into_navigation_graph,
+                    tank_water_navigation_overlay::project_tank_water_onto_navigation_cells,
                     navigation_agent_initialization::
                         initialize_navigation_agents_with_bounded_runtime_state,
                     navigation_reachability_testing::
                         test_requested_navigation_destination_reachability,
+                    // A refused pursuit requests its route for acceptance below.
+                    entity_pursuit_execution::accept_entity_pursuit_requests
+                        .in_set(NavigationRequestAcceptance),
                     navigation_destination_request_execution::
-                        accept_navigation_destination_requests,
-                    crate::locomotion::direct_docking_request_execution::accept_direct_docking_requests,
+                        accept_navigation_destination_requests
+                        .in_set(NavigationRequestAcceptance),
+                    crate::locomotion::direct_docking_request_execution::accept_direct_docking_requests
+                        .in_set(NavigationRequestAcceptance),
                     direct_locomotion_execution::
                         clear_planned_navigation_state_for_direct_locomotion,
                 )
@@ -90,9 +112,14 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    entity_pursuit_execution::steer_entity_pursuits_toward_live_targets,
                     crate::locomotion::animal_navigation_policy::invalidate_animal_routes_after_policy_changes,
+                    staff_tank_gate_navigation::receive_staff_tank_gate_events,
+                    staff_tank_gate_navigation::resume_completed_staff_tank_gate_journeys,
+                    staff_tank_gate_navigation::begin_staff_tank_gate_journeys,
                     changed_destination_route_planning::
                         plan_routes_for_changed_navigation_destinations,
+                    behavior_evasion_steering::project_behavior_evasion_steering,
                     contact_steering_projection::
                         project_avian_contacts_into_navigation_steering,
                     local_steering_calculation::
@@ -105,6 +132,9 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    staff_tank_gate_navigation::execute_staff_tank_gate_journeys
+                        .before(kinematic_navigation_agent_motion_integration::integrate_non_physics_planned_navigation_motion)
+                        .before(direct_locomotion_execution::integrate_non_physics_direct_locomotion),
                     kinematic_navigation_agent_motion_integration::
                         integrate_non_physics_planned_navigation_motion,
                     crate::locomotion::direct_locomotion_execution::integrate_non_physics_direct_locomotion,

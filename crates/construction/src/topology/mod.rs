@@ -13,6 +13,7 @@ mod path_support_hydration;
 mod path_surface_presentation;
 mod tank_boundary_projection;
 mod tank_boundary_types;
+mod tank_wall_rail_presentation;
 pub mod topology_construction_interaction;
 mod topology_construction_planning;
 pub mod topology_construction_preview_types;
@@ -40,10 +41,10 @@ use crate::topology::path_curb_presentation::invalidate_path_curb_presentations_
 use crate::topology::path_support_hydration::hydrate_authored_path_supports_at_sampled_terrain_height;
 use crate::topology::path_support_hydration::invalidate_path_supports_after_topology_or_terrain_changes;
 use crate::topology::path_support_hydration::remove_path_supports_after_their_owning_path_is_removed;
-use crate::topology::path_surface_presentation::ElevatedPathSurfacePresentationAssets;
 use crate::topology::path_surface_presentation::fit_ground_path_tiles_to_authored_terrain;
 use crate::topology::path_surface_presentation::hydrate_elevated_path_surface_mesh_and_material_presentations;
 use crate::topology::path_surface_presentation::invalidate_ground_path_terrain_fitting_after_terrain_changes;
+use crate::topology::path_surface_presentation::ElevatedPathSurfacePresentationAssets;
 use crate::topology::tank_boundary_projection::remove_tank_boundary_relationship_entities_with_missing_endpoints;
 use crate::topology::tank_boundary_projection::synchronize_tank_boundary_relationships_after_habitat_region_changes;
 use crate::topology::topology_construction_interaction::apply_fence_placement_requests_to_construction_previews;
@@ -106,6 +107,7 @@ impl Plugin for TopologyPlugin {
                 (
                     restart_fence_preview_from_committed_endpoint,
                     restart_path_preview_from_committed_endpoint,
+                    topology_construction_interaction::rotate_closed_fence_placement_heading,
                     drive_selected_topology_placement_pointer_sequence,
                     apply_fence_placement_requests_to_construction_previews,
                     apply_path_placement_requests_to_construction_previews,
@@ -132,6 +134,8 @@ impl Plugin for TopologyPlugin {
                     attach_authored_animation_sets_to_resolved_gate_models,
                     fit_fence_presentations_to_terrain_endpoint_heights,
                     project_fence_construction_preview_validity_onto_prefab_model_tints,
+                    tank_wall_rail_presentation::remove_orphaned_tank_wall_rails,
+                    tank_wall_rail_presentation::present_changed_tank_wall_rails,
                 )
                     .chain()
                     .in_set(GameSet::Presentation),

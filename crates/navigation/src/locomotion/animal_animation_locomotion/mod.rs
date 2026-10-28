@@ -80,6 +80,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             Has<Destination>,
             Has<DirectLocomotion>,
             Has<PendingBehaviorAnimationClipCompletion>,
+            Has<openzt2_zoo_state::behavior_task_execution_types::BehaviorHeldAnimationClip>,
         ),
         (
             With<Animal>,
@@ -107,7 +108,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     };
     // Suspend owned agents first. A missing/reloaded controller or asset must
     // never leave stale movement enabled; successful projection restores speed.
-    for (_, _, agent, owner, _, _, _, _) in &mut animals {
+    for (_, _, agent, owner, _, _, _, _, _) in &mut animals {
         if owner.is_some() {
             if let Some(mut agent) = agent {
                 agent.max_speed_mps = 0.0;
@@ -143,12 +144,14 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             navigating,
             direct,
             task_animation,
+            held_animation,
         )) = animals.get_mut(controller_entity)
         else {
             continue;
         };
         let has_agent = agent.is_some();
-        let task_animation = task_animation || docking_poses.contains(animal_entity);
+        let task_animation =
+            task_animation || held_animation || docking_poses.contains(animal_entity);
         if agent.is_some() && owner.is_none() {
             continue;
         }
@@ -179,6 +182,8 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             })
             .and_then(|action| match action {
                 BehaviorAction::Wander(wander) => Some(wander.locomotion_speed),
+                BehaviorAction::Pursuit(pursuit) => Some(pursuit.locomotion_speed),
+                BehaviorAction::Evasion(evasion) => Some(evasion.locomotion_speed),
                 BehaviorAction::Move(movement) => Some(match movement.locomotion_speed {
                     None | Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Slow) => BehaviorGroundLocomotionSpeed::Slow,
                     Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Medium) => BehaviorGroundLocomotionSpeed::Medium,
@@ -191,7 +196,9 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .as_ref()
             .filter(|_| mode == Some(&LocomotionMode::Swim));
         let water_row = water.map(|water| match movement.unwrap_or_default() {
-            BehaviorGroundLocomotionSpeed::Slow => &water.slow,
+            BehaviorGroundLocomotionSpeed::Slow
+            | BehaviorGroundLocomotionSpeed::Glide
+            | BehaviorGroundLocomotionSpeed::Clean => &water.slow,
             BehaviorGroundLocomotionSpeed::Medium => &water.medium,
             BehaviorGroundLocomotionSpeed::Fast => &water.fast,
         });
@@ -201,7 +208,9 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             None
         } else {
             match movement.unwrap_or_default() {
-                BehaviorGroundLocomotionSpeed::Slow => {
+                BehaviorGroundLocomotionSpeed::Slow
+                | BehaviorGroundLocomotionSpeed::Glide
+                | BehaviorGroundLocomotionSpeed::Clean => {
                     variant.ground_navigation_clip_asset_key.as_ref()
                 }
                 BehaviorGroundLocomotionSpeed::Medium => {

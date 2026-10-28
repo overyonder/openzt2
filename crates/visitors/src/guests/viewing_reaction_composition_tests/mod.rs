@@ -75,6 +75,8 @@ fn policy_document() -> WorldDefinitionDocument {
             name_pool: id,
             rarity: GuestRarity::Common,
             preferred_animal_view_factor_q16: 65536,
+            view_meter_decay_per_second: 1.0,
+            view_scoring: Default::default(),
             starting_cash_cents: [0; 2],
             initial_departure_points_q16: 0,
             radius_cm: 25,
@@ -144,6 +146,7 @@ fn install_policy(app: &mut App, document: &WorldDefinitionDocument) {
 fn fixture() -> (App, Entity, Entity, Entity) {
     let mut app = App::new();
     app.init_resource::<Assets<WorldDefinitionAsset>>()
+        .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
         .init_resource::<GuestSurvey>()
         .add_message::<GuestReaction>()
         .add_message::<GuestReactionApplied>()
@@ -173,6 +176,7 @@ fn fixture() -> (App, Entity, Entity, Entity) {
                     subject,
                     area: Some(area),
                     started_tick: 10,
+                    task_execution_id: None,
                 },
                 GuestDestination {
                     entity: area,
@@ -191,7 +195,12 @@ fn fixture() -> (App, Entity, Entity, Entity) {
 fn request(app: &App, guest: Entity, event_id: u64) -> GuestReaction {
     let viewing = *app.world().get::<Viewing>(guest).unwrap();
     GuestReaction {
-        view_event: Some(GuestViewReactionOrigin { event_id, viewing }),
+        view_event: Some(GuestViewReactionOrigin {
+            event_id,
+            source_definition: AssetId::from_key("viewing-test"),
+            view_key: AssetId::from_key("viewing-test"),
+            viewing,
+        }),
         guest,
         subject: viewing.subject,
         kind: GuestMemoryKind::AnimalView,
@@ -231,6 +240,105 @@ fn reversed_reaction_delivery_preserves_distinct_event_effects() {
     emit(&mut app, subject, 2);
     let replay = request(&app, guest, 2);
     app.world_mut().write_message(replay);
+    app.update();
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 50);
+}
+
+#[test]
+fn an_emitted_view_event_reaches_every_current_viewer_once() {
+    let (mut app, subject, first, second) = fixture();
+    app.add_systems(
+        Update,
+        super::view_event_execution::deliver_view_events_to_current_viewers
+            .before(apply_guest_reactions),
+    );
+    emit(&mut app, subject, 1);
+    app.update();
+    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 25);
+    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 25);
+    // A guest who stopped watching is not reached by the next event.
+    app.world_mut().entity_mut(second).remove::<Viewing>();
+    emit(&mut app, subject, 2);
+    app.update();
+    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 50);
+    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 25);
+}
+
+#[test]
+fn a_guest_watching_through_its_view_task_receives_the_event() {
+    use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+    use openzt2_game_data::behavior::{
+        action::view_animals::BehaviorViewAnimalsAction,
+        action_record::BehaviorAction,
+        document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
+    };
+
+    let (mut app, subject, guest, _) = fixture();
+    app.add_systems(
+        Update,
+        super::view_event_execution::deliver_view_events_to_current_viewers
+            .before(apply_guest_reactions),
+    );
+    let area = app.world().get::<Viewing>(guest).unwrap().area;
+    let document = app
+        .world_mut()
+        .resource_mut::<Assets<BehaviorDocumentAsset>>()
+        .add(BehaviorDocumentAsset::from_test_document(
+            BehaviorDocument::Sets(vec![BehaviorSet {
+                id: AssetId::default(),
+                name: "viewing".into(),
+                subjects: Vec::new(),
+                actions: BehaviorTaskActionPhase::Supported(vec![BehaviorAction::ViewAnimals(
+                    BehaviorViewAnimalsAction {
+                        view_meter_start: 60.0,
+                        view_meter_start_range: [60.0; 2],
+                        dock_viewpoint_behavior_set: None,
+                        retarget: None,
+                        emote_sets: Vec::new(),
+                    },
+                )]),
+            }]),
+        ));
+    app.world_mut()
+        .entity_mut(guest)
+        .remove::<(GuestDestination, GuestNavigationRequest)>()
+        .insert(
+            openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState {
+                execution_id: 1,
+                program: AssetId::default(),
+                target: area,
+                document,
+                declaration: 0,
+                phase: openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase::Set,
+                action: 0,
+                repetitions: 0,
+                next_action_tick: 0,
+                object: None,
+                interaction_slot: None,
+                stack: default(),
+            },
+        );
+    app.world_mut()
+        .get_mut::<Viewing>(guest)
+        .unwrap()
+        .task_execution_id = Some(1);
+    emit(&mut app, subject, 1);
+    app.update();
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 25);
+    app.world_mut()
+        .get_mut::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>(
+            guest,
+        )
+        .unwrap()
+        .execution_id = 2;
+    emit(&mut app, subject, 2);
+    app.update();
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 25);
+    app.world_mut()
+        .get_mut::<Viewing>(guest)
+        .unwrap()
+        .task_execution_id = Some(2);
+    emit(&mut app, subject, 3);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 50);
 }

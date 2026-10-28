@@ -1,5 +1,4 @@
 use crate::source_document::ui::model::SourceUiEvent;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::animal_health::{
     UiAnimalHealthAction, UiAnimalHealthActionRecord,
 };
@@ -25,6 +24,7 @@ use openzt2_game_data::ui_document::action::staff_management::{
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
+use openzt2_game_data::AssetId;
 use std::io;
 
 pub(super) fn lower_tool_modes_command(

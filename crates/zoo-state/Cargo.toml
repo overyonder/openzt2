@@ -20,6 +20,7 @@ openzt2_world_state.workspace = true
 bevy.workspace = true
 avian3d.workspace = true
 arrayvec.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 openzt2_game_assets = { workspace = true, features = ["testing"] }

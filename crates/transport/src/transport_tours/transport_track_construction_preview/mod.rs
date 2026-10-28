@@ -133,6 +133,8 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
             to_position: from_position,
             path_points: vec![from_position],
         },
+        Transform::from_translation(from_position),
+        Visibility::Inherited,
         *world_member,
     ));
 }
@@ -154,17 +156,23 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     mut previews: Query<(
         &mut ConstructionPreview,
         &mut TransportTrackConstructionPreview,
+        &mut Transform,
     )>,
 ) {
     let Some((selected_definition, selected_kind)) = selected_transport_track_definition(*tool)
     else {
         return;
     };
-    let (Ok((cursor, world_member)), Ok((mut preview, mut track_preview)), Some(definitions)) = (
+    let (
+        Ok((cursor, world_member)),
+        Ok((mut preview, mut track_preview, mut transform)),
+        Some(definitions),
+    ) = (
         cursors.single(),
         previews.single_mut(),
         active_definitions.get(&definitions),
-    ) else {
+    )
+    else {
         return;
     };
     if preview.definition != selected_definition {
@@ -220,6 +228,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     if direction.xz().length_squared() > f32::EPSILON {
         preview.transform.rotation = Quat::from_rotation_y(direction.x.atan2(direction.z));
     }
+    *transform = preview.transform;
     preview.validity = if let Some((path_points, cost)) = path_points_and_cost {
         track_preview.path_points = path_points;
         PlacementValidity::Valid { cost }

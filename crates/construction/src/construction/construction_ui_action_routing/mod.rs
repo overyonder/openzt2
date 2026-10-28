@@ -23,6 +23,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 
+use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_zoo_state::construction::construction_edit_history_types::ApplyConstructionTransaction;
@@ -59,6 +60,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     cancellations: MessageWriter<'w, CancelConstruction>,
     history: MessageWriter<'w, ApplyConstructionTransaction>,
     uncrate: MessageWriter<'w, RemoveWorldEntityFromCrate>,
+    fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
 }
 pub(super) fn route_construction_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
@@ -156,6 +158,23 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::RotateSelected { steps } => {
+                    if matches!(*selected_tool, ConstructionTool::Fence(_))
+                        && policy.fence_shape != FencePlacementShape::Freeform
+                    {
+                        let step = if policy.fence_shape == FencePlacementShape::Octagon {
+                            2
+                        } else {
+                            1
+                        };
+                        policy.fence_heading_eighth_turns =
+                            (i32::from(policy.fence_heading_eighth_turns)
+                                + i32::from(*steps) * step)
+                                .rem_euclid(8) as u8;
+                        for (_, mut preview) in &mut intents.fence_previews {
+                            preview.heading_eighth_turns = policy.fence_heading_eighth_turns;
+                        }
+                        continue;
+                    }
                     if let Some((entity, placeable)) = selected.0.and_then(|entity| {
                         let entity = intents
                             .animal_crates
@@ -301,11 +320,19 @@ pub(super) fn route_construction_ui_actions(
                     policy.biome_paint_rocks = true;
                 }
                 UiConstructionAction::SetFencePlacementMode { mode } => {
-                    policy.fence_shape = match mode {
+                    let shape = match mode {
                         UiFencePlacementMode::RubberBand => FencePlacementShape::Freeform,
                         UiFencePlacementMode::Rectangle => FencePlacementShape::Rectangle,
                         UiFencePlacementMode::Octagon => FencePlacementShape::Octagon,
                     };
+                    // A new placement mode drops the anchored placement, as the
+                    // original's fence mode clears it.
+                    if policy.fence_shape != shape {
+                        for (preview, _) in &intents.fence_previews {
+                            commands.entity(preview).despawn();
+                        }
+                    }
+                    policy.fence_shape = shape;
                 }
                 UiConstructionAction::SetTankEditMode { mode } => {
                     policy.tank_edit = match mode {
@@ -313,6 +340,8 @@ pub(super) fn route_construction_ui_actions(
                         UiTankEditMode::LowerWall => TankEditKind::LowerWall,
                         UiTankEditMode::RaiseFloor => TankEditKind::RaiseFloor,
                         UiTankEditMode::LowerFloor => TankEditKind::LowerFloor,
+                        UiTankEditMode::Fill => TankEditKind::Fill,
+                        UiTankEditMode::Drain => TankEditKind::Drain,
                     };
                 }
                 UiConstructionAction::SetTerrainEditMode { mode } => {

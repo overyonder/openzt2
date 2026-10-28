@@ -34,8 +34,18 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
     for snapshot_section in WorldSnapshotSectionKind::ENCODING_ORDER.into_iter().skip(1) {
         let section_byte_range =
             validated_snapshot_container.section_directory_entry(snapshot_section);
-        if snapshot_section == WorldSnapshotSectionKind::Maintenance {
-            super::maintenance_snapshot_section_encoding::decode_habitat_waste_records(
+        if snapshot_section == WorldSnapshotSectionKind::Topology {
+            super::fence_topology_snapshot_section::decode_fence_topology_records(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::Maintenance {
+            super::maintenance_snapshot_section_encoding::decode_maintenance_snapshot(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
+        } else if snapshot_section == WorldSnapshotSectionKind::Behavior {
+            super::behavior_snapshot_section_encoding::decode_behavior_actor_snapshots(
                 snapshot_container_bytes,
                 section_byte_range,
             )?;

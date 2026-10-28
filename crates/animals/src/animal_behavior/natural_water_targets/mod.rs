@@ -15,19 +15,9 @@ use openzt2_zoo_state::{
     topology::topology_graph_types::TopologyGrid,
 };
 
-#[derive(Component, Clone, Copy, Debug)]
-pub(super) struct SelectedNaturalWaterTarget {
-    pub region: Entity,
-    pub water: Vec3,
-    pub approach: Vec3,
-    pub kind: NaturalWaterTargetKind,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) enum NaturalWaterTargetKind {
-    Shore,
-    Surface { depth: f32 },
-}
+use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::{
+    NaturalWaterTargetKind, SelectedNaturalWaterTarget,
+};
 
 #[derive(SystemParam)]
 pub(super) struct NaturalWaterTargets<'w, 's> {

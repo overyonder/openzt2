@@ -1,7 +1,7 @@
 use crate::terrain::terrain_water_material_binding::bind_authored_water_frame_base_tints;
-use bevy::camera::CameraProjection;
 use bevy::camera::primitives::Aabb;
 use bevy::camera::visibility::RenderLayers;
+use bevy::camera::CameraProjection;
 use bevy::math::Vec3A;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
@@ -1057,10 +1057,8 @@ mod water_target_demand_tests {
             Transform::from_xyz(-60.0, 20.0, 0.0)
                 .looking_at(Vec3::new(-60.0, 0.0, 0.0), Vec3::NEG_Z),
         );
-        assert!(
-            !surface
-                .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), &wave_state)
-        );
+        assert!(!surface
+            .intersects_camera_frustum(&projection.compute_frustum(&moved_camera), &wave_state));
         assert!(
             surface.intersects_camera_frustum(&projection.compute_frustum(&camera), &wave_state)
         );

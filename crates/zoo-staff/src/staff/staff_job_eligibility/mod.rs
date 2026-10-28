@@ -36,6 +36,10 @@ pub(super) struct StaffCandidateEligibilityFacts {
     pub(super) target_rampaging: Option<bool>,
     pub(super) target_in_show: Option<bool>,
     pub(super) target_food_level_q16: Option<i32>,
+    pub(super) target_trash_level_q16: Option<i32>,
+    /// The job targets a manager request site, which a task authored to
+    /// target its own subject (`self`) moves to, as keeper tank cleaning does.
+    pub(super) target_is_request_site: bool,
 }
 
 pub(super) fn find_highest_priority_compatible_staff_behavior_task<'a>(
@@ -115,7 +119,7 @@ fn candidate_requirement_group_is_satisfied(
     requirements: &BehaviorCandidateEligibilityRequirements,
     candidate_facts: StaffCandidateEligibilityFacts,
 ) -> bool {
-    if !candidate_type_identifiers_match(role, requirements) {
+    if !candidate_type_identifiers_match(role, requirements, candidate_facts) {
         return false;
     }
     let mut results = requirements.eligibility_facts.iter().map(|fact| {
@@ -134,6 +138,7 @@ fn candidate_requirement_group_is_satisfied(
 fn candidate_type_identifiers_match(
     role: StaffRoleKind,
     requirements: &BehaviorCandidateEligibilityRequirements,
+    candidate_facts: StaffCandidateEligibilityFacts,
 ) -> bool {
     if requirements.candidate_type_identifiers.is_empty() {
         return true;
@@ -145,7 +150,11 @@ fn candidate_type_identifiers_match(
             BehaviorCandidateRole::Subject => authored_staff_role_subject_names(role)
                 .iter()
                 .any(|name| *candidate == AssetId::from_key(name)),
-            BehaviorCandidateRole::Target => *candidate == AssetId::from_key("fromtoken"),
+            BehaviorCandidateRole::Target => {
+                *candidate == AssetId::from_key("fromtoken")
+                    || (candidate_facts.target_is_request_site
+                        && *candidate == AssetId::from_key("self"))
+            }
             BehaviorCandidateRole::Object => true,
         });
     match requirements.candidate_type_junction {
@@ -192,6 +201,10 @@ fn evaluate_candidate_eligibility_fact(
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::FoodLevel),
         ) => candidate_facts.target_food_level_q16,
+        (
+            BehaviorCandidateRole::Target,
+            BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::TrashLevel),
+        ) => candidate_facts.target_trash_level_q16,
         _ => return None,
     }?;
     let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
@@ -249,7 +262,7 @@ fn staff_role_accepts_behavior_task(role: StaffRoleKind, behavior_task: &Behavio
         })
 }
 
-fn authored_staff_role_subject_names(role: StaffRoleKind) -> &'static [&'static str] {
+pub(super) fn authored_staff_role_subject_names(role: StaffRoleKind) -> &'static [&'static str] {
     match role {
         StaffRoleKind::Keeper => &["keeper"],
         StaffRoleKind::Maintenance => &["worker"],

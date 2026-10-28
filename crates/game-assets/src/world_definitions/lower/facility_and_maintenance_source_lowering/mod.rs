@@ -75,6 +75,7 @@ pub(super) fn bind_maintenance(
                 0,
             )?,
             waste_capacity_units: number_or(record, &["wasteCapacityUnits", "wasteCapacity"], 0)?,
+            initial_waste_units: number_or(record, &["initialWasteUnits"], 0)?,
             empty_at_units: number_or(record, &["emptyAtUnits", "emptyThreshold"], 0)?,
             litter_definition: optional_asset(record, &["litterDefinition", "litter"]),
             litter_local_offset_cm: array(

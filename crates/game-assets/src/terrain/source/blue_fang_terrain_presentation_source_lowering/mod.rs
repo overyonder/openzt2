@@ -13,17 +13,38 @@ use crate::source_document::{
     path::AssetPath,
 };
 
-/// Returns the authored vertical origin shared by terrain DAT files.
-pub fn read_authored_terrain_base_height_metres(
+/// The authored BFTerrain heights, in metres.
+#[derive(Clone, Copy, Debug)]
+pub struct AuthoredTerrainHeights {
+    /// Vertical origin shared by terrain DAT files.
+    pub base_height_metres: f32,
+    pub maximum_height_metres: f32,
+    /// Lowest water floor; only Marine Mania terrain authors it.
+    pub minimum_water_height_metres: Option<f32>,
+}
+
+pub fn read_authored_terrain_heights(
     source_documents: &[OrderedSourceDocument],
-) -> io::Result<f32> {
+) -> io::Result<AuthoredTerrainHeights> {
     let terrain_source_document = find_authored_terrain_settings_document(source_documents)?;
-    terrain_source_document
-        .root
-        .attribute("nodeMinHeight")
-        .and_then(parse_blue_fang_terrain_number)
-        .filter(|value| value.is_finite())
-        .ok_or_else(|| invalid_terrain_source("BFTerrain has invalid nodeMinHeight"))
+    let height = |name: &str| {
+        terrain_source_document
+            .root
+            .attribute(name)
+            .map(|value| {
+                parse_blue_fang_terrain_number(value)
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| invalid_terrain_source(&format!("BFTerrain has invalid {name}")))
+            })
+            .transpose()
+    };
+    Ok(AuthoredTerrainHeights {
+        base_height_metres: height("nodeMinHeight")?
+            .ok_or_else(|| invalid_terrain_source("BFTerrain has no nodeMinHeight"))?,
+        maximum_height_metres: height("nodeMaxHeight")?
+            .ok_or_else(|| invalid_terrain_source("BFTerrain has no nodeMaxHeight"))?,
+        minimum_water_height_metres: height("nodeMinWaterHeight")?,
+    })
 }
 
 pub fn lower_authored_terrain_presentation_and_biomes_and_waterfall(

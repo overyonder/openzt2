@@ -6,7 +6,7 @@ use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
-use openzt2_zoo_state::terrain::dry_surface_eligibility::TerrainDrySurfaceEligibility;
+use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -40,7 +40,7 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) candidates: Local<'s, Vec<Entity>>,
     pub(super) habitat_index: Res<'w, HabitatIndex>,
     pub(super) topology_grid: Res<'w, TopologyGrid>,
-    pub(super) terrain_surfaces: TerrainDrySurfaceEligibility<'w, 's>,
+    pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
 }
 
 impl WorldObjectTargetSources<'_, '_> {

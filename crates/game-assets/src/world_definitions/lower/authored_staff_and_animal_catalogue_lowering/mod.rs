@@ -24,7 +24,7 @@ use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_d
 };
 use openzt2_game_data::world_definitions::staff_management::{
     StaffHeadPresentation, StaffJobCapabilityFlags, StaffPresentationVariant, StaffRoleDefinition,
-    StaffRoleKind, StaffVirtualNode,
+    StaffRoleKind, StaffStateVariable, StaffSwimmingDepths, StaffVirtualNode,
 };
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
@@ -368,19 +368,19 @@ fn lower_authored_staff_presentation_variants(
         .collect()
 }
 
-/// Lowers one `replacementSet`. Only base-layer replacements have a native
-/// binding; groups left without items still count toward the weighted draw.
 /// `BFSharedPhysVars virtualNodes` children name points by their element and
 /// place them with source `x`, `y`, `z` and `yaw` (degrees about up)
 /// attributes, each defaulting to zero.
 fn lower_authored_staff_virtual_nodes(
     record: &RecordView<'_, '_>,
 ) -> Result<Vec<StaffVirtualNode>, BindError> {
-    let Some(nodes) = record.descendant_named("virtualNodes") else {
-        return Ok(Vec::new());
-    };
-    nodes
-        .element_children()
+    let nodes = super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "virtualNodes",
+    )
+    .into_iter()
+    .flat_map(|nodes| nodes.element_children());
+    let lowered = nodes
         .map(|node| {
             if node
                 .attributes
@@ -413,7 +413,205 @@ fn lower_authored_staff_virtual_nodes(
                 yaw_radians: coordinate("yaw")?.to_radians(),
             })
         })
-        .collect()
+        .collect::<Result<Vec<_>, BindError>>()?;
+    let mut nodes: Vec<StaffVirtualNode> = Vec::new();
+    for node in lowered {
+        if !nodes.iter().any(|existing| existing.name == node.name) {
+            nodes.push(node);
+        }
+    }
+    Ok(nodes)
+}
+
+/// `BFSwimComponent` `waterInDistance` and `waterOutDistance`.
+fn lower_authored_staff_swimming_depths(
+    record: &RecordView<'_, '_>,
+) -> Result<Option<StaffSwimmingDepths>, BindError> {
+    if super::source_element_tree_search::authored_type_family_components(record, "BFSwimComponent")
+        .is_empty()
+    {
+        return Ok(None);
+    }
+    let depth = |attribute| {
+        authored_type_family_component_attribute(record, "BFSwimComponent", attribute)
+            .and_then(|value| parse_blue_fang_source_numeric_lexeme::<f32>(value))
+            .filter(|value| value.is_finite() && *value >= 0.0)
+            .ok_or_else(|| {
+                BindError::record(record, format!("staff swimming needs a valid {attribute}"))
+            })
+    };
+    Ok(Some(StaffSwimmingDepths {
+        entry_depth_m: depth("waterInDistance")?,
+        exit_depth_m: depth("waterOutDistance")?,
+    }))
+}
+
+/// `ZTAIStateThinker` `BFAIStateVar` rows: `Name`, `Value` and
+/// `TriggerThreshold`, each value defaulting to zero.
+fn lower_authored_staff_state_variables(
+    record: &RecordView<'_, '_>,
+) -> Result<Vec<StaffStateVariable>, BindError> {
+    let lowered = super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "ZTAIStateThinker",
+    )
+    .into_iter()
+    .flat_map(|thinker| thinker.element_children())
+    .filter(|variable| variable.name == "BFAIStateVar")
+    .map(|variable| {
+        let name = variable
+            .attribute("Name")
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| BindError::record(record, "staff state variable has no Name"))?;
+        let number = |attribute| {
+            variable.attribute(attribute).map_or(Ok(0.0), |value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| BindError::record(record, "invalid staff state variable number"))
+            })
+        };
+        Ok(StaffStateVariable {
+            name: AssetId::from_key(&name.trim().to_ascii_lowercase()),
+            value: number("Value")?,
+            trigger_threshold: number("TriggerThreshold")?,
+        })
+    })
+    .collect::<Result<Vec<_>, BindError>>()?;
+    let mut variables: Vec<StaffStateVariable> = Vec::new();
+    for variable in lowered {
+        if !variables
+            .iter()
+            .any(|existing| existing.name == variable.name)
+        {
+            variables.push(variable);
+        }
+    }
+    Ok(variables)
+}
+
+fn lower_authored_staff_locomotion_tables(
+    record: &RecordView<'_, '_>,
+) -> Result<
+    Vec<openzt2_game_data::world_definitions::staff_management::StaffLocomotionTable>,
+    BindError,
+> {
+    use openzt2_game_data::world_definitions::staff_management::{
+        StaffLocomotionRow, StaffLocomotionTable,
+    };
+    let mut tables: Vec<StaffLocomotionTable> = Vec::new();
+    for binder in super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "BFNamedBinder",
+    )
+    .into_iter()
+    .rev()
+    {
+        let Some(name) = binder
+            .attribute_named_any(&["binderName"])
+            .filter(|name| matches!(*name, "ground" | "groundcarry" | "water" | "underwater"))
+        else {
+            continue;
+        };
+        let Some(loco) = find_descendant(binder, "BFLocoAnimate") else {
+            continue;
+        };
+        let key = AssetId::from_key(name);
+        let index = tables
+            .iter()
+            .position(|table| table.binder == key)
+            .unwrap_or_else(|| {
+                tables.push(StaffLocomotionTable {
+                    binder: key,
+                    stationary_clip: None,
+                    rows: Vec::new(),
+                });
+                tables.len() - 1
+            });
+        let table = &mut tables[index];
+        if let Some(clip) = loco.attribute_named_any(&["stationaryAnim"]) {
+            table.stationary_clip = Some(clip.to_owned());
+        }
+        for row in loco.element_children().filter(|row| {
+            matches!(
+                row.name.as_str(),
+                "stop" | "slow" | "medium" | "med" | "fast" | "glide" | "clean"
+            )
+        }) {
+            let number = |name, default| -> Result<f32, BindError> {
+                row.attribute_named_any(&[name])
+                    .map_or(Ok(default), |value| {
+                        parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                            .filter(|value| value.is_finite() && *value >= 0.0)
+                            .ok_or_else(|| {
+                                BindError::record(
+                                    record,
+                                    format!("invalid staff locomotion {name}"),
+                                )
+                            })
+                    })
+            };
+            let fixed_rate = row
+                .attribute_named_any(&["animSpeed"])
+                .map(|_| number("animSpeed", 1.0))
+                .transpose()?;
+            let rates = match fixed_rate {
+                Some(rate) => [rate; 2],
+                None => [number("minAnimSpeed", 1.0)?, number("maxAnimSpeed", 1.0)?],
+            };
+            let resets = [
+                number("minResetPeriod", 0.0)?,
+                number("maxResetPeriod", 0.0)?,
+            ];
+            if rates[1] < rates[0] || resets[1] < resets[0] {
+                return Err(BindError::record(
+                    record,
+                    "staff locomotion range is reversed",
+                ));
+            }
+            let lowered = StaffLocomotionRow {
+                key: AssetId::from_key(row.name.as_str()),
+                node: row
+                    .attribute_named_any(&["name"])
+                    .filter(|name| !name.is_empty())
+                    .ok_or_else(|| {
+                        BindError::record(record, "staff locomotion row has no node name")
+                    })?
+                    .to_owned(),
+                playback_speed_range: rates,
+                reset_seconds_range: resets,
+            };
+            if let Some(existing) = table
+                .rows
+                .iter_mut()
+                .find(|existing| existing.key == lowered.key)
+            {
+                *existing = lowered;
+            } else {
+                table.rows.push(lowered);
+            }
+        }
+    }
+    Ok(tables)
+}
+
+fn lower_authored_staff_tank_gate_animations(
+    record: &RecordView<'_, '_>,
+) -> Option<openzt2_game_data::world_definitions::staff_management::StaffTankGateAnimations> {
+    use openzt2_game_data::world_definitions::staff_management::StaffTankGateAnimations;
+    let clip = |attribute| {
+        authored_type_family_component_attribute(record, "BFAIEntityDataShared", attribute)
+            .filter(|clip| !clip.is_empty())
+            .map(str::to_owned)
+    };
+    Some(StaffTankGateAnimations {
+        walk_ahead: clip("s_WalkAheadAnim")?,
+        get_on_up: clip("s_GetOnLadderUpAnim")?,
+        climb_up: clip("s_ClimbLadderUpAnim")?,
+        get_off_up: clip("s_GetOffLadderUpAnim")?,
+        get_on_down: clip("s_GetOnLadderDownAnim")?,
+        climb_down: clip("s_ClimbLadderDownAnim")?,
+        get_off_down: clip("s_GetOffLadderDownAnim")?,
+    })
 }
 
 fn lower_authored_texture_replacement_set(
@@ -812,6 +1010,10 @@ pub(super) fn bind_authored_staff_catalogue(
             actor_scene_paths,
         ),
         virtual_nodes: lower_authored_staff_virtual_nodes(record)?,
+        state_variables: lower_authored_staff_state_variables(record)?,
+        swimming: lower_authored_staff_swimming_depths(record)?,
+        locomotion_tables: lower_authored_staff_locomotion_tables(record)?,
+        tank_gate_animations: lower_authored_staff_tank_gate_animations(record),
     });
     output.document.catalogue.push(CatalogueEntry {
         filter_values: super::catalogue_entry_source_lowering::authored_catalogue_filter_values(

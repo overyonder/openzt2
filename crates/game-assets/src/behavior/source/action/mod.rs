@@ -11,6 +11,8 @@ pub mod attach_object_action_lowering;
 pub mod docking_action_lowering;
 pub mod economy_action_lowering;
 pub mod entity_fact_modification_action_lowering;
+pub mod exit_tank_gate_action_lowering;
+pub mod face_target_action_lowering;
 pub mod feedback_action_lowering;
 pub mod head_look_action_lowering;
 pub mod hide_action_lowering;
@@ -38,6 +40,20 @@ pub mod watch_show_action_lowering;
 pub(super) fn lower_one_behavior_action_source_node(
     behavior_action_source_node: &DataNode,
 ) -> io::Result<BehaviorAction> {
+    if let Some(action) = face_target_action_lowering::lower_face_target_action_source_node(
+        behavior_action_source_node,
+    )? {
+        return Ok(action);
+    }
+    if let Some(action) = exit_tank_gate_action_lowering::lower_exit_tank_gate_action_source_node(
+        behavior_action_source_node,
+    )? {
+        return Ok(action);
+    }
+    if let Some(action) = wander_action_lowering::lower_evasion_action(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
     if let Some(action) =
         token_action_lowering::lower_self_token_delivery(behavior_action_source_node)?
     {
@@ -112,6 +128,11 @@ pub(super) fn lower_one_behavior_action_source_node(
     }
     if let Some(action) =
         move_action_lowering::lower_move_action_source_node(behavior_action_source_node)?
+    {
+        return Ok(action);
+    }
+    if let Some(action) =
+        move_action_lowering::lower_pursuit_action_source_node(behavior_action_source_node)?
     {
         return Ok(action);
     }

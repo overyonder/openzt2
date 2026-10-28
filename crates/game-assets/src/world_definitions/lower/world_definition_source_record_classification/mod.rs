@@ -51,6 +51,7 @@ pub(super) enum WorldDefinitionSourceRecordKind {
     GuestPolicy,
     TankPolicy,
     TankEdit,
+    FencePlacementMode,
     ShowPolicy,
     ShowTimer,
     ShowMixer,
@@ -58,6 +59,7 @@ pub(super) enum WorldDefinitionSourceRecordKind {
     TourPolicy,
     TourRatings,
     StaffWaterCleaning,
+    StaffTankCleaningRequest,
     EnvironmentFog,
     EnvironmentLights,
     PersonNames,
@@ -95,7 +97,7 @@ pub(super) fn classify_world_definition_source_record(
         ("ztaistaffmgr", WorldDefinitionSourceRecordKind::Container),
         (
             "ztaistaffwatercleaningmgr",
-            WorldDefinitionSourceRecordKind::StaffWaterCleaning,
+            WorldDefinitionSourceRecordKind::StaffTankCleaningRequest,
         ),
         (
             "watercleaning",
@@ -107,6 +109,10 @@ pub(super) fn classify_world_definition_source_record(
         ),
         ("ztaiguestmgr", WorldDefinitionSourceRecordKind::GuestPolicy),
         ("zttankmgr", WorldDefinitionSourceRecordKind::TankPolicy),
+        (
+            "ztfencemode",
+            WorldDefinitionSourceRecordKind::FencePlacementMode,
+        ),
         ("ztaishowmgr", WorldDefinitionSourceRecordKind::ShowPolicy),
         (
             "ztshowtimermanager",

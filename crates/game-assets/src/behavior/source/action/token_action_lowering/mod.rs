@@ -1,7 +1,10 @@
 use std::{io, time::Duration};
 
 use openzt2_game_data::{
-    behavior::{action::token::BehaviorSelfTokenDelivery, action_record::BehaviorAction},
+    behavior::{
+        action::token::{BehaviorSelfTokenDelivery, BehaviorTokenRecipient},
+        action_record::BehaviorAction,
+    },
     AssetId,
 };
 
@@ -11,6 +14,9 @@ use super::{
     invalid_behavior_source_data,
     source_value_reading::{read_optional_float_attribute, read_optional_trimmed_string_attribute},
 };
+
+/// The authored timeout that, like an absent one, never expires.
+const UNBOUNDED_TOKEN_TIMEOUT_SECONDS: f32 = -1.0;
 
 pub(super) fn lower_self_token_delivery(
     node: &OrderedSourceDocumentNode,
@@ -52,24 +58,42 @@ pub(super) fn lower_self_token_delivery(
             || token.attributes.iter().any(|attribute| {
                 !matches!(
                     attribute.name(),
-                    "Name" | "GiveTo" | "Timein" | "Timeout" | "Chance"
+                    "Name" | "GiveTo" | "Timein" | "Timeout" | "Chance" | "Reconsider"
                 )
             })
             || token.element_children().next().is_some()
-            || token.attribute("GiveTo") != Some("subject")
         {
             return Err(invalid_behavior_source_data(
-                "token delivery requires a payload-free subject token",
+                "token delivery requires a payload-free token",
             ));
         }
+        let recipient = match token.attribute("GiveTo") {
+            Some("subject") => BehaviorTokenRecipient::Subject,
+            Some("target") => BehaviorTokenRecipient::Target,
+            _ => {
+                return Err(invalid_behavior_source_data(
+                    "token delivery requires a subject or target recipient",
+                ))
+            }
+        };
+        let reconsider = match token.attribute("Reconsider") {
+            None | Some("false") => false,
+            Some("true") => true,
+            Some(_) => {
+                return Err(invalid_behavior_source_data(
+                    "token Reconsider must be true or false",
+                ))
+            }
+        };
         let name = read_optional_trimmed_string_attribute(token, "Name")
             .ok_or_else(|| invalid_behavior_source_data("token delivery requires Name"))?;
-        let seconds = read_optional_float_attribute(token, "Timeout")?.ok_or_else(|| {
-            invalid_behavior_source_data("token delivery requires a finite Timeout")
-        })?;
-        let lifetime = Duration::try_from_secs_f64(f64::from(seconds)).map_err(|_| {
-            invalid_behavior_source_data("token Timeout must be finite and nonnegative")
-        })?;
+        let lifetime = match read_optional_float_attribute(token, "Timeout")? {
+            None => None,
+            Some(seconds) if seconds == UNBOUNDED_TOKEN_TIMEOUT_SECONDS => None,
+            Some(seconds) => Some(Duration::try_from_secs_f64(f64::from(seconds)).map_err(
+                |_| invalid_behavior_source_data("token Timeout must be finite and nonnegative"),
+            )?),
+        };
         let delay = Duration::try_from_secs_f64(f64::from(
             read_optional_float_attribute(token, "Timein")?.unwrap_or(0.0),
         ))
@@ -85,6 +109,8 @@ pub(super) fn lower_self_token_delivery(
             delay,
             lifetime,
             chance_percent,
+            recipient,
+            reconsider,
         });
     }
     Ok(Some(BehaviorAction::SendSelfTokens(deliveries)))

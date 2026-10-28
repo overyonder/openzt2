@@ -11,32 +11,34 @@ impl TerrainDerivedNavigationGraph {
     ) -> impl Iterator<Item = TerrainDerivedNavigationGraphEdge> + '_ {
         let mut destination_navigation_nodes = [u32::MAX; 4];
         let mut destination_navigation_node_count = 0;
-        if let Some(source_terrain_cell) =
-            self.calculate_terrain_cell_for_navigation_node(source_navigation_node)
-        {
-            for candidate_terrain_cell in [
-                source_terrain_cell[0]
-                    .checked_sub(1)
-                    .map(|x| [x, source_terrain_cell[1]]),
-                source_terrain_cell[0]
-                    .checked_add(1)
-                    .map(|x| [x, source_terrain_cell[1]]),
-                source_terrain_cell[1]
-                    .checked_sub(1)
-                    .map(|z| [source_terrain_cell[0], z]),
-                source_terrain_cell[1]
-                    .checked_add(1)
-                    .map(|z| [source_terrain_cell[0], z]),
-            ]
-            .into_iter()
-            .flatten()
+        if (source_navigation_node as usize) < self.navigation_nodes.len() {
+            if let Some(source_terrain_cell) =
+                self.calculate_terrain_cell_for_navigation_node(source_navigation_node)
             {
-                if let Some(destination_navigation_node) =
-                    self.calculate_navigation_node_for_terrain_cell(candidate_terrain_cell)
+                for candidate_terrain_cell in [
+                    source_terrain_cell[0]
+                        .checked_sub(1)
+                        .map(|x| [x, source_terrain_cell[1]]),
+                    source_terrain_cell[0]
+                        .checked_add(1)
+                        .map(|x| [x, source_terrain_cell[1]]),
+                    source_terrain_cell[1]
+                        .checked_sub(1)
+                        .map(|z| [source_terrain_cell[0], z]),
+                    source_terrain_cell[1]
+                        .checked_add(1)
+                        .map(|z| [source_terrain_cell[0], z]),
+                ]
+                .into_iter()
+                .flatten()
                 {
-                    destination_navigation_nodes[destination_navigation_node_count] =
-                        destination_navigation_node;
-                    destination_navigation_node_count += 1;
+                    if let Some(destination_navigation_node) =
+                        self.calculate_navigation_node_for_terrain_cell(candidate_terrain_cell)
+                    {
+                        destination_navigation_nodes[destination_navigation_node_count] =
+                            destination_navigation_node;
+                        destination_navigation_node_count += 1;
+                    }
                 }
             }
         }
@@ -50,9 +52,16 @@ impl TerrainDerivedNavigationGraph {
                     destination_navigation_node,
                 )
             })
+            .chain(
+                self.path_surface_edges
+                    .get(&source_navigation_node)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            )
     }
 
-    fn derive_navigation_graph_edge(
+    pub(super) fn derive_navigation_graph_edge(
         &self,
         source_navigation_node: u32,
         destination_navigation_node: u32,

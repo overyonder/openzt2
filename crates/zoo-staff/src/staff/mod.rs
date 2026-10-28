@@ -5,6 +5,7 @@ use openzt2_zoo_state::staff::StaffJobRequestCreation;
 mod authored_disease_cure_execution;
 
 mod authored_initial_staff_animation_projection;
+mod idle_staff_task_selection;
 mod spawned_staff_identification;
 mod staff_animal_health_job_execution;
 mod staff_assignment_cleanup;
@@ -30,6 +31,8 @@ mod staff_placement_interaction;
 use openzt2_zoo_state::staff::staff_presentation_variant_selection;
 mod staff_request_candidate_cleanup;
 mod staff_wage_lifecycle;
+pub(crate) mod staff_water_locomotion;
+mod tank_cleaning_requests;
 mod ui_actions;
 mod worker_duty_assignment;
 
@@ -38,7 +41,7 @@ use bevy::prelude::*;
 use staff_assignment_types::SetStaffWorkerDutyAssignment;
 use staff_lifecycle_messages::{
     CancelStaffJobRequest, FireStaffRequest, HireStaffRequest, StaffFired, StaffHired,
-    StaffJobCancelled, StaffJobCompleted, StaffJobRequest, TankWaterCleaned,
+    StaffJobCancelled, StaffJobCompleted, StaffJobRequest,
 };
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -59,12 +62,12 @@ impl Plugin for StaffPlugin {
             .add_message::<StaffJobCompleted>()
             .add_message::<StaffJobCancelled>()
             .add_message::<CancelStaffJobRequest>()
-            .add_message::<TankWaterCleaned>()
             .add_message::<SetStaffWorkerDutyAssignment>()
             .add_systems(
                 Update,
                 (
                     authored_initial_staff_animation_projection::request_authored_initial_staff_animation_for_newly_resolved_prefab_models,
+                    authored_initial_staff_animation_projection::project_staff_animation_owners,
                     staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice,
                     staff_placement_interaction::validate_staff_placement_preview_against_world_and_zoo_cash
                         .after(staff_placement_interaction::begin_staff_placement_from_staff_purchase_choice),
@@ -92,11 +95,15 @@ impl Plugin for StaffPlugin {
                     worker_duty_assignment::enable_every_maintenance_worker_duty_for_new_staff_by_default,
                     staff_navigation_agent_projection::project_authored_staff_locomotion_onto_staff_entities,
                     staff_assignment_cleanup::clear_assignments_to_despawned_world_entities,
+                    tank_cleaning_requests::request_keeper_cleaning_for_dirty_tanks,
                     staff_job_request_creation::create_or_raise_priority_of_requested_staff_jobs
                         .in_set(StaffJobRequestCreation),
                     staff_request_candidate_cleanup::clear_unsuccessful_candidates_at_authored_manager_interval,
                     staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff,
+                    idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs,
                     staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs,
+                    idle_staff_task_selection::start_authored_idle_staff_tasks,
+                    idle_staff_task_selection::execute_staff_exit_tank_gate_actions,
                 )
                     .chain()
                     .in_set(FixedGameSet::Think),
@@ -115,6 +122,12 @@ impl Plugin for StaffPlugin {
                 )
                     .chain()
                     .in_set(FixedGameSet::Act),
+            )
+            .add_systems(
+                FixedUpdate,
+                staff_water_locomotion::project_staff_water_locomotion
+                    .in_set(FixedGameSet::Cleanup)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,

@@ -5,7 +5,10 @@ pub mod authored_presentation_physics_source_lowering;
 fn authored_audio_cue_prefixes(record: &RecordView<'_, '_>) -> Vec<String> {
     let mut names = vec![record.key.to_owned()];
     for name in record.type_tokens().into_iter().rev() {
-        if !names.iter().any(|existing| existing.eq_ignore_ascii_case(&name)) {
+        if !names
+            .iter()
+            .any(|existing| existing.eq_ignore_ascii_case(&name))
+        {
             names.push(name);
         }
         if names.len() == 3 {
@@ -136,6 +139,7 @@ use self::staff_role_and_job_source_lowering::{
 };
 use self::staff_water_cleaning_policy_source_lowering::bind_staff_water_cleaning;
 use self::tank_policy_source_lowering::{
+    bind_fence_placement_mode_policy,
     bind_tank_edit_policy,
     bind_tank_policy,
 };
@@ -285,7 +289,12 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     }
     let index = SourceIndex::build_with_additional_named_record_element_types(
         documents,
-        &["ZTFirstPersonMode", "ZTPhotoMode", "ZTSuperStaffMode"],
+        &[
+            "ZTFirstPersonMode",
+            "ZTPhotoMode",
+            "ZTSuperStaffMode",
+            "ZTFenceMode",
+        ],
     )?;
     let records = index.records().collect::<Vec<_>>();
     let primary_records = records
@@ -316,6 +325,20 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         })
         .collect::<Vec<_>>();
     let mut output = WorldDefinitionLoweringTables::default();
+    if matches!(
+        primary_path,
+        "config/freeform_mode.xml" | "config/challenge_mode.xml" | "config/campaign_mode.xml"
+    ) {
+        if let Some(request) = index
+            .document_root(primary_path)
+            .and_then(|root| root.descendant_record("ZTAIStaffWaterCleaningMgr"))
+        {
+            staff_tank_cleaning_request_policy_source_lowering::bind_staff_tank_cleaning_request(
+                &request,
+                &mut output,
+            )?;
+        }
+    }
     if primary_path.starts_with("locations/") && primary_path.ends_with("initiallocs.xml") {
         for document in &primary_documents {
             bind_location_entries_document(document, &mut output)?;
@@ -629,6 +652,9 @@ fn bind_record_shard(
         Some(WorldDefinitionSourceRecordKind::TankEdit) => {
             shard.tank_edit_policy = Some(bind_tank_edit_policy(record)?)
         }
+        Some(WorldDefinitionSourceRecordKind::FencePlacementMode) => {
+            bind_fence_placement_mode_policy(record, &mut shard.tables)?
+        }
         Some(WorldDefinitionSourceRecordKind::ShowPolicy) => {
             bind_show_policy(record, &mut shard.tables)?
         }
@@ -655,6 +681,12 @@ fn bind_record_shard(
         }
         Some(WorldDefinitionSourceRecordKind::StaffWaterCleaning) => {
             bind_staff_water_cleaning(record, &mut shard.tables)?
+        }
+        Some(WorldDefinitionSourceRecordKind::StaffTankCleaningRequest) => {
+            staff_tank_cleaning_request_policy_source_lowering::bind_staff_tank_cleaning_request(
+                record,
+                &mut shard.tables,
+            )?
         }
         Some(WorldDefinitionSourceRecordKind::EnvironmentFog) => {
             bind_environment_fog(record, &mut shard.tables)?
@@ -746,6 +778,7 @@ pub mod simulation_timing_source_lowering;
 pub mod source_element_tree_search;
 pub mod source_model_scene_path_normalization;
 pub mod staff_role_and_job_source_lowering;
+pub mod staff_tank_cleaning_request_policy_source_lowering;
 pub mod staff_water_cleaning_policy_source_lowering;
 pub mod tank_policy_source_lowering;
 pub mod terrain_editing_brush_source_lowering;

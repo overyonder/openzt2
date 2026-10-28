@@ -3,15 +3,15 @@ use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     effect::{
-        ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
         effect_document_runtime_queries::collect_root_effect_emitter_ids,
         explicit_particle_emission::{AppendParticleEffectPoints, ParticleEffectPointEmitter},
+        ParticleEffectDocumentAsset, SpawnParticleEffectEmitter,
     },
     graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings},
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
 };
 use openzt2_game_data::particle::{
-    ParticleEffectDocument, authored_particle_system::AuthoredParticleSystemModifier,
+    authored_particle_system::AuthoredParticleSystemModifier, ParticleEffectDocument,
 };
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::{

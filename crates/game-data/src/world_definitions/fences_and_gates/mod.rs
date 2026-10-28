@@ -19,6 +19,10 @@ pub struct FenceDefinition {
     pub gate: AssetId,
     pub post_prefab: AssetId,
     pub segments: FenceSegmentPrefabs,
+    /// Tank wall top rails, one for each segment shape, named like the
+    /// segment binder with a `t` prefix.
+    #[serde(default)]
+    pub top_segments: Option<FenceSegmentPrefabs>,
     pub gate_policy: FenceGatePolicy,
     #[serde(default)]
     pub fitting_curves: Vec<FenceFittingCurve>,
@@ -39,6 +43,22 @@ pub struct FenceSegmentPrefabs {
     pub cardinal_curve_135: AssetId,
     pub diagonal_curve_135: AssetId,
 }
+
+/// Authored `ZTFenceMode` policy for closed fence shapes and new tank walls.
+/// Shape minimums count whole fence segments.
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub struct FencePlacementModePolicy {
+    pub minimum_rectangle_segments: u16,
+    pub minimum_octagon_segments: u16,
+    /// Height of a new tank wall's top above its reference ground.
+    pub default_tank_wall_height_cm: i32,
+    /// Lowest tank wall top above the ground under the wall.
+    pub minimum_tank_wall_height_cm: i32,
+    /// A closed tank shape whose ground falls this far below its anchor keeps
+    /// its wall tops at the anchor's ground height.
+    pub hill_threshold_cm: i32,
+}
+
 #[derive(Clone, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FenceGatePolicy {
     /// Animated gate model, presented beside the edge's authored segment model.

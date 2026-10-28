@@ -27,10 +27,14 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
     mut commands: Commands,
     animation_samples: LocomotionAnimationSamples,
     time: Res<Time<Fixed>>,
+    navigation_graph: Option<
+        Res<openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph>,
+    >,
     fences: FenceNavigationPolicy,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    pursuit_targets: Query<&GlobalTransform>,
     mut non_physics_navigation_agents: Query<
         (
             Entity,
@@ -43,6 +47,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             &Destination,
             Option<&Docking>,
             Option<&LocomotionAnimationSource>,
+            Option<&openzt2_zoo_state::locomotion::locomotion_types::EntityPursuit>,
         ),
         (Without<DirectLocomotion>, Without<RigidBody>),
     >,
@@ -60,6 +65,7 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
         destination,
         docking,
         animation_source,
+        pursuit,
     ) in &mut non_physics_navigation_agents
     {
         let playback = animation_samples.get(navigation_agent_entity, animation_source);
@@ -91,13 +97,34 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
 
         let locomotion_mode = locomotion_mode.copied().unwrap_or_default();
         if locomotion_mode != LocomotionMode::Flight {
-            fit_to_terrain(
-                locomotion_mode,
-                &mut local_transform.translation,
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
-            );
+            let path_height = navigation_graph.as_deref().and_then(|graph| {
+                let aim_height = pursuit
+                    .and_then(|pursuit| pursuit_targets.get(pursuit.target).ok())
+                    .map(|target| target.translation().y)
+                    .or_else(|| planned_route.current().map(|point| point.y))
+                    .unwrap_or(local_transform.translation.y);
+                super::spatial_index_and_docking_operations::connected_path_surface_height(
+                    graph.terrain_derived_navigation_graph(),
+                    previous_translation,
+                    Vec3::new(
+                        local_transform.translation.x,
+                        aim_height,
+                        local_transform.translation.z,
+                    ),
+                    locomotion_mode,
+                )
+            });
+            if let Some(height) = path_height {
+                local_transform.translation.y = height;
+            } else {
+                fit_to_terrain(
+                    locomotion_mode,
+                    &mut local_transform.translation,
+                    &terrain_index,
+                    &terrain_assets,
+                    &terrain_chunks,
+                );
+            }
             local_velocity.0.y = 0.0;
         }
         let horizontal_velocity = Vec2::new(local_velocity.0.x, local_velocity.0.z);

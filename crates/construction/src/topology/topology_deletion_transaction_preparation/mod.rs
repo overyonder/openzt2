@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -61,6 +62,7 @@ pub(super) fn prepare_topology_deletion_transaction(
         &PersistentId,
     )>,
     persistent: Query<(Entity, &PersistentId)>,
+    wall_tops: Query<&TankWallTopHeight>,
     mut prepared: MessageWriter<TopologyEditPrepared>,
     mut rejected: MessageWriter<TopologyEditPreparationRejected>,
 ) {
@@ -113,6 +115,7 @@ pub(super) fn prepare_topology_deletion_transaction(
                 a,
                 b,
                 gate: gate.copied(),
+                wall_top: wall_tops.get(request.target).ok().copied(),
             });
         }
         if let Some(path) = path {
@@ -179,6 +182,7 @@ pub(super) fn prepare_topology_deletion_transaction(
                                 a,
                                 b,
                                 gate: edge_gate.copied(),
+                                wall_top: wall_tops.get(dependent_entity).ok().copied(),
                             });
                         }
                     }

@@ -18,6 +18,7 @@ use openzt2_game_data::terrain::{
 };
 
 use super::{
+    blue_fang_terrain_presentation_source_lowering::AuthoredTerrainHeights,
     blue_fang_terrain_source_parsing::blue_fang_terrain_cell_size_metres,
     blue_fang_terrain_source_types::{ParsedBlueFangTerrain, ParsedBlueFangTerrainSourceData},
     terrain_chunk_mesh_geometry::{terrain_chunk_triangle_indices, terrain_height_field_normals},
@@ -29,11 +30,11 @@ pub struct LoweredBlueFangTerrain {
 }
 
 /// Lowers one original terrain grid into an ordinary indexed GLB mesh.
-/// `cell_size_metres` and `base_height_metres` are the authored BFTerrain
-/// values resolved from the map's XML documents.
+/// `heights` are the authored BFTerrain values resolved from the map's XML
+/// documents.
 pub fn lower_blue_fang_terrain_to_domain_grid_and_glb(
     terrain: ParsedBlueFangTerrain,
-    base_height_metres: f32,
+    heights: AuthoredTerrainHeights,
     presentation: TerrainPresentation,
     biomes: Vec<TerrainBiome>,
     waterfall: Option<TerrainWaterfall>,
@@ -42,7 +43,7 @@ pub fn lower_blue_fang_terrain_to_domain_grid_and_glb(
     lower_blue_fang_terrain_with_validated_units(
         terrain.0,
         cell_size_metres,
-        base_height_metres,
+        heights,
         presentation,
         biomes,
         waterfall,
@@ -53,12 +54,20 @@ pub fn lower_blue_fang_terrain_to_domain_grid_and_glb(
 fn lower_blue_fang_terrain_with_validated_units(
     terrain: ParsedBlueFangTerrainSourceData,
     cell_size_metres: f32,
-    base_height_metres: f32,
+    heights: AuthoredTerrainHeights,
     presentation: TerrainPresentation,
     biomes: Vec<TerrainBiome>,
     waterfall: Option<TerrainWaterfall>,
 ) -> Result<LoweredBlueFangTerrain, ConversionError> {
-    if !cell_size_metres.is_finite() || cell_size_metres <= 0.0 || !base_height_metres.is_finite() {
+    let base_height_metres = heights.base_height_metres;
+    if !cell_size_metres.is_finite()
+        || cell_size_metres <= 0.0
+        || !base_height_metres.is_finite()
+        || !heights.maximum_height_metres.is_finite()
+        || heights
+            .minimum_water_height_metres
+            .is_some_and(|height| !height.is_finite())
+    {
         return Err(ConversionError::InvalidValue(
             "invalid terrain unit contract",
         ));
@@ -333,6 +342,8 @@ fn lower_blue_fang_terrain_with_validated_units(
         units: TerrainUnits {
             cell_size_metres,
             base_height_metres,
+            maximum_height_metres: heights.maximum_height_metres,
+            minimum_water_height_metres: heights.minimum_water_height_metres,
         },
         presentation,
         biomes,

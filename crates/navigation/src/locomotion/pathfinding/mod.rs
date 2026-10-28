@@ -9,6 +9,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdgeFlags as NavigationGraphEdgeFlags;
+use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphNode;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphTraversalKind;
 
 pub(crate) fn plan_route(
@@ -26,27 +27,16 @@ pub(crate) fn plan_route(
     if !start_world.is_finite() || !destination.is_finite() {
         return Err(NavigationFailure::OutsideWorld);
     }
-    let minimum_normal_y =
-        if mode == LocomotionMode::Ground || agent.capabilities.contains(NavFlags::AMPHIBIOUS) {
-            maximum_ground_slope_radians
-                .map(|slope| {
-                    if !slope.is_finite() || slope < 0.0 {
-                        return Err(NavigationFailure::NoRoute);
-                    }
-                    Ok(slope.min(std::f32::consts::FRAC_PI_2).cos().max(0.0))
-                })
-                .transpose()?
-        } else {
-            None
-        };
-    let start = nearest_eligible(navigation, agent, start_world, minimum_normal_y)
+    let minimum_normal_y = minimum_ground_normal_y(agent, mode, maximum_ground_slope_radians)?;
+    let start = nearest_eligible(navigation, agent, mode, start_world, minimum_normal_y)
         .ok_or(NavigationFailure::NoStartNode)?;
-    let goal = nearest_eligible(navigation, agent, destination, minimum_normal_y)
+    let goal = nearest_eligible(navigation, agent, mode, destination, minimum_normal_y)
         .ok_or(NavigationFailure::OutsideWorld)?;
     // Docking may deliberately snap a non-animal endpoint to a nearby node.
     // Its final exact segment still cannot take a ground actor through water.
     if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
         && !agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+        && navigation.path_surface_at_node(goal).is_none()
         && !ground_endpoint_segment_is_dry(
             navigation,
             navigation_position(navigation, goal),
@@ -188,12 +178,183 @@ pub(crate) fn plan_route(
     Ok(())
 }
 
+/// Follows connected navigation surfaces from the start and checks the
+/// collision circle on each sample. The final surface must own the target.
+pub(crate) fn straight_line_sweep_admits_agent(
+    navigation: &TerrainDerivedNavigationGraph,
+    agent: &NavAgent,
+    mode: LocomotionMode,
+    maximum_ground_slope_radians: Option<f32>,
+    from: Vec3,
+    to: Vec3,
+    target_mode: Option<LocomotionMode>,
+) -> bool {
+    let step_m = agent.radius_m;
+    if step_m <= 0.0 {
+        return true;
+    }
+    if !step_m.is_finite() {
+        return false;
+    }
+    let Ok(minimum_normal_y) = minimum_ground_normal_y(agent, mode, maximum_ground_slope_radians)
+    else {
+        return false;
+    };
+    if !from.is_finite() || !to.is_finite() {
+        return false;
+    }
+    let containing_surface = |position| {
+        if mode == LocomotionMode::Swim {
+            navigation
+                .terrain_cell_at_world_position(position)
+                .and_then(|cell| navigation.calculate_navigation_node_for_terrain_cell(cell))
+        } else {
+            navigation.navigation_surface_at_world_position(position)
+        }
+    };
+    let Some(mut surface) = containing_surface(from) else {
+        return false;
+    };
+    let target_surface = if target_mode == Some(LocomotionMode::Swim) {
+        navigation
+            .terrain_cell_at_world_position(to)
+            .and_then(|cell| navigation.calculate_navigation_node_for_terrain_cell(cell))
+    } else {
+        navigation.navigation_surface_at_world_position(to)
+    };
+    let Some(target_surface) = target_surface else {
+        return false;
+    };
+    let amphibious = agent.capabilities.contains(NavFlags::AMPHIBIOUS);
+    let admits = |index| {
+        navigation.find_navigation_node(index).is_some_and(|node| {
+            let water = node.eligibility_flags.contains(NavFlags::WATER);
+            node_admits_agent(node, agent, minimum_normal_y)
+                && (amphibious
+                    || match mode {
+                        LocomotionMode::Ground | LocomotionMode::Vehicle => !water,
+                        LocomotionMode::Swim => water,
+                        LocomotionMode::Flight => true,
+                    })
+        })
+    };
+    let offset = (to - from).xz();
+    let length_m = offset.length();
+    let direction = offset.normalize_or_zero();
+    // A radius larger than a cell must not skip an intervening surface edge.
+    let step_m = step_m.min(terrain_cell_size_m(navigation) * 0.5);
+    let mut travelled_m = 0.0;
+    loop {
+        travelled_m = (travelled_m + step_m).min(length_m);
+        let mut sample = from + Vec3::new(direction.x, 0.0, direction.y) * travelled_m;
+        sample.y = from.y
+            + (to.y - from.y)
+                * if length_m > 0.0 {
+                    travelled_m / length_m
+                } else {
+                    1.0
+                };
+        let Some(next) = navigation.continue_navigation_surface(surface, sample) else {
+            return false;
+        };
+        surface = next;
+        if !admits(surface) {
+            return false;
+        }
+        if navigation.path_surface_at_node(surface).is_some() {
+            for direction in [
+                Vec2::X,
+                Vec2::Y,
+                Vec2::NEG_X,
+                Vec2::NEG_Y,
+                Vec2::ONE.normalize(),
+                Vec2::new(1.0, -1.0).normalize(),
+                Vec2::new(-1.0, 1.0).normalize(),
+                Vec2::NEG_ONE.normalize(),
+            ] {
+                let occupied = sample + Vec3::new(direction.x, 0.0, direction.y) * agent.radius_m;
+                let Some(node) = navigation.continue_navigation_surface(surface, occupied) else {
+                    return false;
+                };
+                if !admits(node) {
+                    return false;
+                }
+            }
+        }
+        // Sample the occupied circle as well as its centre. Terrain cell
+        // squares intersecting it all contribute to the same clearance test.
+        let radius = agent.radius_m;
+        let size = terrain_cell_size_m(navigation);
+        let minimum = ((Vec2::new(sample.x - radius, -sample.z - radius)) / size)
+            .floor()
+            .as_ivec2();
+        let maximum = ((Vec2::new(sample.x + radius, -sample.z + radius)) / size)
+            .floor()
+            .as_ivec2();
+        for z in minimum.y..=maximum.y {
+            for x in minimum.x..=maximum.x {
+                let low = Vec2::new(x as f32, z as f32) * size;
+                let centre = Vec2::new(sample.x, -sample.z);
+                let closest = centre.clamp(low, low + Vec2::splat(size));
+                if closest.distance_squared(centre) > radius * radius {
+                    continue;
+                }
+                let occupied = Vec3::new(closest.x, sample.y, -closest.y);
+                let Some(node) = navigation.continue_navigation_surface(surface, occupied) else {
+                    return false;
+                };
+                if !admits(node) {
+                    return false;
+                }
+            }
+        }
+        if travelled_m >= length_m {
+            return surface == target_surface
+                || navigation.node_supports_world_position(surface, to)
+                    && navigation
+                        .iterate_outgoing_navigation_graph_edges(surface)
+                        .any(|edge| {
+                            edge.destination_node == target_surface
+                                && navigation.node_supports_world_position(target_surface, to)
+                        });
+        }
+    }
+}
+
 fn ground_endpoint_segment_is_dry(
     navigation: &TerrainDerivedNavigationGraph,
     from: Vec3,
     to: Vec3,
 ) -> bool {
-    let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
+    every_crossed_terrain_cell(navigation, from, to, |cell| {
+        terrain_cell_node(navigation, cell)
+            .is_some_and(|node| !node.eligibility_flags.contains(NavFlags::WATER))
+    })
+}
+
+fn terrain_cell_size_m(navigation: &TerrainDerivedNavigationGraph) -> f32 {
+    f32::from(navigation.terrain_cell_size_centimetres) * 0.01
+}
+
+fn terrain_cell_node(
+    navigation: &TerrainDerivedNavigationGraph,
+    cell: IVec2,
+) -> Option<&TerrainDerivedNavigationGraphNode> {
+    if cell.x < 0 || cell.y < 0 {
+        return None;
+    }
+    navigation
+        .calculate_navigation_node_for_terrain_cell(cell.as_uvec2().to_array())
+        .and_then(|index| navigation.find_navigation_node(index))
+}
+
+fn every_crossed_terrain_cell(
+    navigation: &TerrainDerivedNavigationGraph,
+    from: Vec3,
+    to: Vec3,
+    accepts: impl Fn(IVec2) -> bool,
+) -> bool {
+    let size = terrain_cell_size_m(navigation);
     if size <= 0.0
         || !from.is_finite()
         || !to.is_finite()
@@ -222,25 +383,16 @@ fn ground_endpoint_segment_is_dry(
         next_boundary(from.y, cell.y, delta.y),
     );
     let interval = Vec2::new(delta.x.abs().recip(), delta.y.abs().recip());
-    let dry = |cell: IVec2| {
-        if cell.x < 0 || cell.y < 0 {
-            return false;
-        }
-        navigation
-            .calculate_navigation_node_for_terrain_cell(cell.as_uvec2().to_array())
-            .and_then(|index| navigation.find_navigation_node(index))
-            .is_some_and(|node| !node.eligibility_flags.contains(NavFlags::WATER))
-    };
     // Traverse crossed grid cells, including both neighbours at exact corners.
     loop {
-        if !dry(cell) {
+        if !accepts(cell) {
             return false;
         }
         if cell == end {
             return true;
         }
         if crossing.x == crossing.y {
-            if !dry(cell + IVec2::new(step.x, 0)) || !dry(cell + IVec2::new(0, step.y)) {
+            if !accepts(cell + IVec2::new(step.x, 0)) || !accepts(cell + IVec2::new(0, step.y)) {
                 return false;
             }
             cell += step;
@@ -255,13 +407,53 @@ fn ground_endpoint_segment_is_dry(
     }
 }
 
+fn minimum_ground_normal_y(
+    agent: &NavAgent,
+    mode: LocomotionMode,
+    maximum_ground_slope_radians: Option<f32>,
+) -> Result<Option<f32>, NavigationFailure> {
+    if mode != LocomotionMode::Ground && !agent.capabilities.contains(NavFlags::AMPHIBIOUS) {
+        return Ok(None);
+    }
+    maximum_ground_slope_radians
+        .map(|slope| {
+            if !slope.is_finite() || slope < 0.0 {
+                return Err(NavigationFailure::NoRoute);
+            }
+            Ok(slope.min(std::f32::consts::FRAC_PI_2).cos().max(0.0))
+        })
+        .transpose()
+}
+
+fn node_admits_agent(
+    node: &TerrainDerivedNavigationGraphNode,
+    agent: &NavAgent,
+    minimum_normal_y: Option<f32>,
+) -> bool {
+    node.eligibility_flags.0 & agent.capabilities.0 != 0
+        && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
+        && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
+        && ((agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+            && node.eligibility_flags.contains(NavFlags::WATER))
+            || cell_meets_ground_slope_limit(node.minimum_triangle_normal_y, minimum_normal_y))
+}
+
 fn nearest_eligible(
     navigation: &TerrainDerivedNavigationGraph,
     agent: &NavAgent,
+    mode: LocomotionMode,
     world: Vec3,
     minimum_normal_y: Option<f32>,
 ) -> Option<u32> {
     let position = metres_to_cm(world)?;
+    if let Some(surface) = navigation.navigation_surface_at_world_position(world) {
+        if mode != LocomotionMode::Swim && navigation.path_surface_at_node(surface).is_some() {
+            return navigation
+                .find_navigation_node(surface)
+                .filter(|node| node_admits_agent(node, agent, minimum_normal_y))
+                .map(|_| surface);
+        }
+    }
     if minimum_normal_y.is_some() {
         // Snapping an animal to another cell can bypass a forbidden endpoint
         // and make the final direct segment cross terrain the search rejected.
@@ -275,20 +467,14 @@ fn nearest_eligible(
         ];
         let index = navigation.calculate_navigation_node_for_terrain_cell(cell)?;
         let node = navigation.find_navigation_node(index)?;
-        return (node.eligibility_flags.0 & agent.capabilities.0 != 0
-            && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0
-            && f32::from(node.clearance_centimetres) >= agent.radius_m * 100.0
-            && ((agent.capabilities.contains(NavFlags::AMPHIBIOUS)
-                && node.eligibility_flags.contains(NavFlags::WATER))
-                || cell_meets_ground_slope_limit(
-                    node.minimum_triangle_normal_y,
-                    minimum_normal_y,
-                )))
-        .then_some(index);
+        return node_admits_agent(node, agent, minimum_normal_y).then_some(index);
     }
     navigation
         .find_candidate_node_indices_in_containing_terrain_tile(position)
         .filter(|index| {
+            if mode == LocomotionMode::Swim && navigation.path_surface_at_node(*index).is_some() {
+                return false;
+            }
             navigation.find_navigation_node(*index).is_some_and(|node| {
                 node.eligibility_flags.0 & agent.capabilities.0 != 0
                     && node.eligibility_flags.0 & NavFlags::DISABLED_BY_DEFAULT.0 == 0

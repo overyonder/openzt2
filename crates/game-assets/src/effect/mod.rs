@@ -2,11 +2,11 @@
 
 use bevy::{asset::AssetApp, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     particle::{
-        ParticleEffectDocument as ParticleDocument,
         authored_particle_system::ParticleEffectSimulationClock,
+        ParticleEffectDocument as ParticleDocument,
     },
+    AssetId,
 };
 
 pub mod authored_particle_system_hanabi_effect_preparation;

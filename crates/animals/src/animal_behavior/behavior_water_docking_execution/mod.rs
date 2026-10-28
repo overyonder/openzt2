@@ -1,6 +1,6 @@
 use super::{
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    natural_water_targets::{NaturalWaterTargets, SelectedNaturalWaterTarget},
+    natural_water_targets::NaturalWaterTargets,
 };
 use bevy::prelude::*;
 use openzt2_game_assets::{
@@ -22,6 +22,7 @@ use openzt2_world_state::{
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::world_entity_crating::WorldEntityIsCrated,
 };
+use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget;
 use openzt2_zoo_state::{
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
