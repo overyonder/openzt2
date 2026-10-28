@@ -41,7 +41,7 @@ fn delayed_subject_tokens_preserve_activation_and_expiration_times() {
         panic!("token delivery expected");
     };
     assert_eq!(deliveries[0].delay, Duration::from_secs(30));
-    assert_eq!(deliveries[0].lifetime, Duration::from_secs(180));
+    assert_eq!(deliveries[0].lifetime, Some(Duration::from_secs(180)));
 }
 
 #[test]

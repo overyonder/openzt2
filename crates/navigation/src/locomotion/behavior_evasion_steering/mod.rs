@@ -66,6 +66,7 @@ pub(super) fn project_behavior_evasion_steering(
                     slope,
                     position,
                     endpoint,
+                    None,
                 )
                 && !fences.world_segment_blocks_actor(
                     position,

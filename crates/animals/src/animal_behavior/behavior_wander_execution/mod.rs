@@ -8,7 +8,6 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::behavior::action_record::BehaviorAction;
-use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_world_state::{

@@ -422,17 +422,17 @@ fn stop_pursuit_navigation(
 }
 
 /// The navigation requests one pursuer's update may make.
-struct PursuitRequests<'a, 'w> {
+struct PursuitRequests<'a, 'route, 'pursuit> {
     actor: Entity,
     target: Entity,
     target_position: Vec3,
     hit_radius_m: f32,
     sequence: &'a mut NavigationRequestSequence,
-    route_requests: &'a mut MessageWriter<'w, NavigateTo>,
-    pursuit_requests: &'a mut MessageWriter<'w, PursueEntity>,
+    route_requests: &'a mut MessageWriter<'route, NavigateTo>,
+    pursuit_requests: &'a mut MessageWriter<'pursuit, PursueEntity>,
 }
 
-impl PursuitRequests<'_, '_> {
+impl PursuitRequests<'_, '_, '_> {
     fn route(&mut self, request_id: u64, arrival_radius_m: f32) {
         self.route_requests.write(NavigateTo {
             entity: self.actor,

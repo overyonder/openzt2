@@ -362,7 +362,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
         Option<&Destination>,
         Has<PendingBehaviorTaskFailure>,
         &mut StaffTankGateJourney,
-        Option<&mut RigidBody>,
+        Option<&RigidBody>,
         Option<&mut LinearVelocity>,
     )>,
     mut controllers: Query<(
@@ -441,9 +441,9 @@ pub(super) fn execute_staff_tank_gate_journeys(
             continue;
         };
         if journey.previous_body.is_none() {
-            if let Some(mut body) = body {
+            if let Some(body) = body {
                 journey.previous_body = Some(*body);
-                *body = RigidBody::Kinematic;
+                commands.entity(actor).insert(RigidBody::Kinematic);
             }
         }
         if let Some(mut velocity) = velocity {

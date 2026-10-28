@@ -9,7 +9,7 @@ use openzt2_game_assets::{
 };
 
 #[derive(Component)]
-struct NavigationPathSurfaceCollider;
+pub(super) struct NavigationPathSurfaceCollider;
 use openzt2_zoo_state::{
     locomotion::{
         locomotion_types::{ActiveTerrainDerivedNavigationGraph, Destination, Route},

@@ -13,7 +13,7 @@ use crate::topology::fence_segment_prefab_selection::select_authored_fence_segme
 use crate::topology::topology_edit_outcome_messages::write_topology_edit_acknowledgement;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::{
     tank_habitat_seed_cell, PendingTankRestoration, Tank, TankGeometry, TankTopologyRestorations,
-    TankWallTopHeight, WaterQuality,
+    WaterQuality,
 };
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;

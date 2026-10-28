@@ -163,7 +163,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                 frame.phase = BehaviorTaskExecutionPhase::Execution;
                 frame.action = 0;
                 frame.repetitions = 0;
-                resolve(&frame)
+                resolve_behavior_frame(&frame, &application.documents, &handles)
             })
             .transpose()?;
         prepared.push(PreparedBehaviorActor {
