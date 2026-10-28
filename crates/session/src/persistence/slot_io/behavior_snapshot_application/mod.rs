@@ -14,7 +14,6 @@ use definitions::{
     validate_behavior_snapshot_references,
 };
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     animal_behavior::{
         behavior_synchronized_set_types::SynchronizedBehaviorOwner,
@@ -132,7 +131,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                 .and_then(|reference| identities.get(reference))
                 .and_then(|target| application.entities.get(*target).ok())
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-            if target.get::<GlobalTransform>().is_none() { return Ok(false); }
+            if target.global_transform.is_none() { return Ok(false); }
         }
         for reference in actor_references(record) {
             if let BehaviorSnapshotEntityReference::TankCleaningSite { tank, .. } = reference {
@@ -140,7 +139,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                 if !application
                     .entities
                     .get(tank)
-                    .is_ok_and(|tank| tank.contains::<WorldMember>())
+                    .is_ok_and(|tank| tank.world_member.is_some())
                 {
                     return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
                 }
@@ -263,7 +262,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                         .entities
                         .get(tank)
                         .ok()
-                        .and_then(|tank| tank.get::<WorldMember>().copied())
+                        .and_then(|tank| tank.world_member.copied())
                         .expect("validated tank world membership");
                     commands
                         .spawn((

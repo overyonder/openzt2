@@ -1,23 +1,9 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::{
-    animal_behavior::{
-        behavior_natural_water_target_types::{NaturalWaterTargetKind, SelectedNaturalWaterTarget},
-        behavior_pursuit_types::PendingBehaviorPursuit,
-        behavior_random_stream_state::BehaviorRandomStream,
-        behavior_synchronized_set_types::SynchronizedBehaviorOwner,
-        behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
-    },
-    behavior_task_execution_types::{
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorDockingCompletion,
-        PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure,
-    },
-    locomotion::locomotion_types::{
-        ContactSteering, Destination, Docking, EntityPursuit, LocomotionMode, MotionProgress,
-        NavAgent, Route, SwimLayer, Velocity,
-    },
-    staff::staff_job_types::{CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
+    animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind,
+    behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame},
+    locomotion::locomotion_types::{Route, Velocity},
 };
 
 #[derive(SystemParam)]
@@ -48,7 +34,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
         let identities = self
             .entities
             .iter()
-            .filter_map(|entity| entity.get::<PersistentId>().map(|id| (id.0, entity.id())))
+            .filter_map(|entity| entity.persistent_id.map(|id| (id.0, entity.entity)))
             .collect::<std::collections::BTreeMap<_, _>>();
         for record in &mut records {
             let actor = *identities
@@ -105,7 +91,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
                     .entities
                     .get(actor)
                     .ok()
-                    .and_then(|actor| actor.get::<SynchronizedBehaviorOwner>())
+                    .and_then(|actor| actor.synchronized_behavior_owner)
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
                 if finished.iter().any(|event| {
                     event.actor == owner.target
@@ -188,14 +174,14 @@ fn capture_behavior_actor_snapshots(
     let mut records = Vec::new();
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
     for actor in entities {
-        let Some(task) = actor.get::<BehaviorTaskExecutionState>() else {
+        let Some(task) = actor.behavior_task_execution_state else {
             continue;
         };
         let id = actor
-            .get::<PersistentId>()
+            .persistent_id
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
         let score = actor
-            .get::<BehaviorTaskEffectiveScore>()
+            .behavior_task_effective_score
             .filter(|score| score.execution_id == task.execution_id)
             .map(|score| BehaviorTaskScoreSnapshot {
                 execution_id: score.execution_id,
@@ -219,11 +205,11 @@ fn capture_behavior_actor_snapshots(
                 .map(|frame| capture_behavior_frame(frame, documents))
                 .collect::<Result<_, _>>()?,
             score,
-            failing: actor.contains::<PendingBehaviorTaskFailure>(),
+            failing: actor.pending_behavior_task_failure.is_some(),
         };
         let navigation = capture_owned_navigation(&actor, task, entities, documents)?;
         let water_target = actor
-            .get::<SelectedNaturalWaterTarget>()
+            .selected_natural_water_target
             .map(|target| -> Result<_, WorldSnapshotPersistenceFailure> {
                 Ok(BehaviorNaturalWaterTargetSnapshot {
                     region: reference(target.region)?,
@@ -237,21 +223,21 @@ fn capture_behavior_actor_snapshots(
             })
             .transpose()?;
         let staff_job = actor
-            .get::<CurrentJob>()
+            .current_job
             .map(|current| {
                 let job_entity = entities.get(current.job).map_err(|_| {
                     WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference
                 })?;
                 let job = job_entity
-                    .get::<StaffJob>()
+                    .staff_job
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
                 let claim = job_entity
-                    .get::<JobClaim>()
+                    .job_claim
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
                 let behavior = job_entity
-                    .get::<StaffJobBehaviorTask>()
+                    .staff_job_behavior_task
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-                if claim.staff != actor.id() || behavior.execution_id != Some(task.execution_id) {
+                if claim.staff != actor.entity || behavior.execution_id != Some(task.execution_id) {
                     return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
                 }
                 Ok(BehaviorStaffJobSnapshot {
@@ -266,25 +252,25 @@ fn capture_behavior_actor_snapshots(
                         .to_string(),
                     program: behavior.task,
                     execution_id: task.execution_id,
-                    progressing: job_entity.contains::<JobProgress>(),
+                    progressing: job_entity.job_progress.is_some(),
                 })
             })
             .transpose()?;
         records.push(BehaviorActorSnapshot {
             persistent_identifier: id.0, task: task_snapshot, navigation, water_target, staff_job,
-            membership: occupancy.container_for_member(actor.id()).map(|(container, slot)| -> Result<_, WorldSnapshotPersistenceFailure> {
+            membership: occupancy.container_for_member(actor.entity).map(|(container, slot)| -> Result<_, WorldSnapshotPersistenceFailure> {
                 let definition = entities.get(container).ok()
-                    .and_then(|container| container.get::<openzt2_world_state::world_spawn::world_membership_types::DefinitionId>().copied())
+                    .and_then(|container| container.definition_id.copied())
                     .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
                 Ok(super::behavior_snapshot_types::BehaviorInteractionMembershipSnapshot {
                     container: reference(container)?, definition: definition.0, slot,
-                    admission_order: occupancy.members_of_container(container).position(|member| member == actor.id())
+                    admission_order: occupancy.members_of_container(container).position(|member| member == actor.entity)
                         .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?,
-                    docked: occupancy.is_docked(container, actor.id()),
+                    docked: occupancy.is_docked(container, actor.entity),
                 })
             }).transpose()?,
-            random: actor.get::<BehaviorRandomStream>().map(|random| random.0.to_raw()),
-            synchronized: actor.get::<SynchronizedBehaviorOwner>()
+            random: actor.behavior_random_stream.map(|random| random.0.to_raw()),
+            synchronized: actor.synchronized_behavior_owner
                 .map(|owner| -> Result<_, WorldSnapshotPersistenceFailure> {
                     Ok(BehaviorSynchronizedSnapshot {
                         execution_id: owner.execution_id, target_execution_id: owner.target_execution_id,
@@ -304,12 +290,12 @@ fn capture_owned_navigation(
     entities: &BehaviorSnapshotEntities,
     documents: &Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
 ) -> Result<Option<BehaviorOwnedNavigationSnapshot>, WorldSnapshotPersistenceFailure> {
-    let Some(agent) = actor.get::<NavAgent>() else {
+    let Some(agent) = actor.nav_agent else {
         return Ok(None);
     };
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
     let move_completion = actor
-        .get::<PendingBehaviorMoveCompletion>()
+        .pending_behavior_move_completion
         .filter(|pending| pending.still_owns_exact_task_frame(task))
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorNavigationCompletionSnapshot {
@@ -321,7 +307,7 @@ fn capture_owned_navigation(
         })
         .transpose()?;
     let docking_completion = actor
-        .get::<PendingBehaviorDockingCompletion>()
+        .pending_behavior_docking_completion
         .filter(|pending| pending.still_owns_exact_task_frame(task))
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorNavigationCompletionSnapshot {
@@ -333,7 +319,7 @@ fn capture_owned_navigation(
         })
         .transpose()?;
     let pursuit = actor
-        .get::<PendingBehaviorPursuit>()
+        .pending_behavior_pursuit
         .filter(|pending| pending.still_owns_exact_task_frame(task))
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorPursuitSnapshot {
@@ -360,11 +346,11 @@ fn capture_owned_navigation(
             })
     };
     let destination = actor
-        .get::<Destination>()
+        .destination
         .filter(|destination| owns(destination.request_id))
         .copied();
     let docking = actor
-        .get::<Docking>()
+        .docking
         .filter(|docking| owns(docking.request_id))
         .map(|docking| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorDockingSnapshot {
@@ -377,7 +363,7 @@ fn capture_owned_navigation(
         })
         .transpose()?;
     let pursuit_target = actor
-        .get::<EntityPursuit>()
+        .entity_pursuit
         .filter(|pursuit| {
             destination.is_some_and(|destination| destination.request_id == pursuit.request_id)
         })
@@ -385,7 +371,7 @@ fn capture_owned_navigation(
         .transpose()?;
     let route = if destination.is_some() {
         actor
-            .get::<Route>()
+            .route
             .cloned()
             .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?
     } else {
@@ -393,18 +379,16 @@ fn capture_owned_navigation(
     };
     Ok(Some(BehaviorOwnedNavigationSnapshot {
         agent: *agent,
-        mode: actor.get::<LocomotionMode>().copied().unwrap_or_default(),
-        swim_layer: actor.get::<SwimLayer>().copied(),
-        water_contact: actor
-            .get::<openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>()
-            .copied(),
+        mode: actor.locomotion_mode.copied().unwrap_or_default(),
+        swim_layer: actor.swim_layer.copied(),
+        water_contact: actor.animal_terrain_water_contact.copied(),
         velocity: actor
-            .get::<avian3d::prelude::LinearVelocity>()
+            .linear_velocity
             .map(|velocity| Velocity(velocity.0))
-            .or_else(|| actor.get::<Velocity>().copied())
+            .or_else(|| actor.velocity.copied())
             .unwrap_or_default(),
-        contact_steering: actor.get::<ContactSteering>().copied(),
-        progress: actor.get::<MotionProgress>().copied(),
+        contact_steering: actor.contact_steering.copied(),
+        progress: actor.motion_progress.copied(),
         destination,
         route,
         pursuit_target,

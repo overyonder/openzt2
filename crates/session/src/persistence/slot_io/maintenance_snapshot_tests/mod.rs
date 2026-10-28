@@ -60,6 +60,38 @@ fn fixture() -> (App, Entity) {
         .add_message::<CancelStaffJobRequest>()
         .add_message::<BehaviorTaskFinished>()
         .add_message::<BehaviorTaskFailed>();
+    use openzt2_game_data::world_definitions::{
+        document::WorldDefinitionDocument,
+        staff_management::{
+            StaffRequestControllerDefinition, StaffRequestData, StaffRequestThresholdComparison,
+            StaffRequestThresholdValue,
+        },
+    };
+    let document = WorldDefinitionDocument {
+        staff_requests: vec![StaffRequestControllerDefinition {
+            id: AssetId::from_key("test_waste"),
+            binder: None,
+            attribute_key: None,
+            threshold: StaffRequestThresholdValue::Number(0.0),
+            threshold_comparison: StaffRequestThresholdComparison::ReachesOrAbove,
+            cancel_threshold: StaffRequestThresholdValue::Number(0.0),
+            cancel_comparison: StaffRequestThresholdComparison::FallsBelow,
+            trigger_on_creation: true,
+            trigger_on_destruction: false,
+            request: StaffRequestData {
+                token: Some(AssetId::from_key("t_rakepoo")),
+                ..StaffRequestData::CONSTRUCTED_DEFAULT
+            },
+        }],
+        ..Default::default()
+    };
+    let handle = app
+        .world_mut()
+        .resource_mut::<Assets<WorldDefinitionAsset>>()
+        .add(WorldDefinitionAsset::from_test_document(document.clone()));
+    app.world_mut()
+        .resource_mut::<WorldDefinitions>()
+        .index_test_document(handle, &document);
     add_animal_waste_cleanup_test_systems(&mut app);
     let root = app.world_mut().spawn_empty().id();
     app.insert_resource(PersistentIdAllocator::new(root));

@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
 
 use super::{
@@ -78,7 +77,7 @@ pub(super) fn prepare_behavior_membership_restoration(
             .ok_or(Failure::BrokenPersistentEntityReference)?;
         if !application.entities.get(target).is_ok_and(|target| {
             target
-                .get::<DefinitionId>()
+                .definition_id
                 .is_some_and(|definition| definition.0 == membership.definition)
         }) {
             return Err(Failure::BrokenPersistentEntityReference);

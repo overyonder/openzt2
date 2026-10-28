@@ -111,11 +111,7 @@ pub(super) fn apply_prepared_behavior_actor(
                     .entities
                     .get(actor)
                     .ok()
-                    .and_then(|actor| {
-                        actor
-                            .get::<GlobalTransform>()
-                            .map(GlobalTransform::translation)
-                    })
+                    .and_then(|actor| actor.global_transform.map(GlobalTransform::translation))
                     .unwrap_or(Vec3::ZERO),
                 stationary_ticks: 0,
             }),
@@ -123,7 +119,7 @@ pub(super) fn apply_prepared_behavior_actor(
         if application
             .entities
             .get(actor)
-            .is_ok_and(|actor| actor.contains::<avian3d::prelude::RigidBody>())
+            .is_ok_and(|actor| actor.rigid_body.is_some())
         {
             entity
                 .insert(avian3d::prelude::LinearVelocity(nav.velocity.0))
@@ -313,11 +309,11 @@ fn reissue_unaccepted_pursuit_navigation(
     else {
         unreachable!("validated pursuit action");
     };
-    let position = application.entities.get(target).ok().and_then(|target| {
-        target
-            .get::<GlobalTransform>()
-            .map(GlobalTransform::translation)
-    });
+    let position = application
+        .entities
+        .get(target)
+        .ok()
+        .and_then(|target| target.global_transform.map(GlobalTransform::translation));
     match pending.leg {
         BehaviorPursuitLeg::Route { request_id } => {
             if let Some(destination) = position {
