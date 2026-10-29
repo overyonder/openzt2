@@ -170,8 +170,10 @@ impl Default for GraphicsSettings {
     fn default() -> Self {
         // Use every detail setting's maximum, including features which the
         // original high preset left disabled. Saved player choices override it.
+        // Multisampling stays at 4, the most WebGPU guarantees for every
+        // colour format; Apple GPUs reject 8 and stop rendering.
         Self {
-            multisample_count: 8,
+            multisample_count: 4,
             specular_effects: true,
             detail_objects: EnvironmentalDetailObjectDensity::High,
             screen_detail: true,

@@ -49,7 +49,9 @@ pub(super) fn apply_accepted_multisample_count_to_zoo_cameras(
     settings: Res<GraphicsSettings>,
     cameras: Query<Entity, With<ZooCamera>>,
 ) {
-    let msaa = Msaa::from_samples(u32::from(settings.multisample_count));
+    // Profiles saved with the earlier default of 8 would stop rendering on
+    // GPUs that support at most 4 samples, so clamp to the guaranteed count.
+    let msaa = Msaa::from_samples(u32::from(settings.multisample_count.min(4)));
     for camera in &cameras {
         commands.entity(camera).insert(msaa);
     }
