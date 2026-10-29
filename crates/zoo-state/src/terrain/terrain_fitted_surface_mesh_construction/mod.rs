@@ -143,6 +143,8 @@ pub fn construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_ro
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    // The fixed-function shader always reads a second texture coordinate set.
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, uvs.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
     mesh.insert_indices(Indices::U32(indices));
     Some(mesh)

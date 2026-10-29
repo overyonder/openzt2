@@ -281,6 +281,8 @@ pub(super) fn construct_elevated_ground_track_triangle_strip(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    // The fixed-function shader always reads a second texture coordinate set.
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, texture_coordinates.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, texture_coordinates);
     mesh.insert_indices(Indices::U32(indices));
     Some(mesh)
@@ -372,6 +374,8 @@ fn spawn_authored_sky_track_rope(
     );
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+    // The fixed-function shader always reads a second texture coordinate set.
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_1, texture_coordinates.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, texture_coordinates);
     mesh.insert_indices(Indices::U32(indices));
     commands.spawn((
@@ -602,3 +606,6 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             .insert(AuthoredTransportTrackPiecePresentationProjected);
     }
 }
+
+#[cfg(test)]
+mod tests;
