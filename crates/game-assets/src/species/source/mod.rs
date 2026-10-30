@@ -197,6 +197,7 @@ fn lower_species_source_record_to_canonical_species(
         ("b_MediumPrey", SpeciesFlags::PREY),
         ("b_LargePrey", SpeciesFlags::PREY),
         ("b_Super", SpeciesFlags::SUPER),
+        ("b_ExtinctAnimal", SpeciesFlags::EXTINCT),
         ("b_SmallPredator", SpeciesFlags::SMALL_PREDATOR),
         ("b_MediumPredator", SpeciesFlags::MEDIUM_PREDATOR),
         ("b_LargePredator", SpeciesFlags::LARGE_PREDATOR),

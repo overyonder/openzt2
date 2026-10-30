@@ -7,7 +7,7 @@ use super::{
 use bevy::prelude::Entity;
 use mlua::{Lua, Scope, Table, Value};
 use openzt2_game_data::{
-    species::{LifeStage, NeedKind},
+    species::{ConservationStatus, LifeStage, NeedKind, SpeciesFlags},
     AssetId,
 };
 use openzt2_zoo_state::animal_welfare::types::{SetAnimalNeed, MAX_NEED_Q16, Q16_ONE};
@@ -306,7 +306,13 @@ fn create_entity_component<'scope, 'env: 'scope>(
             match attribute.as_str() {
                 "b_Pregnant" => Ok(fact.pregnant),
                 "b_Adult" => Ok(fact.adult),
-                "b_ExtinctAnimal" => Ok(matches_kind(&fact, &attribute, queries)),
+                "b_ExtinctAnimal" => Ok(fact
+                    .species
+                    .and_then(|species_id| queries.species?.find(species_id))
+                    .is_some_and(|species| {
+                        species.flags.contains(SpeciesFlags::EXTINCT)
+                            || species.conservation == ConservationStatus::Extinct
+                    })),
                 _ => Err(mlua::Error::runtime(format!(
                     "BFG_GET_ATTR_BOOLEAN does not expose {attribute}"
                 ))),
