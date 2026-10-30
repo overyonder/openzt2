@@ -37,7 +37,7 @@ use award_and_progression_fact_types::{
 use fame_history_types::FameHistory;
 use fame_types::Fame;
 use profile_challenge_types::{
-    ProfileChallengeCompletionCounts, RecordCompletedChallengeRequest,
+    ProfileChallengeCompletionCounts, RecordCompletedChallengeRequest, TotalAnimalsReleasedCount,
     TotalEndangeredAnimalBirthCount,
 };
 use rating_types::ZooRating;
@@ -65,6 +65,7 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<FameHistory>()
             .init_resource::<ScenarioAwardPointTotal>()
             .init_resource::<TotalEndangeredAnimalBirthCount>()
+            .init_resource::<TotalAnimalsReleasedCount>()
             .init_resource::<ZooRating>()
             .init_resource::<UnlockedCatalogueDefinitionSet>()
             .init_resource::<ProfileChallengeCompletionCounts>()
@@ -140,6 +141,7 @@ impl Plugin for ProgressionPlugin {
                     fame_progression::update_fame_and_apply_authored_fame_unlocks,
                     profile_challenge_fact_recording::
                         record_endangered_animal_births_for_profile_challenges,
+                    profile_challenge_fact_recording::record_released_animals_for_zoo_fame,
                     research_execution::advance_research_availability_unlock_countdowns
                         .run_if(simulation_is_running),
                     research_execution::refresh_authored_research_availability,

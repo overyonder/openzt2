@@ -1,9 +1,12 @@
 use bevy::prelude::*;
 
 use super::{
-    award_and_progression_fact_types::ScenarioAwardPointTotal, fame_history_types::FameHistory,
-    fame_types::Fame, profile_challenge_types::TotalEndangeredAnimalBirthCount,
-    rating_types::ZooRating, unlock_types::UnlockedCatalogueDefinitionSet,
+    award_and_progression_fact_types::ScenarioAwardPointTotal,
+    fame_history_types::FameHistory,
+    fame_types::Fame,
+    profile_challenge_types::{TotalAnimalsReleasedCount, TotalEndangeredAnimalBirthCount},
+    rating_types::ZooRating,
+    unlock_types::UnlockedCatalogueDefinitionSet,
 };
 
 pub(super) fn reset_all_progression_state_when_game_session_ends(
@@ -12,6 +15,7 @@ pub(super) fn reset_all_progression_state_when_game_session_ends(
     mut unlocked_catalogue_definitions: ResMut<UnlockedCatalogueDefinitionSet>,
     mut scenario_award_point_total: ResMut<ScenarioAwardPointTotal>,
     mut total_endangered_animal_births: ResMut<TotalEndangeredAnimalBirthCount>,
+    mut total_animals_released: ResMut<TotalAnimalsReleasedCount>,
     mut fame_history: ResMut<FameHistory>,
 ) {
     *fame = Fame::default();
@@ -20,5 +24,6 @@ pub(super) fn reset_all_progression_state_when_game_session_ends(
     unlocked_catalogue_definitions.definition_count = 0;
     scenario_award_point_total.0 = 0;
     total_endangered_animal_births.0 = 0;
+    total_animals_released.0 = 0;
     fame_history.clear();
 }

@@ -1,11 +1,13 @@
 use bevy::prelude::*;
 
-use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::AnimalBorn;
+use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts::{
+    AnimalBorn, AnimalReleased,
+};
 use openzt2_zoo_state::animal_lifecycle::types::EndangeredSpecies;
 
 use super::profile_challenge_types::{
     CompletedChallengeFamily, ProfileChallengeCompletionCounts, RecordCompletedChallengeRequest,
-    TotalEndangeredAnimalBirthCount,
+    TotalAnimalsReleasedCount, TotalEndangeredAnimalBirthCount,
 };
 
 pub(super) fn record_endangered_animal_births_for_profile_challenges(
@@ -17,6 +19,15 @@ pub(super) fn record_endangered_animal_births_for_profile_challenges(
         if endangered_animals.contains(animal_birth.child) {
             total_endangered_animal_births.0 = total_endangered_animal_births.0.saturating_add(1);
         }
+    }
+}
+
+pub(super) fn record_released_animals_for_zoo_fame(
+    mut animal_releases: MessageReader<AnimalReleased>,
+    mut total_animals_released: ResMut<TotalAnimalsReleasedCount>,
+) {
+    for _ in animal_releases.read() {
+        total_animals_released.0 = total_animals_released.0.saturating_add(1);
     }
 }
 
