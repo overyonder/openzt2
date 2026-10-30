@@ -360,7 +360,10 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                 scenario,
                 &unlocks,
             ),
-            affordable: unlimited_cash.is_some() || cash.0 .0 >= definition.price_cents,
+            // Moving a placed object is free, so only purchases need the cash.
+            affordable: relocation.is_some()
+                || unlimited_cash.is_some()
+                || cash.0 .0 >= definition.price_cents,
             topology_valid,
             headroom_valid,
             prefab_ready: prefabs.get(&prefab_source.0).is_some_and(|prefab| {

@@ -17,6 +17,7 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
 use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
 use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
@@ -180,6 +181,13 @@ pub(super) fn evaluate_requested_object_placement_previews(
                 headroom_valid: permission.headroom_valid,
             },
         );
+        // A relocation keeps the purchase it was paid with; its preview costs nothing.
+        let validity = match validity {
+            PlacementValidity::Valid { .. } if relocation.is_some() => {
+                PlacementValidity::Valid { cost: Money(0) }
+            }
+            validity => validity,
+        };
         if preview.validity != validity {
             preview.validity = validity;
         }
