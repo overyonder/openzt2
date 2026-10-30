@@ -5,6 +5,7 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::gltf::Gltf;
 use bevy::gltf::GltfMesh;
 use bevy::prelude::*;
+use bevy::render::storage::ShaderBuffer;
 use bevy::tasks::ComputeTaskPool;
 
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
@@ -39,6 +40,7 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
     authored_materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
+    mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut terrain_index: ResMut<TerrainIndex>,
     chunks: Query<
         (Entity, &TerrainChunk),
@@ -154,9 +156,17 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
         let Some(projected_terrain_effect_passes) = terrain_effect_passes
             .into_iter()
             .map(|mut pass| {
-                (pass.replace_texture_asset_at_d3d9_stage(0, texture.clone())
-                    && pass.replace_texture_asset_at_d3d9_stage(1, detail_texture.clone()))
-                .then_some(pass)
+                pass.configure_for_authored_terrain_surface(
+                    texture.clone(),
+                    detail_texture.clone(),
+                )
+                .then_some(())?;
+                pass.clone_with_fixed_function_world_lighting_context(
+                    None,
+                    false,
+                    TERRAIN_RENDER_LAYER,
+                    &mut effect_uniform_buffers,
+                )
             })
             .collect::<Option<Vec<_>>>()
         else {
@@ -209,6 +219,7 @@ pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
     terrain_assets: Res<Assets<TerrainAsset>>,
     authored_materials: Res<Assets<MaterialAsset>>,
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
+    mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut chunks: Query<
         (
             Entity,
@@ -255,9 +266,18 @@ pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
         let Some(mut projected_materials) = selected_passes
             .into_iter()
             .map(|mut pass| {
-                (pass.replace_texture_asset_at_d3d9_stage(0, surface_image.0.clone())
-                    && pass.replace_texture_asset_at_d3d9_stage(1, detail_texture.clone()))
-                .then(|| effect_pass_materials.add(pass))
+                pass.configure_for_authored_terrain_surface(
+                    surface_image.0.clone(),
+                    detail_texture.clone(),
+                )
+                .then_some(())?;
+                let pass = pass.clone_with_fixed_function_world_lighting_context(
+                    None,
+                    false,
+                    TERRAIN_RENDER_LAYER,
+                    &mut effect_uniform_buffers,
+                )?;
+                Some(effect_pass_materials.add(pass))
             })
             .collect::<Option<Vec<_>>>()
         else {

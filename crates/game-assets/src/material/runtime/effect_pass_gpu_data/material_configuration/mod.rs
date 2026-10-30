@@ -259,6 +259,26 @@ impl EffectPassMaterial {
         true
     }
 
+    pub fn configure_for_authored_terrain_surface(
+        &mut self,
+        base_texture: Handle<Image>,
+        detail_texture: Handle<Image>,
+    ) -> bool {
+        if self.pipeline_specialization_key.vertex_shader != FIXED_FUNCTION_SHADER
+            || !self.replace_texture_asset_at_d3d9_stage(0, base_texture)
+            || !self.replace_texture_asset_at_d3d9_stage(1, detail_texture)
+        {
+            return false;
+        }
+        // The basic technique disables stage one; the detailed technique
+        // multiplies the surface by twice the terrain detail texture.
+        if self.fixed_function.values[5].x != 1.0 {
+            self.fixed_function.values[5].x = 5.0; // D3DTOP_MODULATE2X
+            self.dirty_fixed_function = true;
+        }
+        true
+    }
+
     pub fn configure_for_authored_single_texture_terrain_decal(
         &mut self,
         texture: Handle<Image>,

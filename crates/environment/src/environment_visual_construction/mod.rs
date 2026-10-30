@@ -1,3 +1,4 @@
+use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainGrid;
 use openzt2_game_data::world_definitions::environment::EnvironmentVisualFlags;
@@ -18,6 +19,7 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentat
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 
 use super::environment_presentation_types::{
     EnvironmentCameraRelativeVisual, EnvironmentModelVisual, EnvironmentSunPosition,
@@ -74,7 +76,9 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
                 Visibility::Inherited,
                 *member,
             ));
-            if !matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
+            if matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
+                child_commands.insert(RenderLayers::layer(TERRAIN_RENDER_LAYER));
+            } else {
                 child_commands.insert(EnvironmentRenderLayer {
                     layer: sample.layer,
                     clear_depth_after: sample
