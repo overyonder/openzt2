@@ -198,7 +198,7 @@ fn triangles_mesh(triangles: Vec<[Vec3; 3]>) -> Option<Mesh> {
 }
 
 /// Even-odd test against the unordered wall edges.
-fn inside_walls(point: Vec2, walls: &[[Vec2; 2]]) -> bool {
+pub(super) fn inside_walls(point: Vec2, walls: &[[Vec2; 2]]) -> bool {
     walls
         .iter()
         .filter(|[a, b]| {
