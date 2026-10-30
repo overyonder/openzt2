@@ -10,6 +10,7 @@ use openzt2_game_assets::localization::localization_precedence_index::Localizati
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::economy::authored_price_queries::find_authored_object_or_placeable_price;
+use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectRelocationSource;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_ui::animation::UiAnimationOrigin;
 use openzt2_ui::animation::UiShowHideAnimation;
@@ -31,7 +32,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     containers: Query<(&ComputedNode, &UiGlobalTransform), With<CursorMoneyContainer>>,
     preview_fragment_owners: Query<(), With<CursorMoneyPreviewFragmentOwner>>,
     mut spend_fragment_owners: Query<&mut CursorMoneySpendFragmentOwner>,
-    previews: Query<&ConstructionPreview>,
+    previews: Query<(&ConstructionPreview, Has<PlacedObjectRelocationSource>)>,
     animal_placements: Query<&AnimalSpeciesAwaitingHabitatPlacement>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -74,7 +75,9 @@ pub(super) fn project_cursor_money_text_position_and_animation(
         previews
             .single()
             .ok()
-            .and_then(|preview| match preview.validity {
+            .and_then(|(preview, relocating)| match preview.validity {
+                // Moving a placed object is free whether or not the spot is valid yet.
+                _ if relocating => Some(Money(0)),
                 PlacementValidity::Valid { cost } => Some(cost),
                 PlacementValidity::Pending | PlacementValidity::Invalid(_) => world_definitions
                     .and_then(|world_definitions| {
