@@ -118,6 +118,7 @@ pub struct StartingZooRecord {
     pub id: AssetId,
     pub profile: AssetId,
     pub map: AssetId,
+    pub environment: AssetId,
     /// Saved overhead-camera anchor in native `[x, y-up, z]` metres.
     pub camera_position_m: [f32; 3],
     /// Saved camera-root `[pitch, yaw, roll]` rotation in radians.

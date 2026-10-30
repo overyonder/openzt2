@@ -98,6 +98,7 @@ fn recovery_app() -> (App, Entity, EmptyArchiveFixture) {
 fn fixture_start_document() -> WorldScenarioDocumentAsset {
     let mut document = photo_fixture_catalogue();
     document.starting_zoos.push(StartingZooRecord {
+        environment: SCENARIO,
         id: SCENARIO,
         profile: PROFILE,
         map: SCENARIO,

@@ -8,6 +8,7 @@ pub mod fence_terrain_endpoint_skew_presentation;
 mod gate_automatic_operation;
 mod gate_state_application;
 pub mod path_curb_presentation;
+mod path_placement_highlight_presentation;
 mod path_support_hydration;
 mod path_surface_presentation;
 mod tank_boundary_projection;
@@ -89,6 +90,7 @@ impl Plugin for TopologyPlugin {
         app.init_resource::<TopologyIndex>()
             .init_resource::<TopologyGrid>()
             .init_resource::<ElevatedPathSurfacePresentationAssets>()
+            .init_resource::<path_placement_highlight_presentation::PathPlacementHighlightAssets>()
             .add_message::<PlaceFence>()
             .add_message::<PlacePath>()
             .add_message::<SetGateState>()
@@ -137,6 +139,11 @@ impl Plugin for TopologyPlugin {
                     tank_wall_rail_presentation::present_changed_tank_wall_rails,
                 )
                     .chain()
+                    .in_set(GameSet::Presentation),
+            )
+            .add_systems(
+                Update,
+                path_placement_highlight_presentation::present_ground_path_placement_highlights
                     .in_set(GameSet::Presentation),
             )
             .add_systems(

@@ -378,7 +378,7 @@ pub(super) fn calculate_path_construction_plan(
     Ok((cells, Money(cost)))
 }
 
-fn calculate_ground_path_construction_cells(
+pub(super) fn calculate_ground_path_construction_cells(
     from: IVec3,
     to: IVec3,
     width_cm: u16,

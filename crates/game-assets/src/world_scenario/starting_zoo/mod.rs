@@ -61,6 +61,7 @@ pub(super) fn lower(
         id: AssetId::from_key(&format!("start:{map}")),
         profile: AssetId::default(),
         map: AssetId::from_key(&map),
+        environment: AssetId::from_virtual_path(required(document, world, "environment")?),
         camera_position_m: convert_source_z_up_vector_to_bevy_y_up_coordinates([
             required_f32(document, camera, "x")?,
             required_f32(document, camera, "y")?,

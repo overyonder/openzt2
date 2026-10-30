@@ -179,7 +179,10 @@ fn select_scenario_environment_and_biome(
         .campaign_scenario(scenario_identifier)
         .map(|scenario| scenario.map)
         .unwrap_or(scenario_identifier);
-    scenarios
-        .map(map_identifier)
-        .map(|map| (map.environment, map.biome))
+    scenarios.map(map_identifier).map(|map| {
+        let environment = scenarios
+            .start(map.starting_zoo)
+            .map_or(map.environment, |start| start.environment);
+        (environment, map.biome)
+    })
 }

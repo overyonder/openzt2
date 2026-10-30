@@ -89,9 +89,11 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
             {
                 child_commands.insert(EnvironmentCameraRelativeVisual::sky_layer(sample.scale));
             }
-            if !sample.flags.contains_all(
-                openzt2_game_data::world_definitions::environment::EnvironmentVisualFlags::USE_WORLD_LIGHTS,
-            ) {
+            if !matches!(&sample.kind, EnvironmentVisualKind::Skirt)
+                && !sample
+                    .flags
+                    .contains_all(EnvironmentVisualFlags::USE_WORLD_LIGHTS)
+            {
                 child_commands.insert(PrefabFixedFunctionWorldLightingPolicy {
                     enabled: false,
                     preserve_authored_material_lighting: false,

@@ -96,6 +96,7 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
 
         let mut catalogue = photo_fixture_catalogue();
         catalogue.starting_zoos.push(StartingZooRecord {
+            environment: SCENARIO,
             id: SCENARIO,
             profile: PROFILE,
             map: SCENARIO,

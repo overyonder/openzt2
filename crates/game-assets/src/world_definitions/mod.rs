@@ -3,6 +3,8 @@
 pub mod behavior_auxiliary_source_document_lowering;
 pub mod behavior_auxiliary_source_types;
 pub mod lower;
+pub mod path_placement_highlight_asset;
+mod path_placement_highlight_loading;
 pub mod timing;
 pub mod world_definition_asset_loading;
 pub mod world_definition_asset_set_refresh_and_indexing;
@@ -30,6 +32,8 @@ pub struct WorldDefinitionAssetPlugin;
 impl Plugin for WorldDefinitionAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<WorldDefinitionAsset>()
+            .init_asset::<path_placement_highlight_asset::PathPlacementHighlightAsset>()
+            .init_asset_loader::<path_placement_highlight_loading::PathPlacementHighlightLoader>()
             .init_asset_loader::<WorldDefinitionAssetLoader>()
             .init_resource::<WorldDefinitions>()
             .add_systems(
