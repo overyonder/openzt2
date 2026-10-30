@@ -21,9 +21,9 @@ pub(super) enum LooseWasteSnapshotKind {
     Litter,
 }
 
-/// Worn condition, bin contents and animal waste-production deadlines,
+/// Worn condition, bin contents, compost levels and animal waste-production deadlines,
 /// restored onto the entity with the same persistent identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MaintainedObjectSnapshotRecord {
     pub persistent_identifier: u64,
@@ -32,6 +32,9 @@ pub(super) struct MaintainedObjectSnapshotRecord {
     pub contained_waste: Option<[u16; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub next_waste_production_tick: Option<u64>,
+    /// A compost bin's `f_PooLevel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compost_poo_level: Option<f32>,
 }
 
 /// The Maintenance section. Saves before object state hold a bare waste array.

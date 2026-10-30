@@ -194,12 +194,14 @@ fn object_condition_and_bin_contents_round_trip_beside_legacy_waste_arrays() {
                 condition_permille: Some(640),
                 contained_waste: None,
                 next_waste_production_tick: None,
+                compost_poo_level: None,
             },
             MaintainedObjectSnapshotRecord {
                 persistent_identifier: 9,
                 condition_permille: Some(1_000),
                 contained_waste: Some([3, 10]),
                 next_waste_production_tick: None,
+                compost_poo_level: Some(35.0),
             },
         ],
     };
@@ -251,13 +253,14 @@ fn litter_and_animal_waste_round_trip_with_their_distinct_cleanup_kinds() {
 }
 
 #[test]
-fn maintained_object_state_and_animal_waste_deadlines_survive_entity_remapping() {
+fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_remapping() {
     use super::maintenance_snapshot_application::apply_maintained_object_records;
     use super::maintenance_snapshot_capture::{
         capture_maintained_object_records, MaintainedObjectSnapshotEntities,
     };
     use openzt2_zoo_state::maintenance::maintenance_types::{
-        AnimalWasteProductionSchedule, FacilityContainedWaste, MaintainableObjectConditionPermille,
+        AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
+        MaintainableObjectConditionPermille,
     };
 
     let (mut source, _) = fixture();
@@ -275,6 +278,9 @@ fn maintained_object_state_and_animal_waste_deadlines_survive_entity_remapping()
             next_production_tick: 293,
         },
     ));
+    source
+        .world_mut()
+        .spawn((PersistentId(11), CompostPooLevel(35.0)));
     let mut capture = SystemState::<MaintainedObjectSnapshotEntities>::new(source.world_mut());
     let objects = capture_maintained_object_records(&capture.get(source.world()).unwrap());
     let snapshot = MaintenanceSnapshot {
@@ -303,7 +309,8 @@ fn maintained_object_state_and_animal_waste_deadlines_survive_entity_remapping()
         ))
         .id();
     let animal = destination.world_mut().spawn(PersistentId(9)).id();
-    let identities = std::collections::BTreeMap::from([(7, facility), (9, animal)]);
+    let compost = destination.world_mut().spawn(PersistentId(11)).id();
+    let identities = std::collections::BTreeMap::from([(7, facility), (9, animal), (11, compost)]);
     let mut commands = SystemState::<Commands>::new(destination.world_mut());
     apply_maintained_object_records(
         &mut commands.get_mut(destination.world_mut()).unwrap(),
@@ -343,6 +350,7 @@ fn maintenance_encoder_rejects_a_combined_record_count_the_decoder_cannot_read()
                 condition_permille: Some(1_000),
                 contained_waste: None,
                 next_waste_production_tick: None,
+                compost_poo_level: None,
             })
             .collect(),
     };
