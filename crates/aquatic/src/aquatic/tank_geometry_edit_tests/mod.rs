@@ -206,7 +206,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         area: 4.0,
         volume: 8.0,
     };
-    install_flat_terrain(&mut app);
+    install_flat_terrain(&mut app, 5);
     let corners = [
         IVec3::ZERO,
         IVec3::new(2, 0, 0),
@@ -264,13 +264,13 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
     (app, tank, other)
 }
 
-fn install_flat_terrain(app: &mut App) {
+pub(super) fn install_flat_terrain(app: &mut App, side: u16) {
     let asset = app
         .world_mut()
         .resource_mut::<Assets<TerrainAsset>>()
         .add(terrain_test_asset(TerrainGrid {
-            width: 5,
-            height: 5,
+            width: u32::from(side),
+            height: u32::from(side),
             sector_columns: 1,
             sector_rows: 1,
             units: TerrainUnits {
@@ -303,7 +303,7 @@ fn install_flat_terrain(app: &mut App) {
                     height_is_linked: false,
                     has_child_height_link: false,
                 };
-                25
+                usize::from(side) * usize::from(side)
             ],
             water_regions: Vec::new(),
             waterfall: None,
@@ -311,7 +311,7 @@ fn install_flat_terrain(app: &mut App) {
                 TerrainSlopeTile {
                     uses_alternate_diagonal: false,
                 };
-                16
+                usize::from(side - 1) * usize::from(side - 1)
             ],
         }));
     let chunk = app
@@ -322,13 +322,13 @@ fn install_flat_terrain(app: &mut App) {
             asset,
             origin: Vec2::ZERO,
             spacing_m: 1.0,
-            side: 5,
+            side,
         })
         .id();
     app.insert_resource(TerrainIndex {
         chunks: [(IVec2::ZERO, chunk)].into_iter().collect(),
         origin: Vec2::ZERO,
-        chunk_span_m: 4.0,
+        chunk_span_m: f32::from(side - 1),
     });
 }
 

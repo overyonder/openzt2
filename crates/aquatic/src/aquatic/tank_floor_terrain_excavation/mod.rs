@@ -1,9 +1,11 @@
 //! Keeps the terrain inside each tank's walls at the tank floor, so the floor
 //! is the ground seen through the glass and under the water.
 
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
@@ -23,24 +25,30 @@ use super::tank_presentation::inside_walls;
 #[derive(Component)]
 pub(super) struct TankFloorExcavation;
 
-/// Whether `point` lies inside the walls and on none of them; samples on a
-/// wall keep the outside ground.
-pub(super) fn strictly_inside_walls(point: Vec2, walls: &[[Vec2; 2]]) -> bool {
+/// Whether `point` lies inside the walls and more than `margin` from each.
+/// Samples within one terrain spacing of a wall keep the outside ground:
+/// walls and samples lie on different grids, so the terrain triangles crossing
+/// a wall would otherwise poke up through the floor beside the glass.
+pub(super) fn inside_walls_beyond(point: Vec2, walls: &[[Vec2; 2]], margin: f32) -> bool {
     inside_walls(point, walls)
         && walls.iter().all(|[a, b]| {
             let along = (point - *a).dot(*b - *a) / (*b - *a).length_squared().max(f32::EPSILON);
-            point.distance(*a + (*b - *a) * along.clamp(0.0, 1.0)) > 1.0e-3
+            point.distance(*a + (*b - *a) * along.clamp(0.0, 1.0)) > margin
         })
 }
 
 /// Moves the terrain inside tanks whose geometry changed, including new and
 /// restored tanks, to their floor height. Saved terrain already matches, so
-/// restoring a tank changes nothing.
-#[allow(clippy::type_complexity)]
+/// restoring a tank changes nothing. A removed tank is filled back to the mean
+/// ground under its walls.
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 pub(super) fn excavate_changed_tank_floors(
     mut commands: Commands,
     grid: Res<TopologyGrid>,
-    tanks: Query<(&TankGeometry, &HabitatRegion), (With<Tank>, Changed<TankGeometry>)>,
+    tanks: Query<(Entity, &TankGeometry, &HabitatRegion), (With<Tank>, Changed<TankGeometry>)>,
+    mut removed: RemovedComponents<Tank>,
+    mut dug: Local<HashMap<Entity, (Vec<[Vec2; 2]>, i16)>>,
+    ground: TankWallGroundSampling,
     fences: Query<&FenceEdge>,
     nodes: Query<&TopologyNode>,
     chunks: Query<(
@@ -50,26 +58,31 @@ pub(super) fn excavate_changed_tank_floors(
     )>,
     assets: Res<Assets<TerrainAsset>>,
 ) {
-    let floors = tanks
-        .iter()
-        .filter_map(|(geometry, region)| {
-            let walls = region
-                .boundary_fence_entities
-                .iter()
-                .map(|fence| {
-                    let edge = fences.get(*fence).ok()?;
-                    let [a, b] = [edge.a, edge.b].map(|node| {
-                        nodes
-                            .get(node)
-                            .map(|node| grid.cell_translation(node.cell).xz())
-                    });
-                    Some([a.ok()?, b.ok()?])
-                })
-                .collect::<Option<Vec<_>>>()?;
-            let height_cm = (geometry.floor_height * 100.0).round() as i16;
-            Some((walls, height_cm))
-        })
+    let mut floors = removed
+        .read()
+        .filter_map(|tank| dug.remove(&tank))
         .collect::<Vec<_>>();
+    for (tank, geometry, region) in &tanks {
+        let Some((walls, wall_ground)) = region
+            .boundary_fence_entities
+            .iter()
+            .map(|fence| {
+                let edge = fences.get(*fence).ok()?;
+                let [a, b] = [edge.a, edge.b].map(|node| nodes.get(node).map(|node| node.cell));
+                let [a, b] = [a.ok()?, b.ok()?];
+                Some((
+                    [a, b].map(|cell| grid.cell_translation(cell).xz()),
+                    ground.ground_height_at_topology_cell(a)?,
+                ))
+            })
+            .collect::<Option<(Vec<_>, Vec<_>)>>()
+        else {
+            continue;
+        };
+        let mean_ground = wall_ground.iter().sum::<f32>() / wall_ground.len().max(1) as f32;
+        dug.insert(tank, (walls.clone(), (mean_ground * 100.0).round() as i16));
+        floors.push((walls, (geometry.floor_height * 100.0).round() as i16));
+    }
     if floors.is_empty() {
         return;
     }
@@ -99,7 +112,7 @@ pub(super) fn excavate_changed_tank_floors(
             for z in first.y as u32..=end.y as u32 {
                 for x in first.x as u32..=end.x as u32 {
                     let point = chunk.origin + UVec2::new(x, z).as_vec2() * chunk.spacing_m;
-                    if strictly_inside_walls(point, walls) {
+                    if inside_walls_beyond(point, walls, chunk.spacing_m) {
                         targets.push((UVec2::new(x, z), *height_cm));
                     }
                 }
