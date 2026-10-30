@@ -44,11 +44,12 @@ pub struct WorldDefinitionAsset {
 }
 
 impl WorldDefinitionAsset {
-    pub fn contains_ground_path_surface_definitions(&self) -> bool {
+    pub fn affects_ground_path_surface_projection(&self) -> bool {
         self.document
             .paths
             .iter()
             .any(|definition| !definition.elevated)
+            || !self.document.fences.is_empty()
     }
 
     pub fn automatic_placement_definition_needs_source_lowered_bounds(

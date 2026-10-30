@@ -3,9 +3,9 @@ use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
-use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
-use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use crate::topology::topology_presentation_types::TopologyPresentation;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::gate_operation_types::Gate;

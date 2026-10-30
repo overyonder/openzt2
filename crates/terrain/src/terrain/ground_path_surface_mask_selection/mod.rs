@@ -17,7 +17,7 @@ pub(super) fn select_authored_ground_path_surface_mask_textures(
     centre: IVec3,
     width_cells: i32,
     curb: AssetId,
-    curb_edges: &HashMap<(AssetId, EdgeKey), (IVec3, IVec3)>,
+    curb_edges: &HashMap<(AssetId, EdgeKey), (IVec3, IVec3, IVec3)>,
 ) -> Option<[Option<GroundPathSurfaceMaskTextureSelection>; 2]> {
     let corner_offsets = match direction {
         0 => (
@@ -49,10 +49,24 @@ pub(super) fn select_authored_ground_path_surface_mask_textures(
             6 => IVec3::new(-width_cells / 2, 0, 0),
             _ => IVec3::ZERO,
         };
-    if let Some((first_endpoint, _)) = curb_edges.get(&(curb, boundary)) {
+    let fallback = if direction_cell_is_covered_by_adjacent_curb_pair(
+        direction,
+        centre,
+        width_cells,
+        curb,
+        curb_edges,
+    ) {
+        [None, None]
+    } else {
+        single_ground_path_surface_mask_texture_selection(
+            direction_cell,
+            unconnected_ground_path_surface_mask(direction)?,
+        )
+    };
+    if let Some((first_endpoint, _, next_endpoint)) = curb_edges.get(&(curb, boundary)) {
         let vector_index = classify_authored_active_fence_endpoint_vector_index(
-            (*first_endpoint - direction_cell).xy(),
-            width_cells / 2,
+            (*next_endpoint - *first_endpoint).xy(),
+            width_cells * 2,
         );
         return Some(
             vector_index
@@ -64,16 +78,10 @@ pub(super) fn select_authored_ground_path_surface_mask_textures(
                         width_cells,
                     )
                 })
-                .unwrap_or_else(|| {
-                    single_ground_path_surface_mask_texture_selection(
-                        direction_cell,
-                        unconnected_ground_path_surface_mask(direction)
-                            .expect("validated cardinal ground-path direction"),
-                    )
-                }),
+                .unwrap_or(fallback),
         );
     }
-    let Some((first_endpoint, second_endpoint)) =
+    let Some((first_endpoint, corner, next_endpoint)) =
         resolve_authored_neighbor_projection_curb_edge_by_orientation(
             direction,
             centre,
@@ -84,22 +92,61 @@ pub(super) fn select_authored_ground_path_surface_mask_textures(
             curb_edges,
         )
     else {
-        return Some(single_ground_path_surface_mask_texture_selection(
-            direction_cell,
-            unconnected_ground_path_surface_mask(direction)?,
-        ));
+        return Some(fallback);
     };
+    if first_endpoint == boundary.lo || first_endpoint == boundary.hi {
+        return Some(fallback);
+    }
     let direction_pair_code = classify_authored_fence_direction_pair_code(
-        (first_endpoint - centre).xy().signum(),
-        (second_endpoint - centre).xy().signum(),
+        (corner - first_endpoint).xy().signum(),
+        (next_endpoint - corner).xy().signum(),
     );
-    let selected = direction_pair_code
-        .and_then(|code| numbered_authored_ground_path_surface_mask(direction, code))
-        .or_else(|| unconnected_ground_path_surface_mask(direction))?;
-    Some(single_ground_path_surface_mask_texture_selection(
-        direction_cell,
-        selected,
-    ))
+    Some(
+        direction_pair_code
+            .and_then(|code| numbered_authored_ground_path_surface_mask(direction, code))
+            .map_or(fallback, |selected| {
+                single_ground_path_surface_mask_texture_selection(direction_cell, selected)
+            }),
+    )
+}
+
+fn direction_cell_is_covered_by_adjacent_curb_pair(
+    direction: u8,
+    centre: IVec3,
+    width_cells: i32,
+    curb: AssetId,
+    curves: &HashMap<(AssetId, EdgeKey), (IVec3, IVec3, IVec3)>,
+) -> bool {
+    let pairs = match direction {
+        0 => [((0, 1, 5), (0, 0, 6)), ((0, 0, 2), (0, 1, 3))],
+        2 => [((1, 0, 7), (0, 0, 0)), ((1, 0, 5), (0, 0, 4))],
+        4 => [((0, -1, 7), (0, 0, 6)), ((0, 0, 2), (0, -1, 1))],
+        6 => [((-1, 0, 1), (0, 0, 0)), ((-1, 0, 3), (0, 0, 4))],
+        _ => return false,
+    };
+    let origin = centre - IVec3::new(width_cells, width_cells, 0);
+    let edge = |(x, y, heading)| {
+        let cell = origin + IVec3::new(x, y, 0) * (width_cells * 2);
+        let (a, b) = match heading {
+            0 => (IVec3::Y, IVec3::new(1, 1, 0)),
+            2 => (IVec3::X, IVec3::new(1, 1, 0)),
+            4 => (IVec3::ZERO, IVec3::X),
+            6 => (IVec3::ZERO, IVec3::Y),
+            1 | 5 => (IVec3::ZERO, IVec3::new(1, 1, 0)),
+            3 | 7 => (IVec3::X, IVec3::Y),
+            _ => return None,
+        };
+        let key = EdgeKey::new(cell + a * (width_cells * 2), cell + b * (width_cells * 2))?;
+        curves.get(&(curb, key))
+    };
+    pairs.into_iter().any(|(first, second)| {
+        let (Some(&(a, corner, b)), Some(&(other_a, other_corner, other_b))) =
+            (edge(first), edge(second))
+        else {
+            return false;
+        };
+        corner == other_corner && a == other_b && b == other_a
+    })
 }
 
 fn resolve_authored_neighbor_projection_curb_edge_by_orientation(
@@ -109,8 +156,8 @@ fn resolve_authored_neighbor_projection_curb_edge_by_orientation(
     corner_offsets: (IVec3, IVec3),
     curb: AssetId,
     boundary: EdgeKey,
-    curb_edges: &HashMap<(AssetId, EdgeKey), (IVec3, IVec3)>,
-) -> Option<(IVec3, IVec3)> {
+    curb_edges: &HashMap<(AssetId, EdgeKey), (IVec3, IVec3, IVec3)>,
+) -> Option<(IVec3, IVec3, IVec3)> {
     let probes = match direction {
         0 => [
             (corner_offsets.0, IVec2::new(-1, 1)),
@@ -140,7 +187,10 @@ fn resolve_authored_neighbor_projection_curb_edge_by_orientation(
                     if *definition != curb || *key == boundary {
                         return None;
                     }
-                    let (first, second) = *endpoints;
+                    let (first, second) = (key.lo, key.hi);
+                    if first.x == second.x || first.y == second.y {
+                        return None;
+                    }
                     let touches_probe_corner = first == corner || second == corner;
                     let doubled_midpoint_offset =
                         (first + second - direction_cell * 2).xy().signum();
@@ -153,15 +203,15 @@ fn resolve_authored_neighbor_projection_curb_edge_by_orientation(
 
 fn classify_authored_active_fence_endpoint_vector_index(
     endpoint_offset: IVec2,
-    direction_cell_offset: i32,
+    segment_span_cells: i32,
 ) -> Option<u8> {
-    if direction_cell_offset == 0
-        || endpoint_offset.x % direction_cell_offset != 0
-        || endpoint_offset.y % direction_cell_offset != 0
+    if segment_span_cells == 0
+        || endpoint_offset.x % segment_span_cells != 0
+        || endpoint_offset.y % segment_span_cells != 0
     {
         return None;
     }
-    match endpoint_offset / direction_cell_offset {
+    match endpoint_offset / segment_span_cells {
         IVec2 { x: -1, y: 2 } => Some(0),
         IVec2 { x: -1, y: 1 } => Some(1),
         IVec2 { x: -1, y: -1 } => Some(2),
@@ -201,11 +251,11 @@ fn select_authored_active_fence_ground_path_surface_masks(
         (2, 5) => ((9, 1), Some((10, 3))),
         (2, 6) => ((9, 1), Some((10, 1))),
         (2, 7) => ((9, 1), Some((11, 1))),
-        (4, 1) => ((2, 1), None),
+        (4, 1) => ((2, 2), None),
         (4, 2) => ((0, 2), Some((1, 2))),
         (4, 5) => ((2, 3), None),
         (4, 6) => ((0, 2), Some((1, 3))),
-        (4, 8) => ((4, 1), None),
+        (4, 8) => ((4, 2), None),
         (4, 9) => ((0, 2), Some((3, 2))),
         (4, 10) => ((4, 3), None),
         (4, 11) => ((0, 2), Some((3, 3))),
@@ -319,7 +369,8 @@ fn numbered_authored_ground_path_surface_mask(
         (0, 15) => (6, 0),
         (0, 17) => (5, 1),
         (0, 19) => (6, 1),
-        (0, 25 | 26) => (8, 0),
+        (0, 25) => (8, 1),
+        (0, 26) => (8, 0),
         (0, 28) => (7, 1),
         (2, 21) => (16, 3),
         (2, 13) => (14, 1),

@@ -14,8 +14,11 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 
-use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
-use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
+use openzt2_zoo_state::topology::ground_path_boundary_queries::{
+    ground_path_tile_triangles, ground_path_triangle_curb_boundary,
+};
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
@@ -190,7 +193,11 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     let mut owners = HashMap::<(AssetId, IVec3), Entity>::new();
     let mut triangles = HashSet::<IVec3>::new();
     for path in &path_rows {
-        triangles.extend(ground_path_tile_triangles(path));
+        triangles.extend(ground_path_tile_triangles(
+            path.cell,
+            path.centre_cell,
+            path.width_cells,
+        ));
         owners
             .entry((path.definition, path.cell))
             .and_modify(|owner| {
@@ -218,7 +225,7 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
         .iter()
         .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&path.owner))
         .flat_map(|path| {
-            ground_path_tile_triangles(path)
+            ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
                 .flat_map(|triangle| {
                     ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
                 })
@@ -351,45 +358,6 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
         }
         commands.entity(entity).insert(PathCurbsHydrated { root });
     }
-}
-
-/// Triangle cells a tile covers: native ground paths store one of the four
-/// triangles between a square's centre and its sides; a tile on the centre
-/// covers the whole square.
-fn ground_path_tile_triangles(
-    path: &GroundPathMacroCellCurbPresentationRecord,
-) -> impl Iterator<Item = IVec3> {
-    let half = path.width_cells / 2;
-    let whole = path.cell.xy() == path.centre_cell.xy();
-    let cell = path.cell;
-    let centre = path.centre_cell;
-    [IVec3::Y, IVec3::X, -IVec3::Y, -IVec3::X]
-        .into_iter()
-        .map(move |side| centre + side * half)
-        .filter(move |triangle| whole || *triangle == cell)
-}
-
-/// Exposed curb edges of one path triangle, ordered with the outside on the
-/// right. A triangle's outer side borders the facing triangle of the next
-/// square. Two adjacent triangles of one square cut it diagonally; the
-/// counter-clockwise one of the pair owns that corner-to-corner curb.
-fn ground_path_triangle_curb_boundary(
-    triangles: &HashSet<IVec3>,
-    centre: IVec3,
-    triangle: IVec3,
-) -> impl Iterator<Item = (IVec3, IVec3)> {
-    let side = (triangle - centre).signum();
-    let half = (triangle - centre).abs().max_element();
-    let width = half * 2;
-    let ccw = IVec3::new(-side.y, side.x, 0);
-    let occupied = |direction: IVec3| triangles.contains(&(centre + direction * half));
-    let outer = (!triangles.contains(&(centre + side * (width * 2 - half))))
-        .then(|| (centre + (side - ccw) * width, centre + (side + ccw) * width));
-    // A lone triangle or three of four leave half-diagonals, which
-    // no authored curb fits; they stay open.
-    let diagonal = (occupied(-ccw) && !occupied(ccw) && !occupied(-side))
-        .then(|| (centre + (side + ccw) * width, centre - (side + ccw) * width));
-    outer.into_iter().chain(diagonal)
 }
 
 #[cfg(test)]

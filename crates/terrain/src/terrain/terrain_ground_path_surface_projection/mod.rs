@@ -10,6 +10,11 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
+use openzt2_zoo_state::topology::ground_path_boundary_queries::ground_path_tile_triangles;
+use openzt2_zoo_state::topology::ground_path_boundary_queries::ground_path_triangle_curb_boundary;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
+use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentShape;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
@@ -28,7 +33,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 pub struct GroundPathSurfaceImageDependencies {
     images: HashMap<AssetId, Handle<Image>>,
     used_by_projected_paths: HashSet<AssetId>,
-    definition_assets_containing_ground_path_surfaces:
+    definition_assets_affecting_ground_path_surfaces:
         HashSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
 }
 
@@ -145,20 +150,20 @@ pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
             | AssetEvent::LoadedWithDependencies { id } => {
                 if definitions
                     .get(*id)
-                    .is_some_and(WorldDefinitionAsset::contains_ground_path_surface_definitions)
+                    .is_some_and(WorldDefinitionAsset::affects_ground_path_surface_projection)
                 {
                     dependencies
-                        .definition_assets_containing_ground_path_surfaces
+                        .definition_assets_affecting_ground_path_surfaces
                         .insert(*id);
                     true
                 } else {
                     dependencies
-                        .definition_assets_containing_ground_path_surfaces
+                        .definition_assets_affecting_ground_path_surfaces
                         .remove(id)
                 }
             }
             AssetEvent::Removed { id } | AssetEvent::Unused { id } => dependencies
-                .definition_assets_containing_ground_path_surfaces
+                .definition_assets_affecting_ground_path_surfaces
                 .remove(id),
         };
         changed || relevant_definition_changed
@@ -262,7 +267,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
         .round()
         .as_ivec2()
         .extend(0);
-    let curb_edges = fences
+    let explicit_segments = fences
         .iter()
         .filter_map(|edge| {
             let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
@@ -270,7 +275,75 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             };
             let a = source_grid_offset + IVec3::new(a.cell.x, -a.cell.y, a.cell.z);
             let b = source_grid_offset + IVec3::new(b.cell.x, -b.cell.y, b.cell.z);
-            EdgeKey::new(a, b).map(|key| ((edge.definition, key), (a, b)))
+            Some((edge.definition, a, b))
+        })
+        .collect::<Vec<_>>();
+    let explicit_edges = explicit_segments
+        .iter()
+        .filter_map(|&(definition, a, b)| Some((definition, EdgeKey::new(a, b)?)))
+        .collect::<HashSet<_>>();
+    let path_layouts = paths
+        .iter()
+        .filter_map(|(_, path)| {
+            let definition = definitions.find_path(path.definition)?;
+            if definition.elevated {
+                return None;
+            }
+            let cell = source_grid_offset + IVec3::new(path.cell.x, -path.cell.y, path.cell.z);
+            let (centre, width, _) = calculate_snapped_ground_path_layout(
+                cell,
+                definition.width_cm,
+                definitions.topology_cell_size_cm(),
+            )?;
+            Some((AssetId(definition.curb.0), cell, centre, width))
+        })
+        .collect::<Vec<_>>();
+    let triangles = path_layouts
+        .iter()
+        .flat_map(|&(_, cell, centre, width)| ground_path_tile_triangles(cell, centre, width))
+        .collect::<HashSet<_>>();
+    if path_layouts
+        .iter()
+        .any(|&(curb, ..)| curb != AssetId::default() && definitions.find_fence(curb).is_none())
+    {
+        return;
+    }
+    let mut segments = path_layouts
+        .iter()
+        .flat_map(|&(curb, cell, centre, width)| {
+            let triangles = &triangles;
+            ground_path_tile_triangles(cell, centre, width).flat_map(move |triangle| {
+                ground_path_triangle_curb_boundary(triangles, centre, triangle)
+                    .map(move |(a, b)| (curb, a, b))
+            })
+        })
+        .filter(|&(curb, a, b)| {
+            !EdgeKey::new(a, b).is_some_and(|key| explicit_edges.contains(&(curb, key)))
+        })
+        .collect::<Vec<_>>();
+    segments.extend(explicit_segments);
+    // Duplicate path records must not turn one corner into a junction.
+    let mut seen = HashSet::new();
+    segments.retain(|&(curb, a, b)| EdgeKey::new(a, b).is_some_and(|key| seen.insert((curb, key))));
+    let partners = select_reciprocal_fence_curve_partners(&segments);
+    let curb_edges = segments
+        .iter()
+        .zip(partners)
+        .filter_map(|(&(curb, a, b), partner)| {
+            let (outer, corner, next) = partner?;
+            let definition = definitions.find_fence(curb)?;
+            let selected = select_authored_fence_segment_prefab_for_adjacent_topology(
+                definition,
+                outer,
+                corner,
+                Some(next),
+            );
+            (selected.shape != FenceSegmentShape::Straight).then(|| {
+                (
+                    (curb, EdgeKey::new(a, b).expect("validated curb edge")),
+                    (outer, corner, next),
+                )
+            })
         })
         .collect::<HashMap<_, _>>();
     let mut overlays = paths

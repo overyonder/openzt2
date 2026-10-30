@@ -4,7 +4,6 @@ mod fence_anchor_cursor_presentation;
 pub mod fence_anchor_press_diagnostic_types;
 mod fence_construction_preview_presentation;
 mod fence_segment_prefab_refresh;
-mod fence_segment_prefab_selection;
 pub mod fence_terrain_endpoint_skew_presentation;
 mod gate_automatic_operation;
 mod gate_state_application;

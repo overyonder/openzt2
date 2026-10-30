@@ -16,14 +16,14 @@ use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use crate::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
-use crate::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use crate::topology::topology_construction_planning::calculate_fence_construction_plan;
 use crate::topology::topology_construction_planning::{
     calculate_gate_replacement_plan, fence_definition_is_gate, GateHostEdges,
 };
 use crate::topology::topology_construction_preview_types::FencePreview;
 use crate::topology::topology_presentation_types::TopologyPresentation;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored_fence_segment_prefab_for_adjacent_topology;
+use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_reciprocal_fence_curve_partners;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceTerrainEndpointPresentationCells;
 use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;

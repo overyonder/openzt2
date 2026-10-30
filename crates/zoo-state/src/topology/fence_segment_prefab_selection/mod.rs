@@ -2,14 +2,14 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::fences_and_gates::FenceDefinition;
 use openzt2_game_data::AssetId;
 
-use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentPrefab;
-use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentShape;
+use crate::topology::fence_segment_presentation_types::FenceSegmentPrefab;
+use crate::topology::fence_segment_presentation_types::FenceSegmentShape;
 
 /// Finds the reciprocal, unambiguous corner pairing used by the authored
 /// half-curve meshes. Both meshes run from their outer endpoint to the shared
 /// corner. A straight continuation is not a curve candidate; competing turns
 /// at either end leave the segment straight.
-pub(super) fn select_reciprocal_fence_curve_partners(
+pub fn select_reciprocal_fence_curve_partners(
     segments: &[(AssetId, IVec3, IVec3)],
 ) -> Vec<Option<(IVec3, IVec3, IVec3)>> {
     let mut endpoints = bevy::platform::collections::HashMap::<_, Vec<usize>>::new();
@@ -79,7 +79,7 @@ enum AuthoredFenceSegmentTurn {
 /// current segment orientation first (`fence90` or `fence45`) and the corner's
 /// interior angle second. An absent optional curve falls back to the matching
 /// straight segment from the same fence definition.
-pub(super) fn select_authored_fence_segment_prefab_for_adjacent_topology(
+pub fn select_authored_fence_segment_prefab_for_adjacent_topology(
     definition: &FenceDefinition,
     first_cell: IVec3,
     second_cell: IVec3,
