@@ -21,11 +21,8 @@ use openzt2_zoo_state::topology::ground_path_boundary_queries::{
 };
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
-use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 
 #[derive(Clone, Copy)]
 struct GroundPathMacroCellCurbPresentationRecord {
@@ -51,6 +48,7 @@ struct GroundPathConnectedCurbBoundarySegment {
 #[derive(Component)]
 pub struct PathCurbsHydrated {
     root: Option<Entity>,
+    segments: Vec<(IVec3, IVec3, AssetId, bool)>,
 }
 
 impl PathCurbsHydrated {
@@ -157,10 +155,10 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
     terrain_index: Res<TerrainIndex>,
     paths: Query<(Entity, &PathTile, &Transform, Option<&PathCurbsHydrated>)>,
     paths_awaiting_curb_hydration: Query<(), (With<PathTile>, Without<PathCurbsHydrated>)>,
-    fences: Query<&FenceEdge>,
-    nodes: Query<&TopologyNode>,
+    mut topology_changed: MessageReader<TopologyChanged>,
 ) {
-    if paths_awaiting_curb_hydration.is_empty() {
+    let boundary_changed = topology_changed.read().count() != 0;
+    if paths_awaiting_curb_hydration.is_empty() && !boundary_changed {
         return;
     }
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -207,20 +205,6 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             })
             .or_insert(path.owner);
     }
-    let authored_curb_segments = fences
-        .iter()
-        .filter_map(|edge| {
-            let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
-                return None;
-            };
-            EdgeKey::new(a.cell, b.cell).map(|key| (edge.definition, key, a.cell, b.cell))
-        })
-        .collect::<Vec<_>>();
-    let explicit_edges = authored_curb_segments
-        .iter()
-        .map(|(definition, key, _, _)| (*definition, *key))
-        .collect::<HashSet<_>>();
-
     let connected_curb_boundary_segments = path_rows
         .iter()
         .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&path.owner))
@@ -228,10 +212,6 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
             ground_path_tile_triangles(path.cell, path.centre_cell, path.width_cells)
                 .flat_map(|triangle| {
                     ground_path_triangle_curb_boundary(&triangles, path.centre_cell, triangle)
-                })
-                .filter(|(first_cell, second_cell)| {
-                    !EdgeKey::new(*first_cell, *second_cell)
-                        .is_some_and(|edge| explicit_edges.contains(&(path.curb, edge)))
                 })
                 .map(
                     |(first_cell, second_cell)| GroundPathConnectedCurbBoundarySegment {
@@ -245,43 +225,29 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
         })
         .collect::<Vec<_>>();
 
-    let mut curve_edges = connected_curb_boundary_segments
+    let curve_edges = connected_curb_boundary_segments
         .iter()
         .map(|segment| (segment.curb, segment.first_cell, segment.second_cell))
         .collect::<Vec<_>>();
-    curve_edges.extend(
-        authored_curb_segments
-            .iter()
-            .map(|(definition, _, first, second)| (*definition, *first, *second)),
-    );
     let curve_partners = select_reciprocal_fence_curve_partners(&curve_edges);
 
     for (entity, _path, transform, hydrated) in &paths {
-        if hydrated.is_some() {
-            continue;
-        }
         let Some(path) = path_rows
             .iter()
             .find(|candidate| candidate.owner == entity)
+            .filter(|path| path.curb != AssetId::default())
+            .filter(|path| owners.get(&(path.definition, path.cell)) == Some(&entity))
             .copied()
         else {
-            commands
-                .entity(entity)
-                .insert(PathCurbsHydrated { root: None });
+            if let Some(root) = hydrated.and_then(|current| current.root) {
+                commands.entity(root).despawn();
+            }
+            commands.entity(entity).insert(PathCurbsHydrated {
+                root: None,
+                segments: Vec::new(),
+            });
             continue;
         };
-        if path.curb == AssetId::default() {
-            commands
-                .entity(entity)
-                .insert(PathCurbsHydrated { root: None });
-            continue;
-        }
-        if owners.get(&(path.definition, path.cell)) != Some(&entity) {
-            commands
-                .entity(entity)
-                .insert(PathCurbsHydrated { root: None });
-            continue;
-        }
         let Some(curb_definition) = definitions.find_fence(path.curb) else {
             continue;
         };
@@ -302,20 +268,31 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 );
                 (first, second, prefab)
             })
-            .filter(|(_, _, prefab)| prefab.asset != AssetId::default());
+            .filter(|(_, _, prefab)| prefab.asset != AssetId::default())
+            .map(|(first, second, prefab)| (first, second, prefab.asset, prefab.mirror_source_y))
+            .collect::<Vec<_>>();
+        // Reciprocal curve pairing also depends on the partner's other end.
+        // Compare the selected geometry beyond the immediate edited cells.
+        if hydrated.is_some_and(|current| current.segments == selected_segments) {
+            continue;
+        }
         // Prefab presentation keeps strong handles throughout
         // asynchronous loading and renders each segment once it is ready.
         // Looking up Assets here and dropping an unready handle cancels the
         // demand load, repeating the complete boundary scan every frame.
         let Some(ready_segments) = selected_segments
-            .map(|(first, second, prefab)| {
-                let handle = definitions.scene(prefab.asset)?;
-                Some((first, second, prefab.mirror_source_y, handle))
+            .iter()
+            .map(|&(first, second, asset, mirror_source_y)| {
+                let handle = definitions.scene(asset)?;
+                Some((first, second, mirror_source_y, handle))
             })
             .collect::<Option<Vec<_>>>()
         else {
             continue;
         };
+        if let Some(root) = hydrated.and_then(|current| current.root) {
+            commands.entity(root).despawn();
+        }
         let mut root = None;
         for (first, second, mirror_source_y, prefab) in ready_segments {
             let root = *root.get_or_insert_with(|| {
@@ -356,7 +333,10 @@ pub(crate) fn hydrate_authored_path_curb_prefab_presentations(
                 PrefabPresentation::new(prefab),
             ));
         }
-        commands.entity(entity).insert(PathCurbsHydrated { root });
+        commands.entity(entity).insert(PathCurbsHydrated {
+            root,
+            segments: selected_segments,
+        });
     }
 }
 

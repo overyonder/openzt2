@@ -17,10 +17,8 @@ use openzt2_zoo_state::topology::fence_segment_prefab_selection::select_authored
 use openzt2_zoo_state::topology::fence_segment_presentation_types::FenceSegmentShape;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
 use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
-use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 
 use crate::terrain::terrain_surface_image_composition::blend_ground_path_surface_patch_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
@@ -240,8 +238,6 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     mut dependencies: ResMut<GroundPathSurfaceImageDependencies>,
     grid: Res<TopologyGrid>,
     paths: Query<(Entity, &PathTile)>,
-    fences: Query<&FenceEdge>,
-    nodes: Query<&TopologyNode>,
     chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -267,21 +263,6 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
         .round()
         .as_ivec2()
         .extend(0);
-    let explicit_segments = fences
-        .iter()
-        .filter_map(|edge| {
-            let (Ok(a), Ok(b)) = (nodes.get(edge.a), nodes.get(edge.b)) else {
-                return None;
-            };
-            let a = source_grid_offset + IVec3::new(a.cell.x, -a.cell.y, a.cell.z);
-            let b = source_grid_offset + IVec3::new(b.cell.x, -b.cell.y, b.cell.z);
-            Some((edge.definition, a, b))
-        })
-        .collect::<Vec<_>>();
-    let explicit_edges = explicit_segments
-        .iter()
-        .filter_map(|&(definition, a, b)| Some((definition, EdgeKey::new(a, b)?)))
-        .collect::<HashSet<_>>();
     let path_layouts = paths
         .iter()
         .filter_map(|(_, path)| {
@@ -317,11 +298,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
                     .map(move |(a, b)| (curb, a, b))
             })
         })
-        .filter(|&(curb, a, b)| {
-            !EdgeKey::new(a, b).is_some_and(|key| explicit_edges.contains(&(curb, key)))
-        })
         .collect::<Vec<_>>();
-    segments.extend(explicit_segments);
     // Duplicate path records must not turn one corner into a junction.
     let mut seen = HashSet::new();
     segments.retain(|&(curb, a, b)| EdgeKey::new(a, b).is_some_and(|key| seen.insert((curb, key))));

@@ -581,6 +581,13 @@ impl<'a> WorldDefinitionsView<'a> {
             .filter_map(move |((_, id), _)| self.find_path(*id))
     }
 
+    pub fn is_automatic_ground_path_curb(self, definition: AssetId) -> bool {
+        definition != AssetId::default()
+            && self
+                .paths()
+                .any(|path| !path.elevated && path.curb == definition)
+    }
+
     pub fn fences(self) -> impl Iterator<Item = &'a FenceDefinition> {
         self.records
             .range(kind_range(DefinitionKind::Fence))

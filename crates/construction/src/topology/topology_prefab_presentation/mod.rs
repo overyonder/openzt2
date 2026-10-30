@@ -54,6 +54,15 @@ pub(super) fn hydrate_topology_prefab_presentations(
         return;
     };
     for (topology_entity, fence, cells, gate, edge, path, support) in &topology {
+        // Ground-path boundaries own these meshes, including curbs loaded
+        // from a saved zoo. A saved edge must not retain its old corner after
+        // the neighboring path changes.
+        if edge.is_some_and(|edge| definitions.is_automatic_ground_path_curb(edge.definition)) {
+            commands
+                .entity(topology_entity)
+                .insert(TopologyPresentation(None));
+            continue;
+        }
         // A gate edge presents its authored segment model and, beside it, the
         // actor named by its ZTGate physObj binder which carries the leaves.
         let gate_scene = gate
