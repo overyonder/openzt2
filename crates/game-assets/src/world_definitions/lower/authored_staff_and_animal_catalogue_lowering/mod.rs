@@ -125,6 +125,72 @@ mod tests {
     }
 
     #[test]
+    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        // The paleontologist authors `Value=""` with a `ValueMin`/`ValueMax` range.
+        let sources = [
+            (
+                "staff.xml",
+                r#"<BFTypedBinder binderType="Staff" abstract="true">
+                <types><entity><actor><people><Staff/></people></actor></entity></types>
+                <binder><BFBinder><instance><BFBehaviorMgr><subBehaviors><BFBehLocoSwitchSet loopFlag="true"><behaviorTable><ground behSet="Stand_Idle"/></behaviorTable></BFBehLocoSwitchSet></subBehaviors></BFBehaviorMgr></instance></BFBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "keeper.xml",
+                r#"<BFTypedBinder binderType="Keeper" abstract="true">
+                <types><entity><actor><people><Staff><Keeper/></Staff></people></actor></entity></types>
+                <shared><UIToggleButton><UIAspect><default image="keeper.dds"/></UIAspect><on><event msg="ZT_SETPLACEMENTOBJECT" string="Keeper"/></on></UIToggleButton></shared>
+                <binder><BFBinder><instance><BFGCollisionTester radius="0.1"/><BFAICognitiveMgr><StateThinkers><ZTAIStateThinker>
+                    <BFAIStateVar Name="find" Value="" ValueMin="20" ValueMax="50"/>
+                    <BFAIStateVar Name="work" Value="5" TriggerThreshold=""/>
+                </ZTAIStateThinker></StateThinkers></BFAICognitiveMgr></instance></BFBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+            (
+                "keeper_f.xml",
+                r#"<BFTypedBinder binderType="Keeper_Adult_F">
+                <types><entity><actor><people><Staff><Keeper><Keeper_Adult_F/></Keeper></Staff></people></actor></entity></types>
+                <binder><BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFActorComponent actorfile="body_f.bfm"/></BFPhysObj></instance></BFNamedBinder></binder>
+            </BFTypedBinder>"#,
+            ),
+        ];
+        let documents = sources
+            .iter()
+            .map(|(path, xml)| {
+                parse_blue_fang_source_document(AssetPath::new(path), xml.as_bytes())
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+        scenes.register_archive_resolved_actor_scene_asset_path(
+            "body_f.bfm",
+            "body_f.nif#scene".into(),
+        );
+        let document =
+            lower_resolved_world_definition_source_document_closure_to_canonical_document(
+                &documents,
+                &scenes,
+                "keeper.xml",
+                [0, 0],
+            )?
+            .ok_or_else(|| std::io::Error::other("staff source produced no document"))?;
+        let role = document
+            .staff
+            .first()
+            .ok_or_else(|| std::io::Error::other("staff role is absent"))?;
+        let variable = |name: &str| {
+            role.state_variables
+                .iter()
+                .find(|variable| variable.name == AssetId::from_key(name))
+                .map(|variable| (variable.value, variable.trigger_threshold))
+        };
+        assert_eq!(variable("find"), Some((20.0, 0.0)));
+        assert_eq!(variable("work"), Some((5.0, 0.0)));
+        Ok(())
+    }
+
+    #[test]
     fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets(
     ) -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
@@ -447,7 +513,7 @@ fn lower_authored_staff_swimming_depths(
 }
 
 /// `ZTAIStateThinker` `BFAIStateVar` rows: `Name`, `Value` and
-/// `TriggerThreshold`, each value defaulting to zero.
+/// `TriggerThreshold`, each value defaulting to zero, or `Value` to `ValueMin`.
 fn lower_authored_staff_state_variables(
     record: &RecordView<'_, '_>,
 ) -> Result<Vec<StaffStateVariable>, BindError> {
@@ -464,16 +530,28 @@ fn lower_authored_staff_state_variables(
             .filter(|name| !name.trim().is_empty())
             .ok_or_else(|| BindError::record(record, "staff state variable has no Name"))?;
         let number = |attribute| {
-            variable.attribute(attribute).map_or(Ok(0.0), |value| {
-                parse_blue_fang_source_numeric_lexeme::<f32>(value)
-                    .filter(|value| value.is_finite())
-                    .ok_or_else(|| BindError::record(record, "invalid staff state variable number"))
-            })
+            variable
+                .attribute(attribute)
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|value| value.is_finite())
+                        .ok_or_else(|| {
+                            BindError::record(record, "invalid staff state variable number")
+                        })
+                })
+                .transpose()
+        };
+        // An empty Value with ValueMin/ValueMax (the paleontologist's rows)
+        // starts at the range minimum; staff state keeps one starting value.
+        let value = match number("Value")? {
+            Some(value) => value,
+            None => number("ValueMin")?.unwrap_or_default(),
         };
         Ok(StaffStateVariable {
             name: AssetId::from_key(&name.trim().to_ascii_lowercase()),
-            value: number("Value")?,
-            trigger_threshold: number("TriggerThreshold")?,
+            value,
+            trigger_threshold: number("TriggerThreshold")?.unwrap_or_default(),
         })
     })
     .collect::<Result<Vec<_>, BindError>>()?;
