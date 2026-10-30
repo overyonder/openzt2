@@ -10,7 +10,10 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
-    world_definitions::world_objects::WorldObjectNamedPhysicalPresentationDefinition, AssetId,
+    world_definitions::world_objects::{
+        WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
+    },
+    AssetId,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -81,6 +84,7 @@ pub(super) fn lower_named_physical_presentations(
             ),
             attach_node: None,
             inherit_attach_rotation: false,
+            fade: None,
         });
     }
     Ok(presentations)
@@ -172,9 +176,119 @@ pub(super) fn lower_parented_named_physical_presentations(
             inherit_attach_rotation: parenting
                 .attribute_named_any(&["rottype"])
                 .is_some_and(|mode| source_document_names_are_semantically_equal(mode, "use")),
+            fade: None,
         });
     }
     Ok(presentations)
+}
+
+/// Applies `BFAIFadeController` states to the lowered binders. Every state's
+/// binder spawns and shows only while the controller's attribute lies in its
+/// range; the binder of the authored `currState` starts shown. A state binder
+/// the other lowering left out, such as an optional alternative beside a main
+/// model, is lowered here at the object's origin.
+pub(super) fn lower_fade_controller_states(
+    record: &RecordView<'_, '_>,
+    scene_paths: &BTreeMap<String, String>,
+    presentations: &mut Vec<WorldObjectNamedPhysicalPresentationDefinition>,
+) -> Result<(), BindError> {
+    let binders = authored_type_family_elements_named(record, "BFNamedBinder");
+    for controller in authored_type_family_elements_named(record, "BFAIFadeController") {
+        let (Some(attribute), Some(states)) = (
+            controller.attribute_named_any(&["attribName"]),
+            find_descendant(controller, "stateList"),
+        ) else {
+            continue;
+        };
+        let attribute = AssetId::from_key(&attribute.trim().to_ascii_lowercase());
+        let current = controller.attribute_named_any(&["currState"]);
+        for state in states.element_children() {
+            let Some(binder_name) = state.attribute_named_any(&["physObj"]) else {
+                continue;
+            };
+            let bound = |name| {
+                state
+                    .attribute_named_any(&[name])
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                    .filter(|value| value.is_finite())
+                    .ok_or_else(|| {
+                        BindError::record(
+                            record,
+                            format!("fade state {:?} has an invalid {name}", state.name.as_str()),
+                        )
+                    })
+            };
+            let fade = WorldObjectFadeRange {
+                attribute,
+                minimum: bound("minRange")?,
+                maximum: bound("maxRange")?,
+            };
+            let name = AssetId::from_key(&canonicalize_source_document_record_key(binder_name));
+            let initially_visible = current.is_some_and(|current| {
+                source_document_names_are_semantically_equal(current, state.name.as_str())
+            });
+            if let Some(presentation) = presentations
+                .iter_mut()
+                .find(|presentation| presentation.name == name)
+            {
+                if !presentation.required {
+                    presentation.required = true;
+                    presentation.initially_visible = initially_visible;
+                }
+                presentation.fade = Some(fade);
+                continue;
+            }
+            let Some(component) = binders
+                .iter()
+                .copied()
+                .find(|binder| {
+                    binder
+                        .attribute_named_any(&["binderName"])
+                        .is_some_and(|name| {
+                            source_document_names_are_semantically_equal(name, binder_name)
+                        })
+                })
+                .and_then(find_presentation_component)
+            else {
+                continue;
+            };
+            let model = component
+                .attribute_named_any(&["modelfile", "actorfile"])
+                .expect("presentation lookup requires a reference");
+            let Some(scene) = scene_paths.get(&canonicalize_source_document_record_key(model))
+            else {
+                bevy::log::warn!(
+                    definition = record.key,
+                    binder = binder_name,
+                    %model,
+                    "fade state binder has no resolved model scene; leaving it out"
+                );
+                continue;
+            };
+            let scale = component
+                .attribute_named_any(&["scale"])
+                .map(|value| {
+                    parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                        .filter(|scale| scale.is_finite() && *scale > 0.0)
+                        .ok_or_else(|| {
+                            BindError::record(record, "fade state binder scale must be positive")
+                        })
+                })
+                .transpose()?
+                .unwrap_or(1.0);
+            presentations.push(WorldObjectNamedPhysicalPresentationDefinition {
+                name,
+                prefab: AssetId::from_virtual_path(scene),
+                scale,
+                required: true,
+                initially_visible,
+                attach_node: None,
+                inherit_attach_rotation: false,
+                fade: Some(fade),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Binders named as the `child` of a presentation-controller state (any
@@ -332,6 +446,117 @@ mod tests {
                 (AssetId::from_key("finishedeventobj"), false),
             ]
         );
+        Ok(())
+    }
+
+    /// Lowers one object from `source` with every listed model resolved.
+    fn lower_object(
+        source: &'static [u8],
+        models: &[&str],
+    ) -> Result<
+        openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+        Box<dyn std::error::Error>,
+    > {
+        let record = parse_blue_fang_source_document(AssetPath::new("object.xml"), source)
+            .map_err(|error| std::io::Error::other(format!("{error:?}")))?;
+        let mut scenes = BlueFangActorManifestModelAndSceneResolutionIndex::default();
+        for model in models {
+            scenes.register_archive_resolved_native_model_scene_asset_path(
+                model,
+                &format!("{model}#scene"),
+            );
+        }
+        lower_resolved_world_definition_source_document_closure_to_canonical_document(
+            &[record],
+            &scenes,
+            "object.xml",
+            [0, 0],
+        )?
+        .and_then(|document| document.objects.into_iter().next())
+        .ok_or_else(|| std::io::Error::other("source produced no object").into())
+    }
+
+    fn fade_states(
+        object: &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+    ) -> Vec<(AssetId, bool, bool, Option<[f32; 2]>)> {
+        object
+            .named_physical_presentations
+            .iter()
+            .map(|presentation| {
+                (
+                    presentation.name,
+                    presentation.required,
+                    presentation.initially_visible,
+                    presentation
+                        .fade
+                        .filter(|fade| fade.attribute == AssetId::from_key("f_foodlevel"))
+                        .map(|fade| [fade.minimum, fade.maximum]),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn feeder_fade_states_spawn_and_show_only_the_current_state(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let object = lower_object(
+            br#"<BFTypedBinder binderType="insects">
+            <types><entity><food><insects/></food></entity></types>
+            <binder>
+                <BFNamedBinder binderName="full" required="1"><instance><BFPhysObj><BFSceneGraphComponent modelfile="full.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="half" required="0"><instance><BFPhysObj><BFSceneGraphComponent modelfile="half.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFBinder required="1"><instance>
+                    <BFAIFadeController attribName="f_FoodLevel" currState="full" fadePeriod="1"><stateList>
+                        <full physObj="full" minRange="50" maxRange="101"/>
+                        <half physObj="half" minRange="1" maxRange="50"/>
+                        <empty minRange="-101" maxRange="1"/>
+                    </stateList></BFAIFadeController>
+                </instance></BFBinder>
+            </binder>
+        </BFTypedBinder>"#,
+            &["full.nif", "half.nif"],
+        )?;
+        assert_eq!(
+            fade_states(&object),
+            [
+                (AssetId::from_key("full"), true, true, Some([50.0, 101.0])),
+                (AssetId::from_key("half"), true, false, Some([1.0, 50.0])),
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn fade_states_beside_a_main_model_spawn_at_the_origin(
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let object = lower_object(
+            br#"<BFTypedBinder binderType="bin">
+            <types><entity><building><bin/></building></entity></types>
+            <binder>
+                <BFNamedBinder binderName="mainObj"><instance><BFPhysObj><BFSimpleLODComponent modelfile="bin.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="full" required="0"><instance><BFPhysObj><BFSimpleLODComponent modelfile="full.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFNamedBinder binderName="empty" required="1"><instance><BFPhysObj><BFSimpleLODComponent modelfile="empty.nif"/></BFPhysObj></instance></BFNamedBinder>
+                <BFBinder required="1"><instance>
+                    <BFAIFadeController attribName="f_FoodLevel" currState="empty"><stateList>
+                        <full physObj="full" minRange="1" maxRange="101"/>
+                        <empty physObj="empty" minRange="-1" maxRange="1"/>
+                    </stateList></BFAIFadeController>
+                </instance></BFBinder>
+            </binder>
+        </BFTypedBinder>"#,
+            &["bin.nif", "full.nif", "empty.nif"],
+        )?;
+        assert_eq!(
+            fade_states(&object),
+            [
+                (AssetId::from_key("full"), true, false, Some([1.0, 101.0])),
+                (AssetId::from_key("empty"), true, true, Some([-1.0, 1.0])),
+            ]
+        );
+        assert!(object
+            .named_physical_presentations
+            .iter()
+            .all(|presentation| presentation.attach_node.is_none()));
         Ok(())
     }
 }
