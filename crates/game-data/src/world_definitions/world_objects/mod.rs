@@ -224,6 +224,29 @@ pub struct WorldObjectNamedPhysicalPresentationDefinition {
     /// `rottype="use"`: the binder turns with its node, not just follows it.
     #[serde(default)]
     pub inherit_attach_rotation: bool,
+    /// The `BFAIFadeController` state that shows this binder.
+    #[serde(default)]
+    pub fade: Option<WorldObjectFadeRange>,
+}
+
+/// One `BFAIFadeController` state: its binder shows while the controller's
+/// attribute lies in `minimum..maximum`, in authored points.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "authored ranges are floating point"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectFadeRange {
+    /// Lower-case attribute name, such as `f_foodlevel`.
+    pub attribute: AssetId,
+    pub minimum: f32,
+    pub maximum: f32,
+}
+
+impl WorldObjectFadeRange {
+    pub fn contains(&self, value: f32) -> bool {
+        (self.minimum..self.maximum).contains(&value)
+    }
 }
 
 const fn named_physical_presentation_is_initially_visible() -> bool {

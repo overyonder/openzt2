@@ -8,7 +8,10 @@ use bevy::prelude::*;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::world_definitions::world_objects::WorldObjectNamedPhysicalPresentationDefinition;
+use openzt2_game_data::world_definitions::world_objects::{
+    WorldObjectFadeRange, WorldObjectNamedPhysicalPresentationDefinition,
+};
+use openzt2_zoo_state::feeding::container_quantity::{DrinkContainer, FoodContainer};
 use openzt2_game_data::AssetId;
 
 #[cfg(test)]
@@ -162,10 +165,53 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
         if let Some(prefab) = prefab {
             child.insert(PrefabPresentation::new(prefab));
         }
+        if let Some(fade) = presentation.fade {
+            child.insert(NamedPresentationFade(fade));
+        }
     }
     commands
         .entity(owner)
         .insert(NamedPhysicalPresentationsHydrated);
+}
+
+/// A `BFAIFadeController` state binder, shown while its owner's attribute
+/// lies in its range.
+#[derive(Component)]
+pub(super) struct NamedPresentationFade(WorldObjectFadeRange);
+
+/// Shows each fade state binder whose range holds its owner's attribute and
+/// hides the others. Binders whose attribute has no live value here keep their
+/// authored visibility.
+pub(super) fn select_named_presentation_fade_states(
+    owners: Query<(Option<&FoodContainer>, Option<&DrinkContainer>)>,
+    mut states: Query<(
+        &NamedPhysicalPresentation,
+        &NamedPresentationFade,
+        &mut Visibility,
+    )>,
+) {
+    let food_level = AssetId::from_key("f_foodlevel");
+    for (owner, fade, mut visibility) in &mut states {
+        let Ok((food, drink)) = owners.get(owner.0) else {
+            continue;
+        };
+        // Container amounts are authored points in Q16.
+        let value = (fade.0.attribute == food_level)
+            .then(|| {
+                food.map(|food| food.amount_q16)
+                    .or(drink.map(|drink| drink.amount_q16))
+            })
+            .flatten()
+            .map(|amount| amount as f32 / 65_536.0);
+        let Some(value) = value else {
+            continue;
+        };
+        visibility.set_if_neq(if fade.0.contains(value) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
+    }
 }
 
 /// A binder holder waiting for the node of its owner's model to exist.

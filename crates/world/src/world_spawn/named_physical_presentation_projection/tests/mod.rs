@@ -30,6 +30,7 @@ fn presentation(
         initially_visible,
         attach_node: None,
         inherit_attach_rotation: false,
+        fade: None,
     }
 }
 
@@ -122,4 +123,91 @@ fn unresolved_binder_is_skipped_and_finished_binder_starts_hidden() {
         .map(|(_, visibility)| *visibility)
         .collect::<Vec<_>>();
     assert_eq!(visibility, [Visibility::Inherited, Visibility::Hidden]);
+}
+
+#[test]
+fn feeder_shows_the_fade_state_matching_its_food_level() {
+    use super::select_named_presentation_fade_states;
+    use openzt2_game_data::world_definitions::world_objects::WorldObjectFadeRange;
+    use openzt2_zoo_state::feeding::container_quantity::{
+        FoodContainer, AUTHORED_CONTAINER_CAPACITY_Q16,
+    };
+
+    let definition = AssetId::from_key("insects");
+    let mut object = marker_object(definition);
+    object.named_physical_presentations = [("full", 50.0, 101.0), ("half", 1.0, 50.0)]
+        .into_iter()
+        .map(
+            |(name, minimum, maximum)| WorldObjectNamedPhysicalPresentationDefinition {
+                fade: Some(WorldObjectFadeRange {
+                    attribute: AssetId::from_key("f_foodlevel"),
+                    minimum,
+                    maximum,
+                }),
+                ..presentation(name, AssetId::default(), name == "full")
+            },
+        )
+        .collect();
+    let mut application = App::new();
+    application
+        .insert_resource(Assets::<WorldDefinitionAsset>::default())
+        .init_resource::<WorldDefinitions>()
+        .add_systems(
+            Update,
+            (
+                hydrate_required_named_physical_presentations,
+                select_named_presentation_fade_states,
+            )
+                .chain(),
+        );
+    let document = WorldDefinitionDocument {
+        objects: vec![object],
+        ..default()
+    };
+    let handle = application
+        .world_mut()
+        .resource_mut::<Assets<WorldDefinitionAsset>>()
+        .add(WorldDefinitionAsset::from_test_document(document.clone()));
+    application
+        .world_mut()
+        .resource_mut::<WorldDefinitions>()
+        .index_test_document(handle, &document);
+    let food = |points: i32| FoodContainer {
+        food: definition,
+        amount_q16: points << 16,
+        capacity_q16: AUTHORED_CONTAINER_CAPACITY_Q16,
+    };
+    let owner = application
+        .world_mut()
+        .spawn((DefinitionId(definition), food(100)))
+        .id();
+    let visibility = |application: &mut App| {
+        let world = application.world_mut();
+        let mut children = world.query::<(&ChildOf, &Visibility)>();
+        children
+            .iter(world)
+            .filter(|(parent, _)| parent.parent() == owner)
+            .map(|(_, visibility)| *visibility)
+            .collect::<Vec<_>>()
+    };
+
+    application.update();
+    application.update();
+    assert_eq!(
+        visibility(&mut application),
+        [Visibility::Inherited, Visibility::Hidden]
+    );
+    application.world_mut().entity_mut(owner).insert(food(20));
+    application.update();
+    assert_eq!(
+        visibility(&mut application),
+        [Visibility::Hidden, Visibility::Inherited]
+    );
+    // An empty feeder has no state binder in range, so it shows neither.
+    application.world_mut().entity_mut(owner).insert(food(0));
+    application.update();
+    assert_eq!(
+        visibility(&mut application),
+        [Visibility::Hidden, Visibility::Hidden]
+    );
 }

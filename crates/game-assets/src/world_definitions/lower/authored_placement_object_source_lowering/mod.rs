@@ -297,7 +297,7 @@ pub(super) fn bind_authored_placement_object(
                 )
         })
     };
-    let named_physical_presentations = if model.is_none() {
+    let mut named_physical_presentations = if model.is_none() {
         super::named_physical_presentation_source_lowering::lower_named_physical_presentations(
             record,
             entity_scene_paths,
@@ -308,6 +308,11 @@ pub(super) fn bind_authored_placement_object(
             entity_scene_paths,
         )?
     };
+    super::named_physical_presentation_source_lowering::lower_fade_controller_states(
+        record,
+        entity_scene_paths,
+        &mut named_physical_presentations,
+    )?;
     let presentation_attachments = lower_authored_world_object_presentation_controller_states(
         record,
         actor_scene_paths,
