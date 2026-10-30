@@ -86,6 +86,11 @@ impl LooseLitterWaste {
     }
 }
 
+/// A compost bin's authored `f_PooLevel`, raised as keepers rake waste into
+/// it. Absent until a script first writes it; the authored start is zero.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct CompostPooLevel(pub f32);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 /// Animal waste deposited in a habitat and awaiting maintenance staff.
 pub struct AnimalHabitatWaste {
