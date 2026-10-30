@@ -134,6 +134,10 @@ pub struct WorldDefinitionDocument {
     #[serde(default)]
     pub staff_tank_cleaning_requests: Vec<StaffAquaticTankCleaningRequestPolicy>,
     pub person_name_pools: Vec<PersonNamePool>,
+    /// Authored spelling of each object's binder type. Behavior Lua compares
+    /// `BFG_GET_BINDER_TYPE` results case-sensitively, e.g. `CompostPoo.lua`.
+    #[serde(default)]
+    pub object_binder_types: Vec<(crate::AssetId, Box<str>)>,
     pub weather: Vec<WeatherDefinition>,
     pub ambient_spawns: Vec<AmbientSpawnDefinition>,
     pub environments: Vec<EnvironmentDefinition>,

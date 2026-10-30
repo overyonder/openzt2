@@ -106,6 +106,7 @@ impl WorldDefinitionLoweringTables {
             show_audio_cues,
             show_presentation_icons,
             person_name_pools,
+            object_binder_types,
             weather,
             ambient_spawns,
         );

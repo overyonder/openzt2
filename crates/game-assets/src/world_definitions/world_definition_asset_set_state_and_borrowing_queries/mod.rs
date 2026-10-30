@@ -326,6 +326,17 @@ impl<'a> WorldDefinitionsView<'a> {
         self.records.contains_key(&(DefinitionKind::Object, id))
     }
 
+    /// The authored binder type spelling of an object, e.g. `Poop_Medium`.
+    pub fn object_binder_type(self, id: AssetId) -> Option<&'a str> {
+        let handle = self.records.get(&(DefinitionKind::Object, id))?;
+        self.assets
+            .get(handle)?
+            .document
+            .object_binder_types
+            .iter()
+            .find_map(|(object, binder_type)| (*object == id).then_some(&**binder_type))
+    }
+
     pub const fn has_pending_assets(self) -> bool {
         self.pending_assets
     }

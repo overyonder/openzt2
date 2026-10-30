@@ -75,6 +75,14 @@ pub(crate) struct VerificationWorldFactQueries<'w, 's> {
     animals:
         Query<'w, 's, (Option<&'static Containment>, Option<&'static AnimalSex>), With<Animal>>,
     staff: Query<'w, 's, (), With<Employment>>,
+    habitat_waste: Query<
+        'w,
+        's,
+        (),
+        With<openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste>,
+    >,
+    compost_poo_levels:
+        Query<'w, 's, &'static openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel>,
     facilities: Query<'w, 's, (), With<ServiceFacility>>,
     guests: Query<'w, 's, (), With<Guest>>,
     placed_objects: Query<'w, 's, (), With<PlacedObjectDefinitionReference>>,
@@ -383,6 +391,15 @@ pub(crate) fn collect_requested_verification_facts(
         );
     }
     fact("staff", count(world.staff.iter().count()));
+    fact("habitat_waste", count(world.habitat_waste.iter().count()));
+    fact(
+        "compost_poo_level",
+        world
+            .compost_poo_levels
+            .iter()
+            .map(|level| f64::from(level.0))
+            .sum(),
+    );
     fact("facilities", count(world.facilities.iter().count()));
     fact("guests", count(world.guests.iter().count()));
     fact("placed_objects", count(world.placed_objects.iter().count()));

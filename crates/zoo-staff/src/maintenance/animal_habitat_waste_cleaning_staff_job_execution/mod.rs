@@ -6,10 +6,12 @@ use openzt2_game_data::{
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorKilledTarget;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
@@ -41,7 +43,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
         &StaffJobBehaviorTask,
         Option<&AppliedHabitatWasteCleanup>,
     )>,
-    targets: Query<&AnimalHabitatWaste, With<WorldMember>>,
+    targets: Query<(&AnimalHabitatWaste, &DefinitionId, &GlobalTransform), With<WorldMember>>,
     mut cancellations: MessageReader<CancelStaffJobRequest>,
     mut cancelled_jobs: Local<HashSet<Entity>>,
     mut consumed_targets: Local<HashSet<Entity>>,
@@ -84,7 +86,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
             }
             continue;
         }
-        let Ok(waste) = targets.get(job.target) else {
+        let Ok((waste, definition, transform)) = targets.get(job.target) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
@@ -94,6 +96,12 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
         }
         // The component removal hook owns the cleanliness debit.
         commands.entity(job.target).despawn();
+        commands.entity(actor).insert(BehaviorKilledTarget {
+            execution_id: execution.execution_id,
+            entity: job.target,
+            definition: definition.0,
+            translation: transform.translation(),
+        });
         commands
             .entity(current.job)
             .insert(AppliedHabitatWasteCleanup {

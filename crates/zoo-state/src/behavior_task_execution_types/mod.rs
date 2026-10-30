@@ -152,6 +152,16 @@ pub enum BehaviorTaskExecutionPhase {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct PendingBehaviorTaskFailure;
 
+/// A target that `BFBehKill killTarget` removed. Later actions of the same
+/// execution can still read it, as `CompostPoo.lua` reads the raked waste.
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
+pub struct BehaviorKilledTarget {
+    pub execution_id: u64,
+    pub entity: Entity,
+    pub definition: AssetId,
+    pub translation: Vec3,
+}
+
 /// An explicit clip that a behavior action started and does not wait for,
 /// such as lifting an item until its attach key fires. Locomotion leaves the
 /// actor's presentation to it until that request completes, is rejected or

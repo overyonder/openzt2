@@ -757,6 +757,28 @@ fn bind_record_shard(
             record, object,
         )?;
     }
+    let record_object = AssetId::from_key(&canonicalize_source_document_record_key(record.key));
+    let tables = &mut shard.tables.document;
+    // Record keys are canonical; scripts need the authored `binderType` spelling.
+    let binder_type = record
+        .source_document_element()
+        .attribute_named_any(&["binderType"])
+        .map(str::trim)
+        .filter(|binder_type| {
+            AssetId::from_key(&canonicalize_source_document_record_key(binder_type))
+                == record_object
+        });
+    if let Some(binder_type) = binder_type {
+        if tables
+            .objects
+            .iter()
+            .any(|object| object.id == record_object)
+        {
+            tables
+                .object_binder_types
+                .push((record_object, binder_type.into()));
+        }
+    }
     Ok(shard)
 }
 

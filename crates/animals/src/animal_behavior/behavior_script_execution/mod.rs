@@ -29,6 +29,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
 };
 
+mod world_access;
+pub(super) use world_access::remove_settled_behavior_script_transactions;
+use world_access::{BehaviorScriptWorldAccess, BehaviorScriptWorldChanges};
+
 #[derive(Default)]
 pub(super) struct BehaviorScriptContexts {
     contexts: BTreeMap<AssetId, BehaviorScriptVirtualMachine>,
@@ -72,6 +76,7 @@ pub(super) fn execute_authored_behavior_script_actions(
         ),
     >,
     entities: Query<()>,
+    mut world: BehaviorScriptWorldAccess,
     mut presentation_requests: MessageWriter<PhysicalPresentationRequest>,
 ) {
     for (actor, mut task) in &mut actors {
@@ -109,6 +114,10 @@ pub(super) fn execute_authored_behavior_script_actions(
         let output = RefCell::new(Vec::new());
         let textures = RefCell::new(Vec::new());
         let crated = RefCell::new(Vec::new());
+        let script_changes = RefCell::new(BehaviorScriptWorldChanges::default());
+        let changes = &script_changes;
+        let execution_id = task.execution_id;
+        let world_view = &world;
         let result = vm.lua.scope(|scope| -> mlua::Result<Option<String>> {
             install_lua_script_dependency_loading_functions(
                 &vm.lua,
@@ -118,7 +127,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                 &vm.loaded,
                 &path_stack,
             )?;
-            for name in ["LUALOG", "SYSERROR"] {
+            for name in ["LUALOG", "SYSERROR", "BFLOG"] {
                 vm.lua.globals().set(
                     name,
                     scope.create_function(move |_, message: mlua::Value| {
@@ -128,13 +137,127 @@ pub(super) fn execute_authored_behavior_script_actions(
                 )?;
             }
             vm.lua.globals().set(
+                "queryObject",
+                scope.create_function(move |lua, name: String| {
+                    let manager = lua.create_table()?;
+                    match name.as_str() {
+                        "BFGManager" => manager.set(
+                            "BFG_GET_ENTITIES",
+                            scope.create_function(
+                                move |lua, (_, binder_type): (Table, String)| {
+                                    let found = lua.create_table()?;
+                                    for (index, entity) in world_view
+                                        .entities_of_type(&binder_type)
+                                        .into_iter()
+                                        .enumerate()
+                                    {
+                                        let row = lua.create_table()?;
+                                        row.set(
+                                            "value",
+                                            lua.create_userdata(BehaviorScriptEntityReference(
+                                                entity,
+                                            ))?,
+                                        )?;
+                                        found.set(index + 1, row)?;
+                                    }
+                                    Ok(found)
+                                },
+                            )?,
+                        )?,
+                        "ZTEconomyMgr" => manager.set(
+                            "ZT_GENERIC_TRANSACTION",
+                            scope.create_function(move |_, (_, transaction): (Table, Table)| {
+                                let category: String = transaction.get("string")?;
+                                let amount: f64 = transaction.get("float")?;
+                                if category != "destroy" || amount <= 0.0 {
+                                    return Err(mlua::Error::runtime(format!(
+                                        "unmapped behavior transaction {category} {amount}"
+                                    )));
+                                }
+                                changes.borrow_mut().incomes.push(amount);
+                                Ok(())
+                            })?,
+                        )?,
+                        _ => {
+                            return Err(mlua::Error::runtime(format!(
+                                "behavior queryObject does not expose {name}"
+                            )));
+                        }
+                    }
+                    Ok(manager)
+                })?,
+            )?;
+            vm.lua.globals().set(
                 "resolveTable",
                 scope.create_function(|lua, reference: AnyUserData| {
                     let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
-                    if !entities.contains(entity) {
+                    if !entities.contains(entity)
+                        && !world_view.can_resolve(actor, execution_id, entity)
+                    {
                         return Ok(None);
                     }
                     let table = lua.create_table()?;
+                    let subject_entity = |subject: &Table| -> mlua::Result<Entity> {
+                        let reference: AnyUserData = subject.get("entity")?;
+                        Ok(reference.borrow::<BehaviorScriptEntityReference>()?.0)
+                    };
+                    table.set(
+                        "BFG_GET_ENTITY_POSITION",
+                        scope.create_function(move |lua, subject: Table| {
+                            let entity = subject_entity(&subject)?;
+                            let position = world_view
+                                .position(actor, execution_id, entity)
+                                .ok_or_else(|| mlua::Error::runtime("entity has no position"))?;
+                            // Native positions are ground x/y with height in z.
+                            let table = lua.create_table()?;
+                            table.set("x", position.x)?;
+                            table.set("y", position.z)?;
+                            table.set("z", position.y)?;
+                            Ok(table)
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_GET_BINDER_TYPE",
+                        scope.create_function(move |_, subject: Table| {
+                            let entity = subject_entity(&subject)?;
+                            world_view
+                                .binder_type(actor, execution_id, entity)
+                                .ok_or_else(|| mlua::Error::runtime("entity has no binder type"))
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_GET_ATTR_FLOAT",
+                        scope.create_function(move |_, (subject, name): (Table, String)| {
+                            let entity = subject_entity(&subject)?;
+                            if name != "f_PooLevel" {
+                                return Err(mlua::Error::runtime(format!(
+                                    "unmapped behavior float attribute {name}"
+                                )));
+                            }
+                            Ok(changes
+                                .borrow()
+                                .poo_levels
+                                .iter()
+                                .rev()
+                                .find_map(|(written, level)| (*written == entity).then_some(*level))
+                                .unwrap_or_else(|| world_view.poo_level(entity)))
+                        })?,
+                    )?;
+                    table.set(
+                        "BFG_SET_ATTR_FLOAT",
+                        scope.create_function(move |_, (subject, value): (Table, Table)| {
+                            let entity = subject_entity(&subject)?;
+                            let name: String = value.get(1)?;
+                            let level: f32 = value.get(2)?;
+                            if name != "f_PooLevel" || !level.is_finite() {
+                                return Err(mlua::Error::runtime(format!(
+                                    "unmapped behavior float attribute {name}"
+                                )));
+                            }
+                            changes.borrow_mut().poo_levels.push((entity, level));
+                            Ok(())
+                        })?,
+                    )?;
                     table.set(
                         "sendMessage",
                         scope.create_function(
@@ -259,6 +382,7 @@ pub(super) fn execute_authored_behavior_script_actions(
         for entity in crated.into_inner() {
             commands.entity(entity).insert(WorldEntityIsCrated);
         }
+        world.apply(&mut commands, actor, script_changes.into_inner());
         match result {
             Ok(Some(result)) if result != "error" && result != "failure" => {
                 let textures = textures.into_inner();

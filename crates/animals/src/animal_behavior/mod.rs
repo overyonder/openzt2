@@ -145,6 +145,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 behavior_trick_learning_execution::apply_current_authored_trick_learning,
                 behavior_show_event_execution::register_current_authored_animal_show_events,
                 behavior_script_execution::execute_authored_behavior_script_actions,
+                behavior_script_execution::remove_settled_behavior_script_transactions,
                 behavior_clothing_delivery::finish_clothing_delivery,
                 behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
                 behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,

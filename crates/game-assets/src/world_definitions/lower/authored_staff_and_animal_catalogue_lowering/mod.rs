@@ -120,6 +120,10 @@ mod tests {
             );
             assert_eq!(object.preview_offset_cm, [0, 0, 49]);
             assert!((object.preview_scale - 3.954_455).abs() < 0.000_001);
+            // Behavior Lua compares the authored binder type case-sensitively.
+            assert!(document
+                .object_binder_types
+                .contains(&(object.id, "Worker".into())));
         }
         Ok(())
     }
