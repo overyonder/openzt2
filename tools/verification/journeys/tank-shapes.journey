@@ -5,17 +5,17 @@ click "Tank Tools Tab"
 select-catalogue "tankseg_mm"
 click "rectangle1"
 snapshot shape-start
-click 1000 260
-move 1400 300
-click 1400 300
+click 1050 170
+move 1300 190
+click 1300 190
 until fences > @shape-start
 until tanks == 1 within 600
 snapshot rectangle
 click "octagon1"
 select-catalogue "tankseg_mm"
-click 1100 500
-move 1480 530
-click 1480 530
+click 1150 560
+move 1400 580
+click 1400 580
 until fences > @rectangle
 key ESCAPE
 until placement_previews == 0
