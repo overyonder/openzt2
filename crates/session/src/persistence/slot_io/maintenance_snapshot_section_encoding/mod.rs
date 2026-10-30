@@ -53,6 +53,10 @@ fn validate_maintained_object_records(
             || record.condition_permille.is_none()
                 && record.contained_waste.is_none()
                 && record.next_waste_production_tick.is_none()
+                && record.compost_poo_level.is_none()
+            || record
+                .compost_poo_level
+                .is_some_and(|level| !level.is_finite() || level < 0.0)
             || record
                 .contained_waste
                 .is_some_and(|[units, capacity]| capacity == 0 || units > capacity)

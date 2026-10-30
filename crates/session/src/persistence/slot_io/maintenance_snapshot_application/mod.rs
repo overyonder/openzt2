@@ -22,8 +22,8 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::maintenance::maintenance_types::{
     AnimalHabitatWaste, AnimalWasteProductionSchedule,
-    AnimalWasteProductionScheduleResolutionMarker, FacilityContainedWaste, LooseLitterWaste,
-    MaintainableObjectConditionPermille,
+    AnimalWasteProductionScheduleResolutionMarker, CompostPooLevel, FacilityContainedWaste,
+    LooseLitterWaste, MaintainableObjectConditionPermille,
 };
 
 pub(super) fn resolve_loose_waste_prefabs(
@@ -151,7 +151,7 @@ pub(super) fn apply_loose_waste_records(
     Ok(restored_identities)
 }
 
-/// Restores saved condition, bin contents, and animal production deadlines. Authored
+/// Restores saved condition, bin contents, compost levels and animal production deadlines. Authored
 /// initial facts only fill values that are still absent.
 pub(super) fn apply_maintained_object_records(
     commands: &mut Commands,
@@ -175,6 +175,9 @@ pub(super) fn apply_maintained_object_records(
                     contained_waste_units: units,
                     contained_waste_capacity_units: capacity,
                 });
+        }
+        if let Some(level) = record.compost_poo_level {
+            object.insert(CompostPooLevel(level));
         }
         if let Some(next_production_tick) = record.next_waste_production_tick {
             object.insert((

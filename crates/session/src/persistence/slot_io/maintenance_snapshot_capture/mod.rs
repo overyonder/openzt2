@@ -10,8 +10,8 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::maintenance::maintenance_types::{
-    AnimalHabitatWaste, AnimalWasteProductionSchedule, FacilityContainedWaste, LooseLitterWaste,
-    MaintainableObjectConditionPermille,
+    AnimalHabitatWaste, AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
+    LooseLitterWaste, MaintainableObjectConditionPermille,
 };
 
 pub(in crate::persistence) type LooseWasteSnapshotFilter =
@@ -68,7 +68,7 @@ pub(super) fn capture_loose_waste_records(
     Ok(records)
 }
 
-/// Entities carrying worn condition, retained bin waste or waste-production deadlines.
+/// Entities carrying worn condition, retained bin waste, compost or waste-production deadlines.
 pub(in crate::persistence) type MaintainedObjectSnapshotEntities<'w, 's> = Query<
     'w,
     's,
@@ -77,12 +77,14 @@ pub(in crate::persistence) type MaintainedObjectSnapshotEntities<'w, 's> = Query
         Option<&'static MaintainableObjectConditionPermille>,
         Option<&'static FacilityContainedWaste>,
         Option<&'static AnimalWasteProductionSchedule>,
+        Option<&'static CompostPooLevel>,
     ),
     (
         Or<(
             With<MaintainableObjectConditionPermille>,
             With<FacilityContainedWaste>,
             With<AnimalWasteProductionSchedule>,
+            With<CompostPooLevel>,
         )>,
         Without<IsResource>,
     ),
@@ -94,7 +96,7 @@ pub(super) fn capture_maintained_object_records(
     let mut records = objects
         .iter()
         .map(
-            |(id, condition, waste, production)| MaintainedObjectSnapshotRecord {
+            |(id, condition, waste, production, compost)| MaintainedObjectSnapshotRecord {
                 persistent_identifier: id.0,
                 condition_permille: condition.map(|condition| condition.0),
                 contained_waste: waste.map(|waste| {
@@ -105,6 +107,7 @@ pub(super) fn capture_maintained_object_records(
                 }),
                 next_waste_production_tick: production
                     .map(|production| production.next_production_tick),
+                compost_poo_level: compost.map(|compost| compost.0),
             },
         )
         .collect::<Vec<_>>();
