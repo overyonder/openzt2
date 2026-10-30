@@ -3,7 +3,7 @@ use self::locomotion::lower_authored_species_ground_movement_speed_metres_per_se
 use self::locomotion::lower_authored_species_swimming_speed_metres_per_second;
 use self::needs::lower_effective_authored_species_need_facts;
 use self::source_queries::authored_optional_boolean_is_true;
-use self::source_queries::find_effective_authored_species_name;
+use self::source_queries::find_effective_authored_animal_shared_attribute;
 use self::source_queries::find_inherited_animal_shared_attribute;
 use self::variants::lower_species_root_actor_to_fallback_canonical_variant;
 use self::variants::lower_species_variant_source_record_to_canonical_variant;
@@ -94,8 +94,9 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
         return Ok(SpeciesDocument::default());
     };
 
-    let authored_species_name = find_effective_authored_species_name(&species)
-        .ok_or_else(|| BindError::record(&species, "animal family has no s_Species"))?;
+    let authored_species_name =
+        find_effective_authored_animal_shared_attribute(&species, "s_Species")
+            .ok_or_else(|| BindError::record(&species, "animal family has no s_Species"))?;
     let species_record = (current.key == species.key)
         .then(|| lower_species_source_record_to_canonical_species(&species))
         .transpose()?
@@ -109,9 +110,20 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
     .into_iter()
     .map(|variant| SpeciesVariantBinding {
         species: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
-        authored_species_name_override: find_effective_authored_species_name(&current)
-            .filter(|value| *value != authored_species_name)
-            .map(str::to_owned),
+        authored_species_name_override: find_effective_authored_animal_shared_attribute(
+            &current,
+            "s_Species",
+        )
+        .filter(|value| *value != authored_species_name)
+        .map(str::to_owned),
+        authored_product_name_override: find_effective_authored_animal_shared_attribute(
+            &current,
+            "s_Product",
+        )
+        .filter(|value| {
+            Some(*value) != find_effective_authored_animal_shared_attribute(&species, "s_Product")
+        })
+        .map(str::to_owned),
         variant,
     })
     .collect::<Vec<_>>();
@@ -124,6 +136,7 @@ pub(super) fn lower_resolved_species_source_document_closure_to_canonical_docume
             .map(|variant| SpeciesVariantBinding {
                 species: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
                 authored_species_name_override: None,
+                authored_product_name_override: None,
                 variant,
             }),
         );
@@ -214,9 +227,18 @@ fn lower_species_source_record_to_canonical_species(
     Ok(Species {
         donation: donation::lower_animal_donation_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
-        authored_species_name: find_effective_authored_species_name(species)
-            .ok_or_else(|| BindError::record(species, "animal family has no s_Species"))?
-            .to_owned(),
+        authored_species_name: find_effective_authored_animal_shared_attribute(
+            species,
+            "s_Species",
+        )
+        .ok_or_else(|| BindError::record(species, "animal family has no s_Species"))?
+        .to_owned(),
+        authored_product_name: find_effective_authored_animal_shared_attribute(
+            species,
+            "s_Product",
+        )
+        .unwrap_or_default()
+        .to_owned(),
         name_key: AssetId::from_key(name_key),
         taxonomy_key: AssetId::from_key(&canonicalize_source_document_record_key(&taxonomy)),
         world_definition: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),

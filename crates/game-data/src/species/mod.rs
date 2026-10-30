@@ -21,6 +21,8 @@ pub struct SpeciesVariantBinding {
     /// Absence inherits `Species::authored_species_name`.
     #[serde(default)]
     pub authored_species_name_override: Option<String>,
+    #[serde(default)]
+    pub authored_product_name_override: Option<String>,
     pub variant: SpeciesVariant,
 }
 
@@ -31,6 +33,8 @@ pub struct Species {
     pub id: AssetId,
     /// Exact authored `s_Species`, preserving case and punctuation.
     pub authored_species_name: String,
+    #[serde(default)]
+    pub authored_product_name: String,
     pub name_key: AssetId,
     pub taxonomy_key: AssetId,
     pub world_definition: AssetId,

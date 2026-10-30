@@ -313,6 +313,14 @@ pub(super) fn collect_authored_world_definition_source_document_dependency_refer
             .rsplit(':')
             .next()
             .unwrap_or(&source_node.name);
+        if source_node_local_name.eq_ignore_ascii_case("ZTStatus") {
+            if let Some(reference) = source_node.attribute_named_any(&["configData"]) {
+                source_document_references.insert((
+                    source_document_path.to_owned(),
+                    AuthoredWorldDefinitionSourceReference::Document(reference.to_owned()),
+                ));
+            }
+        }
         if ["fog", "skylayers"]
             .iter()
             .any(|node_name| source_node_local_name.eq_ignore_ascii_case(node_name))

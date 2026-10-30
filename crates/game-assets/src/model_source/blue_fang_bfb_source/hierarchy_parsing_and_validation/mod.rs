@@ -191,21 +191,9 @@ fn parse_blue_fang_bfb_node(
                 source_path,
                 "BFB mesh-link block ID",
             )?;
-            let material_start = offset + 169;
-            let material_end = material_start + 128;
-            let material_bytes = bytes.get(material_start..material_end).ok_or_else(|| {
-                BlueFangBfbSourceError::InvalidData {
-                    source_path: source_path.to_owned(),
-                    detail: format!("truncated BFB mesh-link node at {offset}"),
-                }
-            })?;
             BlueFangBfbNodeKind::MeshLink {
                 mesh_block_id,
-                material_name: parse_blue_fang_bfb_padded_string(
-                    material_bytes,
-                    source_path,
-                    "BFB mesh-link material name",
-                )?,
+                material_names: read_blue_fang_material_names(bytes, offset + 165, source_path)?,
             }
         }
         4 => {
@@ -219,21 +207,18 @@ fn parse_blue_fang_bfb_node(
                 source_path,
                 "BFB billboard block ID",
             )?;
-            let material_start = offset + 189;
-            let material_end = material_start + 128;
-            let material_bytes = bytes.get(material_start..material_end).ok_or_else(|| {
-                BlueFangBfbSourceError::InvalidData {
-                    source_path: source_path.to_owned(),
-                    detail: format!("truncated BFB billboard node at {offset}"),
-                }
-            })?;
             BlueFangBfbNodeKind::Billboard {
                 mesh_block_id,
-                material_name: parse_blue_fang_bfb_padded_string(
-                    material_bytes,
+                material_names: vec![parse_blue_fang_bfb_padded_string(
+                    bytes.get(offset + 189..offset + 317).ok_or_else(|| {
+                        BlueFangBfbSourceError::invalid_data(
+                            source_path,
+                            "truncated BFB billboard material",
+                        )
+                    })?,
                     source_path,
-                    "BFB billboard material name",
-                )?,
+                    "BFB billboard material",
+                )?],
                 mode,
             }
         }
@@ -253,6 +238,31 @@ fn parse_blue_fang_bfb_node(
         local_transform,
         kind,
     })
+}
+
+fn read_blue_fang_material_names(
+    bytes: &[u8],
+    mut cursor: usize,
+    source_path: &str,
+) -> Result<Vec<String>, BlueFangBfbSourceError> {
+    let count =
+        read_u32_little_endian(bytes, &mut cursor, source_path, "BFB material count")? as usize;
+    let size = count.checked_mul(128).ok_or_else(|| {
+        BlueFangBfbSourceError::invalid_data(source_path, "BFB material table size overflow")
+    })?;
+    let table = bytes
+        .get(
+            cursor..cursor.checked_add(size).ok_or_else(|| {
+                BlueFangBfbSourceError::invalid_data(source_path, "BFB material table end overflow")
+            })?,
+        )
+        .ok_or_else(|| {
+            BlueFangBfbSourceError::invalid_data(source_path, "truncated BFB material table")
+        })?;
+    table
+        .chunks_exact(128)
+        .map(|name| parse_blue_fang_bfb_padded_string(name, source_path, "BFB material name"))
+        .collect()
 }
 
 fn read_blue_fang_attached_resource_name(
@@ -322,11 +332,33 @@ pub(super) fn validate_blue_fang_bfb_hierarchy(
     source_path: &str,
 ) -> Result<(), BlueFangBfbSourceError> {
     for node in hierarchy {
-        let mesh_block_id = match &node.kind {
-            BlueFangBfbNodeKind::MeshLink { mesh_block_id, .. }
-            | BlueFangBfbNodeKind::Billboard { mesh_block_id, .. } => *mesh_block_id,
+        let (mesh_block_id, material_names) = match &node.kind {
+            BlueFangBfbNodeKind::MeshLink {
+                mesh_block_id,
+                material_names,
+            }
+            | BlueFangBfbNodeKind::Billboard {
+                mesh_block_id,
+                material_names,
+                ..
+            } => (*mesh_block_id, material_names),
             _ => continue,
         };
+        if let Some(block) = mesh_blocks
+            .iter()
+            .find(|block| block.block_id == mesh_block_id)
+        {
+            if block.sections.len() != material_names.len() {
+                return Err(BlueFangBfbSourceError::invalid_data(
+                    source_path,
+                    format!(
+                        "BFB mesh block {mesh_block_id} has {} sections but {} materials",
+                        block.sections.len(),
+                        material_names.len()
+                    ),
+                ));
+            }
+        }
         if !mesh_blocks
             .iter()
             .any(|block| block.block_id == mesh_block_id)

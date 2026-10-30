@@ -9,8 +9,8 @@ use super::super::{
     blue_fang_bfb_source::{
         document::BlueFangBfbDocument,
         source_types::{
-            BlueFangBfbBone, BlueFangBfbMesh, BlueFangBfbMeshBlock, BlueFangBfbNodeKind,
-            BlueFangBfbVertex,
+            BlueFangBfbBone, BlueFangBfbMesh, BlueFangBfbMeshBlock, BlueFangBfbMeshSection,
+            BlueFangBfbNodeKind, BlueFangBfbVertex,
         },
     },
     model::{JointSource, MeshSource, ModelSource, SubmeshSource},
@@ -31,20 +31,22 @@ struct SelectedBlueFangBfbRenderPart<'a> {
     node_index: usize,
     name: &'a str,
     mesh_block: &'a BlueFangBfbMeshBlock,
+    section: &'a BlueFangBfbMeshSection,
+    section_index: usize,
     mesh_data: &'a BlueFangBfbMesh,
     material_name: &'a str,
 }
 
 impl<'a> SelectedBlueFangBfbRenderPart<'a> {
     fn vertices(&self) -> &'a [BlueFangBfbVertex] {
-        let vertex_start = self.mesh_block.vertex_start as usize;
-        let vertex_end = vertex_start + self.mesh_block.vertex_count as usize;
+        let vertex_start = self.section.vertex_start as usize;
+        let vertex_end = vertex_start + self.section.vertex_count as usize;
         &self.mesh_data.vertices[vertex_start..vertex_end]
     }
 
     fn indices(&self) -> &'a [u32] {
-        let index_start = self.mesh_block.index_start as usize;
-        let index_end = index_start + self.mesh_block.index_count as usize;
+        let index_start = self.section.index_start as usize;
+        let index_end = index_start + self.section.index_count as usize;
         &self.mesh_data.indices[index_start..index_end]
     }
 }
@@ -71,16 +73,16 @@ fn select_blue_fang_render_parts_for_lod(
         .enumerate()
         .filter(|(_, node)| node.lod_index.is_none_or(|index| index == lod_index))
         .filter_map(|(node_index, node)| {
-            let (mesh_block_id, material_name) = match &node.kind {
+            let (mesh_block_id, material_names) = match &node.kind {
                 BlueFangBfbNodeKind::MeshLink {
                     mesh_block_id,
-                    material_name,
+                    material_names,
                 }
                 | BlueFangBfbNodeKind::Billboard {
                     mesh_block_id,
-                    material_name,
+                    material_names,
                     ..
-                } => (*mesh_block_id, material_name.as_str()),
+                } => (*mesh_block_id, material_names),
                 _ => return None,
             };
             let mesh_block = document
@@ -89,14 +91,26 @@ fn select_blue_fang_render_parts_for_lod(
             let mesh_data = document
                 .meshes()
                 .find(|mesh| mesh.block_id == mesh_block.mesh_data_block_id)?;
-            Some(SelectedBlueFangBfbRenderPart {
-                node_index,
-                name: node.name.as_str(),
-                mesh_block,
-                mesh_data,
-                material_name,
-            })
+            Some(
+                mesh_block
+                    .sections
+                    .iter()
+                    .zip(material_names)
+                    .enumerate()
+                    .map(move |(section_index, (section, material_name))| {
+                        SelectedBlueFangBfbRenderPart {
+                            node_index,
+                            name: node.name.as_str(),
+                            mesh_block,
+                            mesh_data,
+                            material_name,
+                            section,
+                            section_index,
+                        }
+                    }),
+            )
         })
+        .flatten()
         .collect()
 }
 
@@ -234,7 +248,11 @@ fn adapt_bfb_part(
     }
     let index_count = indices.len() as u32;
     Ok(ModelSource {
-        virtual_path: blue_fang_geometry_virtual_path(document, part.node_index),
+        virtual_path: blue_fang_geometry_virtual_path(
+            document,
+            part.node_index,
+            part.section_index,
+        ),
         meshes: vec![MeshSource {
             vertices,
             indices,

@@ -723,6 +723,12 @@ impl<'a> WorldDefinitionsView<'a> {
             .filter_map(move |((_, id), _)| self.find_rating(*id))
     }
 
+    pub fn starting_fame(self, mode: AssetId) -> Option<&'a StartingFamePolicy> {
+        self.documents()
+            .flat_map(|asset| asset.document.starting_fame.iter())
+            .find(|policy| policy.mode == mode)
+    }
+
     pub fn fame_thresholds(self) -> impl Iterator<Item = &'a FameThreshold> {
         self.documents()
             .flat_map(|asset| asset.document.fame_thresholds.iter())

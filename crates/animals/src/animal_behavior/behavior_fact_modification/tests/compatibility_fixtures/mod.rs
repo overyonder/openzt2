@@ -26,6 +26,7 @@ pub(super) fn install_definitions(
             donation: None,
             id: species_id,
             authored_species_name: "test:species".to_owned(),
+            authored_product_name: String::new(),
             name_key: species_id,
             taxonomy_key: species_id,
             world_definition: species_id,
@@ -56,6 +57,7 @@ pub(super) fn install_definitions(
         variants: vec![SpeciesVariantBinding {
             species: species_id,
             authored_species_name_override: None,
+            authored_product_name_override: None,
             variant: SpeciesVariant {
                 id: variant_id,
                 behavior_subject_type_identifiers: ["b_carnivore", "b_fooddisheater"]

@@ -46,6 +46,12 @@ pub(in super::super) struct BlueFangBfbMeshBlock {
     pub(in super::super) block_type: u16,
     pub(in super::super) name: String,
     pub(in super::super) mesh_data_block_id: u32,
+    pub(in super::super) sections: Vec<BlueFangBfbMeshSection>,
+    pub(in super::super) skin: Option<BlueFangBfbSkin>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(in super::super) struct BlueFangBfbMeshSection {
     pub(in super::super) index_start: u32,
     pub(in super::super) index_count: u32,
     pub(in super::super) vertex_start: u32,
@@ -53,7 +59,6 @@ pub(in super::super) struct BlueFangBfbMeshBlock {
     pub(in super::super) face_count: u32,
     pub(in super::super) bounds_center: [f32; 3],
     pub(in super::super) bounds_radius: f32,
-    pub(in super::super) skin: Option<BlueFangBfbSkin>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -93,11 +98,11 @@ pub(in super::super) enum BlueFangBfbNodeKind {
     LodGroup,
     MeshLink {
         mesh_block_id: u32,
-        material_name: String,
+        material_names: Vec<String>,
     },
     Billboard {
         mesh_block_id: u32,
-        material_name: String,
+        material_names: Vec<String>,
         mode: u32,
     },
     ParticleSystem {

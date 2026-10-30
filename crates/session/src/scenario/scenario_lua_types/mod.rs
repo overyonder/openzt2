@@ -29,6 +29,7 @@ pub(super) struct ScenarioLuaScriptResult {
         openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus,
     pub(super) economy_operations: Vec<ScenarioEconomyOperation>,
     pub(super) award_point_adjustments: Vec<i32>,
+    pub(super) maximum_fame_percent: Option<f32>,
     pub(super) challenge_offer_source_paths: Vec<String>,
     pub(super) challenge_panel: Option<super::challenge_offer_types::ScenarioChallengePanelRequest>,
 }

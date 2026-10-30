@@ -1,4 +1,5 @@
 use openzt2_interface_state::ui::UiSet;
+mod authored_fame_star_presentation;
 mod authored_globe_camera_framing;
 mod authored_globe_interaction;
 mod authored_globe_marker_presentation;
@@ -280,6 +281,10 @@ impl Plugin for GameUiPlugin {
                         authored_multi_icon_presentation::present_multi_icons
                             .after(projection::project_ui_documents),
                         authored_credits_sequence_presentation::advance_authored_credits_sequence_presentations,
+                        (authored_fame_star_presentation::create_fame_star_scenes,
+                         authored_fame_star_presentation::hydrate_fame_stars,
+                         authored_fame_star_presentation::frame_fame_star_models,
+                         authored_fame_star_presentation::present_fame_stars).chain(),
                         authored_rail_camera_presentation::hydrate_rail_cameras,
                         authored_rail_camera_presentation::update_rail_cameras
                             .after(authored_rail_camera_presentation::hydrate_rail_cameras),

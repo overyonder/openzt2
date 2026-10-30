@@ -47,6 +47,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
         MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
         MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
     ),
 ) {
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
@@ -113,6 +114,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                         &mut outputs.8,
                         &mut outputs.9,
                         &mut outputs.10,
+                        &mut outputs.11,
                     );
                 }
                 Ok(result) if result.condition_status != ScenarioObjectiveStatus::Active => {
@@ -131,6 +133,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                         &mut outputs.8,
                         &mut outputs.9,
                         &mut outputs.10,
+                        &mut outputs.11,
                     );
                     *status = next_status;
                     changed.write(ScenarioObjectiveStatusChanged {
@@ -154,6 +157,7 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
                     &mut outputs.8,
                     &mut outputs.9,
                     &mut outputs.10,
+                    &mut outputs.11,
                 ),
                 Err(error) => error!(entry = %binding.entry, %error, "scenario Lua call failed"),
             }
@@ -186,6 +190,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
         MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
         MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
     ),
 ) {
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
@@ -320,6 +325,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
                         &mut outputs.8,
                         &mut outputs.9,
                         &mut outputs.10,
+                        &mut outputs.11,
                     );
                 }
                 Err(error) => {

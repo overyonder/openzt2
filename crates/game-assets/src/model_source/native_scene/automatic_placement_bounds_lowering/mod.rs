@@ -351,28 +351,30 @@ fn collect_blue_fang_mesh_points(
         else {
             continue;
         };
-        let vertex_start = mesh_block.vertex_start as usize;
-        let vertex_end = vertex_start + mesh_block.vertex_count as usize;
-        let transformed = mesh.vertices[vertex_start..vertex_end]
-            .iter()
-            .map(|vertex| blue_fang_bfb_point(node.world_transform, vertex.position))
-            .collect::<Result<Vec<_>>>()?;
-        if clip_to_agent_height {
-            let start = mesh_block.index_start as usize;
-            let end = start + mesh_block.index_count as usize;
-            for triangle in mesh.indices[start..end].chunks_exact(3) {
-                append_triangle_below_agent_height(
-                    &transformed,
-                    [
-                        triangle[0] as usize,
-                        triangle[1] as usize,
-                        triangle[2] as usize,
-                    ],
-                    points,
-                )?;
+        for section in &mesh_block.sections {
+            let vertex_start = section.vertex_start as usize;
+            let vertex_end = vertex_start + section.vertex_count as usize;
+            let transformed = mesh.vertices[vertex_start..vertex_end]
+                .iter()
+                .map(|vertex| blue_fang_bfb_point(node.world_transform, vertex.position))
+                .collect::<Result<Vec<_>>>()?;
+            if clip_to_agent_height {
+                let start = section.index_start as usize;
+                let end = start + section.index_count as usize;
+                for triangle in mesh.indices[start..end].chunks_exact(3) {
+                    append_triangle_below_agent_height(
+                        &transformed,
+                        [
+                            triangle[0] as usize,
+                            triangle[1] as usize,
+                            triangle[2] as usize,
+                        ],
+                        points,
+                    )?;
+                }
+            } else {
+                points.extend(transformed);
             }
-        } else {
-            points.extend(transformed);
         }
     }
     Ok(())

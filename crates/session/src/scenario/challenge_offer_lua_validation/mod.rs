@@ -75,6 +75,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
         MessageWriter<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>,
         MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
         MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+        MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
     ),
 ) {
     let Some(clock) = fact_sources.zoo_clock() else {
@@ -214,6 +215,7 @@ pub(super) fn evaluate_challenge_manager_and_validate_one_picked_challenge(
                 &mut outputs.8,
                 &mut outputs.9,
                 &mut outputs.10,
+                &mut outputs.11,
             );
         }
         Err(error) => {

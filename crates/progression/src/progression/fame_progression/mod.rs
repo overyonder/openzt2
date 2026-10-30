@@ -16,6 +16,28 @@ use super::{
     unlock_types::UnlockedCatalogueDefinitionSet,
 };
 
+pub(super) fn apply_scenario_maximum_fame_requests(
+    mut requests: MessageReader<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
+    mut fame: ResMut<Fame>,
+    mut changed: MessageWriter<ProgressionFactChanged>,
+) {
+    for request in requests.read() {
+        if !request.percent.is_finite() || !(0.0..=100.0).contains(&request.percent) {
+            continue;
+        }
+        if fame
+            .maximum_percent_reached
+            .is_none_or(|previous| request.percent > previous)
+        {
+            fame.maximum_percent_reached = Some(request.percent);
+            fame.maximum_reached = fame
+                .maximum_reached
+                .max((request.percent / 10.0).floor() as u8);
+            changed.write(ProgressionFactChanged::Fame);
+        }
+    }
+}
+
 pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -31,6 +53,10 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    // An empty threshold set supplies no rating-to-fame rule.
+    if definitions.fame_thresholds().next().is_none() {
+        return;
+    }
     let guest_count = guests.iter().count() as u32;
     let next = select_fame_level_for_rating_and_guest_count(
         definitions.fame_thresholds().map(|threshold| {

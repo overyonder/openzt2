@@ -11,8 +11,8 @@ use super::{
     source_error::BlueFangBfbSourceError,
     source_matrix_reading::read_blue_fang_bfb_row_major_matrix,
     source_types::{
-        BlueFangBfbBone, BlueFangBfbMesh, BlueFangBfbMeshBlock, BlueFangBfbSkin, BlueFangBfbVertex,
-        BlueFangBfbVertexInfluence,
+        BlueFangBfbBone, BlueFangBfbMesh, BlueFangBfbMeshBlock, BlueFangBfbMeshSection,
+        BlueFangBfbSkin, BlueFangBfbVertex, BlueFangBfbVertexInfluence,
     },
 };
 
@@ -154,69 +154,77 @@ pub(super) fn parse_blue_fang_bfb_mesh_block(
                 source_path: source_path.to_owned(),
                 detail: "BFB logical mesh offset overflow".to_owned(),
             })?;
-    let payload_end =
-        cursor
-            .checked_add(44)
-            .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
-                source_path: source_path.to_owned(),
-                detail: "BFB logical mesh payload overflow".to_owned(),
-            })?;
+    let mesh_data_block_id =
+        read_u32_little_endian(bytes, &mut cursor, source_path, "BFB mesh-data block ID")?;
+    let section_count =
+        read_u32_little_endian(bytes, &mut cursor, source_path, "BFB mesh section count")? as usize;
+    let payload_end = section_count
+        .checked_mul(36)
+        .and_then(|size| cursor.checked_add(size))
+        .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
+            source_path: source_path.to_owned(),
+            detail: "BFB logical mesh payload overflow".to_owned(),
+        })?;
     if payload_end > block.block_end {
         return Err(BlueFangBfbSourceError::InvalidData {
             source_path: source_path.to_owned(),
             detail: "truncated BFB logical mesh block".to_owned(),
         });
     }
-    let mesh_data_block_id =
-        read_u32_little_endian(bytes, &mut cursor, source_path, "BFB mesh-data block ID")?;
-    let _unknown = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh unknown field",
-    )?;
-    let index_start = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh index start",
-    )?;
-    let index_count = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh index count",
-    )?;
-    let vertex_start = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh vertex start",
-    )?;
-    let vertex_count = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh vertex count",
-    )?;
-    let face_count = read_u32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh face count",
-    )?;
-    let bounds_center = read_three_component_vector(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh bounds center",
-    )?;
-    let bounds_radius = read_f32_little_endian(
-        bytes,
-        &mut cursor,
-        source_path,
-        "BFB logical mesh bounds radius",
-    )?;
+    let mut sections = Vec::with_capacity(section_count);
+    for _ in 0..section_count {
+        let index_start = read_u32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh index start",
+        )?;
+        let index_count = read_u32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh index count",
+        )?;
+        let vertex_start = read_u32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh vertex start",
+        )?;
+        let vertex_count = read_u32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh vertex count",
+        )?;
+        let face_count = read_u32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh face count",
+        )?;
+        let bounds_center = read_three_component_vector(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh bounds center",
+        )?;
+        let bounds_radius = read_f32_little_endian(
+            bytes,
+            &mut cursor,
+            source_path,
+            "BFB logical mesh bounds radius",
+        )?;
+        sections.push(BlueFangBfbMeshSection {
+            index_start,
+            index_count,
+            vertex_start,
+            vertex_count,
+            face_count,
+            bounds_center,
+            bounds_radius,
+        });
+    }
     let skin = (block.block_type == 8)
         .then(|| parse_blue_fang_bfb_skin(bytes, payload_end, block.block_end, source_path))
         .transpose()?;
@@ -225,13 +233,7 @@ pub(super) fn parse_blue_fang_bfb_mesh_block(
         block_type: block.block_type,
         name: block.name.clone(),
         mesh_data_block_id,
-        index_start,
-        index_count,
-        vertex_start,
-        vertex_count,
-        face_count,
-        bounds_center,
-        bounds_radius,
+        sections,
         skin,
     })
 }
@@ -354,65 +356,67 @@ pub(super) fn validate_blue_fang_bfb_mesh_blocks(
                     block.block_id, block.mesh_data_block_id
                 ),
             })?;
-        let vertex_end = block
-            .vertex_start
-            .checked_add(block.vertex_count)
-            .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
-                source_path: source_path.to_owned(),
-                detail: format!(
-                    "BFB logical mesh block {} vertex range overflows",
-                    block.block_id
-                ),
-            })? as usize;
-        if vertex_end > mesh.vertices.len() {
-            return Err(BlueFangBfbSourceError::InvalidData {
+        for section in &block.sections {
+            let vertex_end = section
+                .vertex_start
+                .checked_add(section.vertex_count)
+                .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
+                    source_path: source_path.to_owned(),
+                    detail: format!(
+                        "BFB logical mesh block {} vertex range overflows",
+                        block.block_id
+                    ),
+                })? as usize;
+            if vertex_end > mesh.vertices.len() {
+                return Err(BlueFangBfbSourceError::InvalidData {
                 source_path: source_path.to_owned(),
                 detail: format!(
                     "BFB logical mesh block {} vertex range {}..{} exceeds mesh-data block {} vertex count {}",
                     block.block_id,
-                    block.vertex_start,
+                    section.vertex_start,
                     vertex_end,
                     mesh.block_id,
                     mesh.vertices.len()
                 ),
             });
-        }
-        let index_start = block.index_start as usize;
-        let index_end = block
-            .index_start
-            .checked_add(block.index_count)
-            .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
-                source_path: source_path.to_owned(),
-                detail: format!(
-                    "BFB logical mesh block {} index range overflows",
-                    block.block_id
-                ),
-            })? as usize;
-        let indices = mesh.indices.get(index_start..index_end).ok_or_else(|| {
+            }
+            let index_start = section.index_start as usize;
+            let index_end = section
+                .index_start
+                .checked_add(section.index_count)
+                .ok_or_else(|| BlueFangBfbSourceError::InvalidData {
+                    source_path: source_path.to_owned(),
+                    detail: format!(
+                        "BFB logical mesh block {} index range overflows",
+                        block.block_id
+                    ),
+                })? as usize;
+            let indices = mesh.indices.get(index_start..index_end).ok_or_else(|| {
             BlueFangBfbSourceError::InvalidData {
                 source_path: source_path.to_owned(),
                 detail: format!(
                     "BFB logical mesh block {} index range {}..{} exceeds mesh-data block {} index count {}",
                     block.block_id,
-                    block.index_start,
+                    section.index_start,
                     index_end,
                     mesh.block_id,
                     mesh.indices.len()
                 ),
             }
         })?;
-        if let Some(index) = indices
-            .iter()
-            .copied()
-            .find(|index| *index >= block.vertex_count)
-        {
-            return Err(BlueFangBfbSourceError::InvalidData {
-                source_path: source_path.to_owned(),
-                detail: format!(
-                    "BFB logical mesh block {} index {index} exceeds its vertex count {}",
-                    block.block_id, block.vertex_count
-                ),
-            });
+            if let Some(index) = indices
+                .iter()
+                .copied()
+                .find(|index| *index >= section.vertex_count)
+            {
+                return Err(BlueFangBfbSourceError::InvalidData {
+                    source_path: source_path.to_owned(),
+                    detail: format!(
+                        "BFB logical mesh block {} index {index} exceeds its vertex count {}",
+                        block.block_id, section.vertex_count
+                    ),
+                });
+            }
         }
     }
     Ok(())

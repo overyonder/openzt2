@@ -210,7 +210,23 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         .unwrap_or_default();
     commands.insert_resource(AdmissionPrice(Money(admission_cents)));
     commands.insert_resource(ZooAdmissionsOpen(start_record.admissions_open));
-    if start_record.maximum_fame_percent_reached.is_none()
+    let mode_path = match request.mode {
+        openzt2_world_state::game_session_types::WorldSessionMode::Freeform => {
+            "config/freeform_mode.xml"
+        }
+        openzt2_world_state::game_session_types::WorldSessionMode::Challenge => {
+            "config/challenge_mode.xml"
+        }
+        openzt2_world_state::game_session_types::WorldSessionMode::Campaign => {
+            "config/campaign_mode.xml"
+        }
+    };
+    let starting_fame = definitions.starting_fame(AssetId::from_virtual_path(mode_path));
+    let fame_half_stars = starting_fame.map_or(fame_half_stars, |policy| {
+        (policy.percent / 10.0).floor() as u8
+    });
+    if starting_fame.is_none()
+        && start_record.maximum_fame_percent_reached.is_none()
         && matches!(
             request.mode,
             openzt2_world_state::game_session_types::WorldSessionMode::Campaign
@@ -224,10 +240,13 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             "starting zoo has no maximum fame percentage; fame-gated research remains unavailable"
         );
     }
+    info!(fame_half_stars, starting_fame_percent = ?starting_fame.map(|policy| policy.percent), "initialized starting zoo fame");
     commands.insert_resource(Fame {
         half_stars: fame_half_stars,
         maximum_reached: fame_half_stars,
-        maximum_percent_reached: start_record.maximum_fame_percent_reached,
+        maximum_percent_reached: starting_fame
+            .map(|policy| policy.percent)
+            .or(start_record.maximum_fame_percent_reached),
     });
     commands
         .entity(root)

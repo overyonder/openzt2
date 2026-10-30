@@ -329,6 +329,31 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         primary_path,
         "config/freeform_mode.xml" | "config/challenge_mode.xml" | "config/campaign_mode.xml"
     ) {
+        if let Some(status) = index
+            .document_root(primary_path)
+            .and_then(|root| root.descendant_record("ZTStatus"))
+        {
+            let source = status.value(&["configData"]).and_then(|path| {
+                index.document_root(&path.replace('\\', "/").to_ascii_lowercase())
+            });
+            if let Some(source) = source {
+                let percent: f32 =
+                    world_definition_source_value_reading_and_conversion::required_number(
+                        &source,
+                        &["zooFameStart"],
+                    )?;
+                if !percent.is_finite() || !(0.0..=100.0).contains(&percent) {
+                    return Err(BindError::record(
+                        &source,
+                        "starting fame is outside 0..100",
+                    ));
+                }
+                output.document.starting_fame.push(openzt2_game_data::world_definitions::catalogue_and_progression::zoo_rating_fame_and_award_definition_types::StartingFamePolicy {
+                    mode: AssetId::from_virtual_path(primary_path),
+                    percent,
+                });
+            }
+        }
         if let Some(request) = index
             .document_root(primary_path)
             .and_then(|root| root.descendant_record("ZTAIStaffWaterCleaningMgr"))

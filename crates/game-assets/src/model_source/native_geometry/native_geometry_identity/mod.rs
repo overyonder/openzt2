@@ -25,9 +25,10 @@ impl NativeMaterialReference<'_> {
 pub(in crate::model_source) fn blue_fang_geometry_virtual_path(
     document: &BlueFangBfbDocument,
     node_index: usize,
+    section_index: usize,
 ) -> String {
     format!(
-        "{}#geometry/bfb_{node_index:08x}",
+        "{}#geometry/bfb_{node_index:08x}_{section_index:08x}",
         document.source_path.as_str()
     )
 }

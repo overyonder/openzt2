@@ -14,6 +14,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         Vec<openzt2_zoo_state::economy::scenario_economy_command_types::ScenarioEconomyOperation>,
     >,
     award_points: &'env RefCell<Vec<i32>>,
+    maximum_fame_percent: &'env RefCell<Option<f32>>,
     challenge_offers: &'env RefCell<Vec<String>>,
     scenario: openzt2_game_data::AssetId,
     shown_rules: &'env RefCell<
@@ -185,6 +186,26 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     super::scenario_lua_ui::install_manager_commands(scope, &scenario_manager, ui)?;
     let economy_manager = lua.create_table()?;
     let status = lua.create_table()?;
+    status.set(
+        "ZT_GET_ZOO_FAME",
+        scope.create_function(move |_, _: Table| {
+            Ok(f32::from(queries.zoo_fame.half_stars) * 10.0)
+        })?,
+    )?;
+    status.set(
+        "ZT_GET_FAME_HALFSTARS",
+        scope.create_function(move |_, _: Table| Ok(queries.zoo_fame.half_stars))?,
+    )?;
+    status.set(
+        "ZT_SET_MAX_FAME_REACHED",
+        scope.create_function(move |_, (_, percent): (Table, f32)| {
+            if !percent.is_finite() {
+                return Err(mlua::Error::runtime("maximum fame must be finite"));
+            }
+            *maximum_fame_percent.borrow_mut() = Some(percent.clamp(0.0, 100.0));
+            Ok(())
+        })?,
+    )?;
     status.set(
         "ZT_GET_DONATIONBYANIMALTYPE",
         scope.create_function(move |_, (_, category): (Table, String)| {

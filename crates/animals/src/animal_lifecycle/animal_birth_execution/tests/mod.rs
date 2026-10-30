@@ -14,6 +14,7 @@ fn document() -> SpeciesDocument {
             donation: None,
             id,
             authored_species_name: "test_species".to_owned(),
+            authored_product_name: String::new(),
             name_key: id,
             taxonomy_key: id,
             world_definition: id,
@@ -47,6 +48,7 @@ fn document() -> SpeciesDocument {
             .map(|(index, sex)| SpeciesVariantBinding {
                 species: id,
                 authored_species_name_override: None,
+                authored_product_name_override: None,
                 variant: SpeciesVariant {
                     id: AssetId::from_key(&format!("young_{index}")),
                     behavior_subject_type_identifiers: vec![],

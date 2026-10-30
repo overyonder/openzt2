@@ -6,3 +6,8 @@ pub struct Fame {
     pub maximum_reached: u8,
     pub maximum_percent_reached: Option<f32>,
 }
+
+#[derive(Message, Debug, Clone, Copy)]
+pub struct SetScenarioMaximumFame {
+    pub percent: f32,
+}

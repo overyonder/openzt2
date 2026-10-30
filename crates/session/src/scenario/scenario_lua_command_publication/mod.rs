@@ -32,7 +32,11 @@ pub(super) fn publish_commands_produced_by_scenario_lua_script(
     >,
     ui: &mut MessageWriter<super::scenario_lua_ui::ScenarioUiCommand>,
     entities: &mut MessageWriter<super::scenario_lua_entity_commands::ScenarioEntityCommand>,
+    fame: &mut MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
 ) {
+    if let Some(percent) = result.maximum_fame_percent {
+        fame.write(openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame { percent });
+    }
     let _ = entities.write_batch(result.entities);
     let _ = ui.write_batch(result.ui);
     let _ = profile_variables.write_batch(result.profile_variables);

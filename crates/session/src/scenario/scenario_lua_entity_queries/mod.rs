@@ -111,6 +111,38 @@ fn matches_kind(fact: &EntityFacts, kind: &str, queries: ScenarioLuaQueryFacts<'
     matches_entity_type(fact, kind, queries.species, queries.world_definitions)
 }
 
+fn authored_entity_string_attribute(
+    queries: ScenarioLuaQueryFacts<'_>,
+    attribute: &str,
+    species_id: Option<AssetId>,
+    variant_id: Option<AssetId>,
+) -> mlua::Result<String> {
+    let species = queries
+        .species
+        .ok_or_else(|| mlua::Error::runtime("species catalogue unavailable"))?;
+    if !matches!(attribute, "s_Species" | "s_Product") {
+        return Err(mlua::Error::runtime(format!(
+            "BFG_GET_ATTR_STRING does not expose {attribute}"
+        )));
+    }
+    if let Some(name) = variant_id
+        .and_then(|variant| species.find_variant_binding(variant))
+        .and_then(|binding| match attribute {
+            "s_Species" => binding.authored_species_name_override.as_deref(),
+            _ => binding.authored_product_name_override.as_deref(),
+        })
+    {
+        return Ok(name.to_owned());
+    }
+    species_id
+        .and_then(|id| species.find(id))
+        .map(|species| match attribute {
+            "s_Species" => species.authored_species_name.clone(),
+            _ => species.authored_product_name.clone(),
+        })
+        .ok_or_else(|| mlua::Error::runtime("entity has no authored species"))
+}
+
 fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool> {
     if let Some(id) = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)? {
         Ok(fact.persistent_id == Some(id))
@@ -254,6 +286,8 @@ fn create_entity_component<'scope, 'env: 'scope>(
     fact: EntityFacts,
 ) -> mlua::Result<Table> {
     let entity = fact.entity;
+    let species_id = fact.species;
+    let variant_id = fact.variant;
     let component = lua.create_table()?;
     component.set(ENTITY_FIELD, entity.to_bits())?;
     component.set(PERSISTENT_ENTITY_FIELD, fact.persistent_id)?;
@@ -268,15 +302,22 @@ fn create_entity_component<'scope, 'env: 'scope>(
     )?;
     component.set(
         "BFG_GET_ATTR_BOOLEAN",
-        lua.create_function(
-            move |_, (_, attribute): (Table, String)| match attribute.as_str() {
+        scope.create_function(move |_, (_, attribute): (Table, String)| {
+            match attribute.as_str() {
                 "b_Pregnant" => Ok(fact.pregnant),
                 "b_Adult" => Ok(fact.adult),
+                "b_ExtinctAnimal" => Ok(matches_kind(&fact, &attribute, queries)),
                 _ => Err(mlua::Error::runtime(format!(
                     "BFG_GET_ATTR_BOOLEAN does not expose {attribute}"
                 ))),
-            },
-        )?,
+            }
+        })?,
+    )?;
+    component.set(
+        "BFG_GET_ATTR_STRING",
+        scope.create_function(move |_, (_, attribute): (Table, String)| {
+            authored_entity_string_attribute(queries, &attribute, species_id, variant_id)
+        })?,
     )?;
     component.set(
         "BFG_GET_ATTR_FLOAT",
@@ -387,20 +428,7 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
                 .iter()
                 .find(|fact| fact.entity == entity)
                 .ok_or_else(|| mlua::Error::runtime("species requested for absent entity"))?;
-            let species = queries
-                .species
-                .ok_or_else(|| mlua::Error::runtime("species catalogue unavailable"))?;
-            if let Some(name) = fact
-                .variant
-                .and_then(|variant| species.find_variant_binding(variant))
-                .and_then(|binding| binding.authored_species_name_override.as_deref())
-            {
-                return Ok(name.to_owned());
-            }
-            fact.species
-                .and_then(|id| species.find(id))
-                .map(|species| species.authored_species_name.clone())
-                .ok_or_else(|| mlua::Error::runtime("entity has no authored species"))
+            authored_entity_string_attribute(queries, "s_Species", fact.species, fact.variant)
         })?,
     )?;
     manager.set(

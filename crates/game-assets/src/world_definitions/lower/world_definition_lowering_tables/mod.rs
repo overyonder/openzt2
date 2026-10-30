@@ -84,6 +84,7 @@ impl WorldDefinitionLoweringTables {
             unlocks,
             rating_definitions,
             fame_thresholds,
+            starting_fame,
             awards,
             tanks,
             aquatic_requirements,

@@ -51,11 +51,11 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
         )?;
         match &node.kind {
             BlueFangBfbNodeKind::MeshLink {
-                material_name,
+                material_names,
                 mesh_block_id,
             }
             | BlueFangBfbNodeKind::Billboard {
-                material_name,
+                material_names,
                 mesh_block_id,
                 ..
             } => {
@@ -63,15 +63,27 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
                     .mesh_blocks()
                     .find(|mesh| mesh.block_id == *mesh_block_id)
                 {
-                    builder.local_render_bound(
-                        entity,
-                        convert_source_z_up_vector_to_bevy_y_up_coordinates(mesh.bounds_center),
-                        mesh.bounds_radius,
-                    );
+                    for (section_index, (section, material_name)) in
+                        mesh.sections.iter().zip(material_names).enumerate()
+                    {
+                        let section_entity = builder.entity(
+                            &format!("{key}_section_{section_index:08x}"),
+                            Some(&key),
+                            identity_prefab_transform(),
+                            true,
+                        )?;
+                        builder.local_render_bound(
+                            section_entity,
+                            convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                                section.bounds_center,
+                            ),
+                            section.bounds_radius,
+                        );
+                        let scene = blue_fang_geometry_virtual_path(document, index, section_index);
+                        builder.renderable_from(section_entity, &model_path, scene);
+                        builder.blue_fang_model_material_override(material_name);
+                    }
                 }
-                let scene = blue_fang_geometry_virtual_path(document, index);
-                builder.renderable_from(entity, &model_path, scene);
-                builder.blue_fang_model_material_override(material_name);
             }
             BlueFangBfbNodeKind::Node | BlueFangBfbNodeKind::LodGroup => {}
             BlueFangBfbNodeKind::ModelJoint { component_name } => {

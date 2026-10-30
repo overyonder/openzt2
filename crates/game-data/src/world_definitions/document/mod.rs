@@ -24,7 +24,7 @@ use super::{
         catalogue_definition_types::CatalogueEntry,
         research_and_unlock_definition_types::{ResearchDefinition, UnlockDefinition},
         zoo_rating_fame_and_award_definition_types::{
-            AwardDefinition, FameThreshold, RatingDefinition,
+            AwardDefinition, FameThreshold, RatingDefinition, StartingFamePolicy,
         },
         zoopedia_entry_types::ZoopediaEntry,
     },
@@ -89,6 +89,7 @@ pub struct WorldDefinitionDocument {
     pub unlocks: Vec<UnlockDefinition>,
     pub rating_definitions: Vec<RatingDefinition>,
     pub fame_thresholds: Vec<FameThreshold>,
+    pub starting_fame: Vec<StartingFamePolicy>,
     pub awards: Vec<AwardDefinition>,
     pub tanks: Vec<TankDefinition>,
     pub aquatic_requirements: Vec<AquaticRequirement>,

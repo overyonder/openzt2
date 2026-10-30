@@ -79,6 +79,7 @@ impl Plugin for ProgressionPlugin {
             .add_message::<RecordCompletedChallengeRequest>()
             .add_message::<ProgressionAwardGrantCandidate>()
             .add_message::<AdjustScenarioAwardPointTotalRequest>()
+            .add_message::<fame_types::SetScenarioMaximumFame>()
             .add_message::<adoption_and_content_availability_types::MakeScenarioContentAvailableRequest>()
             .add_systems(
                 Update,
@@ -169,6 +170,7 @@ impl Plugin for ProgressionPlugin {
                 (
                     scenario_award_point_adjustment::
                         apply_requested_scenario_award_point_total_adjustments,
+                    fame_progression::apply_scenario_maximum_fame_requests,
                     profile_challenge_fact_recording::
                         record_completed_profile_challenge_family_counts,
                 )

@@ -2,17 +2,18 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
 
-pub(super) fn find_effective_authored_species_name<'a>(
+pub(super) fn find_effective_authored_animal_shared_attribute<'a>(
     record: &RecordView<'_, 'a>,
+    attribute: &str,
 ) -> Option<&'a str> {
-    find_inherited_animal_shared_attribute(record, "s_Species").or_else(|| {
+    find_inherited_animal_shared_attribute(record, attribute).or_else(|| {
         record
             .type_tokens()
             .iter()
             .rev()
             .filter(|key| !source_document_names_are_semantically_equal(key, record.key))
             .filter_map(|key| record.find_resolved_source_record_by_reference(key))
-            .find_map(|ancestor| find_inherited_animal_shared_attribute(&ancestor, "s_Species"))
+            .find_map(|ancestor| find_inherited_animal_shared_attribute(&ancestor, attribute))
     })
 }
 

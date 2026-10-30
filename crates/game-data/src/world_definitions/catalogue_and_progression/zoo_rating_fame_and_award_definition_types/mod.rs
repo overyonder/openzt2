@@ -62,3 +62,9 @@ pub struct AwardCondition {
     pub value: i32,
     pub duration_ticks: u64,
 }
+
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct StartingFamePolicy {
+    pub mode: AssetId,
+    pub percent: f32,
+}
