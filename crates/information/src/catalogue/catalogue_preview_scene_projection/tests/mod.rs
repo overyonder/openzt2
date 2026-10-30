@@ -4,6 +4,8 @@ use super::*;
 fn missing_registry_does_not_retain_a_cleared_or_replaced_preview() {
     let mut app = App::new();
     app.init_resource::<Assets<Image>>()
+        .init_resource::<Assets<Mesh>>()
+        .init_resource::<Assets<StandardMaterial>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<SelectedCatalogueEntry>()

@@ -350,7 +350,16 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
                     ) {
                         let mut formatted_amount = String::new();
                         let _ = localization.write_localized_currency_amount(
-                            price.0,
+                            // A ground-path purchase covers the four
+                            // triangles of one complete surface tile.
+                            if world_definitions
+                                .find_path(details_definition)
+                                .is_some_and(|path| !path.elevated)
+                            {
+                                price.0.saturating_mul(4)
+                            } else {
+                                price.0
+                            },
                             !omit_fractional_currency_cents,
                             &mut formatted_amount,
                         );

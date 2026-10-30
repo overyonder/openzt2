@@ -32,7 +32,7 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 
-const CATALOGUE_PREVIEW_SCENE_RENDER_LAYER: usize = 29;
+pub(super) const CATALOGUE_PREVIEW_SCENE_RENDER_LAYER: usize = 29;
 
 #[cfg(test)]
 mod tests;
@@ -64,6 +64,12 @@ impl CataloguePreviewScene {
 #[derive(Component)]
 pub(crate) struct CataloguePreviewPrefab(Handle<ScenePrefabAsset>);
 
+impl CataloguePreviewPrefab {
+    pub(super) fn new(prefab: Handle<ScenePrefabAsset>) -> Self {
+        Self(prefab)
+    }
+}
+
 #[derive(Component)]
 pub struct CataloguePreviewOwner(Entity);
 
@@ -80,6 +86,8 @@ pub(crate) struct CataloguePreviewAnimationAttachmentConsidered;
 pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
     mut commands: Commands,
     mut images: ResMut<Assets<Image>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     selected_entry: Res<SelectedCatalogueEntry>,
@@ -157,12 +165,18 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
                         .map(|presentation| presentation.prefab)
                 })
         });
-        let Some(prefab) = prefab.and_then(|prefab| definitions.scene(prefab)) else {
+        let ground_path = definitions
+            .find_path(definition)
+            .filter(|path| !path.elevated);
+        let path_texture =
+            ground_path.and_then(|path| definitions.texture_image(path.surface_texture));
+        let prefab = prefab.and_then(|prefab| definitions.scene(prefab));
+        if prefab.is_none() && path_texture.is_none() {
             if let Some(image_node) = image_node.as_deref_mut() {
                 image_node.image = Handle::default();
             }
             continue;
-        };
+        }
         let mut target = Image::new_target_texture(
             AUTHORED_BUY_INFORMATION_PREVIEW_SIZE.x,
             AUTHORED_BUY_INFORMATION_PREVIEW_SIZE.y,
@@ -184,20 +198,34 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
         let offset = object
             .preview_offset_cm
             .map(|value| f32::from(value) * 0.01);
-        let mut preview = commands.spawn((
-            Name::new("catalogue object preview prefab"),
-            CataloguePreviewPrefab(prefab),
-            Transform::from_translation(
-                AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR
-                    + Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(offset)),
-            )
-            .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
-            .with_scale(Vec3::splat(object.preview_scale * object.prefab_scale)),
-            Visibility::Inherited,
-            ChildOf(scene),
-        ));
-        if object.catalogue_preview_prefab.is_none() {
-            preview.insert(PrefabObjectPresentationAttachmentProjection(definition));
+        if let (Some(path), Some(texture)) = (ground_path, path_texture) {
+            super::catalogue_ground_path_preview_construction::spawn_ground_path_catalogue_preview(
+                &mut commands,
+                scene,
+                path,
+                definitions,
+                texture,
+                &mut meshes,
+                &mut materials,
+            );
+        } else if let Some(prefab) = prefab {
+            let mut preview = commands.spawn((
+                Name::new("catalogue object preview prefab"),
+                CataloguePreviewPrefab(prefab),
+                Transform::from_translation(
+                    AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR
+                        + Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                            offset,
+                        )),
+                )
+                .with_rotation(Quat::from_rotation_y(-std::f32::consts::FRAC_PI_2))
+                .with_scale(Vec3::splat(object.preview_scale * object.prefab_scale)),
+                Visibility::Inherited,
+                ChildOf(scene),
+            ));
+            if object.catalogue_preview_prefab.is_none() {
+                preview.insert(PrefabObjectPresentationAttachmentProjection(definition));
+            }
         }
         commands.spawn((
             Name::new("catalogue object preview light"),
@@ -221,24 +249,37 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             Camera {
                 is_active: inherited_visibility.get(),
                 clear_color: ClearColorConfig::Custom(Color::NONE),
-                sub_camera_view: Some(SubCameraView {
+                sub_camera_view: ground_path.is_none().then_some(SubCameraView {
                     full_size: AUTHORED_BUY_INFORMATION_VIEW_SIZE,
                     offset: AUTHORED_BUY_INFORMATION_PREVIEW_OFFSET,
                     size: AUTHORED_BUY_INFORMATION_PREVIEW_SIZE,
                 }),
                 ..default()
             },
-            Projection::Perspective(PerspectiveProjection {
-                // The winning overhead camera authors frustum slopes of
-                // -0.48 and +0.48 at a fixed 4:3 aspect.
-                fov: 2.0 * 0.48_f32.atan(),
-                aspect_ratio: 4.0 / 3.0,
-                near: 0.3,
-                far: 800.0,
-                ..default()
-            }),
+            if let Some(path) = ground_path {
+                Projection::Orthographic(OrthographicProjection {
+                    scaling_mode: bevy::camera::ScalingMode::FixedVertical {
+                        viewport_height: f32::from(path.width_cm) * 0.03,
+                    },
+                    ..OrthographicProjection::default_3d()
+                })
+            } else {
+                Projection::Perspective(PerspectiveProjection {
+                    // The winning overhead camera authors frustum slopes of
+                    // -0.48 and +0.48 at a fixed 4:3 aspect.
+                    fov: 2.0 * 0.48_f32.atan(),
+                    aspect_ratio: 4.0 / 3.0,
+                    near: 0.3,
+                    far: 800.0,
+                    ..default()
+                })
+            },
             RenderTarget::Image(target.clone().into()),
-            Transform::IDENTITY.looking_to(Vec3::X, Vec3::Y),
+            if ground_path.is_some() {
+                Transform::from_xyz(8.0, 10.0, 8.0).looking_at(Vec3::ZERO, Vec3::Y)
+            } else {
+                Transform::IDENTITY.looking_to(Vec3::X, Vec3::Y)
+            },
             RenderLayers::layer(CATALOGUE_PREVIEW_SCENE_RENDER_LAYER),
             CataloguePreviewOwner(node),
             ChildOf(scene),
