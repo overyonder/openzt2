@@ -22,8 +22,7 @@ expect map_min_x_m == 0
 expect map_max_x_m == 162
 expect map_min_z_m == -162
 expect map_max_z_m == 0
-click "close"
-until hidden "Buy Info Panel"
+expect-hidden "Buy Info Panel"
 until placement_previews == 0
 until construction_tool_active == 0
 until steady camera_height_m 30
