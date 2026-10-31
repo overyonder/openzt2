@@ -28,6 +28,12 @@ need_component!(EnvironmentNeed);
 need_component!(HealthNeed);
 need_component!(HygieneNeed);
 need_component!(BathroomNeed);
+// Outside the welfare score; its trigger is `REPRODUCTION_TRIGGER_INDEX`.
+need_component!(ReproductionNeed);
+
+/// The `NeedTriggerState` bit of the reproduction need, after the eleven
+/// welfare needs.
+pub const REPRODUCTION_TRIGGER_INDEX: usize = 11;
 
 /// Hysteretic BFAI need-trigger facts. A bit sets and clears only at the
 /// species-authored trigger and cessation thresholds.
@@ -116,6 +122,7 @@ adjustment_message!(AdjustEnvironment);
 adjustment_message!(AdjustHealthNeed);
 adjustment_message!(AdjustHygiene);
 adjustment_message!(AdjustBathroom);
+adjustment_message!(AdjustReproduction);
 
 /// Sets one canonical animal need to an authored Q16 value.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

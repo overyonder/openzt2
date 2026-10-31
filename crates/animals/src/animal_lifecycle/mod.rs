@@ -143,7 +143,7 @@ impl Plugin for AnimalLifecyclePlugin {
                 FixedUpdate,
                 (
                     adoption_offer_inventory_execution::advance_and_repopulate_animal_adoption_offer_inventory,
-                    animal_birth_execution::complete_due_animal_pregnancies,
+                    animal_birth_execution::spawn_children_for_authored_births,
                 )
                     .chain()
                     .in_set(FixedGameSet::Act)

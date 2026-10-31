@@ -196,6 +196,7 @@ pub(super) fn capture_behavior_entity_reference(
             name: token.name,
             available_at: token.available_at,
             expires_at: token.expires_at,
+            retain_on_failure: token.retain_on_failure,
         });
     }
     if let Some(id) = entity.persistent_id {

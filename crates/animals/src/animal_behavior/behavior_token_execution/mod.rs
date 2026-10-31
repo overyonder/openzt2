@@ -20,7 +20,8 @@ use openzt2_zoo_state::{
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
         abandon_behavior_task_for_reconsideration, advance_behavior_task_to_next_action,
-        find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        find_current_behavior_task_action, BehaviorTaskExecutionState, BehaviorTaskFailed,
+        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
 };
@@ -53,15 +54,25 @@ fn discard_expired_and_consumed_tokens(
         Option<&ClaimedBehaviorSelfToken>,
     )>,
     recipients: Query<Option<&BehaviorTaskExecutionState>, Without<Dead>>,
+    mut failures: MessageReader<BehaviorTaskFailed>,
 ) {
+    let failed = failures
+        .read()
+        .map(|failure| (failure.actor, failure.execution_id))
+        .collect::<Vec<_>>();
     for (entity, token, recipient, claim) in &tokens {
         let Ok(task) = recipients.get(recipient.parent()) else {
             commands.entity(entity).despawn();
             continue;
         };
         // A selected token remains the task's object until that execution ends.
-        // Both completion and failure consume it; retain-on-failure deliveries
-        // are a distinct policy which the loader does not accept here.
+        // Completion consumes it; failure does too unless it retains on failure.
+        if token.retain_on_failure
+            && claim.is_some_and(|claim| failed.contains(&(recipient.parent(), claim.execution_id)))
+        {
+            commands.entity(entity).remove::<ClaimedBehaviorSelfToken>();
+            continue;
+        }
         let expired_or_consumed = claim.map_or(clock.tick >= token.expires_at, |claim| {
             task.is_none_or(|task| task.execution_id != claim.execution_id)
         });
@@ -182,10 +193,22 @@ fn execute_current_self_token_deliveries(
                     }
                 });
             }
+            let payload = match delivery.payload {
+                None => None,
+                Some(BehaviorTokenRecipient::Subject) => Some(actor),
+                Some(BehaviorTokenRecipient::Target) => {
+                    let Some(target) = task.target() else {
+                        continue;
+                    };
+                    Some(target)
+                }
+            };
             for recipient in delivered_to {
                 if delivery.only_one
                     && held_tokens.iter().any(|(held, holder)| {
-                        holder.parent() == recipient && held.name == delivery.token
+                        holder.parent() == recipient
+                            && held.name == delivery.token
+                            && clock.tick < held.expires_at
                     })
                 {
                     continue;
@@ -205,6 +228,8 @@ fn execute_current_self_token_deliveries(
                         name: delivery.token,
                         available_at: at_tick(delivery.delay),
                         expires_at: delivery.lifetime.map_or(u64::MAX, at_tick),
+                        payload,
+                        retain_on_failure: delivery.retain_on_failure,
                     },
                     ChildOf(recipient),
                 ));

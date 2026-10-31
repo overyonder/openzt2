@@ -1,11 +1,20 @@
 use super::*;
+use arrayvec::ArrayVec;
+use openzt2_game_data::behavior::{
+    action::spawn::BehaviorSpawnPosePolicy,
+    document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
+};
 use openzt2_game_data::{
     species::*,
     world_definitions::{document::WorldDefinitionDocument, simulation_time::*},
     AssetId,
 };
-use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
+use openzt2_world_state::simulation_time::deterministic_random_stream::{
+    DeterministicRng, RngDomain, ZooSeed,
+};
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
 fn document() -> SpeciesDocument {
     let id = AssetId::from_key("test_species");
@@ -88,13 +97,14 @@ fn install_species(app: &mut App, document: &SpeciesDocument) {
         .index_test_document(handle, document);
 }
 
-fn setup(entity_padding: usize) -> (App, Entity, Entity) {
+#[test]
+fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
     let mut app = App::new();
     app.init_resource::<Assets<SpeciesAsset>>()
         .init_resource::<SpeciesAssets>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .insert_resource(ZooSeed(123))
+        .init_resource::<Assets<BehaviorDocumentAsset>>()
         .insert_resource(ZooClock {
             fractional_tick: Default::default(),
             tick: 99,
@@ -102,46 +112,9 @@ fn setup(entity_padding: usize) -> (App, Entity, Entity) {
             tick_in_day: 99,
         })
         .add_message::<AnimalBorn>()
-        .add_systems(
-            Update,
-            (
-                complete_due_animal_pregnancies,
-                super::super::animal_lineage_reference_cleanup::
-                    clear_lineage_references_to_deleted_animal_entities,
-            )
-                .chain(),
-        );
-    for _ in 0..entity_padding {
-        app.world_mut().spawn_empty();
-    }
+        .add_systems(Update, spawn_children_for_authored_births);
     let root = app.world_mut().spawn_empty().id();
-    let mut allocator = PersistentIdAllocator::new(root);
-    allocator.reserve_imported(root, PersistentId(20)).unwrap();
-    app.insert_resource(allocator);
-    let father = app
-        .world_mut()
-        .spawn((Animal, PersistentId(10), WorldMember { root }))
-        .id();
-    let mother = app
-        .world_mut()
-        .spawn((
-            Animal,
-            PersistentId(20),
-            WorldMember { root },
-            SpeciesHandle {
-                species: AssetId::from_key("test_species"),
-            },
-            Pregnancy {
-                father,
-                due_tick: 100,
-            },
-            ReproductionTraits {
-                gestation_ticks: 50,
-                litter: [2, 4],
-            },
-            Transform::from_xyz(3.0, 4.0, 5.0).with_scale(Vec3::splat(8.0)),
-        ))
-        .id();
+    app.insert_resource(PersistentIdAllocator::new(root));
     let definitions = WorldDefinitionDocument {
         simulation_timing: Some(SimulationTimingDefinition {
             fixed_hz: 10,
@@ -167,35 +140,88 @@ fn setup(entity_padding: usize) -> (App, Entity, Entity) {
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &definitions);
     install_species(&mut app, &document());
-    (app, mother, father)
-}
-
-fn born(app: &mut App) -> Vec<Entity> {
-    app.world_mut()
+    let program = AssetId::from_key("SpawnM");
+    let document = app
+        .world_mut()
+        .resource_mut::<Assets<BehaviorDocumentAsset>>()
+        .add(BehaviorDocumentAsset::from_test_document(
+            BehaviorDocument::Sets(vec![BehaviorSet {
+                id: program,
+                name: "SpawnM".into(),
+                subjects: vec![],
+                actions: BehaviorTaskActionPhase::Supported(vec![BehaviorAction::SpawnChild {
+                    entity: AssetId::from_key("young_1"),
+                    pose: BehaviorSpawnPosePolicy {
+                        random_position_offset_m: 3.0,
+                        random_rotation_offset_radians: 0.0,
+                    },
+                }]),
+            }]),
+        ));
+    let father = app
+        .world_mut()
+        .spawn((Animal, PersistentId(10), WorldMember { root }))
+        .id();
+    let mother = app
+        .world_mut()
+        .spawn((
+            Animal,
+            WorldMember { root },
+            SpeciesHandle {
+                species: AssetId::from_key("test_species"),
+            },
+            Transform::from_xyz(3.0, 4.0, 5.0),
+            Pregnancy { father: None },
+            Mate(father),
+            BehaviorRandomStream(DeterministicRng::from_entity(
+                ZooSeed(1),
+                PersistentId(20),
+                RngDomain::Reproduction,
+            )),
+            BehaviorTaskExecutionState {
+                execution_id: 1,
+                program,
+                target: None,
+                object: None,
+                document,
+                declaration: 0,
+                phase: BehaviorTaskExecutionPhase::Set,
+                action: 0,
+                repetitions: 0,
+                next_action_tick: 0,
+                interaction_slot: None,
+                stack: ArrayVec::new(),
+            },
+        ))
+        .id();
+    app.update();
+    let born = app
+        .world_mut()
         .resource_mut::<Messages<AnimalBorn>>()
         .drain()
         .map(|birth| birth.child)
-        .collect()
-}
-
-#[test]
-fn reconstructed_pregnancy_uses_persistent_identity_and_due_tick_for_randomness() {
-    let outcomes = [0, 17].map(|padding| {
-        let (mut app, _, _) = setup(padding);
-        app.world_mut().resource_mut::<ZooClock>().tick = 100;
-        app.update();
-        born(&mut app)
-            .into_iter()
-            .map(|child| {
-                (
-                    *app.world().get::<PersistentId>(child).unwrap(),
-                    *app.world().get::<AnimalSex>(child).unwrap(),
-                    *app.world().get::<AnimalVariant>(child).unwrap(),
-                    app.world().get::<Transform>(child).unwrap().scale,
-                )
-            })
-            .collect::<Vec<_>>()
-    });
-    assert!((2..=4).contains(&outcomes[0].len()));
-    assert_eq!(outcomes[0], outcomes[1]);
+        .collect::<Vec<_>>();
+    assert_eq!(born.len(), 1);
+    let child = born[0];
+    assert_eq!(
+        *app.world().get::<Parents>(child).unwrap(),
+        Parents {
+            mother: Some(mother),
+            father: Some(father),
+        }
+    );
+    assert_eq!(
+        app.world().get::<AnimalVariant>(child).unwrap().0,
+        AssetId::from_key("young_1")
+    );
+    let offset =
+        app.world().get::<Transform>(child).unwrap().translation - Vec3::new(3.0, 4.0, 5.0);
+    assert!(offset.x.abs() <= 3.0 && offset.z.abs() <= 3.0);
+    assert_eq!(
+        app.world()
+            .get::<BehaviorTaskExecutionState>(mother)
+            .unwrap()
+            .action,
+        1
+    );
 }

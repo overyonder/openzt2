@@ -30,6 +30,9 @@ pub(super) enum BehaviorSnapshotEntityReference {
         name: AssetId,
         available_at: u64,
         expires_at: u64,
+        /// Its payload is not kept: the claiming task already holds its target.
+        #[serde(default)]
+        retain_on_failure: bool,
     },
 }
 

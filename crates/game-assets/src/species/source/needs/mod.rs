@@ -38,10 +38,19 @@ pub(super) fn lower_effective_authored_species_need_facts(
         (NeedKind::Health, "health"),
         (NeedKind::Hygiene, "hygiene"),
         (NeedKind::Bathroom, "bathroom"),
+        (NeedKind::Reproduction, "reproduction"),
     ]
     .into_iter()
-    .map(|(kind, authored_name)| {
-        lower_effective_authored_animal_need_to_canonical_species_need(species, kind, authored_name)
+    .filter_map(|(kind, authored_name)| {
+        match lower_effective_authored_animal_need_to_canonical_species_need(
+            species,
+            kind,
+            authored_name,
+        ) {
+            // Reproduction is optional: records without it keep the other needs.
+            Err(_) if kind == NeedKind::Reproduction => None,
+            result => Some(result),
+        }
     })
     .collect()
 }

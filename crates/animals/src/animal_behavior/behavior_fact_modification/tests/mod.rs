@@ -49,6 +49,7 @@ fn install_action_app() -> (App, Entity, Entity) {
         .add_message::<openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt>()
         .add_message::<AdjustHunger>()
         .add_message::<AdjustBathroom>()
+        .add_message::<openzt2_zoo_state::animal_welfare::types::AdjustReproduction>()
         .add_message::<AdjustThirst>()
         .add_message::<AdjustRest>()
         .add_message::<AdjustPrivacy>()
