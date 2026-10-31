@@ -244,7 +244,13 @@ fn paint_terrain_surface_stamp(
         .as_ref()
         .and_then(|water| match paint.water {
             TerrainSurfaceWater::Dry => None,
-            TerrainSurfaceWater::Shore => water.shoreline.shore_texture.as_ref(),
+            // A shore texture that didn't load, such as the unshipped benthic
+            // one, falls back to the ground texture.
+            TerrainSurfaceWater::Shore => water
+                .shoreline
+                .shore_texture
+                .as_ref()
+                .filter(|path| asset.texture_image(path).is_some()),
             TerrainSurfaceWater::Submerged => water.shoreline.submerged_texture.as_ref(),
         });
     let cover = paint.cover && water_texture.is_none();

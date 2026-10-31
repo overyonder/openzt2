@@ -362,8 +362,24 @@ impl AssetLoader for TerrainSourceAssetLoader {
                                 )),
                         )
                     })
+                    .map(Some)
+                    .or_else(|| {
+                        // `Biomes/benthic/benthic_shore_256.DDS` is authored by
+                        // the shipped benthic biome but not shipped; the shore
+                        // keeps the ground texture instead.
+                        let optional_shore = canonical_terrain_grid.biomes.iter().any(|biome| {
+                            biome.water_presentation.as_ref().is_some_and(|water| {
+                                water.shoreline.shore_texture.as_deref() == Some(source_path)
+                            })
+                        });
+                        optional_shore.then(|| {
+                            warn!(texture = source_path, "terrain shore texture is missing; using the ground texture");
+                            None
+                        })
+                    })
                     .ok_or_else(|| missing_terrain_reference("texture", source_path))
             })
+            .filter_map(|entry| entry.transpose())
             .collect::<io::Result<HashMap<_, _>>>()?;
         for source_path in canonical_terrain_grid
             .biomes
