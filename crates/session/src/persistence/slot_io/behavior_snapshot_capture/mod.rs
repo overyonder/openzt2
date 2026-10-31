@@ -136,7 +136,7 @@ fn capture_behavior_frame(
     {
         &document
             .behavior_set_at_index(frame.declaration)
-            .filter(|set| set.id == frame.program)
+            .filter(|set| set.answers_program(frame.program))
             .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?
             .subjects
     } else {
@@ -174,6 +174,11 @@ fn capture_behavior_actor_snapshots(
     let mut records = Vec::new();
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
     for actor in entities {
+        // Guests are not saved (#118), so their tasks would reference actors
+        // that a load never restores.
+        if actor.guest {
+            continue;
+        }
         let Some(task) = actor.behavior_task_execution_state else {
             continue;
         };

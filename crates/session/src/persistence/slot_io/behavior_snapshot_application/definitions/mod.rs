@@ -23,14 +23,19 @@ pub(super) fn resolve_behavior_frame(
     let declaration = (0..)
         .map_while(|index| {
             if frame.phase == BehaviorTaskExecutionPhase::Set {
-                document
-                    .behavior_set_at_index(index)
-                    .map(|set| (index, set.id, &set.actions, &set.subjects))
+                document.behavior_set_at_index(index).map(|set| {
+                    (
+                        index,
+                        set.answers_program(frame.program),
+                        &set.actions,
+                        &set.subjects,
+                    )
+                })
             } else {
                 document.behavior_task_at_index(index).map(|task| {
                     (
                         index,
-                        task.id,
+                        task.id == frame.program,
                         match frame.phase {
                             BehaviorTaskExecutionPhase::Execution => &task.execution,
                             BehaviorTaskExecutionPhase::Completion => &task.completion,
@@ -42,8 +47,8 @@ pub(super) fn resolve_behavior_frame(
                 })
             }
         })
-        .filter(|(_, program, _, subjects)| {
-            if *program != frame.program {
+        .filter(|(_, answers_program, _, subjects)| {
+            if !answers_program {
                 return false;
             }
             let mut subjects = subjects

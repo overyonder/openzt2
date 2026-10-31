@@ -118,6 +118,7 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) terrain_water_region_source: Option<&'static TerrainWaterRegionSource>,
     pub(super) velocity: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::Velocity>,
     pub(super) world_member: Option<&'static openzt2_world_state::world_spawn::world_membership_types::WorldMember>,
+    pub(super) guest: Has<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
 }
 
 pub(super) type BehaviorSnapshotEntity<'w, 's> = BehaviorSnapshotEntityDataItem<'w, 's>;
