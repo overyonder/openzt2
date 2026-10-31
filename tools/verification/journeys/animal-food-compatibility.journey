@@ -1,0 +1,68 @@
+# diagnostic: run alone with --budget 1800
+# A hungry aardvark ignores branches, which only folivores eat, and eats
+# insects, which improves its hunger (#105, #107).
+start freeform-map
+snapshot before-habitat
+click "construction"
+click "Fence Tab"
+select-catalogue "chainlink"
+snapshot fence-start
+click 1000 220
+click 1350 220
+until fences > @fence-start
+snapshot fence-start
+click 1350 470
+until fences > @fence-start
+snapshot fence-start
+click 1000 470
+until fences > @fence-start
+snapshot fence-start
+click 1000 220
+until fences > @fence-start
+key ESCAPE
+until placement_previews == 0
+until habitats == @before-habitat+1
+click "animals"
+until rows "Animal Typelist" >= 1
+click "Animal Food Tab"
+select-catalogue "terrain_branches" in "Food Typelist"
+move 1120 320
+until placement_valid_previews == 1
+click 1120 320
+until food_placed_objects == 1
+key ESCAPE
+until placement_previews == 0
+snapshot branches-placed
+click "Buy Animal Tab"
+until rows "Animal Typelist" >= 1
+click "Female Button"
+select-catalogue "aardvark" in "Animal Typelist"
+move 1170 340
+until placement_valid_previews == 1
+click 1170 340
+until contained_animals == 1
+until placement_previews == 0
+capture aardvark-with-branches
+# Branches.tsk asks for b_Folivore; the aardvark is b_Insectivore.
+until animals_hungry == 1 within 36000
+snapshot hungry
+wait 3600
+capture hungry-aardvark-ignores-branches
+expect food_left == @branches-placed
+expect animal_hunger_improvements == @branches-placed
+expect animal_hunger_mean < @hungry
+snapshot before-insects
+click "Animal Food Tab"
+wheel-to-catalogue "hollowlog_insects"
+select-catalogue "hollowlog_insects" in "Food Typelist"
+move 1300 290
+until placement_valid_previews == 1
+click 1300 290
+until food_placed_objects == 2
+key ESCAPE
+until placement_previews == 0
+snapshot insects-placed
+until animal_hunger_improvements > @insects-placed within 36000
+capture aardvark-ate-insects
+expect food_left < @insects-placed
+expect animal_hunger_mean > @before-insects
