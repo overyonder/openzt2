@@ -35,6 +35,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
 }
 
 mod object_placement_occupancy_index_tests;
+mod object_placement_preview_decal_tests;
 mod object_placement_preview_interpolation_tests;
 
 mod object_placement_transform_validation_tests;
