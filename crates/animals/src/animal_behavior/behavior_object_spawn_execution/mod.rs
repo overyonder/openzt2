@@ -1,10 +1,12 @@
 //! One authored spawn action owns its asset demand and animation-key delivery.
 
+mod at_actor;
 mod delivery;
 mod preparation;
 mod spawn_pose;
 mod types;
 
+use at_actor::spawn_behavior_objects_at_actor;
 use delivery::deliver_behavior_object_spawns;
 use preparation::prepare_behavior_object_spawns;
 use types::PendingBehaviorObjectSpawn;
@@ -50,13 +52,17 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
+use openzt2_zoo_state::maintenance::maintenance_types::{AnimalHabitatWaste, LooseLitterWaste};
 
 pub(super) fn register_object_spawn_execution(app: &mut App) {
     app.add_systems(FixedUpdate, prepare_behavior_object_spawns
         .in_set(FixedGameSet::Think)
         .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .run_if(in_state(GamePhase::InGame)))
+        .add_systems(FixedUpdate, spawn_behavior_objects_at_actor
+            .in_set(FixedGameSet::Think)
+            .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
+            .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, deliver_behavior_object_spawns
             .in_set(FixedGameSet::Act)
             .in_set(AnimationObjectCommandDelivery)

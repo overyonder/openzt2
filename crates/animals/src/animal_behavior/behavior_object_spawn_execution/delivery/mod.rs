@@ -103,7 +103,7 @@ pub(super) fn deliver_behavior_object_spawns(
                 pose_validation.actor_pose(actor)?,
                 *pose,
                 view,
-                &mut random,
+                &mut random.0,
             );
             let transform =
                 transform.mul_transform(Transform::from_scale(Vec3::splat(object.prefab_scale)));
