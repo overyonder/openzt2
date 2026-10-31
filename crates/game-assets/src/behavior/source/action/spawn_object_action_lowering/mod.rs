@@ -40,13 +40,18 @@ pub(super) fn lower_spawn_object_action(
         }
         Ok(value)
     };
+    let entity = AssetId::from_key(&required("spawnEntity")?.to_ascii_lowercase());
+    let pose = openzt2_game_data::behavior::action::spawn::BehaviorSpawnPosePolicy {
+        random_position_offset_m: offset("randomPosOffset")?,
+        random_rotation_offset_radians: offset("randomRotOffset")?,
+    };
+    if node.attribute("subjectNode").is_none() && node.attribute("targetAnim").is_none() {
+        return Ok(Some(BehaviorAction::SpawnObjectAtActor { entity, pose }));
+    }
     Ok(Some(BehaviorAction::SpawnObject {
-        entity: AssetId::from_key(&required("spawnEntity")?.to_ascii_lowercase()),
+        entity,
         subject_node: required("subjectNode")?,
         animation: required("targetAnim")?,
-        pose: openzt2_game_data::behavior::action::spawn::BehaviorSpawnPosePolicy {
-            random_position_offset_m: offset("randomPosOffset")?,
-            random_rotation_offset_radians: offset("randomRotOffset")?,
-        },
+        pose,
     }))
 }

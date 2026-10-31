@@ -26,6 +26,13 @@ pub enum BehaviorAction {
         #[serde(default)]
         pose: action::spawn::BehaviorSpawnPosePolicy,
     },
+    /// `BFBehSpawn` without a node or clip, such as the `TrashGround` a guest
+    /// drops on a path: the object appears at once beside the actor.
+    SpawnObjectAtActor {
+        entity: crate::AssetId,
+        #[serde(default)]
+        pose: action::spawn::BehaviorSpawnPosePolicy,
+    },
     Dock(action::docking::BehaviorDockAction),
     DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),

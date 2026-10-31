@@ -429,6 +429,11 @@ pub(super) fn bind_authored_placement_object(
                 WorldObjectPropertyFlags::ANIMAL_WASTE.raw_flag_bits()
             } else {
                 0
+            }
+            | if record.has_type_token("TrashGround") {
+                WorldObjectPropertyFlags::LOOSE_LITTER.raw_flag_bits()
+            } else {
+                0
             },
     )
     .expect("authored object flags are part of the canonical flag vocabulary");

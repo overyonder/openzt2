@@ -4,9 +4,9 @@ use openzt2_game_assets::{
     world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView,
 };
 use openzt2_game_data::{behavior::action::spawn::BehaviorSpawnPosePolicy, AssetId};
+use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::{
-    animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     construction::construction_interaction_types::PlacementValidity,
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
@@ -59,19 +59,19 @@ impl SpawnPoseValidation<'_, '_> {
         actor_pose: Transform,
         policy: BehaviorSpawnPosePolicy,
         catalogue: WorldDefinitionsView<'_>,
-        random: &mut BehaviorRandomStream,
+        random: &mut DeterministicRng,
     ) -> Transform {
         for _ in 0..50 {
             let mut candidate = node;
             if policy.random_position_offset_m > 0.0 {
                 candidate.translation.x +=
-                    (random.0.unit_f32() * 2.0 - 1.0) * policy.random_position_offset_m;
+                    (random.unit_f32() * 2.0 - 1.0) * policy.random_position_offset_m;
                 candidate.translation.z +=
-                    (random.0.unit_f32() * 2.0 - 1.0) * policy.random_position_offset_m;
+                    (random.unit_f32() * 2.0 - 1.0) * policy.random_position_offset_m;
             }
             if policy.random_rotation_offset_radians > 0.0 {
                 candidate.rotation = Quat::from_rotation_y(
-                    (random.0.unit_f32() * 2.0 - 1.0) * policy.random_rotation_offset_radians,
+                    (random.unit_f32() * 2.0 - 1.0) * policy.random_rotation_offset_radians,
                 );
             }
             if self.pose_is_valid(actor, object, &candidate, catalogue) {
