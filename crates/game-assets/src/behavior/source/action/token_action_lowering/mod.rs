@@ -58,7 +58,15 @@ pub(super) fn lower_self_token_delivery(
             || token.attributes.iter().any(|attribute| {
                 !matches!(
                     attribute.name(),
-                    "Name" | "GiveTo" | "Timein" | "Timeout" | "Chance" | "Reconsider"
+                    "Name"
+                        | "GiveTo"
+                        | "Timein"
+                        | "Timeout"
+                        | "Chance"
+                        | "Reconsider"
+                        | "OnlyOne"
+                        | "Payload"
+                        | "RetainOnFailure"
                 )
             })
             || token.element_children().next().is_some()
@@ -76,12 +84,23 @@ pub(super) fn lower_self_token_delivery(
                 ))
             }
         };
-        let reconsider = match token.attribute("Reconsider") {
-            None | Some("false") => false,
-            Some("true") => true,
+        let flag = |name| match token.attribute(name) {
+            None | Some("false") => Ok(false),
+            Some("true") => Ok(true),
+            Some(_) => Err(invalid_behavior_source_data(format!(
+                "token {name} must be true or false"
+            ))),
+        };
+        let reconsider = flag("Reconsider")?;
+        let only_one = flag("OnlyOne")?;
+        let retain_on_failure = flag("RetainOnFailure")?;
+        let payload = match token.attribute("Payload") {
+            None => None,
+            Some("subject") => Some(BehaviorTokenRecipient::Subject),
+            Some("target") => Some(BehaviorTokenRecipient::Target),
             Some(_) => {
                 return Err(invalid_behavior_source_data(
-                    "token Reconsider must be true or false",
+                    "token Payload must be subject or target",
                 ))
             }
         };
@@ -111,6 +130,9 @@ pub(super) fn lower_self_token_delivery(
             chance_percent,
             recipient,
             reconsider,
+            only_one,
+            payload,
+            retain_on_failure,
         });
     }
     Ok(Some(BehaviorAction::SendSelfTokens(deliveries)))

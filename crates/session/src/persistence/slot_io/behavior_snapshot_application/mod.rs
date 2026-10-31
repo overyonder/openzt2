@@ -253,6 +253,11 @@ pub(super) fn restore_behavior_actor_snapshots(
                                 name: *name,
                                 available_at: *available_at,
                                 expires_at: *expires_at,
+                                // ponytail: the snapshot keeps only the claimed token's
+                                // name and times; save payloads and retention with #97's
+                                // persistence step.
+                                payload: None,
+                                retain_on_failure: false,
                             },
                             ClaimedBehaviorSelfToken {
                                 execution_id: record.task.execution_id,

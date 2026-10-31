@@ -94,6 +94,10 @@ pub struct Pregnancy {
     pub due_tick: u64,
 }
 
+/// The animal's `mate` relationship, set by `scripts/setmates.lua` after mating.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Mate(pub Entity);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Parents {
     pub mother: Option<Entity>,

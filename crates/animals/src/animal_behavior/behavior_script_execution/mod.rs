@@ -112,6 +112,7 @@ pub(super) fn execute_authored_behavior_script_actions(
                 });
         let path_stack = RefCell::new(Vec::new());
         let output = RefCell::new(Vec::new());
+        let output_requests = &output;
         let textures = RefCell::new(Vec::new());
         let crated = RefCell::new(Vec::new());
         let script_changes = RefCell::new(BehaviorScriptWorldChanges::default());
@@ -261,28 +262,81 @@ pub(super) fn execute_authored_behavior_script_actions(
                     table.set(
                         "sendMessage",
                         scope.create_function(
-                            |_, (subject, message, value): (Table, String, String)| {
-                                let reference: AnyUserData = subject.get("entity")?;
-                                let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
-                                let state = AssetId::from_key(&value.to_ascii_lowercase());
-                                let operation = match message.as_str() {
-                                    "BFG_SETPHYSANIM" => PhysicalPresentationOperation::Set(state),
-                                    "BFG_PUSHPHYSANIM" => {
-                                        PhysicalPresentationOperation::Push(state)
-                                    }
-                                    _ => {
-                                        return Err(mlua::Error::runtime(format!(
-                                            "unmapped behavior entity message {message}"
-                                        )));
-                                    }
+                            move |lua, (subject, message, value): (Table, String, mlua::Value)| {
+                                let output = output_requests;
+                                let entity = subject_entity(&subject)?;
+                                let text = || -> mlua::Result<String> {
+                                    lua.unpack::<String>(value.clone())
                                 };
-                                output.borrow_mut().push(PhysicalPresentationRequest {
-                                    owner: entity,
-                                    operation,
-                                });
-                                Ok(())
+                                match message.as_str() {
+                                    "BFG_SETPHYSANIM" | "BFG_PUSHPHYSANIM" => {
+                                        let state =
+                                            AssetId::from_key(&text()?.to_ascii_lowercase());
+                                        output.borrow_mut().push(PhysicalPresentationRequest {
+                                            owner: entity,
+                                            operation: if message == "BFG_SETPHYSANIM" {
+                                                PhysicalPresentationOperation::Set(state)
+                                            } else {
+                                                PhysicalPresentationOperation::Push(state)
+                                            },
+                                        });
+                                        Ok(mlua::Value::Nil)
+                                    }
+                                    // `canreproduce.lua`: pregnancy tokens and young children.
+                                    "BFAI_HAS_TOKEN" => Ok(mlua::Value::Boolean(
+                                        world_view.has_token(entity, &text()?),
+                                    )),
+                                    "BFAI_GET_RELATED_ENTITIES" if text()? == "child" => {
+                                        let found = lua.create_table()?;
+                                        for (index, child) in
+                                            world_view.children(entity).into_iter().enumerate()
+                                        {
+                                            let row = lua.create_table()?;
+                                            row.set(
+                                                "value",
+                                                lua.create_userdata(
+                                                    BehaviorScriptEntityReference(child),
+                                                )?,
+                                            )?;
+                                            found.set(index + 1, row)?;
+                                        }
+                                        Ok(mlua::Value::Table(found))
+                                    }
+                                    // `setmates.lua`: one mate per animal.
+                                    "BFAI_CLEAR_RELATIONSHIP" if text()? == "mate" => {
+                                        changes.borrow_mut().mates.push((entity, None));
+                                        Ok(mlua::Value::Nil)
+                                    }
+                                    "BFAI_ADD_RELATIONSHIP" => {
+                                        let relationship: Table = lua.unpack(value.clone())?;
+                                        let relation: String = relationship.get("relation")?;
+                                        if relation != "mate" {
+                                            return Err(mlua::Error::runtime(format!(
+                                                "unmapped behavior relationship {relation}"
+                                            )));
+                                        }
+                                        let mate = subject_entity(&relationship.get("target")?)?;
+                                        changes.borrow_mut().mates.push((entity, Some(mate)));
+                                        Ok(mlua::Value::Nil)
+                                    }
+                                    _ => Err(mlua::Error::runtime(format!(
+                                        "unmapped behavior entity message {message}"
+                                    ))),
+                                }
                             },
                         )?,
+                    )?;
+                    table.set(
+                        "BFG_GET_ATTR_BOOLEAN",
+                        scope.create_function(move |_, (subject, name): (Table, String)| {
+                            let entity = subject_entity(&subject)?;
+                            if name != "b_Adult" {
+                                return Err(mlua::Error::runtime(format!(
+                                    "unmapped behavior boolean attribute {name}"
+                                )));
+                            }
+                            Ok(world_view.is_adult(entity))
+                        })?,
                     )?;
                     table.set(
                         "BFG_GET_ATTR_STRING",
