@@ -43,6 +43,7 @@ mod verification_scenario_text_layout_diagnostics;
 mod verification_session_navigation;
 mod verification_staff_gate_facts;
 mod verification_staff_gate_topology_diagnostics;
+mod verification_staff_work_facts;
 mod verification_text_edit_render_facts;
 mod verification_ui_invariants;
 mod verification_zoopedia_facts;
@@ -186,6 +187,7 @@ impl Plugin for VerificationJourneyPlugin {
                 verification_animal_task_facts::collect_animal_task_verification_facts,
                 verification_animal_drinking_facts::collect_animal_drinking_verification_facts,
                 verification_guest_activity_facts::collect_guest_activity_verification_facts,
+                verification_staff_work_facts::collect_staff_work_verification_facts,
                 verification_save_navigation_facts::collect_save_navigation_verification_facts,
                 verification_save_pause_facts::collect_save_pause_verification_facts,
                 verification_gamepad_input::collect_journey_controller_verification_facts,

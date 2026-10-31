@@ -1,0 +1,58 @@
+# diagnostic: run alone with --budget 3600
+# A guest eats a burger and drops its trash in a bin or on the path; a hired
+# maintenance worker sweeps the litter or empties the bin (#152, #151).
+# Placement must be checked against the entrance path in the capture.
+start freeform-map
+until guests > 0 within 4800
+until guests_visiting > 0 within 9000
+click "construction"
+click "Building Tab"
+until rows "Building Typelist" >= 1
+snapshot before-maintenance
+move "Building Typelist"
+wheel 100
+wheel-to-catalogue "foodstand_burger_df"
+select-catalogue "foodstand_burger_df"
+move 933 239
+until placement_valid_previews == 1
+click 933 239
+until placed_objects > @entered-map
+key ESCAPE
+until placement_previews == 0
+click "Path Tab"
+select-catalogue "asphalt"
+move 815 210
+click 815 210
+move 939 294
+until placement_valid_previews == 1 within 120
+click 939 294
+until paths > @before-maintenance
+key ESCAPE
+until placement_previews == 0
+click "Scenery Tab"
+wait 30                         # the tab's own icons replace the previous tab's
+wheel-to-catalogue "trashcan_df"
+select-catalogue "trashcan_df"
+move 880 320                    # on the grass just below the new path
+until placement_valid_previews == 1 within 120
+click 880 320
+until placed_objects > @before-maintenance+1
+key ESCAPE
+until placement_previews == 0
+click "staff"
+select-catalogue "worker"
+move 860 300
+until placement_valid_previews == 1
+click 860 300
+until staff > @before-maintenance
+until placement_previews == 0
+capture maintenance-placed
+snapshot maintenance-open
+until guests_fed_by_eating > 0 within 18000
+capture guest-fed
+until trash_waiting > 0 within 7200
+capture trash-dropped
+snapshot trash-dropped
+until trash_jobs_completed > @trash-dropped within 90000   # an empty-bin job opens above f_TrashLevel 50, about eleven throws
+capture maintenance-done
+expect staff_task_failures == @maintenance-open

@@ -15,6 +15,9 @@ use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
+use openzt2_zoo_state::maintenance::maintenance_types::{
+    AdjustFacilityContainedWaste, FacilityContainedWaste,
+};
 
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
@@ -50,6 +53,8 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
         With<Guest>,
     >,
     mut viewing_needs: Query<&mut GuestViewingNeed, With<Guest>>,
+    containers: Query<(), With<FacilityContainedWaste>>,
+    mut trash_changes: MessageWriter<AdjustFacilityContainedWaste>,
     mut commands: Commands,
 ) {
     for (actor, mut task, mut random) in &mut tasks {
@@ -81,6 +86,7 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         | BehaviorFact::Happiness
                         | BehaviorFact::AteFavoriteFood
                         | BehaviorFact::AteNonFavoriteFood
+                        | BehaviorFact::TrashLevel
                 )
                 && resolve_behavior_entity_role_to_live_entity(
                     modification.affected_entity_role,
@@ -88,6 +94,9 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                     task.target,
                 )
                 .is_some_and(|subject| {
+                    if modification.modified_fact == BehaviorFact::TrashLevel {
+                        return containers.contains(subject);
+                    }
                     needs.contains(subject)
                         && (modification.modified_fact != BehaviorFact::ViewAnimals
                             || viewing_needs.contains(subject))
@@ -117,6 +126,16 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 if let Ok(mut need) = viewing_needs.get_mut(subject) {
                     need.add_source_delta(authored_delta);
                 }
+                continue;
+            }
+            // Trash.tsk completes with the guest's happiness and the can's
+            // `f_TrashLevel` together; the can's share goes to its owner.
+            if modification.modified_fact == BehaviorFact::TrashLevel {
+                trash_changes.write(AdjustFacilityContainedWaste {
+                    facility: subject,
+                    operation: BehaviorFactModificationOperation::Add,
+                    delta_q16: authored_delta,
+                });
                 continue;
             }
             if modification.modified_fact == BehaviorFact::Happiness {

@@ -12,6 +12,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::BehaviorCandidateRanking;
@@ -105,7 +106,13 @@ pub(super) fn select_idle_guest_tasks(
             Without<SynchronizedBehaviorParticipant>,
         ),
     >,
-    targets: Query<(Entity, &DefinitionId, &GlobalTransform, &WorldMember)>,
+    targets: Query<(
+        Entity,
+        &DefinitionId,
+        &GlobalTransform,
+        &WorldMember,
+        Option<&FacilityContainedWaste>,
+    )>,
     held: Query<&DefinitionId>,
     occupancy: Res<InteractionContainerOccupancy>,
     paths: Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
@@ -267,6 +274,7 @@ pub(super) fn select_idle_guest_tasks(
                 |target: Entity,
                  target_definition: Option<&WorldObjectDefinition>,
                  elevated_path: Option<bool>,
+                 target_trash_level: Option<u16>,
                  target_position: Vec3| {
                     let is_path = elevated_path.is_some();
                     let is_self = target == guest;
@@ -300,6 +308,7 @@ pub(super) fn select_idle_guest_tasks(
                                     transform.translation(),
                                     target_position,
                                     elevated_path,
+                                    target_trash_level,
                                 );
                             }
                             need_facts.satisfies(
@@ -375,18 +384,18 @@ pub(super) fn select_idle_guest_tasks(
                     );
                 };
             if task.targets[0] == "self" {
-                consider_target(guest, None, None, transform.translation());
+                consider_target(guest, None, None, None, transform.translation());
             } else if task.targets[0] == "path" {
                 // Other path sensors, such as litter disposal, are not modelled.
                 if task.sensor_tag == Some(view_sensor) {
                     for &(path, position, root, elevated) in &viewing_paths {
                         if root == world.root {
-                            consider_target(path, None, Some(elevated), position);
+                            consider_target(path, None, Some(elevated), None, position);
                         }
                     }
                 }
             } else {
-                for (target, target_definition, target_transform, target_world) in &targets {
+                for (target, target_definition, target_transform, target_world, waste) in &targets {
                     if target == guest
                         || target_world.root != world.root
                         || !target_transform.translation().is_finite()
@@ -396,7 +405,13 @@ pub(super) fn select_idle_guest_tasks(
                     let Some(object) = definitions.find_object(target_definition.0) else {
                         continue;
                     };
-                    consider_target(target, Some(object), None, target_transform.translation());
+                    consider_target(
+                        target,
+                        Some(object),
+                        None,
+                        waste.map(|waste| waste.contained_waste_units),
+                        target_transform.translation(),
+                    );
                 }
             }
         }
