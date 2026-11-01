@@ -383,9 +383,11 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .find_map(|entity| {
                 let (binding, parent) = joints.get(entity).ok()?;
                 (binding.animation_playback_controller_entity == controller_entity
-                    && binding.joint_asset_key == root.joint_asset_key)
-                    .then(|| transforms.get(parent.parent()).ok())
-                    .flatten()
+                    && binding
+                        .joint_asset_key
+                        .eq_ignore_ascii_case(&root.joint_asset_key))
+                .then(|| transforms.get(parent.parent()).ok())
+                .flatten()
             });
         let Some(parent) = parent else {
             wait(
