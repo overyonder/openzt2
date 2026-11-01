@@ -4,6 +4,7 @@ use openzt2_zoo_state::economy::authored_transaction_amount;
 use openzt2_zoo_state::economy::behavior_transaction_state;
 use openzt2_zoo_state::economy::currency_formatting;
 use openzt2_zoo_state::economy::facility_economy_types;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 use openzt2_zoo_state::economy::guest_admission_types;
 use openzt2_zoo_state::economy::money_types;
 use openzt2_zoo_state::economy::monthly_finance_types;
@@ -61,6 +62,7 @@ impl Plugin for EconomyPlugin {
             .init_resource::<ZooCash>()
             .init_resource::<AdmissionPrice>()
             .init_resource::<MonthlyFinanceHistory>()
+            .init_resource::<GeneralEconomyLedger>()
             .init_resource::<guest_admission_ui::AuthoredZooAdmissionPriceBands>()
             .init_resource::<ZooAdmissionsOpen>()
             .add_systems(

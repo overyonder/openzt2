@@ -2,7 +2,9 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 use openzt2_zoo_state::economy::money_types::Money;
+use openzt2_zoo_state::terrain::terrain_brush_types::{TerrainBrushKind, TerrainBrushPreview};
 
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
@@ -21,7 +23,11 @@ use openzt2_zoo_state::construction::construction_transaction_types::Transaction
 pub fn begin_construction_transaction_from_valid_preview(
     mut commands: Commands,
     mut construction_commit_requests: MessageReader<CommitConstruction>,
-    previews: Query<(&ConstructionPreview, &WorldMember)>,
+    previews: Query<(
+        &ConstructionPreview,
+        &WorldMember,
+        Option<&TerrainBrushPreview>,
+    )>,
     pending_transactions: Query<&EditCommitProgress>,
     mut construction_edit_history: ResMut<ConstructionEditHistory>,
     mut construction_preparation_requests: MessageWriter<PrepareConstruction>,
@@ -34,7 +40,9 @@ pub fn begin_construction_transaction_from_valid_preview(
         return;
     }
     for construction_commit_request in construction_commit_requests.read() {
-        let Ok((preview, world_member)) = previews.get(construction_commit_request.preview) else {
+        let Ok((preview, world_member, terrain_brush)) =
+            previews.get(construction_commit_request.preview)
+        else {
             continue;
         };
         if !matches!(preview.validity, PlacementValidity::Valid { .. }) {
@@ -51,6 +59,21 @@ pub fn begin_construction_transaction_from_valid_preview(
             },
             EditCommitProgress::preparing(),
             *world_member,
+            match terrain_brush.map(|brush| brush.kind) {
+                None => GeneralEconomyTransaction::Build,
+                Some(TerrainBrushKind::Paint { .. }) => GeneralEconomyTransaction::BiomeChange,
+                Some(
+                    TerrainBrushKind::PaintWater { .. }
+                    | TerrainBrushKind::AddWater
+                    | TerrainBrushKind::RemoveWater,
+                ) => GeneralEconomyTransaction::WaterChange,
+                Some(
+                    TerrainBrushKind::Raise
+                    | TerrainBrushKind::Lower
+                    | TerrainBrushKind::Smooth
+                    | TerrainBrushKind::Flatten { .. },
+                ) => GeneralEconomyTransaction::Terraform,
+            },
         ));
         if let Some(confirming_pointer_screen_position) = primary_windows
             .single()

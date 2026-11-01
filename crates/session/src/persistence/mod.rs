@@ -187,6 +187,8 @@ impl Plugin for PersistencePlugin {
                         .run_if(in_state(GamePhase::InGame)),
                     slot_io::load_snapshot_file_request_execution::
                         begin_loading_requested_world_snapshot_from_save_slot,
+                    slot_io::original_saved_game_load_preparation::begin_original_saved_game_loading,
+                    slot_io::original_saved_game_load_preparation::complete_original_saved_game_preparation,
                     slot_io::delete_snapshot_file_request_execution::
                         begin_deleting_requested_save_slot_snapshot_file,
                     slot_io::save_slot_catalogue_load_execution::

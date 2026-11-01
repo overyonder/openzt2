@@ -100,6 +100,7 @@ pub(super) fn validate_start_research_requests_and_request_payments(
                     definition: request.definition,
                 },
                 WorldMember { root },
+                openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction::Research,
             ))
             .id();
         transactions.write(TransactionRequest {

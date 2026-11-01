@@ -89,3 +89,16 @@ mod runtime_continuation_snapshot_section;
 mod runtime_continuation_snapshot_types;
 
 mod behavior_snapshot_identity_high_water_marks;
+
+mod monthly_finance_history_encoding;
+mod original_saved_game_clock_conversion;
+mod original_saved_game_economy_conversion;
+mod original_saved_game_entity_name_conversion;
+mod original_saved_game_fame_conversion;
+mod original_saved_game_favorite_conversion;
+mod original_saved_game_general_economy_conversion;
+mod original_saved_game_guest_survey_conversion;
+pub(super) mod original_saved_game_load_preparation;
+mod original_saved_game_scenario_conversion;
+mod original_saved_game_snapshot_conversion;
+mod original_saved_game_world_conversion;

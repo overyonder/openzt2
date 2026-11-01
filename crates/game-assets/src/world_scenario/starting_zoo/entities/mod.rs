@@ -148,12 +148,21 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
         })
         .transpose()?
         .unwrap_or(1);
-    if used_ids.iter().any(|id| *id >= next_id) && manager.attribute("topLevelGlobalID").is_some() {
-        return Err(at(
-            document,
-            manager,
-            "BFGManager next identity does not exceed its saved entities",
-        ));
+    if manager.attribute("topLevelGlobalID").is_some() {
+        for entity in entity_list.element_children() {
+            if let Some(raw) = entity.attribute("globalID") {
+                let id = raw
+                    .parse::<u64>()
+                    .map_err(|_| at(document, entity, "saved entity globalID is not u64"))?;
+                if id >= next_id {
+                    return Err(at(
+                        document,
+                        manager,
+                        "BFGManager next identity does not exceed its saved entities",
+                    ));
+                }
+            }
+        }
     }
     let mut persistent_id =
         |entity: &OrderedSourceDocumentNode, retain_source: bool| -> io::Result<u64> {

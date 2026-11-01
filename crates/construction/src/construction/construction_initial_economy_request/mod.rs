@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejection;
@@ -16,14 +17,21 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 pub(super) fn request_initial_construction_payment_or_authorize_zero_cost_application(
     mut commands: Commands,
     mut construction_transactions: Query<
-        (Entity, &WorldMember, &mut EditCommitProgress),
+        (
+            Entity,
+            &WorldMember,
+            &mut EditCommitProgress,
+            Option<&GeneralEconomyTransaction>,
+        ),
         Changed<EditCommitProgress>,
     >,
     mut account_transaction_requests: MessageWriter<TransactionRequest>,
     mut authorized_edit_applications: MessageWriter<EditApplicationAuthorized>,
     mut failed_construction_commits: MessageWriter<ConstructionCommitFailed>,
 ) {
-    for (transaction_entity, world_member, mut progress) in &mut construction_transactions {
+    for (transaction_entity, world_member, mut progress, general_transaction) in
+        &mut construction_transactions
+    {
         if progress.phase != EditCommitPhase::AwaitingEconomy
             || progress.application != EditApplication::InitialCommit
         {
@@ -44,6 +52,7 @@ pub(super) fn request_initial_construction_payment_or_authorize_zero_cost_applic
             progress.cost,
             ConstructionPaymentPurpose::InitialTransfer,
             false,
+            general_transaction.copied(),
         ) else {
             progress.phase = EditCommitPhase::Failed;
             failed_construction_commits.write(ConstructionCommitFailed {

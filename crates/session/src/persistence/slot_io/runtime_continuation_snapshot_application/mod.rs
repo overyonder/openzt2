@@ -27,6 +27,15 @@ pub(super) fn validate_runtime_continuation_identity_high_water_marks(
         || record.navigation_sequence < high_water_marks.maximum_navigation_request
         || record.behavior_execution_sequence < high_water_marks.maximum_behavior_execution
     {
+        warn!(
+            next_persistent_identifier = record.next_persistent_identifier,
+            maximum_persistent_identifier = high_water_marks.maximum_persistent_identifier,
+            navigation_sequence = record.navigation_sequence,
+            maximum_navigation_request = high_water_marks.maximum_navigation_request,
+            behavior_execution_sequence = record.behavior_execution_sequence,
+            maximum_behavior_execution = high_water_marks.maximum_behavior_execution,
+            "saved continuation counters do not cover restored identities"
+        );
         return Err(Failure::BrokenPersistentEntityReference);
     }
     let mut service_requests = HashSet::new();
@@ -69,6 +78,7 @@ pub(super) fn apply_runtime_continuation_snapshot(
             .service_request_sequence
             .map(ServiceRequestSequence::from_snapshot),
     );
+    apply_optional_resource(commands, record.general_economy);
     apply_optional_resource::<GuestArrivalState>(commands, record.guest_arrivals);
     apply_optional_resource::<GuestSurvey>(commands, record.guest_survey);
     if let Some(counters) = &record.entity_name_counters {
@@ -205,6 +215,7 @@ mod tests {
 
     fn record() -> RuntimeContinuationSnapshot {
         RuntimeContinuationSnapshot {
+            general_economy: None,
             entity_names: Some(Vec::new()),
             world_audio_preset: None,
             entity_name_counters: None,
@@ -319,6 +330,18 @@ mod tests {
         use openzt2_zoo_state::entity_naming_types::{EntityNameRegistered, EntityNameTagCounters};
         let tag = AssetId::from_key("tree");
         let mut saved = record();
+        let mut general_history =
+            openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory::default();
+        general_history.enter_calendar_month(
+            12,
+            openzt2_zoo_state::economy::money_types::Money(3_706_800),
+        );
+        saved.general_economy = Some(
+            openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger::from_saved(
+                general_history,
+            )
+            .unwrap(),
+        );
         saved.entity_names = Some(vec![(7, "Front Gate".into())]);
         saved.world_audio_preset = Some(openzt2_game_data::audio::AudioDocument {
             soundscape_contents: vec![openzt2_game_data::audio::AudioSoundscapeContent {
@@ -395,6 +418,7 @@ mod tests {
         let mut recaptured_bytes = Vec::new();
         append_runtime_continuation_snapshot(&mut recaptured_bytes, &recaptured).unwrap();
         assert_eq!(recaptured_bytes, bytes);
+        decoded.general_economy = None;
         decoded.world_audio_preset = None;
         decoded.entity_name_counters = None;
         decoded.registered_entity_name_identifiers = None;
@@ -409,6 +433,7 @@ mod tests {
         assert!(world
             .get::<openzt2_zoo_state::audio::audio_environment_types::WorldAudioPreset>(root)
             .is_none());
+        assert!(!world.contains_resource::<openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>());
         assert!(world.get::<EntityNameTagCounters>(root).is_none());
         assert!(world.get::<EntityNameRegistered>(fresh).is_some());
         assert!(world.get::<EntityNameRegistered>(other).is_none());

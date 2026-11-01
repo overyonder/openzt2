@@ -43,6 +43,7 @@ pub(in super::super) fn begin_loading_save_slot_catalogue_for_active_profile(
         Or<(
             With<PersistenceSlotFilesystemTask>,
             With<PendingSnapshotApplication>,
+            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
         )>,
     >,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,

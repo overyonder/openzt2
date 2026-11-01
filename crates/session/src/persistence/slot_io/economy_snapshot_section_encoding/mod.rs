@@ -1,6 +1,5 @@
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinance;
 
 use super::super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure,
@@ -33,25 +32,7 @@ pub(super) fn append_encoded_economy_snapshot_section(
         Some(true) => 2,
     });
     for month in &economy.monthly_finance_records {
-        bytes.extend_from_slice(&month.month_ordinal.to_le_bytes());
-        bytes.extend_from_slice(&month.opening_cash.0.to_le_bytes());
-        bytes.extend_from_slice(&month.closing_cash.0.to_le_bytes());
-        bytes.extend_from_slice(&month.income.0.to_le_bytes());
-        bytes.extend_from_slice(&month.expenses.0.to_le_bytes());
-        bytes.extend_from_slice(&month.admission_income.0.to_le_bytes());
-        bytes.extend_from_slice(&month.cash_grants.0.to_le_bytes());
-        bytes.extend_from_slice(&month.donation_income.0.to_le_bytes());
-        bytes.extend_from_slice(&month.food_drink_sales.0.to_le_bytes());
-        bytes.extend_from_slice(&month.recycling_income.0.to_le_bytes());
-        bytes.extend_from_slice(&month.gift_sales.0.to_le_bytes());
-        bytes.extend_from_slice(&month.animal_adoption.0.to_le_bytes());
-        bytes.extend_from_slice(&month.animal_upkeep.0.to_le_bytes());
-        bytes.extend_from_slice(&month.construction.0.to_le_bytes());
-        bytes.extend_from_slice(&month.research.0.to_le_bytes());
-        bytes.extend_from_slice(&month.staff_salaries.0.to_le_bytes());
-        bytes.extend_from_slice(&month.upkeep.0.to_le_bytes());
-        bytes.extend_from_slice(&month.active_users.to_le_bytes());
-        bytes.extend_from_slice(&month.total_users.to_le_bytes());
+        super::monthly_finance_history_encoding::append_monthly_finance_record(bytes, month);
     }
     for record in &economy.entity_economy_records {
         encode_entity_economy_record(bytes, record);
@@ -63,7 +44,8 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
     range: WorldSnapshotSectionDirectoryEntry,
 ) -> Result<EconomySnapshotRecords, WorldSnapshotPersistenceFailure> {
     const LEGACY_HEADER_BYTES: usize = 60;
-    const MONTH_BYTES: usize = 140;
+    const MONTH_BYTES: usize =
+        super::monthly_finance_history_encoding::MONTHLY_FINANCE_RECORD_BYTE_COUNT;
     let payload = &bytes[range.payload_byte_range_within_container(bytes.len())?];
     if payload.len() < LEGACY_HEADER_BYTES || range.encoded_record_count == 0 {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
@@ -82,14 +64,6 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
             .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?
             .try_into()
             .map(u32::from_le_bytes)
-            .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
-    };
-    let read_i32 = |offset: usize| {
-        payload
-            .get(offset..offset + 4)
-            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?
-            .try_into()
-            .map(i32::from_le_bytes)
             .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
     };
     let admissions_open = match payload[16] {
@@ -114,7 +88,9 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
         _ => return Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion),
     };
     let month_count = read_unsigned_32(56)? as usize;
-    if month_count > 120 {
+    if month_count
+        > openzt2_zoo_state::economy::monthly_finance_types::MONTHLY_FINANCE_HISTORY_CAPACITY
+    {
         return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
     }
     let months_end = header_bytes
@@ -146,28 +122,13 @@ pub(super) fn decode_and_validate_economy_snapshot_section(
     let mut months = Vec::with_capacity(month_count);
     for index in 0..month_count {
         let offset = header_bytes + index * MONTH_BYTES;
-        months.push(MonthlyFinance {
-            month_ordinal: read_unsigned_32(offset)?,
-            opening_cash: Money(read_signed_64(offset + 4)?),
-            closing_cash: Money(read_signed_64(offset + 12)?),
-            income: Money(read_signed_64(offset + 20)?),
-            expenses: Money(read_signed_64(offset + 28)?),
-            admission_income: Money(read_signed_64(offset + 36)?),
-            cash_grants: Money(read_signed_64(offset + 44)?),
-            donation_income: Money(read_signed_64(offset + 52)?),
-            food_drink_sales: Money(read_signed_64(offset + 60)?),
-            recycling_income: Money(read_signed_64(offset + 68)?),
-            gift_sales: Money(read_signed_64(offset + 76)?),
-            animal_adoption: Money(read_signed_64(offset + 84)?),
-            animal_upkeep: Money(read_signed_64(offset + 92)?),
-            construction: Money(read_signed_64(offset + 100)?),
-            research: Money(read_signed_64(offset + 108)?),
-            staff_salaries: Money(read_signed_64(offset + 116)?),
-            upkeep: Money(read_signed_64(offset + 124)?),
-            active_users: read_i32(offset + 132)?,
-            total_users: read_i32(offset + 136)?,
-        });
+        months.push(
+            super::monthly_finance_history_encoding::decode_monthly_finance_record(
+                &payload[offset..offset + MONTH_BYTES],
+            )?,
+        );
     }
+
     let facilities = if revision == 0 {
         let mut records = Vec::with_capacity(facility_count);
         for record in

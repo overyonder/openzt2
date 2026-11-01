@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejection;
@@ -24,14 +25,19 @@ pub(super) fn begin_requested_construction_edit_history_application(
     mut commands: Commands,
     mut requested_history_applications: MessageReader<ApplyConstructionTransaction>,
     construction_edit_history: Res<ConstructionEditHistory>,
-    mut construction_transactions: Query<(&EditTransaction, &WorldMember, &mut EditCommitProgress)>,
+    mut construction_transactions: Query<(
+        &EditTransaction,
+        &WorldMember,
+        &mut EditCommitProgress,
+        Option<&GeneralEconomyTransaction>,
+    )>,
     mut account_transaction_requests: MessageWriter<TransactionRequest>,
     mut authorized_edit_applications: MessageWriter<EditApplicationAuthorized>,
     mut failed_construction_commits: MessageWriter<ConstructionCommitFailed>,
 ) {
     if construction_transactions
         .iter_mut()
-        .any(|(_, _, progress)| progress.phase != EditCommitPhase::Complete)
+        .any(|(_, _, progress, _)| progress.phase != EditCommitPhase::Complete)
     {
         return;
     }
@@ -43,7 +49,7 @@ pub(super) fn begin_requested_construction_edit_history_application(
         {
             continue;
         }
-        let Ok((transaction, world_member, mut progress)) =
+        let Ok((transaction, world_member, mut progress, general_transaction)) =
             construction_transactions.get_mut(requested_application.transaction)
         else {
             continue;
@@ -69,6 +75,7 @@ pub(super) fn begin_requested_construction_edit_history_application(
                 progress.cost,
                 ConstructionPaymentPurpose::RedoTransfer,
                 false,
+                general_transaction.copied(),
             ) {
                 Some(account_transaction_request) => {
                     progress.phase = EditCommitPhase::AwaitingEconomy;

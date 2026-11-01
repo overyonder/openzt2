@@ -44,6 +44,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
         Or<(
             With<PersistenceSlotFilesystemTask>,
             With<PendingSnapshotApplication>,
+            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
         )>,
     >,
     world_snapshot_capture_queries: WorldSnapshotCaptureQueries,

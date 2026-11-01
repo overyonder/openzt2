@@ -168,7 +168,7 @@ fn decode_section(payload: &[u8], count: usize) -> MaintenanceSnapshot {
     finalize_world_snapshot_container_header_and_checksum(&mut bytes, count as u32).unwrap();
     let validated =
         validate_world_snapshot_container_and_section_directory(&bytes, profile).unwrap();
-    assert_eq!(validated.container_header.format_version, 13);
+    assert_eq!(validated.container_header.format_version, 14);
     decode_maintenance_snapshot(
         &bytes,
         validated.section_directory_entry(WorldSnapshotSectionKind::Maintenance),

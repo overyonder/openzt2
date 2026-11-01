@@ -4,6 +4,7 @@ pub mod authored_transaction_amount;
 pub mod behavior_transaction_state;
 pub mod currency_formatting;
 pub mod facility_economy_types;
+pub mod general_economy_types;
 pub mod guest_admission_types;
 pub mod money_types;
 pub mod monthly_finance_types;

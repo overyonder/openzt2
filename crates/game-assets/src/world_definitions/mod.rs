@@ -16,6 +16,7 @@ pub mod world_definition_source_document_lowering;
 use bevy::{asset::AssetApp, prelude::*};
 
 use crate::application_lifecycle::GamePhase;
+use crate::world_asset_preparation::WorldAssetPreparation;
 
 use self::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use self::{
@@ -43,7 +44,11 @@ impl Plugin for WorldDefinitionAssetPlugin {
                     index_loaded_world_definition_assets_by_identifier_and_singleton_kind,
                 )
                     .chain()
-                    .run_if(in_state(GamePhase::Loading).or_else(in_state(GamePhase::InGame))),
+                    .run_if(
+                        in_state(GamePhase::Loading)
+                            .or_else(in_state(GamePhase::InGame))
+                            .or_else(any_with_component::<WorldAssetPreparation>),
+                    ),
             );
     }
 }

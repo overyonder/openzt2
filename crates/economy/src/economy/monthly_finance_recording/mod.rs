@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityServiceKind;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -104,6 +105,10 @@ pub(super) fn record_completed_transactions_and_guest_counts_in_monthly_finance_
 /// loaded save restores its own history afterwards.
 pub(super) fn clear_finance_history_after_leaving_game(
     mut finance_history: ResMut<MonthlyFinanceHistory>,
+    general_ledger: Option<ResMut<GeneralEconomyLedger>>,
 ) {
     *finance_history = MonthlyFinanceHistory::default();
+    if let Some(mut general_ledger) = general_ledger {
+        *general_ledger = GeneralEconomyLedger::default();
+    }
 }

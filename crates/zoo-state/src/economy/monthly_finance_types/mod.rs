@@ -41,7 +41,7 @@ pub enum FinancePeriod {
     Lifetime,
 }
 
-const MONTHLY_FINANCE_HISTORY_CAPACITY: usize = 120;
+pub const MONTHLY_FINANCE_HISTORY_CAPACITY: usize = 120;
 const MONTHLY_FINANCE_HISTORY_CAPACITY_MONTHS: u32 = 120;
 
 /// The most recent ten years of monthly zoo-account totals.
@@ -210,14 +210,10 @@ impl MonthlyFinanceHistory {
         }
     }
 
-    pub fn record_completed_transaction(&mut self, kind: TransactionKind, delta: i64, cash: Money) {
+    pub fn record_account_cash_movement(&mut self, delta: i64, cash: Money) {
         if delta >= 0 {
             let amount = Money(delta);
             self.lifetime_income = Money(self.lifetime_income.0.saturating_add(amount.0));
-            if kind == TransactionKind::Donation {
-                self.lifetime_donation_income =
-                    Money(self.lifetime_donation_income.0.saturating_add(amount.0));
-            }
         } else {
             let amount = delta.saturating_abs();
             self.lifetime_expenses = Money(self.lifetime_expenses.0.saturating_add(amount));
@@ -228,6 +224,21 @@ impl MonthlyFinanceHistory {
         row.closing_cash = cash;
         if delta >= 0 {
             row.income = Money(row.income.0.saturating_add(delta));
+        } else {
+            row.expenses = Money(row.expenses.0.saturating_add(delta.saturating_abs()));
+        }
+    }
+
+    pub fn record_completed_transaction(&mut self, kind: TransactionKind, delta: i64, cash: Money) {
+        self.record_account_cash_movement(delta, cash);
+        if delta >= 0 && kind == TransactionKind::Donation {
+            self.lifetime_donation_income =
+                Money(self.lifetime_donation_income.0.saturating_add(delta));
+        }
+        let row = self
+            .current_month_finance_mut()
+            .expect("current month was recorded");
+        if delta >= 0 {
             let category = match kind {
                 TransactionKind::Admission => &mut row.admission_income,
                 TransactionKind::Donation => &mut row.donation_income,
@@ -237,7 +248,6 @@ impl MonthlyFinanceHistory {
             category.0 = category.0.saturating_add(delta);
         } else {
             let amount = delta.saturating_abs();
-            row.expenses = Money(row.expenses.0.saturating_add(amount));
             let category = match kind {
                 TransactionKind::AnimalAdoption => &mut row.animal_adoption,
                 TransactionKind::Construction => &mut row.construction,

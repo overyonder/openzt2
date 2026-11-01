@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
@@ -25,6 +26,7 @@ pub(super) fn request_construction_undo_or_failure_compensation(
         &mut EditCommitProgress,
         Option<&CompensationRequested>,
         Option<&RollbackContext>,
+        Option<&GeneralEconomyTransaction>,
     )>,
     mut account_transaction_requests: MessageWriter<TransactionRequest>,
     mut applied_transactions: MessageWriter<ConstructionTransactionApplied>,
@@ -37,6 +39,7 @@ pub(super) fn request_construction_undo_or_failure_compensation(
         mut progress,
         compensation_requested,
         rollback_context,
+        general_transaction,
     ) in &mut construction_transactions
     {
         if progress.phase != EditCommitPhase::AwaitingCompensation
@@ -81,6 +84,7 @@ pub(super) fn request_construction_undo_or_failure_compensation(
             transaction.cost,
             payment_purpose,
             reverse_payment_direction,
+            general_transaction.copied(),
         ) {
             commands
                 .entity(transaction_entity)

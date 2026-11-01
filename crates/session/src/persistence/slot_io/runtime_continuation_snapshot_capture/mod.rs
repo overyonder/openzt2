@@ -23,6 +23,8 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
     service: Option<Res<'w, ServiceRequestSequence>>,
     arrivals: Option<Res<'w, GuestArrivalState>>,
     survey: Option<Res<'w, GuestSurvey>>,
+    general_economy:
+        Option<Res<'w, openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>>,
     audio_assets:
         Option<Res<'w, Assets<openzt2_game_assets::audio::audio_asset_types::AudioAsset>>>,
     audio_presets: Query<
@@ -45,6 +47,8 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
             &'static Name,
         ),
+        // Guests have no saved records yet, so their names have no owner on load.
+        Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
     >,
     named_entities: Query<
         'w,
@@ -53,7 +57,10 @@ pub(in crate::persistence) struct RuntimeContinuationSnapshotCapture<'w, 's> {
             &'static openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
             &'static openzt2_world_state::world_spawn::world_membership_types::WorldMember,
         ),
-        With<openzt2_zoo_state::entity_naming_types::EntityNameRegistered>,
+        (
+            With<openzt2_zoo_state::entity_naming_types::EntityNameRegistered>,
+            Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+        ),
     >,
     favourite_trends: Query<'w, 's, &'static GuestFavouriteAnimalTrend, With<WorldRoot>>,
 }
@@ -81,6 +88,7 @@ impl RuntimeContinuationSnapshotCapture<'_, '_> {
             .collect::<Vec<_>>();
         names.sort_unstable_by_key(|(id, _)| *id);
         let record = RuntimeContinuationSnapshot {
+            general_economy: self.general_economy.as_deref().copied(),
             entity_names: Some(names),
             world_audio_preset: self
                 .audio_presets

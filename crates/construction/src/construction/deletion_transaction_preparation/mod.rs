@@ -41,6 +41,7 @@ pub fn begin_deletion_transaction_preparation(
                 },
                 EditCommitProgress::preparing(),
                 *world_member,
+                openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction::Destroy,
             ))
             .id();
         deletion_preparation_requests.write(PrepareDeletion {

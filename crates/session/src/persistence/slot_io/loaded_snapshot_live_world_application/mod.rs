@@ -43,6 +43,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     commands: &mut Commands,
     snapshot_container_bytes: &[u8],
     profile_identifier: AssetId,
+    source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource,
     world_root_entity: Entity,
     persistent_identifier_allocator: &mut PersistentIdAllocator,
     world_snapshot_application_state: WorldSnapshotApplicationState,
@@ -163,7 +164,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             snapshot_container_bytes,
             validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Animals),
         )?;
-    let scenario_snapshot = super::scenario_snapshot_section::decode(
+    let mut scenario_snapshot = super::scenario_snapshot_section::decode(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Scenario),
     )?;
@@ -223,12 +224,39 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     let world_definitions = active_world_definitions
         .get(&world_definition_assets)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
-    let runtime_continuation =
+    let mut runtime_continuation =
         super::runtime_continuation_snapshot_section::decode_runtime_continuation_section(
             snapshot_container_bytes,
             validated_snapshot_container
                 .section_directory_entry(WorldSnapshotSectionKind::RuntimeContinuation),
         )?;
+    if matches!(
+        source,
+        openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Original(_)
+    ) {
+        let original_next = world_snapshot_record
+            .source_document
+            .as_ref()
+            .and_then(|source| {
+                source
+                    .document
+                    .find_starting_zoo(world_snapshot_record.starting_point_definition_identifier)
+            })
+            .and_then(|start| start.next_persistent_identifier)
+            .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
+        if persistent_identifier_allocator.next() < original_next {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        let next_identifier = super::scenario_snapshot_section::original_saved_game_conversion::assign_original_scenario_objective_identifiers(
+            &mut scenario_snapshot,
+            world_root_entity,
+            persistent_identifier_allocator,
+        )?;
+        let runtime = runtime_continuation
+            .as_mut()
+            .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;
+        runtime.next_persistent_identifier = next_identifier;
+    }
     let placement_records = placement_snapshot_records.as_deref().unwrap_or_default();
     super::native_crate_snapshot_links::validate_native_crate_links(
         &animal_snapshot_records,
@@ -322,7 +350,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     } else {
         Vec::new()
     };
-    let maximum_persistent_identifier =
+    let (maximum_persistent_identifier, complete_persistent_identifiers) =
         validate_loaded_snapshot_references_and_imported_persistent_identifiers(
             scenario_snapshot.as_ref(),
             &animal_snapshot_records,
@@ -380,10 +408,14 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     for record in topology_snapshot_records.iter().flatten() {
         planned_identities.insert(record.id().0, Entity::PLACEHOLDER);
     }
-    if maintained_object_records
+    if let Some(record) = maintained_object_records
         .iter()
-        .any(|record| !planned_identities.contains_key(&record.persistent_identifier))
+        .find(|record| !planned_identities.contains_key(&record.persistent_identifier))
     {
+        bevy::log::warn!(
+            id = record.persistent_identifier,
+            "saved maintenance owner is missing"
+        );
         return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
     }
     // Validate references before spawning or removing any placement entities.
@@ -396,18 +428,23 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             pending_service_request_sequences: &[],
         };
     if let Some(record) = &runtime_continuation {
-        if record.entity_names.as_ref().is_some_and(|names| {
+        if let Some((id, _)) = record.entity_names.as_ref().and_then(|names| {
             names
                 .iter()
-                .any(|(id, _)| !planned_identities.contains_key(id))
+                .find(|(id, _)| !complete_persistent_identifiers.contains(id))
         }) {
+            bevy::log::warn!(id, "saved name owner is missing");
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         }
-        if record
+        if let Some(id) = record
             .registered_entity_name_identifiers
             .as_ref()
-            .is_some_and(|ids| ids.iter().any(|id| !planned_identities.contains_key(id)))
+            .and_then(|ids| {
+                ids.iter()
+                    .find(|id| !complete_persistent_identifiers.contains(id))
+            })
         {
+            bevy::log::warn!(id, "saved name registration owner is missing");
             return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
         }
         super::runtime_continuation_snapshot_application::validate_runtime_continuation_identity_high_water_marks(record, high_water_marks)?;
@@ -616,6 +653,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             high_water_marks,
         )?;
     } else {
+        commands.remove_resource::<openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>();
         super::runtime_continuation_snapshot_application::apply_entity_name_registration(
             commands,
             world_root_entity,

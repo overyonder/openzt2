@@ -7,11 +7,11 @@ use std::{
 
 use bevy::prelude::*;
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{document::WorldDefinitionDocument, environment::EnvironmentDefinition},
     world_scenario::{
         PhotoChallengeRule, StartingTopologyNodeRecord, StartingZooRecord, WorldScenarioDocument,
     },
-    AssetId,
 };
 
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
@@ -25,8 +25,8 @@ use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFr
 use crate::persistence::{
     persistence_failure_types::WorldSnapshotPersistenceFailed,
     slot_io::photo_baseline_snapshot_tests::{
-        initialize_fixture_album_localization, loading_app, photo_fixture_catalogue,
-        prepare_photo_snapshot_application, FIRST, PROFILE, SCENARIO, SECOND,
+        FIRST, PROFILE, SCENARIO, SECOND, initialize_fixture_album_localization, loading_app,
+        photo_fixture_catalogue, prepare_photo_snapshot_application,
     },
 };
 use openzt2_game_assets::{
@@ -106,6 +106,7 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             name: "baseline".into(),
             admissions_open: true,
             cash_cents: 5000,
+            general_cash_cents: None,
             admission_cents: Some(250),
             fame_half_stars: 0,
             maximum_fame_percent_reached: None,
@@ -215,10 +216,11 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
         if delay_localization {
             assert!(app.world().get::<Name>(album).is_none());
             app.update();
-            assert!(app
-                .world()
-                .resource::<Messages<WorldSnapshotLoadedFromSlot>>()
-                .is_empty());
+            assert!(
+                app.world()
+                    .resource::<Messages<WorldSnapshotLoadedFromSlot>>()
+                    .is_empty()
+            );
             assert!(matches!(
                 app.world().resource::<NextState<GamePhase>>(),
                 NextState::Unchanged
@@ -244,10 +246,11 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
                 .len(),
             1
         );
-        assert!(app
-            .world()
-            .resource::<Messages<WorldSnapshotPersistenceFailed>>()
-            .is_empty());
+        assert!(
+            app.world()
+                .resource::<Messages<WorldSnapshotPersistenceFailed>>()
+                .is_empty()
+        );
         let mut challenges = app
             .world_mut()
             .query::<(&PhotoChallenge, &PhotoChallengeProgress)>();

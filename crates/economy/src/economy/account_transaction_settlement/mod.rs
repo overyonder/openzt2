@@ -1,6 +1,10 @@
 use bevy::{platform::collections::HashSet, prelude::*};
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use openzt2_zoo_state::economy::general_economy_types::{
+    GeneralEconomyLedger, GeneralEconomyTransaction,
+};
 
 use super::{
     account_transaction_types::{
@@ -99,6 +103,8 @@ pub(super) fn settle_requested_account_transactions(
     mut transaction_requests: MessageReader<TransactionRequest>,
     mut zoo_cash: ResMut<ZooCash>,
     unlimited_zoo_cash: Option<Res<UnlimitedZooCash>>,
+    mut general_ledger: Option<ResMut<GeneralEconomyLedger>>,
+    calendar: Option<Res<ZooCalendar>>,
     mut wallets: Query<&mut Wallet>,
     mut completed_transactions: MessageWriter<TransactionCompleted>,
     mut rejected_transactions: MessageWriter<TransactionRejected>,
@@ -106,6 +112,7 @@ pub(super) fn settle_requested_account_transactions(
         Option<&TransactionSettled>,
         Option<&BehaviorTransactionPayment>,
         Option<&KeeperRefillPayment>,
+        Option<&GeneralEconomyTransaction>,
     )>,
     mut behavior_tasks: Query<
         (&mut BehaviorTaskExecutionState, &PendingBehaviorTransaction),
@@ -115,6 +122,11 @@ pub(super) fn settle_requested_account_transactions(
     mut keeper_refills: KeeperRefillSettlement,
 ) {
     operations_settled_this_tick.clear();
+    if let (Some(ledger), Some(calendar)) = (general_ledger.as_deref_mut(), calendar.as_deref()) {
+        ledger.enter_calendar_month(
+            u32::from(calendar.year) * 12 + u32::from(calendar.month.saturating_sub(1)),
+        );
+    }
     for request in transaction_requests.read() {
         // Completed behavior operations are despawned by their owner. A late
         // replay must not become an unowned payment after that cleanup.
@@ -123,7 +135,7 @@ pub(super) fn settle_requested_account_transactions(
         }
         if transaction_operations
             .get(request.operation)
-            .is_ok_and(|(settled, _, _)| settled.is_some())
+            .is_ok_and(|(settled, _, _, _)| settled.is_some())
             || !operations_settled_this_tick.insert(request.operation)
         {
             continue;
@@ -133,7 +145,7 @@ pub(super) fn settle_requested_account_transactions(
             // Authored payments are valid only while the originating instruction
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
-            if let Ok((_, Some(owner), _)) = transaction_operations.get(request.operation) {
+            if let Ok((_, Some(owner), _, _)) = transaction_operations.get(request.operation) {
                 let valid = behavior_tasks
                     .get(owner.actor)
                     .is_ok_and(|(task, pending)| {
@@ -162,7 +174,29 @@ pub(super) fn settle_requested_account_transactions(
                 credit_account_balance,
             )?;
 
-            if let Ok((_, Some(owner), Some(refill))) =
+            let general_cash_change = if transaction_operations
+                .get(request.operation)
+                .is_ok_and(|(_, _, _, provenance)| provenance.is_some())
+                && general_ledger
+                    .as_deref()
+                    .is_some_and(|ledger| ledger.cash().is_some())
+            {
+                let delta = match (request.debit, request.credit) {
+                    (Account::Zoo, Account::Zoo) => 0,
+                    (Account::Zoo, _) => -request.amount.0,
+                    (_, Account::Zoo) => request.amount.0,
+                    _ => 0,
+                };
+                general_ledger
+                    .as_deref()
+                    .and_then(|ledger| ledger.cash_after_transaction(delta))
+                    .ok_or(TransactionRejection::Overflow)?;
+                Some(delta)
+            } else {
+                None
+            };
+
+            if let Ok((_, Some(owner), Some(refill), _)) =
                 transaction_operations.get(request.operation)
             {
                 let (mut task, _) = behavior_tasks
@@ -171,6 +205,14 @@ pub(super) fn settle_requested_account_transactions(
                 keeper_refills
                     .commit(owner.actor, &mut task, refill)
                     .ok_or(TransactionRejection::Cancelled)?;
+            }
+
+            if let Some(delta) = general_cash_change {
+                general_ledger
+                    .as_deref_mut()
+                    .expect("general balance was checked")
+                    .record_completed_transaction(delta)
+                    .expect("general movement was checked");
             }
 
             if !accounts_are_same {

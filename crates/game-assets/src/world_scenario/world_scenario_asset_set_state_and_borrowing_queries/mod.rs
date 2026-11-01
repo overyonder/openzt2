@@ -228,11 +228,33 @@ impl<'a> WorldScenariosView<'a> {
         self,
         id: AssetId,
     ) -> Option<&'a openzt2_game_data::world_scenario::ScenarioDefinitionRecord> {
+        let (_, document, record) = self.scenario_document(id)?;
+        document.document.find_scenario_record(record)
+    }
+
+    fn scenario_document(
+        self,
+        id: AssetId,
+    ) -> Option<(
+        &'a Handle<WorldScenarioDocumentAsset>,
+        &'a WorldScenarioDocumentAsset,
+        AssetId,
+    )> {
+        if let Some((handle, document)) =
+            self.scoped_document(|document| document.document.find_scenario_record(id).is_some())
+        {
+            return Some((handle, document, id));
+        }
         let source = self.owner.scenarios.get(&id)?;
-        self.assets
-            .get(&source.handle)?
-            .document
-            .find_scenario_record(source.record)
+        let (handle, document) = self
+            .scoped_document(|document| {
+                document
+                    .document
+                    .find_scenario_record(source.record)
+                    .is_some()
+            })
+            .or_else(|| Some((&source.handle, self.assets.get(&source.handle)?)))?;
+        Some((handle, document, source.record))
     }
 
     pub fn campaign_scenario(
@@ -279,14 +301,14 @@ impl<'a> WorldScenariosView<'a> {
     }
 
     pub fn document_for_scenario(self, id: AssetId) -> Option<&'a WorldScenarioDocumentAsset> {
-        self.assets.get(&self.owner.scenarios.get(&id)?.handle)
+        self.scenario_document(id).map(|(_, document, _)| document)
     }
 
     pub fn handle_for_scenario(
         self,
         id: AssetId,
     ) -> Option<&'a Handle<WorldScenarioDocumentAsset>> {
-        Some(&self.owner.scenarios.get(&id)?.handle)
+        self.scenario_document(id).map(|(handle, _, _)| handle)
     }
 
     pub fn handle_for_map(self, id: AssetId) -> Option<&'a Handle<WorldScenarioDocumentAsset>> {
