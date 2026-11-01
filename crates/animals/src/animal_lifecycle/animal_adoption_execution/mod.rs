@@ -33,6 +33,9 @@ use super::{
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct CompletedAnimalAdoptionPayment;
 
+#[derive(Component)]
+pub(super) struct AnimalAdoptionRefund;
+
 pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     mut commands: Commands,
     mut adoption_requests: MessageReader<AdoptAnimal>,
@@ -243,8 +246,16 @@ pub(super) fn refund_paid_animal_adoptions_after_rejected_spawns(
             continue;
         };
         if payment_completed {
+            let operation = commands
+                .spawn((
+                    AnimalAdoptionRefund,
+                    WorldMember {
+                        root: adoption.world,
+                    },
+                ))
+                .id();
             refund_requests.write(TransactionRequest {
-                operation: rejected_spawn.operation,
+                operation,
                 debit: Account::External,
                 credit: Account::Zoo,
                 amount: adoption.cost,
@@ -253,5 +264,22 @@ pub(super) fn refund_paid_animal_adoptions_after_rejected_spawns(
             });
         }
         commands.entity(rejected_spawn.operation).despawn();
+    }
+}
+
+pub(super) fn remove_settled_animal_adoption_refunds(
+    mut commands: Commands,
+    refunds: Query<(), With<AnimalAdoptionRefund>>,
+    mut completed: MessageReader<TransactionCompleted>,
+    mut rejected: MessageReader<TransactionRejected>,
+) {
+    for operation in completed
+        .read()
+        .map(|transaction| transaction.operation)
+        .chain(rejected.read().map(|transaction| transaction.operation))
+    {
+        if refunds.contains(operation) {
+            commands.entity(operation).despawn();
+        }
     }
 }

@@ -1,7 +1,5 @@
 use bevy::prelude::{Commands, Entity};
 
-use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
-use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::money_types::Money;
@@ -38,19 +36,77 @@ pub(super) fn apply_economy_snapshot_records_to_live_economy_resources_and_facil
     zoo_admission_price.0 = economy_snapshot_records.admission_price;
     zoo_admissions_open_state.0 = economy_snapshot_records.admissions_open;
 
-    for facility_economy_snapshot_record in economy_snapshot_records.facility_economy_records {
-        let facility_entity = entities_with_persistent_identifiers
-            .get(&facility_economy_snapshot_record.persistent_identifier.0)
+    if let Some(unlimited) = economy_snapshot_records.unlimited_cash {
+        if unlimited {
+            commands.insert_resource(openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash);
+        } else {
+            commands
+                .remove_resource::<openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>();
+        }
+    }
+    use openzt2_zoo_state::economy::{
+        behavior_transaction_state::EconomyUsage, facility_economy_types::*,
+    };
+    for record in economy_snapshot_records.entity_economy_records {
+        let entity = entities_with_persistent_identifiers
+            .get(&record.persistent_identifier.0)
             .copied()
             .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
-
-        commands.entity(facility_entity).insert((
-            OperatingSinceDay(facility_economy_snapshot_record.opening_zoo_day),
-            FacilityProfit {
-                total: Money(facility_economy_snapshot_record.total_profit_cents),
-                transactions: facility_economy_snapshot_record.transaction_count,
-            },
-        ));
+        let mut entity = commands.entity(entity);
+        if record.complete_component_state {
+            entity.remove::<(
+                OperatingSinceDay,
+                FacilityProfit,
+                FacilityPriceIndex,
+                MaintenanceScheduleIndex,
+                Wallet,
+                Price,
+                ServiceFacility,
+                Inventory,
+                EconomyUsage,
+                ObjectEconomyFactsResolved,
+                ServiceFacilityFactsResolved,
+            )>();
+        }
+        if let Some(day) = record.opening_zoo_day {
+            entity.insert(OperatingSinceDay(day));
+        }
+        if let Some((profit, transactions)) = record.profit {
+            entity.insert(FacilityProfit {
+                total: Money(profit),
+                transactions,
+            });
+        }
+        if let Some(index) = record.price_index {
+            entity.insert(FacilityPriceIndex(index));
+        }
+        if let Some(index) = record.maintenance_schedule_index {
+            entity.insert(MaintenanceScheduleIndex(index));
+        }
+        if let Some(wallet) = record.wallet {
+            entity.insert(Wallet(Money(wallet)));
+        }
+        if let Some(price) = record.price {
+            entity.insert(Price(Money(price)));
+        }
+        if let Some(service) = record.service {
+            entity.insert(ServiceFacility {
+                definition: service.definition,
+                capacity: service.capacity,
+                occupied: service.occupied,
+                payment_trigger: service.payment_trigger,
+            });
+        }
+        if let Some([available, reserved, capacity]) = record.inventory {
+            entity.insert(Inventory {
+                available,
+                reserved,
+                capacity,
+            });
+        }
+        if let Some([active, total]) = record.usage {
+            entity.insert(EconomyUsage::from_counts(active, total));
+        }
     }
 
     Ok(())

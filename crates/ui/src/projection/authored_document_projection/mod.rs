@@ -16,6 +16,7 @@ use super::authored_widget_projection::project_widget;
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::document::UiDocument;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
@@ -23,7 +24,6 @@ use openzt2_game_data::ui_document::node::UiNodeFlags;
 use openzt2_game_data::ui_document::node::UiNodeKind;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
-use openzt2_game_data::AssetId;
 
 use crate::animation::NotifyOnUiAnimationComplete;
 use crate::animation::UiShowHideAnimation;
@@ -264,7 +264,7 @@ pub fn project_document(
                 } else {
                     0.0
                 },
-                bob_ms: animation.bob_ms as f32,
+                bob_factor: animation.bob_factor,
                 interpolation: animation.interpolation,
                 forward: animation.initial_forward,
                 running: duration_ms > 0.0

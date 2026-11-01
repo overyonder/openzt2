@@ -3,6 +3,7 @@ use openzt2_game_data::AssetId;
 
 #[derive(bevy::prelude::Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BeginWorldLoad {
+    pub saved_world_document: Option<bevy::asset::AssetId<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>>,
     pub operation: Option<Entity>,
     pub scenario: AssetId,
     pub mode: crate::game_session_types::WorldSessionMode,

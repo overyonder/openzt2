@@ -16,6 +16,14 @@ pub struct SamplingBehaviorDockPose;
 pub struct BehaviorTaskExecutionSequence(u64);
 
 impl BehaviorTaskExecutionSequence {
+    pub const fn from_snapshot(last_issued: u64) -> Self {
+        Self(last_issued)
+    }
+
+    pub const fn last_issued(&self) -> u64 {
+        self.0
+    }
+
     pub fn reserve_restored(&mut self, execution_id: u64) {
         self.0 = self.0.max(execution_id);
     }

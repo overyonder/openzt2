@@ -398,7 +398,7 @@ pub struct SourceUiShowHideAnimation {
     pub exit_rate: Option<f32>,
     pub initial_seconds: Option<f32>,
     pub initial_direction: Option<bool>,
-    pub bob_seconds: Option<f32>,
+    pub bob_factor: Option<f32>,
     pub delay_seconds: Option<f32>,
     pub function: Option<String>,
     pub start: Option<SourceUiRect>,
@@ -881,7 +881,7 @@ pub struct SourceUiAnimation {
     pub exit_rate: Option<f32>,
     pub initial_time: Option<f32>,
     pub initial_direction: Option<bool>,
-    pub bob_seconds: Option<f32>,
+    pub bob_factor: Option<f32>,
     pub delay_seconds: Option<f32>,
     pub function: Option<String>,
 }

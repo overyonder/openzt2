@@ -3,3 +3,4 @@
 pub mod generated_photo_persistence_types;
 pub mod profile_types;
 pub mod save_slot_types;
+pub mod saved_game_source_types;

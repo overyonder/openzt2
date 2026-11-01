@@ -35,6 +35,19 @@ impl ArchiveSet {
     /// Returns an error when the path has no enabled winner or its archive
     /// entry cannot be read.
     pub fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
+        self.read_with_maximum_byte_count(path, usize::MAX)
+    }
+
+    /// Reads the winning entry with a limit on both its declared and actual size.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the entry exceeds the limit or cannot be read.
+    pub fn read_with_maximum_byte_count(
+        &self,
+        path: &Path,
+        maximum_byte_count: usize,
+    ) -> io::Result<Vec<u8>> {
         let path = normalize_asset_path_for_case_insensitive_archive_lookup(path);
         let state = self
             .overlay_state
@@ -52,8 +65,23 @@ impl ArchiveSet {
             .map_err(io::Error::other)?;
         let capacity = usize::try_from(entry.size())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Z2F entry is too large"))?;
+        if capacity > maximum_byte_count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Z2F entry exceeds the requested byte limit",
+            ));
+        }
         let mut bytes = Vec::with_capacity(capacity);
-        entry.read_to_end(&mut bytes)?;
+        let read_limit = u64::try_from(maximum_byte_count)
+            .unwrap_or(u64::MAX)
+            .saturating_add(1);
+        (&mut entry).take(read_limit).read_to_end(&mut bytes)?;
+        if bytes.len() > maximum_byte_count {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "Z2F entry exceeds the requested byte limit",
+            ));
+        }
         drop(entry);
         drop(archive);
         Ok(bytes)

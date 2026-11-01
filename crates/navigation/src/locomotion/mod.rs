@@ -67,10 +67,19 @@ impl Plugin for LocomotionPlugin {
             .add_message::<PursueEntity>()
             .add_message::<Arrived>()
             .add_message::<NavigationFailed>()
+            .add_message::<openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored>()
             .add_systems(
                 Update,
                 world_navigation_installation::
                     install_terrain_derived_navigation_graph_for_loaded_world,
+            )
+            .add_systems(
+                Update,
+                terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_restoration
+                    .after(world_navigation_installation::install_terrain_derived_navigation_graph_for_loaded_world)
+                    .before(path_surface_navigation_projection::project_path_surfaces_into_navigation_graph)
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
             )
             .add_systems(
                 Update,

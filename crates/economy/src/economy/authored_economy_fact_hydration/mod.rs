@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffRoleKind};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -8,34 +8,32 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::{
     facility_economy_types::FacilityProfit,
     facility_economy_types::{
-        Inventory, MonthlyUpkeep, Price, RequiredFacilityStaff, ServiceFacility,
+        Inventory, MonthlyUpkeep, ObjectEconomyFactsResolved, Price, RequiredFacilityStaff,
+        ServiceFacility, ServiceFacilityFactsResolved,
     },
     money_types::Money,
 };
-
-#[derive(Component)]
-pub(super) struct ObjectEconomyFactsResolved;
-
-#[derive(Component)]
-pub(super) struct ServiceFacilityFactsResolved;
 
 pub(super) fn hydrate_authored_monthly_upkeep_for_new_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    objects: Query<(Entity, &DefinitionId), Without<ObjectEconomyFactsResolved>>,
+    objects: Query<
+        (Entity, &DefinitionId, Option<&FacilityProfit>),
+        Without<ObjectEconomyFactsResolved>,
+    >,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (entity, definition_id) in &objects {
+    for (entity, definition_id, profit) in &objects {
         let Some(object_definition) = world_definitions.find_object(definition_id.0) else {
             commands.entity(entity).insert(ObjectEconomyFactsResolved);
             continue;
         };
 
         let monthly_upkeep = i64::from(object_definition.upkeep_cents_per_month);
-        if !object_definition.transactions.is_empty() {
+        if !object_definition.transactions.is_empty() && profit.is_none() {
             commands.entity(entity).insert(FacilityProfit::default());
         }
         if monthly_upkeep != 0 {
@@ -55,12 +53,21 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
     mut commands: Commands,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    facilities: Query<(Entity, &DefinitionId), Without<ServiceFacilityFactsResolved>>,
+    facilities: Query<
+        (
+            Entity,
+            &DefinitionId,
+            Option<&Price>,
+            Option<&ServiceFacility>,
+            Option<&Inventory>,
+        ),
+        Without<ServiceFacilityFactsResolved>,
+    >,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (entity, definition_id) in &facilities {
+    for (entity, definition_id, price, service, inventory) in &facilities {
         let Some(facility_definition) = world_definitions.find_facility_by_object(definition_id.0)
         else {
             commands.entity(entity).insert(ServiceFacilityFactsResolved);
@@ -68,22 +75,24 @@ pub(super) fn hydrate_authored_service_facility_facts_for_new_world_objects(
         };
 
         let mut entity_commands = commands.entity(entity);
-        entity_commands.insert((
-            Price(Money(i64::from(facility_definition.price_cents))),
-            ServiceFacility {
+        entity_commands.insert(ServiceFacilityFactsResolved);
+        if price.is_none() {
+            entity_commands.insert(Price(Money(i64::from(facility_definition.price_cents))));
+        }
+        if service.is_none() {
+            entity_commands.insert(ServiceFacility {
                 definition: AssetId(facility_definition.id.0),
                 capacity: facility_definition.capacity,
                 occupied: 0,
                 payment_trigger: facility_definition.payment_trigger,
-            },
-            ServiceFacilityFactsResolved,
-        ));
+            });
+        }
         if let Some(required_staff) =
             map_authored_staff_kind_to_supported_facility_operator(&facility_definition.staffing)
         {
             entity_commands.insert(RequiredFacilityStaff(required_staff));
         }
-        if facility_definition.inventory_capacity > 0 {
+        if facility_definition.inventory_capacity > 0 && inventory.is_none() {
             entity_commands.insert(Inventory {
                 available: facility_definition.inventory_capacity,
                 reserved: 0,
@@ -113,13 +122,13 @@ fn map_authored_staff_kind_to_supported_facility_operator(
 #[cfg(test)]
 mod authored_service_facility_hydration_tests {
     use super::*;
+    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::{
         document::WorldDefinitionDocument,
         facilities_and_maintenance::{
             FacilityDefinition, FacilityPaymentTrigger, FacilityServiceKind,
         },
     };
-    use openzt2_game_data::AssetId;
 
     fn cart_object() -> AssetId {
         AssetId::from_key("snackcart_fruitcup_df")
@@ -192,6 +201,46 @@ mod authored_service_facility_hydration_tests {
             facility.payment_trigger,
             FacilityPaymentTrigger::AuthoredBehavior,
             "the authored buy behavior set owns payment; the hydration must carry that ownership into the live component"
+        );
+    }
+    #[test]
+    fn restored_capacity_inventory_and_price_survive_initial_hydration() {
+        let mut application = create_application_with_fruitcup_facility();
+        let facility = ServiceFacility {
+            definition: AssetId::from_key("facility/snackcart_fruitcup_df"),
+            capacity: 3,
+            occupied: 2,
+            payment_trigger: FacilityPaymentTrigger::AuthoredBehavior,
+        };
+        let stock = Inventory {
+            available: 6,
+            reserved: 4,
+            capacity: 10,
+        };
+        let cart = application
+            .world_mut()
+            .spawn((
+                DefinitionId(cart_object()),
+                Price(Money(700)),
+                facility,
+                stock,
+            ))
+            .id();
+        application.update();
+        assert_eq!(
+            application.world().get::<Price>(cart),
+            Some(&Price(Money(700)))
+        );
+        assert_eq!(
+            application.world().get::<ServiceFacility>(cart),
+            Some(&facility)
+        );
+        assert_eq!(application.world().get::<Inventory>(cart), Some(&stock));
+        assert!(
+            application
+                .world()
+                .get::<ServiceFacilityFactsResolved>(cart)
+                .is_some()
         );
     }
 }

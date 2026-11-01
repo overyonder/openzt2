@@ -13,8 +13,8 @@ pub struct UiNodeAnimationDefinition {
     pub initial_forward: bool,
     /// Delay before forward playback begins.
     pub delay_ms: u32,
-    /// Time held at the end before automatic reverse playback. Zero disables it.
-    pub bob_ms: u32,
+    /// Dimensionless sine overshoot factor. Zero selects the ordinary sine curve.
+    pub bob_factor: f32,
     pub interpolation: UiNodeAnimationInterpolation,
     /// Start and end of the x, y, width and height the animation moves.
     /// `None` keeps that component of the projected layout, which may be

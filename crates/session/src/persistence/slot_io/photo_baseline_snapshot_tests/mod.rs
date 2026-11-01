@@ -150,6 +150,7 @@ pub(crate) fn loading_app() -> (App, Entity) {
         ..default()
     })
     .insert_resource(ZooClock {
+        fractional_tick: Default::default(),
         tick: 1,
         absolute_day: 0,
         tick_in_day: 1,
@@ -268,6 +269,7 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
         },
     ];
     let economy = EconomySnapshotRecords {
+        unlimited_cash: Some(false),
         zoo_cash: Money(5000),
         admission_price: Money(250),
         admissions_open: true,
@@ -278,7 +280,7 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
         lifetime_users: 0,
         monthly_finance_history_initialized: false,
         monthly_finance_records: vec![],
-        facility_economy_records: vec![],
+        entity_economy_records: vec![],
     };
     let mut bytes = Vec::new();
     initialize_empty_world_snapshot_container(&mut bytes, PROFILE);
@@ -303,8 +305,10 @@ pub(crate) fn saved_photo_container_for_scenario(world: &mut World, scenario: As
                         session_mode: WorldSessionMode::Freeform,
                         last_saved_unix_timestamp_milliseconds: 0,
                         display_name: "restored".into(),
+                        source_document: None,
                     },
-                ),
+                )
+                .unwrap(),
                 WorldSnapshotSectionKind::Animals => payload.extend_from_slice(b"[]"),
                 WorldSnapshotSectionKind::Economy => {
                     append_encoded_economy_snapshot_section(payload, &economy)
@@ -340,6 +344,10 @@ pub(crate) fn prepare_photo_snapshot_application(world: &mut World) {
     });
     let pending = world
         .spawn(PendingSnapshotApplication {
+            world_snapshot: None,
+            terrain_snapshot: None,
+            saved_world_document: None,
+            terrain_restored: false,
             behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: Some(SCENARIO),
@@ -385,6 +393,10 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
     });
     world
         .spawn(PendingSnapshotApplication {
+            world_snapshot: None,
+            terrain_snapshot: None,
+            saved_world_document: None,
+            terrain_restored: false,
             behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: None,
@@ -483,6 +495,10 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
     let pending = app
         .world_mut()
         .spawn(PendingSnapshotApplication {
+            world_snapshot: None,
+            terrain_snapshot: None,
+            saved_world_document: None,
+            terrain_restored: false,
             behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: None,
@@ -586,6 +602,10 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
     let pending = app
         .world_mut()
         .spawn(PendingSnapshotApplication {
+            world_snapshot: None,
+            terrain_snapshot: None,
+            saved_world_document: None,
+            terrain_restored: false,
             behavior_documents: Vec::new(),
             save_slot_identifier: SaveSlotId(0),
             scenario_definition_identifier: Some(SCENARIO),

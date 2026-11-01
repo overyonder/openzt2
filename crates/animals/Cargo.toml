@@ -27,5 +27,6 @@ bevy.workspace = true
 mlua.workspace = true
 
 [dev-dependencies]
+openzt2_economy.workspace = true
 openzt2_game_assets = { workspace = true, features = ["testing"] }
 openzt2_zoo_staff.workspace = true

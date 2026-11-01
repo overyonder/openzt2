@@ -124,6 +124,7 @@ mod tests {
     fn facility_values_render_text_without_dirtying_settled_text() {
         let mut app = App::new();
         app.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,

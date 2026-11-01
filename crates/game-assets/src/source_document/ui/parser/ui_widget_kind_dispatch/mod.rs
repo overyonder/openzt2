@@ -12,6 +12,7 @@ use super::{
         SourceUiTooltip, SourceUiTreeElement, SourceUiTypeList, SourceUiWidgetData,
         SourceUiWidgetKind, SourceUiWindow, SourceUiWorldMap,
     },
+    SourceUiDiagnostic,
     focused_widget_property_parsing::{
         child_element_names as child_names, parse_authored_show_hide_colors as parse_colors,
         parse_authored_ui_button as parse_button, parse_authored_ui_drag_axis as parse_drag_axis,
@@ -29,7 +30,6 @@ use super::{
     },
     ui_event_and_hotkey_parsing::parse_authored_ui_event as parse_event,
     ui_region_and_state_parsing::parse_authored_ui_region as parse_region,
-    SourceUiDiagnostic,
 };
 
 pub(super) fn parse_authored_ui_widget_data(
@@ -49,7 +49,7 @@ pub(super) fn parse_authored_ui_widget_data(
             exit_rate: parse_f32_attr(attributes, "exitRate"),
             initial_time: parse_f32_attr(attributes, "initialTime"),
             initial_direction: attr(attributes, "initialDir").and_then(parse_bool),
-            bob_seconds: parse_f32_attr(attributes, "bob"),
+            bob_factor: parse_f32_attr(attributes, "bob"),
             delay_seconds: parse_f32_attr(attributes, "delay"),
             function: attr(attributes, "function").map(str::to_owned),
         }),

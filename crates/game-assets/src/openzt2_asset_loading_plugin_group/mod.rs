@@ -18,6 +18,7 @@ impl PluginGroup for OpenZt2AssetLoadingPluginGroup {
             .add(super::scene_prefab::ScenePrefabAssetPlugin)
             .add(super::species::SpeciesAssetPlugin)
             .add(super::terrain::TerrainAssetPlugin)
+            .add(super::original_saved_game_asset_loading::OriginalSavedGameAssetPlugin)
             .add(super::world_definitions::WorldDefinitionAssetPlugin)
             .add(super::world_scenario::WorldScenarioDocumentAssetPlugin)
             // UI documents are the only XML family that publishes labels.

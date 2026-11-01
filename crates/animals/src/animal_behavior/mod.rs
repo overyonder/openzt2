@@ -87,6 +87,12 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .add_message::<BehaviorTaskFinished>()
             .add_systems(
                 FixedUpdate,
+                behavior_task_phase_transition_execution::begin_behavior_target_candidate_selection_updates
+                    .in_set(FixedGameSet::Clock)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 behavior_random_stream_initialization::attach_behavior_random_stream_to_animals_and_staff
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame))

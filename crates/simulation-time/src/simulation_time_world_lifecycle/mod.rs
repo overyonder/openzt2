@@ -2,6 +2,7 @@ use bevy::{
     prelude::*,
     time::{Fixed, Virtual},
 };
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -17,7 +18,10 @@ use super::{
 
 pub fn initialize_simulation_time_from_selected_world(
     mut commands: Commands,
-    selected_worlds: Query<&SelectedWorldIdentity>,
+    selected_worlds: Query<(
+        &SelectedWorldIdentity,
+        Option<&SelectedWorldDocumentHandles>,
+    )>,
     existing_zoo_clock: Option<Res<ZooClock>>,
     scenario_documents: Res<Assets<WorldScenarioDocumentAsset>>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -45,11 +49,16 @@ pub fn initialize_simulation_time_from_selected_world(
     ));
     let calendar_policy = &timing.calendar;
 
-    for selected_world in &selected_worlds {
-        let Some(starting_zoo) = scenario_documents
-            .iter()
-            .find_map(|(_, document)| document.document.find_starting_zoo(selected_world.start))
-        else {
+    for (selected_world, documents) in &selected_worlds {
+        let starting_zoo = match documents {
+            Some(documents) => scenario_documents
+                .get(&documents.start)
+                .and_then(|document| document.document.find_starting_zoo(selected_world.start)),
+            None => scenario_documents.iter().find_map(|(_, document)| {
+                document.document.find_starting_zoo(selected_world.start)
+            }),
+        };
+        let Some(starting_zoo) = starting_zoo else {
             warn!(start = ?selected_world.start, loaded = scenario_documents.len(), "selected world has no starting-zoo time record");
             continue;
         };
@@ -77,6 +86,7 @@ pub fn initialize_simulation_time_from_selected_world(
             ZooSeed,
         );
         commands.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick,
             absolute_day,
             tick_in_day,

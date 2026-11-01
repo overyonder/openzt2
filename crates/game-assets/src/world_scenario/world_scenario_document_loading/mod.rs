@@ -9,21 +9,15 @@ use bevy::{
 use openzt2_game_data::AssetId;
 
 use super::{
-    authored,
     world_scenario_document_asset_and_dependency_handles::{
         DemandLoadedAssetHandle, DemandLoadedAssetPath, WorldScenarioDocumentAsset,
     },
-    world_scenario_source_reference_resolution::{
-        resolve_world_scenario_source_references, unresolved_reference, SourceReference,
-        SourceReferenceKind,
-    },
+    world_scenario_source_reference_resolution::{SourceReference, SourceReferenceKind},
 };
 
 use crate::{
     asset_source::AssetArchives,
     source_document::{
-        blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
-        blue_fang_source_dependency_reference_discovery::collect_blue_fang_actor_manifest_source_references,
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
 };
@@ -63,8 +57,6 @@ impl AssetLoader for WorldScenarioDocumentLoader {
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
         ];
         let source = &source_documents[0];
-        let mut actor_manifest_resolution_index =
-            BlueFangActorManifestModelAndSceneResolutionIndex::default();
         let starting_zoos = if source.root.name.rsplit(':').next() == Some("maps") {
             let folder = if path.to_ascii_lowercase().contains("maps/scenario/") {
                 ""
@@ -122,65 +114,9 @@ impl AssetLoader for WorldScenarioDocumentLoader {
                 });
             }
         }
-        for manifest in collect_blue_fang_actor_manifest_source_references(&source_documents) {
-            let resolved = self
-                .archives
-                .resolve_source_reference(Path::new(&path), &manifest)
-                .ok_or_else(|| unresolved_reference(&path, "actor manifest", &manifest))?;
-            let manifest_path = resolved.to_string_lossy().replace('\\', "/");
-            let bytes = context
-                .read_asset_bytes(resolved)
-                .await
-                .map_err(io::Error::other)?;
-            let actor_manifest =
-                parse_blue_fang_source_document(AssetPath::new(&manifest_path), &bytes)
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-            actor_manifest_resolution_index
-                .insert_parsed_blue_fang_actor_model_manifest(&actor_manifest);
-        }
-        let root = source.root.name.rsplit(':').next();
-        let starting_zoo = matches!(root, Some("BFContext" | "saveRoot"))
-            && path.to_ascii_lowercase().ends_with(".zt2");
-        let timing = if starting_zoo {
-            let timing_path = self
-                .archives
-                .resolve_source_reference(Path::new(""), "config/timekeeper.xml")
-                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "config/timekeeper.xml"))?;
-            Some(
-                context
-                    .load_builder()
-                    .load_value::<crate::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>(
-                        timing_path,
-                    )
-                    .await
-                    .map_err(io::Error::other)?,
-            )
-        } else {
-            None
-        };
-        let timing = timing
-            .as_ref()
-            .map(|asset| {
-                asset.get().simulation_timing().ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "timekeeper has no simulation timing",
-                    )
-                })
-            })
-            .transpose()?;
-        let references = resolve_world_scenario_source_references(
-            source,
-            &source_documents,
-            &actor_manifest_resolution_index,
-            &self.archives,
-        )?;
-        let document = authored::lower_documents(
-            &[source],
-            &references,
-            actor_manifest_resolution_index.actor_scene_asset_paths_by_authored_actor_key(),
-            timing,
-        )?;
+        let (document,references) = super::world_source_document_dependency_lowering::lower_world_source_document_and_resolve_dependencies(
+            source,&self.archives,context,
+        ).await?;
         let terrains = demand_loaded_asset_paths(&references, SourceReferenceKind::Terrain, |id| {
             document.maps.iter().any(|record| record.terrain == id)
         });
@@ -193,35 +129,16 @@ impl AssetLoader for WorldScenarioDocumentLoader {
         let textures = demand_handles(&references, SourceReferenceKind::Texture, context, |id| {
             document.maps.iter().any(|record| record.thumbnail == id)
         });
-        let scripts = document
-            .scenario_script_bindings
-            .iter()
-            .map(|binding| {
-                let resolved = self
-                    .archives
-                    .resolve_script_reference(Path::new(&path), &binding.script)
-                    .ok_or_else(|| {
-                        unresolved_reference(&path, "scenario script", &binding.script)
-                    })?;
-                let resolved = resolved.to_string_lossy().replace('\\', "/");
-                Ok((binding.clone(), resolved.clone(), context.load(resolved)))
-            })
-            .collect::<io::Result<Box<[_]>>>()?;
-        let photo_scripts = document
-            .photo_challenge_script_bindings
-            .iter()
-            .filter_map(|binding| {
-                // Shipped photo catalogues contain stale optional challenge
-                // scripts. The original simply leaves those challenges
-                // inactive; rejecting the whole catalogue also empties the
-                // unrelated campaign/scenario menus.
-                let resolved = self
-                    .archives
-                    .resolve_script_reference(Path::new(&path), &binding.script)?;
-                let resolved = resolved.to_string_lossy().replace('\\', "/");
-                Some((binding.clone(), resolved.clone(), context.load(resolved)))
-            })
-            .collect::<Box<[_]>>();
+        let scripts =
+            super::world_scenario_script_dependency_loading::load_scenario_script_dependencies(
+                &document,
+                &self.archives,
+                &path,
+                context,
+            )?;
+        let photo_scripts = super::world_scenario_script_dependency_loading::load_photo_challenge_script_dependencies(
+            &document,&self.archives,&path,context,
+        );
         Ok(WorldScenarioDocumentAsset {
             document,
             starting_zoos,

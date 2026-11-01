@@ -17,6 +17,7 @@ openzt2_game_assets.workspace = true
 openzt2_game_data.workspace = true
 
 bevy.workspace = true
+num-integer.workspace = true
 
 [dev-dependencies]
 openzt2_game_assets = { workspace = true, features = ["testing"] }

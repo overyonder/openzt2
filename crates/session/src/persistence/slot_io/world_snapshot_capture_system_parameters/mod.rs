@@ -8,8 +8,6 @@ use openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdo
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterQuality;
-use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
-use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
@@ -51,6 +49,14 @@ use super::super::{
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
     pub(super) behavior: super::behavior_snapshot_capture::BehaviorSnapshotCapture<'w, 's>,
+    pub(super) terrain: super::terrain_snapshot_capture_parameters::TerrainSnapshotCapture<'w,'s>,
+    pub(super) asset_server: Option<Res<'w, AssetServer>>,
+    pub(super) world_scenario_assets: Option<Res<'w, Assets<openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset>>>,
+    pub(super) world_scenarios: Option<Res<'w, openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios>>,
+    pub(super) world_documents: Query<'w,'s,(
+        &'static openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles,
+        &'static SelectedWorldIdentity,
+    ),With<WorldRoot>>,
     pub(super) topology:
         super::fence_topology_snapshot_section::FenceTopologySnapshotEntities<'w, 's>,
     pub(super) scenario: super::scenario_snapshot_section::ScenarioSnapshotCapture<'w, 's>,
@@ -195,15 +201,18 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
     >,
     pub(super) transport_circuit_members_without_definition_identifiers:
         Query<'w, 's, (), (With<CircuitMember>, Without<DefinitionId>)>,
-    pub(super) facilities_with_economy_state: Query<
+    pub(super) entities_with_economy_state: Query<
         'w,
         's,
+        EntityRef<'static>,
         (
-            &'static PersistentId,
-            &'static OperatingSinceDay,
-            &'static FacilityProfit,
+            With<PersistentId>,
+            Without<bevy::ecs::resource::IsResource>,
+            Without<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
         ),
     >,
+    pub(super) unlimited_cash:
+        Option<Res<'w, openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>>,
     pub(super) zoo_cash: Res<'w, ZooCash>,
     pub(super) zoo_admission_price: Res<'w, AdmissionPrice>,
     pub(super) zoo_admissions_open_state: Res<'w, ZooAdmissionsOpen>,

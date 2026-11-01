@@ -5,7 +5,6 @@ use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
-use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
@@ -102,8 +101,6 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
     pub(super) photo_challenges_with_mutable_progress:
         Query<'w, 's, (&'static PhotoChallenge, &'static mut PhotoChallengeProgress)>,
     pub(super) tank_persistent_identifiers: Query<'w, 's, &'static PersistentId, With<Tank>>,
-    pub(super) facility_persistent_identifiers:
-        Query<'w, 's, &'static PersistentId, With<FacilityProfit>>,
     pub(super) zoo_cash: ResMut<'w, ZooCash>,
     pub(super) zoo_admission_price: ResMut<'w, AdmissionPrice>,
     pub(super) zoo_admissions_open_state: ResMut<'w, ZooAdmissionsOpen>,

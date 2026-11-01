@@ -49,6 +49,17 @@ pub struct EconomyUsage {
 }
 
 impl EconomyUsage {
+    pub fn from_counts(active_users: i32, total_users: i32) -> Self {
+        Self {
+            active_users,
+            total_users,
+        }
+    }
+
+    pub fn counts(&self) -> [i32; 2] {
+        [self.active_users, self.total_users]
+    }
+
     pub fn apply_user_change(&mut self, amount: i32, adding: bool) {
         if adding {
             self.active_users = self.active_users.saturating_add(amount);

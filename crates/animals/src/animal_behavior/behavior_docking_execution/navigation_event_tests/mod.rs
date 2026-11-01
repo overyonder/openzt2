@@ -16,6 +16,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<InteractionContainerOccupancy>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,

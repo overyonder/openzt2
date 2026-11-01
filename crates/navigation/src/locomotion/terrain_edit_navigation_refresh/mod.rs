@@ -5,11 +5,40 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_navigation_cell_queries::read_navigation_cell_geometry_from_terrain_samples;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
+use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationRestored;
 
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
+
+/// Refreshes restored terrain before saved actor routes are applied.
+pub(super) fn refresh_navigation_graph_after_terrain_restoration(
+    mut restored_terrain: MessageReader<TerrainNavigationRestored>,
+    active_navigation_graph: Option<ResMut<ActiveTerrainDerivedNavigationGraph>>,
+    terrain_assets: Res<Assets<TerrainAsset>>,
+    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) {
+    let Some(mut graph) = active_navigation_graph else {
+        return;
+    };
+    for restored in restored_terrain.read() {
+        let Ok((chunk, edited)) = terrain_chunks.get(restored.chunk) else {
+            continue;
+        };
+        let Some(terrain) = terrain_assets.get(&chunk.asset) else {
+            continue;
+        };
+        refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples(
+            graph.terrain_derived_navigation_graph_mut(),
+            chunk,
+            terrain,
+            edited,
+            restored.min,
+            restored.max,
+        );
+    }
+}
 
 /// Refreshes edited cells before the next route-planning pass.
 // Bevy system parameters are consumed by value when the system is registered.

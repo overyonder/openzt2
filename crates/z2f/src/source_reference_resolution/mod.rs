@@ -5,6 +5,11 @@ use crate::{
     paths::normalize_asset_path_for_case_insensitive_archive_lookup, ArchiveSet,
 };
 
+const UI_REFERENCE_EXTENSIONS: [&str; 15] = [
+    "bmp", "cur", "dds", "jpg", "jpeg", "png", "tga", "nif", "bfb", "wav", "mp3", "ogg", "xml",
+    "zt2", "old",
+];
+
 impl ArchiveSet {
     /// Resolves an authored source reference without inflating any archive
     /// entry. Exact virtual paths, paths relative to the referring document,
@@ -139,13 +144,22 @@ impl ArchiveSet {
     /// priority overlay. UI lowering asks for concrete references only; it
     /// never needs a cloned view of the complete archive overlay.
     pub fn resolve_ui_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {
-        self.resolve_reference(
+        self.resolve_reference(from, reference, &UI_REFERENCE_EXTENSIONS)
+    }
+
+    /// Resolves UI paths without substituting an asset from another directory.
+    /// Callers can check exact loose files before accepting a basename fallback.
+    #[must_use]
+    pub fn resolve_ui_reference_without_basename_fallback(
+        &self,
+        from: &Path,
+        reference: &str,
+    ) -> Option<PathBuf> {
+        self.resolve_reference_with_optional_basename_fallback(
             from,
             reference,
-            &[
-                "bmp", "cur", "dds", "jpg", "jpeg", "png", "tga", "nif", "bfb", "wav", "mp3",
-                "ogg", "xml", "zt2", "old",
-            ],
+            &UI_REFERENCE_EXTENSIONS,
+            false,
         )
     }
 
@@ -154,6 +168,16 @@ impl ArchiveSet {
         from: &Path,
         reference: &str,
         extensions: &[&str],
+    ) -> Option<PathBuf> {
+        self.resolve_reference_with_optional_basename_fallback(from, reference, extensions, true)
+    }
+
+    fn resolve_reference_with_optional_basename_fallback(
+        &self,
+        from: &Path,
+        reference: &str,
+        extensions: &[&str],
+        allow_basename_fallback: bool,
     ) -> Option<PathBuf> {
         let reference =
             normalize_asset_path_for_case_insensitive_archive_lookup(Path::new(reference.trim()));
@@ -175,29 +199,37 @@ impl ArchiveSet {
             .parent()
             .map(Path::to_owned)
             .unwrap_or_default();
+        let lookup = |candidate: &Path| {
+            if allow_basename_fallback {
+                winning_archive_entry_for_path(&state, candidate)
+            } else {
+                state.winning_entries_by_normalized_path.get(candidate)
+            }
+        };
         let direct = [reference.clone(), parent.join(&reference)]
             .into_iter()
             .find_map(|candidate| {
-                winning_archive_entry_for_path(&state, &candidate)
-                    .map(|winner| winner.original_archive_path.clone())
+                lookup(&candidate).map(|winner| winner.original_archive_path.clone())
             });
         if direct.is_some() {
             return direct;
         }
-        if let Some(winner) = reference
-            .file_name()
-            .and_then(|name| winning_archive_entry_for_path(&state, Path::new(name)))
-        {
-            return Some(winner.original_archive_path.clone());
+        if allow_basename_fallback {
+            if let Some(winner) = reference
+                .file_name()
+                .and_then(|name| lookup(Path::new(name)))
+            {
+                return Some(winner.original_archive_path.clone());
+            }
         }
         if reference.extension().is_none() {
             for extension in extensions {
                 let relative = parent.join(&reference).with_extension(extension);
-                if let Some(winner) = winning_archive_entry_for_path(&state, &relative) {
+                if let Some(winner) = lookup(&relative) {
                     return Some(winner.original_archive_path.clone());
                 }
                 let basename = reference.with_extension(extension);
-                if let Some(winner) = winning_archive_entry_for_path(&state, &basename) {
+                if let Some(winner) = lookup(&basename) {
                     return Some(winner.original_archive_path.clone());
                 }
             }

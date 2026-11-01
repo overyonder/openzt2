@@ -44,6 +44,8 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
     mut progression_snapshot_application_parameters: ProgressionSnapshotApplicationParameters,
     mut simulation_time_snapshot_application_resources: super::super::simulation_time_snapshot_section::SimulationTimeSnapshotLoadResources,
     mut reported_load_state: Local<Option<String>>,
+    mut terrain_application: super::terrain_snapshot_application_parameters::TerrainSnapshotApplicationParameters,
+    mut saved_world_preparation: super::saved_world_snapshot_preparation::SavedWorldSnapshotPreparation,
 ) {
     let WorldSnapshotApplicationMessages {
         mut begin_world_load_requests,
@@ -136,6 +138,44 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         let Some(root) = pending_snapshot_application.baseline_world_root else {
             return;
         };
+        if !pending_snapshot_application.terrain_restored {
+            let terrain_result =
+                if let Some(terrain) = &pending_snapshot_application.terrain_snapshot {
+                    terrain_application
+                        .apply(
+                            terrain,
+                            root,
+                            pending_snapshot_application_entity,
+                            &mut commands,
+                        )
+                        .map(|()| true)
+                } else {
+                    Ok(false)
+                };
+            match terrain_result {
+                Ok(changed) => {
+                    pending_snapshot_application.terrain_restored = true;
+                    pending_snapshot_application.terrain_snapshot = None;
+                    if changed {
+                        return;
+                    }
+                }
+                Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight) => return,
+                Err(reason) => {
+                    world_unload_requests.write(UnloadWorld(root));
+                    next_game_phase.set(GamePhase::MapSelection);
+                    discard_pending_snapshot_application_after_load_failure(
+                        &mut commands,
+                        pending_snapshot_application_entity,
+                        pending_snapshot_application.save_slot_identifier,
+                        reason,
+                        &mut snapshot_scratch_storage,
+                        &mut persistence_failures,
+                    );
+                    return;
+                }
+            }
+        }
         let snapshot_application_result = match persistent_identifier_allocator.as_mut() {
             Some(persistent_identifier_allocator)
                 if world_roots.get(root).is_ok()
@@ -204,6 +244,10 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         completed_world_loads.clear();
         failed_world_loads.clear();
         begin_world_load_requests.write(BeginWorldLoad {
+            saved_world_document: pending_snapshot_application
+                .saved_world_document
+                .as_ref()
+                .map(|handle| handle.id()),
             operation: Some(pending_snapshot_application_entity),
             scenario,
             mode,
@@ -213,11 +257,57 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         pending_snapshot_application.baseline_world_load_requested = true;
         return;
     }
-    let snapshot = match validate_supported_snapshot_container_and_every_section_payload(
-        &snapshot_scratch_storage.snapshot_container_bytes,
-        profile_options.profile_identifier,
-    ) {
-        Ok(snapshot) => snapshot,
+    if pending_snapshot_application.world_snapshot.is_none() {
+        let decoded = validate_supported_snapshot_container_and_every_section_payload(
+            &snapshot_scratch_storage.snapshot_container_bytes,
+            profile_options.profile_identifier,
+        )
+        .and_then(|snapshot| {
+            let world = decode_and_validate_world_snapshot_section(
+                &snapshot_scratch_storage.snapshot_container_bytes,
+                snapshot.section_directory_entry(WorldSnapshotSectionKind::World),
+            )?;
+            let terrain =
+                super::terrain_snapshot_container_section::decode_terrain_snapshot_section(
+                    &snapshot_scratch_storage.snapshot_container_bytes,
+                    snapshot.section_directory_entry(WorldSnapshotSectionKind::Terrain),
+                )?;
+            Ok((world, terrain))
+        });
+        match decoded {
+            Ok((world, terrain)) => {
+                pending_snapshot_application.world_snapshot = Some(world);
+                pending_snapshot_application.terrain_snapshot = terrain;
+                snapshot_scratch_storage.contains_validated_snapshot_container = true;
+            }
+            Err(reason) => {
+                discard_pending_snapshot_application_after_load_failure(
+                    &mut commands,
+                    pending_snapshot_application_entity,
+                    pending_snapshot_application.save_slot_identifier,
+                    reason,
+                    &mut snapshot_scratch_storage,
+                    &mut persistence_failures,
+                );
+                return;
+            }
+        }
+    }
+    let preparation = {
+        let PendingSnapshotApplication {
+            world_snapshot,
+            terrain_snapshot,
+            saved_world_document,
+            ..
+        } = &mut *pending_snapshot_application;
+        let Some(world) = world_snapshot.as_ref() else {
+            return;
+        };
+        saved_world_preparation.prepare(world, terrain_snapshot.as_ref(), saved_world_document)
+    };
+    match preparation {
+        Ok(false) => return,
+        Ok(true) => {}
         Err(reason) => {
             discard_pending_snapshot_application_after_load_failure(
                 &mut commands,
@@ -229,26 +319,10 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
             );
             return;
         }
+    }
+    let Some(world) = pending_snapshot_application.world_snapshot.take() else {
+        return;
     };
-    snapshot_scratch_storage.contains_validated_snapshot_container = true;
-    let world = match decode_and_validate_world_snapshot_section(
-        &snapshot_scratch_storage.snapshot_container_bytes,
-        snapshot.section_directory_entry(WorldSnapshotSectionKind::World),
-    ) {
-        Ok(world) => world,
-        Err(reason) => {
-            discard_pending_snapshot_application_after_load_failure(
-                &mut commands,
-                pending_snapshot_application_entity,
-                pending_snapshot_application.save_slot_identifier,
-                reason,
-                &mut snapshot_scratch_storage,
-                &mut persistence_failures,
-            );
-            return;
-        }
-    };
-
     for entity in &world_roots {
         world_unload_requests.write(UnloadWorld(entity));
     }

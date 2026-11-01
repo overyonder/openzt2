@@ -222,6 +222,17 @@ fn topmost_cancel_hotkey_receiver_scope(ui: &UiCancellationReceivers) -> Option<
             ui.context.visible_and_enabled(*entity)
                 && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
         })
+        .inspect(|(entity, owner, id)| {
+            let document = ui.roots.get(owner.0).ok()
+                .and_then(|root| ui.documents.get(&root.document))
+                .map(|document| document.canonical_ui_document());
+            debug!(
+                receiver = ?entity, owner = ?owner.0,
+                role = ?document.map(|document| document.role),
+                name = ?document.and_then(|document| document.nodes.get(id.index as usize)).map(|node| node.name.as_str()),
+                order = ui.context.navigation_order(*entity),
+                "eligible authored UI cancellation receiver");
+        })
         .max_by_key(|(entity, _, _)| ui.context.navigation_order(*entity))
         .map(|(_, owner, _)| ui.context.document_scope(owner.0))
 }
@@ -250,9 +261,11 @@ fn activate_cancel_hotkey_receiver(
                 && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
         })
         .max_by_key(|(entity, _, _)| context.navigation_order(*entity));
-    let Some((_, owner, id)) = receiver else {
+    let Some((receiver, owner, id)) = receiver else {
         return false;
     };
+    debug!( ?receiver, owner = ?owner.0, receiver_index = id.index,
+        "selected authored UI cancellation receiver");
     let mut forwarded_targets = std::collections::HashSet::new();
     for (entity, binding_owner, binding, presentation, _) in bindings {
         if binding_owner.0 != owner.0
@@ -307,6 +320,12 @@ fn activate_cancel_hotkey_receiver(
                 source,
                 trigger: UiTrigger::Press,
             });
+            debug!(
+                ?receiver,
+                ?node,
+                ?forwarded_target,
+                "forwarded authored UI cancellation"
+            );
         }
     }
     true

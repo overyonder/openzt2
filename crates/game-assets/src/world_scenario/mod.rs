@@ -1,12 +1,16 @@
 //! World-scenario asset loading, precedence indexing and public borrowing queries.
 
 pub mod authored;
+pub mod saved_world_catalogue_metadata;
+pub mod saved_world_map_metadata;
 pub mod starting_zoo;
+mod world_map_row_lowering;
 pub mod world_scenario_asset_set_refresh_and_indexing;
 pub mod world_scenario_asset_set_state_and_borrowing_queries;
 pub mod world_scenario_document_asset_and_dependency_handles;
 pub mod world_scenario_document_loading;
 pub mod world_scenario_source_reference_resolution;
+pub(crate) mod world_source_document_dependency_lowering;
 
 use bevy::{asset::AssetApp, prelude::*};
 
@@ -28,6 +32,7 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<WorldScenarioDocumentAsset>()
             .init_asset_loader::<WorldScenarioDocumentLoader>()
+            .init_asset_loader::<canonical_world_scenario_document_loading::CanonicalWorldScenarioDocumentLoader>()
             .init_resource::<WorldScenarios>()
             .add_systems(
                 PreUpdate,
@@ -39,3 +44,9 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
             );
     }
 }
+
+pub mod world_scenario_document_source;
+
+mod canonical_world_scenario_document_loading;
+pub mod world_scenario_document_source_encoding;
+mod world_scenario_script_dependency_loading;

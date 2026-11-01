@@ -254,6 +254,14 @@ pub struct NavigationFailed {
 pub struct NavigationRequestSequence(u64);
 
 impl NavigationRequestSequence {
+    pub const fn from_snapshot(last_issued: u64) -> Self {
+        Self(last_issued)
+    }
+
+    pub const fn last_issued(&self) -> u64 {
+        self.0
+    }
+
     pub fn reserve_restored(&mut self, request_id: u64) {
         self.0 = self.0.max(request_id);
     }

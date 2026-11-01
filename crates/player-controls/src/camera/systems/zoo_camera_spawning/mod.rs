@@ -4,6 +4,7 @@ use bevy::{
     ui_render::UiAntiAlias,
 };
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -42,6 +43,7 @@ pub(crate) fn spawn_zoo_camera(
             &SelectedWorldIdentity,
             &WorldTerrainHorizontalBounds,
             Option<&CameraSpawnPending>,
+            Option<&SelectedWorldDocumentHandles>,
         ),
         With<WorldRoot>,
     >,
@@ -53,7 +55,16 @@ pub(crate) fn spawn_zoo_camera(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (root, selection, world_bounds, pending) in &roots {
+    for (root, selection, world_bounds, pending, documents) in &roots {
+        let scoped_catalogue = match documents {
+            Some(documents) => scenario_catalogue
+                .with_document(&documents.map)
+                .and_then(|view| view.with_document(&documents.start)),
+            None => Some(scenario_catalogue),
+        };
+        let Some(scoped_catalogue) = scoped_catalogue else {
+            continue;
+        };
         if cameras.iter().any(|member| member.root == root) {
             if pending.is_some() {
                 commands.entity(root).remove::<CameraSpawnPending>();
@@ -61,7 +72,7 @@ pub(crate) fn spawn_zoo_camera(
             continue;
         }
 
-        let Some(map) = scenario_catalogue.map(selection.map) else {
+        let Some(map) = scoped_catalogue.map(selection.map) else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,
                 root,
@@ -70,10 +81,15 @@ pub(crate) fn spawn_zoo_camera(
             );
             continue;
         };
-        let Some(start) = scenarios
-            .iter()
-            .find_map(|(_, document)| document.document.find_starting_zoo(selection.start))
-        else {
+        let start = match documents {
+            Some(documents) => scenarios
+                .get(&documents.start)
+                .and_then(|document| document.document.find_starting_zoo(selection.start)),
+            None => scenarios
+                .iter()
+                .find_map(|(_, document)| document.document.find_starting_zoo(selection.start)),
+        };
+        let Some(start) = start else {
             set_zoo_camera_spawn_pending_reason(
                 &mut commands,
                 root,

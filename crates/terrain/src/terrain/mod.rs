@@ -19,6 +19,7 @@ mod terrain_edit_preparation;
 pub mod terrain_ground_path_surface_projection;
 mod terrain_live_brush_application;
 mod terrain_object_placement_flattening_preparation;
+mod terrain_presentation_restoration;
 mod terrain_sample_change_calculations;
 mod terrain_surface_image_composition;
 mod terrain_water_caustics;
@@ -52,13 +53,14 @@ use crate::terrain::terrain_chunk_render_refresh::refresh_changed_terrain_chunk_
 use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_collisions_within_tick_budget;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
+use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
 use crate::terrain::terrain_ground_path_surface_projection::recompose_ground_path_surfaces_into_terrain_chunk_images;
 use crate::terrain::terrain_ground_path_surface_projection::retain_ground_path_surface_image_dependencies;
-use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
 use crate::terrain::terrain_live_brush_application::roll_back_cancelled_live_terrain_brush_edit;
 use crate::terrain::terrain_object_placement_flattening_preparation::prepare_authored_object_placement_terrain_flattening;
+use crate::terrain::terrain_presentation_restoration::mark_restored_terrain_chunks_for_presentation_rebuilding;
 use crate::terrain::terrain_water_geometric_wave_shader_state::apply_authored_water_impact_events_to_geometric_wave_channels;
 use crate::terrain::terrain_water_renderer_inputs::update_authored_terrain_water_renderer_inputs;
 use crate::terrain::terrain_water_renderer_targets::initialize_authored_terrain_water_renderer_targets;
@@ -76,6 +78,7 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditAcknowledged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPreparationRejected;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditPrepared;
+use openzt2_zoo_state::terrain::terrain_edit_types::TerrainPresentationRestored;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 use openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::ActivateTerrainWaterImpactWave;
@@ -102,6 +105,7 @@ impl Plugin for TerrainPlugin {
             .add_message::<TerrainStroke>()
             .add_message::<DefinedTerrainStroke>()
             .add_message::<TerrainChanged>()
+            .add_message::<TerrainPresentationRestored>()
             .add_message::<TerrainNavigationChanged>()
             .add_message::<TerrainWaterChanged>()
             .add_message::<ActivateTerrainWaterImpactWave>()
@@ -120,6 +124,7 @@ impl Plugin for TerrainPlugin {
             .add_systems(
                 Update,
                 (
+                    mark_restored_terrain_chunks_for_presentation_rebuilding,
                     validate_index_and_project_loaded_terrain_chunks,
                     apply_changed_effect_quality_to_projected_terrain_chunks,
                     project_natural_water_regions,

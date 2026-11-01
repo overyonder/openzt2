@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         facilities_and_maintenance::FacilityPaymentTrigger, staff_management::StaffRoleKind,
     },
-    AssetId,
 };
 
 use super::money_types::Money;
@@ -118,3 +118,9 @@ impl Inventory {
             .min(u32::from(available_limit)) as u16;
     }
 }
+
+#[derive(Component)]
+pub struct ObjectEconomyFactsResolved;
+
+#[derive(Component)]
+pub struct ServiceFacilityFactsResolved;

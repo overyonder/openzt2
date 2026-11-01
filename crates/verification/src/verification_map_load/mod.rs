@@ -93,6 +93,7 @@ fn verify_selected_map_load(
         verification.selected = Some((map.id, Instant::now()));
         phase.set(GamePhase::Loading);
         requests.write(BeginWorldLoad {
+            saved_world_document: None,
             operation: None,
             scenario: map.id,
             mode: WorldSessionMode::Freeform,
