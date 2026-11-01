@@ -12,6 +12,7 @@ use openzt2_zoo_state::economy::account_transaction_types::{
     Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
 };
 use openzt2_zoo_state::economy::authored_transaction_amount::authored_currency_to_money;
+use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel;
 
 /// Owns a zoo income requested by a behavior script until it settles.
@@ -23,6 +24,15 @@ pub(in crate::animal_behavior) struct BehaviorScriptTransaction;
 pub(super) struct BehaviorScriptWorldChanges {
     pub(super) poo_levels: Vec<(Entity, f32)>,
     pub(super) incomes: Vec<f64>,
+    pub(super) diseases: Vec<(Entity, DiseaseAttribute)>,
+}
+
+/// An authored disease attribute a script wrote.
+pub(super) enum DiseaseAttribute {
+    /// `b_Disease`.
+    Diseased(bool),
+    /// `s_DiseaseName`; `cureAnimal` writes "None".
+    Name(String),
 }
 
 #[derive(SystemParam)]
@@ -119,6 +129,34 @@ impl BehaviorScriptWorldAccess<'_, '_> {
         actor: Entity,
         changes: BehaviorScriptWorldChanges,
     ) {
+        for (entity, attribute) in changes.diseases {
+            let Ok(mut entity) = commands.get_entity(entity) else {
+                continue;
+            };
+            match attribute {
+                DiseaseAttribute::Diseased(true) => {
+                    entity.insert_if_new(Disease {
+                        definition: AssetId::default(),
+                        elapsed_ticks: 0,
+                        severity_permille: 0,
+                        hint_level: 0,
+                    });
+                }
+                DiseaseAttribute::Diseased(false) => {
+                    entity.remove::<Disease>();
+                }
+                // The name is the shipped `ZTDisease name`, such as "ExtinctFlu".
+                DiseaseAttribute::Name(name) => {
+                    entity.entry::<Disease>().and_modify(move |mut disease| {
+                        disease.definition = if name == "None" {
+                            AssetId::default()
+                        } else {
+                            AssetId::from_key(&canonicalize_source_document_record_key(&name))
+                        };
+                    });
+                }
+            }
+        }
         for (entity, level) in changes.poo_levels {
             if let Ok(mut entity) = commands.get_entity(entity) {
                 entity.insert(CompostPooLevel(level));

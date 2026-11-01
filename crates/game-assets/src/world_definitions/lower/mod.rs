@@ -256,6 +256,8 @@ struct RecordShard {
     admission_price_bands_cents: Option<[i32; 4]>,
     guest_viewing: Option<GuestViewingPolicy>,
     tank_edit_policy: Option<TankEditPolicy>,
+    disease_exposure:
+        Option<openzt2_game_data::world_definitions::animal_health::DiseaseExposurePolicy>,
 }
 
 /// Bind resolved source documents into the canonical per-document domain records.
@@ -376,6 +378,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     let mut admission_price_bands_cents = None;
     let mut guest_viewing = None;
     let mut tank_edit_policy = None;
+    let mut disease_exposure = None;
     for shard in shards {
         let mut shard = shard?;
         if shard.timing.is_some() {
@@ -389,6 +392,9 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
         }
         if shard.guest_viewing.is_some() {
             guest_viewing = shard.guest_viewing;
+        }
+        if shard.disease_exposure.is_some() {
+            disease_exposure = shard.disease_exposure;
         }
         if shard.tank_edit_policy.is_some() {
             if tank_edit_policy.is_some() {
@@ -428,6 +434,7 @@ pub(super) fn bind_resolved_world_definition_source_records_to_canonical_documen
     }
 
     output.document.tank_edit_policy = tank_edit_policy;
+    output.document.disease_exposure = disease_exposure;
     if let Some(first) = unmapped.first() {
         let roots = unmapped
             .iter()
@@ -583,6 +590,12 @@ fn bind_record_shard(
             if canonicalize_source_document_record_key(&kind) == "bfgtraversabilitymgr" =>
         {
             shard.guest_viewing = Some(bind_guest_viewing_policy(record)?);
+        }
+        Some(WorldDefinitionSourceRecordKind::Container)
+            if canonicalize_source_document_record_key(&kind) == "ztdiseasemgr" =>
+        {
+            shard.disease_exposure =
+                Some(disease_exposure_source_lowering::bind_disease_exposure_policy(record)?);
         }
         Some(WorldDefinitionSourceRecordKind::Container) => {}
         Some(WorldDefinitionSourceRecordKind::Object) => bind_object(record, &mut shard.tables)?,
@@ -811,6 +824,7 @@ pub mod biome_definition_and_detail_source_lowering;
 pub mod catalogue_category_source_vocabulary;
 pub mod catalogue_entry_source_lowering;
 pub mod commerce_facility_source_lowering;
+mod disease_exposure_source_lowering;
 pub mod entity_information_panel_source_lowering;
 mod entity_naming_source_lowering;
 pub mod environment;
