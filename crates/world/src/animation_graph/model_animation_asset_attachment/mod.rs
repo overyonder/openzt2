@@ -3,6 +3,7 @@ use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset
 use openzt2_game_assets::source_document::path::AssetPath;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::model_animation_asset_attachment::resolve_animation_clip_or_graph_node_asset_key;
 use openzt2_world_state::animation_graph::model_animation_asset_attachment::select_initial_animation_clip_asset_key_from_graph_node;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAttachmentResolved;
@@ -93,6 +94,9 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
         let initial_animation_clip_asset_key = match pending_model_animation_assets
             .requested_initial_animation_clip_asset_key
             .clone()
+            .and_then(|key| {
+                resolve_animation_clip_or_graph_node_asset_key(initial_animation_set_asset, &key)
+            })
             .map_or_else(
                 || select_initial_animation_clip_asset_key(initial_animation_set_asset),
                 Some,

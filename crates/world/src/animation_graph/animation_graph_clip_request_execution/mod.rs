@@ -11,6 +11,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphEnabled;
 use openzt2_world_state::animation_graph::animation_graph_playback_state_types::AnimationGraphPlaybackState;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
+use openzt2_world_state::animation_graph::model_animation_asset_attachment::resolve_animation_clip_or_graph_node_asset_key;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::ModelAnimationAssetLibrary;
 
 /// A request whose clip the subject's manifest names but has not loaded yet.
@@ -103,6 +104,25 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             })
         {
             continue;
+        }
+        // A request naming a graph node plays one of the node's clips.
+        let mut animation_clip_request = animation_clip_request;
+        if let Some(clip) = animation_playback_controllers
+            .iter()
+            .filter(|(controller, owner, ..)| {
+                *controller == animation_clip_request.animation_subject_entity
+                    || owner.gameplay_entity == animation_clip_request.animation_subject_entity
+            })
+            .flat_map(|(_, _, library, ..)| library.loaded_model_animation_set_asset_handles.iter())
+            .filter_map(|handle| animation_set_assets.get(handle))
+            .find_map(|set| {
+                resolve_animation_clip_or_graph_node_asset_key(
+                    set,
+                    &animation_clip_request.animation_clip_asset_key,
+                )
+            })
+        {
+            animation_clip_request.animation_clip_asset_key = clip;
         }
         let animation_clip_request = &animation_clip_request;
         let mut started = false;
