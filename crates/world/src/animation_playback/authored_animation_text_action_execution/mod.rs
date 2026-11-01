@@ -25,8 +25,10 @@ impl AuthoredAnimationTextActionExecutionContext<'_, '_> {
             .find_map(|(joint_entity, joint_target)| {
                 (joint_target.animation_playback_controller_entity
                     == animation_playback_controller_entity
-                    && joint_target.joint_asset_key == authored_target_joint_asset_key)
-                    .then_some(joint_entity)
+                    && joint_target
+                        .joint_asset_key
+                        .eq_ignore_ascii_case(authored_target_joint_asset_key))
+                .then_some(joint_entity)
             })
             .unwrap_or(animation_playback_controller_entity);
 
