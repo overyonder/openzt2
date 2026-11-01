@@ -127,6 +127,9 @@ pub(super) fn apply_animal_snapshot_records(
             if welfare.environment_habitat_assessed {
                 entity.insert(EnvironmentHabitatAssessed);
             }
+            if let Some(reproduction) = welfare.reproduction_need {
+                entity.insert(ReproductionNeed(reproduction));
+            }
             let values = welfare.needs;
             entity.insert((
                 Hunger(values[0]),

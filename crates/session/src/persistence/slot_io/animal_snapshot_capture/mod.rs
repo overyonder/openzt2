@@ -50,6 +50,7 @@ pub(super) fn capture_animal_snapshot_records(
                     required_animal_component::<HygieneNeed>(animal)?.0,
                     required_animal_component::<BathroomNeed>(animal)?.0,
                 ],
+                reproduction_need: animal.get::<ReproductionNeed>().map(|need| need.0),
                 triggers: required_animal_component::<NeedTriggerState>(animal)?.0,
                 cumulative_points: {
                     let points = required_animal_component::<CumulativeNeedPoints>(animal)?;

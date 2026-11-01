@@ -18,6 +18,7 @@ use openzt2_zoo_state::animal_welfare::types::AdjustHealthNeed;
 use openzt2_zoo_state::animal_welfare::types::AdjustHunger;
 use openzt2_zoo_state::animal_welfare::types::AdjustHygiene;
 use openzt2_zoo_state::animal_welfare::types::AdjustPrivacy;
+use openzt2_zoo_state::animal_welfare::types::AdjustReproduction;
 use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
@@ -40,6 +41,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 #[derive(SystemParam)]
 pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     bathroom: MessageWriter<'w, AdjustBathroom>,
+    reproduction: MessageWriter<'w, AdjustReproduction>,
     hunger: MessageWriter<'w, AdjustHunger>,
     thirst: MessageWriter<'w, AdjustThirst>,
     rest: MessageWriter<'w, AdjustRest>,
@@ -179,6 +181,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                             amount: value_q16 as f32 / 65536.0,
                         },
                     );
+                }
+                BehaviorFact::Reproduction => {
+                    modification_messages
+                        .reproduction
+                        .write(AdjustReproduction {
+                            animal,
+                            delta_q16: wellness_delta_q16,
+                        });
                 }
                 BehaviorFact::Hunger => {
                     modification_messages.hunger.write(AdjustHunger {
@@ -321,6 +331,7 @@ fn behavior_fact_modification_has_runtime_owner(
         modification.modified_fact,
         BehaviorFact::Hunger
             | BehaviorFact::Bathroom
+            | BehaviorFact::Reproduction
             | BehaviorFact::Thirst
             | BehaviorFact::Rest
             | BehaviorFact::Privacy

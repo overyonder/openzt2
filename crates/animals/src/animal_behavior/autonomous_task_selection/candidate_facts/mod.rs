@@ -29,6 +29,7 @@ use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
+use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
@@ -98,6 +99,7 @@ pub(crate) struct AnimalCandidateFacts {
     velocity: Option<&'static Velocity>,
     habitat: Option<&'static HabitatMember>,
     mate: Has<Mate>,
+    reproduction: Option<&'static ReproductionNeed>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
@@ -158,9 +160,18 @@ impl AnimalCandidateFactsItem<'_, '_> {
             self.hygiene.0,
             self.bathroom.0,
         ];
+        let deprivation = |wellness: i32| (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10;
+        if name == AssetId::from_key("reproduction") {
+            return self.reproduction.map(|need| {
+                (
+                    deprivation(need.0),
+                    self.triggers.0 & (1 << REPRODUCTION_TRIGGER_INDEX) != 0,
+                )
+            });
+        }
         NEED_NAMES.iter().enumerate().find_map(|(index, key)| {
             (*key == name).then_some((
-                (MAX_NEED_Q16 - needs[index].clamp(0, MAX_NEED_Q16)) / 10,
+                deprivation(needs[index]),
                 self.triggers.0 & (1 << index) != 0,
             ))
         })
@@ -216,6 +227,12 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     BehaviorWelfareEligibilityFact::Stimulation => self.stimulation.0,
                     BehaviorWelfareEligibilityFact::Health => self.health.0,
                     BehaviorWelfareEligibilityFact::Hygiene => self.hygiene.0,
+                    BehaviorWelfareEligibilityFact::Reproduction => {
+                        let Some(need) = self.reproduction else {
+                            return false;
+                        };
+                        need.0
+                    }
                     _ => return false,
                 };
                 (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10

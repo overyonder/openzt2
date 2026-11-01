@@ -19,8 +19,8 @@ use super::{
     types::*,
 };
 
-fn need_rank(kind: &NeedKind) -> usize {
-    match kind {
+fn need_rank(kind: &NeedKind) -> Option<usize> {
+    Some(match kind {
         NeedKind::Hunger => 0,
         NeedKind::Thirst => 1,
         NeedKind::Rest => 2,
@@ -32,7 +32,21 @@ fn need_rank(kind: &NeedKind) -> usize {
         NeedKind::Health => 8,
         NeedKind::Hygiene => 9,
         NeedKind::Bathroom => 10,
-    }
+        NeedKind::Reproduction => return None,
+    })
+}
+
+fn species_reproduction_need<'a>(
+    index: &'a SpeciesAssets,
+    assets: &'a Assets<SpeciesAsset>,
+    handle: &SpeciesHandle,
+) -> Option<&'a SpeciesNeed> {
+    index
+        .get(assets)?
+        .find(handle.species)?
+        .needs
+        .iter()
+        .find(|need| need.kind == NeedKind::Reproduction)
 }
 
 fn species_needs<'a>(
@@ -44,7 +58,9 @@ fn species_needs<'a>(
     let rows = &species.needs;
     let mut found: [Option<&SpeciesNeed>; 11] = [None; 11];
     for row in rows {
-        found[need_rank(&row.kind)] = Some(row);
+        if let Some(rank) = need_rank(&row.kind) {
+            found[rank] = Some(row);
+        }
     }
     Some([
         found[0]?, found[1]?, found[2]?, found[3]?, found[4]?, found[5]?, found[6]?, found[7]?,
@@ -75,16 +91,24 @@ pub(crate) fn initialize_animal_needs(
         };
         let mut random =
             DeterministicRng::from_entity(*zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
-        let mut initial = needs.map(|need| {
+        let mut sample = |need: &SpeciesNeed| {
             let minimum = need.initial_wellness_permille_range[0];
             let maximum = need.initial_wellness_permille_range[1].max(minimum);
             let width = u32::from(maximum - minimum) + 1;
             let sampled = minimum + random.range_u32(width).unwrap_or_default() as u16;
             i32::from(sampled) * Q16_ONE
-        });
+        };
+        let mut initial = needs.map(&mut sample);
+        // Sampled after the welfare needs so their streams stay as they were.
+        let reproduction_row = species_reproduction_need(&index, &assets, species);
+        let mut reproduction = reproduction_row.map(&mut sample);
         if let Some(scripted) = scripted {
             for (kind, value) in &scripted.needs {
-                initial[need_rank(kind)] = (*value).clamp(0, MAX_NEED_Q16);
+                let value = (*value).clamp(0, MAX_NEED_Q16);
+                match need_rank(kind) {
+                    Some(rank) => initial[rank] = value,
+                    None => reproduction = reproduction.map(|_| value),
+                }
             }
         }
         // The next assessment uses live membership and species population.
@@ -113,6 +137,15 @@ pub(crate) fn initialize_animal_needs(
                 need.trigger_wellness_threshold,
                 need.cessation_wellness_threshold,
             );
+        }
+        if let (Some(row), Some(value)) = (reproduction_row, reproduction) {
+            trigger_state.observe(
+                REPRODUCTION_TRIGGER_INDEX,
+                value,
+                row.trigger_wellness_threshold,
+                row.cessation_wellness_threshold,
+            );
+            commands.entity(entity).insert(ReproductionNeed(value));
         }
         commands.entity(entity).insert((
             Hunger(initial[0]),
@@ -199,6 +232,7 @@ pub(super) fn decay_animal_needs(
             ),
             &mut NeedTriggerState,
             Option<&mut AnimalNeedAdjustmentTimer>,
+            Option<&mut ReproductionNeed>,
         ),
         (With<Animal>, Without<Dead>),
     >,
@@ -233,6 +267,7 @@ pub(super) fn decay_animal_needs(
         ),
         mut triggers,
         timer,
+        reproduction,
     ) in &mut animals
     {
         let Some(needs) = species_needs(&index, &assets, species) else {
@@ -292,6 +327,103 @@ pub(super) fn decay_animal_needs(
                     value: convert_animal_need_q16_to_permille(next),
                 });
             }
+        }
+        if let (Some(mut reproduction), Some(need)) = (
+            reproduction,
+            species_reproduction_need(&index, &assets, species),
+        ) {
+            let (next, crossed) = rate_result(reproduction.0, need);
+            reproduction.0 = next;
+            triggers.observe(
+                REPRODUCTION_TRIGGER_INDEX,
+                next,
+                need.trigger_wellness_threshold,
+                need.cessation_wellness_threshold,
+            );
+            if crossed {
+                changed.write(NeedChanged {
+                    animal: entity,
+                    need: need.kind,
+                    value: convert_animal_need_q16_to_permille(next),
+                });
+            }
+        }
+    }
+}
+
+/// Animals from saves made before the reproduction need start it from its
+/// authored initial range.
+pub(crate) fn initialize_missing_reproduction_needs(
+    mut commands: Commands,
+    zoo_seed: Res<ZooSeed>,
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    animals: Query<
+        (Entity, &PersistentId, &SpeciesHandle),
+        (
+            With<Animal>,
+            With<AnimalWelfare>,
+            Without<ReproductionNeed>,
+            Without<Dead>,
+        ),
+    >,
+) {
+    for (entity, persistent_id, species) in &animals {
+        let Some(need) = species_reproduction_need(&index, &assets, species) else {
+            continue;
+        };
+        let mut random =
+            DeterministicRng::from_entity(*zoo_seed, *persistent_id, RngDomain::AnimalNeeds);
+        let minimum = need.initial_wellness_permille_range[0];
+        let maximum = need.initial_wellness_permille_range[1].max(minimum);
+        let sampled = minimum
+            + random
+                .range_u32(u32::from(maximum - minimum) + 1)
+                .unwrap_or_default() as u16;
+        commands
+            .entity(entity)
+            .insert(ReproductionNeed(i32::from(sampled) * Q16_ONE));
+    }
+}
+
+/// `AdjustReproduction`, as the welfare needs' adjustment systems apply theirs.
+pub(super) fn adjust_reproduction(
+    mut messages: MessageReader<AdjustReproduction>,
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    mut animals: Query<
+        (&SpeciesHandle, &mut ReproductionNeed, &mut NeedTriggerState),
+        (With<Animal>, Without<Dead>),
+    >,
+    mut changed: MessageWriter<NeedChanged>,
+) {
+    for message in messages.read() {
+        let Ok((species, mut value, mut triggers)) = animals.get_mut(message.animal) else {
+            continue;
+        };
+        let Some(need) = species_reproduction_need(&index, &assets, species) else {
+            continue;
+        };
+        let old = value.0;
+        let next = clamp_animal_need_q16_after_delta(old, message.delta_q16);
+        value.0 = next;
+        triggers.observe(
+            REPRODUCTION_TRIGGER_INDEX,
+            next,
+            need.trigger_wellness_threshold,
+            need.cessation_wellness_threshold,
+        );
+        if animal_need_crossed_authored_threshold(
+            old,
+            next,
+            need.trigger_wellness_threshold,
+            need.cessation_wellness_threshold,
+        ) {
+            changed.write(NeedChanged {
+                animal: message.animal,
+                need: NeedKind::Reproduction,
+                value: convert_animal_need_q16_to_permille(next),
+            });
         }
     }
 }
@@ -401,6 +533,8 @@ adjustment_system!(
 
 pub(super) fn set_animal_need(
     mut messages: MessageReader<SetAnimalNeed>,
+    mut reproduction: MessageWriter<AdjustReproduction>,
+    reproduction_needs: Query<&ReproductionNeed>,
     assets: Res<Assets<SpeciesAsset>>,
     index: Res<SpeciesAssets>,
     mut animals: Query<
@@ -424,6 +558,16 @@ pub(super) fn set_animal_need(
     mut changed: MessageWriter<NeedChanged>,
 ) {
     for message in messages.read() {
+        // Setting reproduction is the adjustment from its current value.
+        if message.need == NeedKind::Reproduction {
+            if let Ok(current) = reproduction_needs.get(message.animal) {
+                reproduction.write(AdjustReproduction {
+                    animal: message.animal,
+                    delta_q16: message.value_q16.clamp(0, MAX_NEED_Q16) - current.0,
+                });
+            }
+            continue;
+        }
         let Ok((
             species,
             mut hunger,
@@ -457,6 +601,7 @@ pub(super) fn set_animal_need(
             NeedKind::Health => (8, &mut health.0),
             NeedKind::Hygiene => (9, &mut hygiene.0),
             NeedKind::Bathroom => (10, &mut bathroom.0),
+            NeedKind::Reproduction => unreachable!("handled above"),
         };
         let old = *value;
         let next = message.value_q16.clamp(0, MAX_NEED_Q16);
