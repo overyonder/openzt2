@@ -55,10 +55,15 @@ pub(super) fn lower_animal_surface_water_locomotion(
             };
             for row in loco.element_children() {
                 if row.name == "stop" {
-                    stop = row
+                    // A polar bear's water `stop` lists only `Swim_Ahead` and
+                    // `SubSwim_2Swim`: it keeps swimming when it stops.
+                    let mut clips = row
                         .element_children()
-                        .filter_map(|child| child.attribute_named_any(&["name"]))
+                        .filter_map(|child| child.attribute_named_any(&["name"]));
+                    let first = clips.clone().next();
+                    stop = clips
                         .find(|name| name.ends_with("_Idle"))
+                        .or(first)
                         .map(str::to_owned);
                     continue;
                 }
