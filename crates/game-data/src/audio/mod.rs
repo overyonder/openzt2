@@ -59,7 +59,7 @@ pub struct AudioWaterPolicy {
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct AudioCrowdPolicy {
-    pub thresholds: [f32; 8],
+    pub thresholds: [i32; 8],
     pub cues: [Option<AssetId>; 5],
 }
 

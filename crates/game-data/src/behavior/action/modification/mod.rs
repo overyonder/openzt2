@@ -70,4 +70,7 @@ pub enum BehaviorFact {
     ViewAnimals,
     AteFavoriteFood,
     AteNonFavoriteFood,
+    Education,
+    FoundDonationBox,
+    MissedDonationBox,
 }

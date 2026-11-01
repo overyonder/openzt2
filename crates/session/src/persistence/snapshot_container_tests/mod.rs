@@ -156,3 +156,38 @@ fn truncated_directory_with_valid_checksum_is_rejected() {
         );
     }
 }
+
+#[test]
+fn legacy_directory_decodes_without_runtime_continuation_and_mixed_shapes_reject() {
+    let profile = create_test_profile_identifier(7);
+    let mut bytes = create_complete_test_world_snapshot_container(profile);
+    bytes.truncate(bytes.len() - 2);
+    bytes.drain(76 + 26 * 24..76 + 27 * 24);
+    for index in 0..26 {
+        let offset = 76 + index * 24 + 8;
+        let old = u64::from_le_bytes(bytes[offset..offset + 8].try_into().unwrap());
+        bytes[offset..offset + 8].copy_from_slice(&(old - 24).to_le_bytes());
+    }
+    bytes[8..12].copy_from_slice(&13u32.to_le_bytes());
+    bytes[32..36].copy_from_slice(&26u32.to_le_bytes());
+    finalize_world_snapshot_container_header_and_checksum(&mut bytes, 4).unwrap();
+    let validated =
+        validate_world_snapshot_container_and_section_directory(&bytes, profile).unwrap();
+    assert_eq!(
+        validated.section_directory_entry(WorldSnapshotSectionKind::RuntimeContinuation),
+        Default::default()
+    );
+    bytes[8..12].copy_from_slice(&14u32.to_le_bytes());
+    finalize_world_snapshot_container_header_and_checksum(&mut bytes, 4).unwrap();
+    assert_eq!(
+        validate_world_snapshot_container_and_section_directory(&bytes, profile),
+        Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
+    );
+    let mut modern = create_complete_test_world_snapshot_container(profile);
+    modern[8..12].copy_from_slice(&13u32.to_le_bytes());
+    finalize_world_snapshot_container_header_and_checksum(&mut modern, 4).unwrap();
+    assert_eq!(
+        validate_world_snapshot_container_and_section_directory(&modern, profile),
+        Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
+    );
+}

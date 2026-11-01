@@ -119,7 +119,7 @@ pub(in super::super) fn apply_completed_persistence_slot_filesystem_tasks(
                             saved_world_document: None,
                             terrain_restored: false,
                             behavior_documents: Vec::new(),
-                            save_slot_identifier,
+                            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(save_slot_identifier),
                             scenario_definition_identifier: None,
                             session_mode: None,
                             baseline_world_load_requested: false,

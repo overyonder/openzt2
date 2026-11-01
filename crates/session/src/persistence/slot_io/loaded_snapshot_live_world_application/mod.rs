@@ -223,6 +223,12 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     let world_definitions = active_world_definitions
         .get(&world_definition_assets)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
+    let runtime_continuation =
+        super::runtime_continuation_snapshot_section::decode_runtime_continuation_section(
+            snapshot_container_bytes,
+            validated_snapshot_container
+                .section_directory_entry(WorldSnapshotSectionKind::RuntimeContinuation),
+        )?;
     let placement_records = placement_snapshot_records.as_deref().unwrap_or_default();
     super::native_crate_snapshot_links::validate_native_crate_links(
         &animal_snapshot_records,
@@ -311,32 +317,39 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         species,
         world_definitions.timing().ticks_per_day,
     )?;
-    validate_loaded_snapshot_references_and_imported_persistent_identifiers(
-        scenario_snapshot.as_ref(),
-        &animal_snapshot_records,
-        &baseline_animals,
-        &loose_waste_records,
-        &baseline_waste,
-        &staff_snapshot_records,
-        &baseline_staff,
-        &baseline_placements,
-        &baseline_topology,
-        topology_snapshot_records.as_deref().unwrap_or_default(),
-        placement_records,
-        &tank_snapshot_records,
-        &economy_snapshot_records,
-        &progression_snapshot_records,
-        &show_snapshot_records,
-        &transport_snapshot_records,
-        &photo_snapshot_records,
-        &photo_challenge_progress_snapshot_records,
-        &entities_with_persistent_identifiers,
-        &tank_persistent_identifiers,
-        &mut show_stages_with_mutable_snapshot_state,
-        &photo_album_persistent_identifiers,
-        &mut photo_challenges_with_mutable_progress,
-        progression_snapshot_application_parameters,
-    )?;
+    let baseline_scenario = if scenario_snapshot.is_some() {
+        scenario.replaced_entities(world_root_entity)
+    } else {
+        Vec::new()
+    };
+    let maximum_persistent_identifier =
+        validate_loaded_snapshot_references_and_imported_persistent_identifiers(
+            scenario_snapshot.as_ref(),
+            &animal_snapshot_records,
+            &baseline_animals,
+            &loose_waste_records,
+            &baseline_waste,
+            &staff_snapshot_records,
+            &baseline_staff,
+            &baseline_placements,
+            &baseline_topology,
+            &baseline_scenario,
+            topology_snapshot_records.as_deref().unwrap_or_default(),
+            placement_records,
+            &tank_snapshot_records,
+            &economy_snapshot_records,
+            &progression_snapshot_records,
+            &show_snapshot_records,
+            &transport_snapshot_records,
+            &photo_snapshot_records,
+            &photo_challenge_progress_snapshot_records,
+            &entities_with_persistent_identifiers,
+            &tank_persistent_identifiers,
+            &mut show_stages_with_mutable_snapshot_state,
+            &photo_album_persistent_identifiers,
+            &mut photo_challenges_with_mutable_progress,
+            progression_snapshot_application_parameters,
+        )?;
 
     let mut restored_identities = std::collections::BTreeMap::new();
     for (entity, id) in &entities_with_persistent_identifiers {
@@ -345,6 +358,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             && !baseline_waste.contains(entity)
             && !baseline_staff.contains(&entity)
             && !baseline_topology.contains(&entity)
+            && !baseline_scenario.contains(&entity)
             && restored_identities.insert(id.0, entity).is_some()
         {
             return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
@@ -373,6 +387,39 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
     }
     // Validate references before spawning or removing any placement entities.
+    let (maximum_navigation_request, maximum_behavior_execution) = super::behavior_snapshot_identity_high_water_marks::behavior_snapshot_identity_high_water_marks(&behavior_snapshot_records);
+    let high_water_marks =
+        super::runtime_continuation_snapshot_types::RuntimeContinuationIdentityHighWaterMarks {
+            maximum_persistent_identifier,
+            maximum_navigation_request,
+            maximum_behavior_execution,
+            pending_service_request_sequences: &[],
+        };
+    if let Some(record) = &runtime_continuation {
+        if record.entity_names.as_ref().is_some_and(|names| {
+            names
+                .iter()
+                .any(|(id, _)| !planned_identities.contains_key(id))
+        }) {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        if record
+            .registered_entity_name_identifiers
+            .as_ref()
+            .is_some_and(|ids| ids.iter().any(|id| !planned_identities.contains_key(id)))
+        {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+        super::runtime_continuation_snapshot_application::validate_runtime_continuation_identity_high_water_marks(record, high_water_marks)?;
+        if record
+            .guest_favourite_animal_trend
+            .into_iter()
+            .flat_map(|trend| trend.species().into_iter().flatten())
+            .any(|id| species.find(id).is_none())
+        {
+            return Err(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier);
+        }
+    }
     super::donation_snapshot_section::resolve_donation_records(
         donation_snapshot_records.clone(),
         &planned_identities,
@@ -380,6 +427,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
     let prepared_scenario = super::scenario_snapshot_section::prepare(
         scenario_snapshot,
         world_snapshot_record.scenario_definition_identifier,
+        world_root_entity,
         &scenario,
     )?;
     let replaced_behavior_entities = baseline_animals
@@ -560,6 +608,20 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         persistent_identifier_allocator,
         &mut scenario,
     )?;
+    if let Some(record) = &runtime_continuation {
+        super::runtime_continuation_snapshot_application::apply_runtime_continuation_snapshot(
+            commands,
+            world_root_entity,
+            record,
+            high_water_marks,
+        )?;
+    } else {
+        super::runtime_continuation_snapshot_application::apply_entity_name_registration(
+            commands,
+            world_root_entity,
+            None,
+        );
+    }
     if placement_snapshot_records.is_some() || !behavior_snapshot_records.is_empty() {
         *placement_hydration = Some(
             placement_records

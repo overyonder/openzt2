@@ -132,7 +132,29 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
             ));
         }
     }
-    let mut next_id = 1_u64;
+    let mut next_id = manager
+        .attribute("topLevelGlobalID")
+        .map(|raw| {
+            raw.parse::<u64>()
+                .ok()
+                .filter(|next| *next != 0)
+                .ok_or_else(|| {
+                    at(
+                        document,
+                        manager,
+                        "BFGManager next identity is not a nonzero u64",
+                    )
+                })
+        })
+        .transpose()?
+        .unwrap_or(1);
+    if used_ids.iter().any(|id| *id >= next_id) && manager.attribute("topLevelGlobalID").is_some() {
+        return Err(at(
+            document,
+            manager,
+            "BFGManager next identity does not exceed its saved entities",
+        ));
+    }
     let mut persistent_id =
         |entity: &OrderedSourceDocumentNode, retain_source: bool| -> io::Result<u64> {
             if retain_source {
@@ -150,6 +172,13 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
                         "starting-zoo persistent ID space is exhausted",
                     )
                 })?;
+            }
+            if next_id == u64::MAX {
+                return Err(at(
+                    document,
+                    entity,
+                    "starting-zoo persistent ID space is exhausted",
+                ));
             }
             let assigned = next_id;
             used_ids.insert(assigned);
@@ -170,6 +199,24 @@ pub(super) fn lower_starting_zoo_entities_paths_and_fences_into_record(
                     "duplicate starting entity safe handle",
                 ));
             }
+        }
+    }
+    for (index, (entity, ..)) in renderables.iter().enumerate() {
+        if let Some(name) = child(entity, "subComponents")
+            .and_then(|components| {
+                components
+                    .element_children()
+                    .find(|component| local(&component.name) == "BFAIEntityDataInstance")
+            })
+            .and_then(|data| data.attribute("s_name"))
+        {
+            starting_zoo_record.spawn_values.push(
+                openzt2_game_data::world_scenario::StartingZooSpawnValue::Name {
+                    entity: u32::try_from(index)
+                        .map_err(|_| at(document, entity, "starting entity index exceeds u32"))?,
+                    text: name.to_owned(),
+                },
+            );
         }
     }
     let entities = renderables

@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use bevy::{audio::AudioSource, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     audio::{
-        AudioAmbientPolicy, AudioCue, AudioDocument, AudioMixerPolicy,
+        AudioAmbientPolicy, AudioCrowdPolicy, AudioCue, AudioDocument, AudioMixerPolicy,
         AudioSoundscapeAllowedEntities, AudioSoundscapeContent, AudioStage, AudioWaterPolicy,
     },
-    AssetId,
 };
 
 #[derive(Asset, TypePath, Debug)]
@@ -16,6 +16,32 @@ pub struct AudioAsset {
 }
 
 impl AudioAsset {
+    pub fn from_world_preset(
+        soundscape: AudioSoundscapeContent,
+        crowd: Option<AudioCrowdPolicy>,
+    ) -> Self {
+        Self {
+            document: AudioDocument {
+                soundscape_contents: vec![soundscape],
+                crowd,
+                ..Default::default()
+            },
+            clip_paths: Box::new([]),
+        }
+    }
+
+    pub fn document(&self) -> &AudioDocument {
+        &self.document
+    }
+
+    pub fn soundscape_content(&self) -> Option<&AudioSoundscapeContent> {
+        self.document.soundscape_contents.first()
+    }
+
+    pub fn crowd_policy(&self) -> Option<&AudioCrowdPolicy> {
+        self.document.crowd.as_ref()
+    }
+
     fn clip(&self, server: &AssetServer, id: AssetId) -> Option<Handle<AudioSource>> {
         self.clip_paths
             .binary_search_by_key(&id, |(candidate, _)| *candidate)
@@ -36,6 +62,7 @@ pub struct AudioAssets {
     pub(super) mixer: Option<Handle<AudioAsset>>,
     pub(super) ambient: Option<Handle<AudioAsset>>,
     pub(super) water: Option<Handle<AudioAsset>>,
+    pub(super) crowd: Option<Handle<AudioAsset>>,
 }
 
 impl AudioAssets {
@@ -131,5 +158,13 @@ impl<'a> AudioView<'a> {
             .as_ref()
             .and_then(|handle| self.assets.get(handle))
             .and_then(|asset| asset.document.water.as_ref())
+    }
+
+    pub fn crowd(self) -> Option<&'a AudioCrowdPolicy> {
+        self.index
+            .crowd
+            .as_ref()
+            .and_then(|handle| self.assets.get(handle))
+            .and_then(|asset| asset.document.crowd.as_ref())
     }
 }

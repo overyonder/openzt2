@@ -15,8 +15,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use super::guest_simulation_calculations::memory_value;
 use super::guest_simulation_calculations::push_memory;
 use super::guest_simulation_calculations::should_leave;
-use super::guest_simulation_calculations::survey_rate_permille;
-use super::guest_simulation_calculations::survey_view_score_permille;
 use super::guest_simulation_types::DeparturePending;
 use super::guest_simulation_types::Guest;
 use super::guest_simulation_types::GuestArchetype;
@@ -35,7 +33,7 @@ use super::guest_simulation_types::GuestReaction;
 use super::guest_simulation_types::GuestReactionApplied;
 use super::guest_simulation_types::GuestRestroom;
 use super::guest_simulation_types::GuestSatisfaction;
-use super::guest_simulation_types::GuestSurvey;
+use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use super::guest_simulation_types::GuestThirst;
 use super::guest_simulation_types::GuestViewingTarget;
 use super::guest_simulation_types::Viewing;
@@ -70,7 +68,6 @@ pub(crate) fn apply_guest_reactions(
     documents: Res<
         Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
     >,
-    survey: Option<ResMut<GuestSurvey>>,
     mut guests: Query<
         (
             &GuestArchetype,
@@ -92,7 +89,6 @@ pub(crate) fn apply_guest_reactions(
     };
     // Deferred component writes must also suppress duplicates in this batch.
     let mut receipts = std::collections::HashMap::new();
-    let mut survey = survey;
     let mut reactions: Vec<_> = incoming.read().copied().collect();
     reactions.sort_by_key(|reaction| reaction.view_event.map_or(0, |origin| origin.event_id));
     for reaction in &reactions {
@@ -109,10 +105,9 @@ pub(crate) fn apply_guest_reactions(
         else {
             continue;
         };
-        let Some((asset, definition)) = find_guest_definition(definitions, archetype.0) else {
+        let Some((_, definition)) = find_guest_definition(definitions, archetype.0) else {
             continue;
         };
-        let survey_policy = asset.guest_generation().map(|p| &p.need_survey);
         let mut reaction = *reaction;
         if reaction.kind == GuestMemoryKind::AnimalView {
             let Some(origin) = reaction.view_event else {
@@ -193,67 +188,23 @@ pub(crate) fn apply_guest_reactions(
                 policy.map_or(0, |policy| policy.satisfaction_delta);
             reaction.education_delta_permille = policy.map_or(0, |policy| policy.education_delta);
         }
-        let education_delta = survey_policy
-            .map(|policy| {
-                cap_positive(
-                    reaction.education_delta_permille,
-                    policy.maximum_education_points_per_view,
-                )
-            })
-            .unwrap_or(reaction.education_delta_permille);
-        let entertainment_delta =
-            if matches!(reaction.kind, GuestMemoryKind::Show | GuestMemoryKind::Tour) {
-                survey_policy
-                    .map(|policy| {
-                        cap_positive(
-                            reaction.satisfaction_delta_permille,
-                            policy.maximum_entertainment_points_per_view,
-                        )
-                    })
-                    .unwrap_or(reaction.satisfaction_delta_permille)
-            } else {
-                reaction.satisfaction_delta_permille
-            };
+        let education_delta = reaction.education_delta_permille;
+        let entertainment_delta = reaction.satisfaction_delta_permille;
         satisfaction.add_wellness_q16(i32::from(entertainment_delta) * (1 << 16));
         education.0 = apply_permille_delta(education.0, education_delta);
-        if let Some(survey) = survey.as_deref_mut() {
-            survey.education_points = survey
-                .education_points
-                .saturating_add(education_delta.max(0) as u32);
-            if matches!(reaction.kind, GuestMemoryKind::Show | GuestMemoryKind::Tour) {
-                survey.entertainment_points = survey
-                    .entertainment_points
-                    .saturating_add(entertainment_delta.max(0) as u32);
+        let guest = reaction.guest;
+        commands.queue(move |world: &mut World| {
+            let Ok(mut entity) = world.get_entity_mut(guest) else {
+                return;
+            };
+            if !entity.contains::<GuestSurveyExperience>() {
+                entity.insert(GuestSurveyExperience::default());
             }
-            if matches!(
-                reaction.kind,
-                GuestMemoryKind::AnimalView
-                    | GuestMemoryKind::Education
-                    | GuestMemoryKind::Show
-                    | GuestMemoryKind::Tour
-            ) {
-                let maximum_education = survey_policy
-                    .map(|policy| policy.maximum_education_points_per_view)
-                    .unwrap_or_default();
-                let maximum_entertainment = survey_policy
-                    .map(|policy| policy.maximum_entertainment_points_per_view)
-                    .unwrap_or_default();
-                survey.education_view_rate_permille = survey_rate_permille(
-                    education_delta.max(0) as u32,
-                    u32::from(maximum_education),
-                );
-                survey.entertainment_view_rate_permille = survey_rate_permille(
-                    entertainment_delta.max(0) as u32,
-                    u32::from(maximum_entertainment),
-                );
-                survey.view_score_permille = survey_view_score_permille(
-                    survey.critical_need_rate_permille,
-                    survey.education_view_rate_permille,
-                    survey.entertainment_view_rate_permille,
-                    *phase != GuestPhase::Arriving,
-                );
-            }
-        }
+            entity
+                .get_mut::<GuestSurveyExperience>()
+                .expect("inserted survey experience")
+                .education_points += f32::from(education_delta) / 10.0;
+        });
         let replacement = definition.memory.replacement;
         push_memory(
             &mut memories,
@@ -480,13 +431,5 @@ pub(crate) fn age_guest_memories(
         });
         let capacity = usize::from(memories.active_capacity).max(1);
         memories.next = (usize::from(memories.next) % capacity) as u16;
-    }
-}
-
-fn cap_positive(value: i16, maximum: u16) -> i16 {
-    if value <= 0 {
-        value
-    } else {
-        value.min(maximum.min(i16::MAX as u16) as i16)
     }
 }

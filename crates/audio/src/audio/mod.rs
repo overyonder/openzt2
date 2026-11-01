@@ -10,6 +10,7 @@ mod audio_settings_projection;
 mod audio_soundscape_playback;
 mod audio_stage_playback_projection;
 mod audio_stop_request_execution;
+mod crowd_audio_playback;
 mod deferred_audio_playback_start;
 mod deterministic_audio_sampling;
 mod direct_audio_clip_playback;
@@ -49,6 +50,7 @@ impl Plugin for AudioPlugin {
                     project_changed_audio_stages_into_playback_requests,
                     project_changed_audio_soundscapes_into_playback_and_schedules,
                     advance_audio_soundscape_cue_schedules,
+                    crowd_audio_playback::project_current_crowd_into_audio_playback,
                     play_changed_allowed_ambient_audio_emitters,
                     main_menu_music_playback::play_main_menu_music_when_audio_is_ready,
                     execute_audio_stop_requests,

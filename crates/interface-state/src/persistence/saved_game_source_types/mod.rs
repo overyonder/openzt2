@@ -32,3 +32,8 @@ pub struct OriginalSavedGameLoadFailed {
     pub source_identifier: AssetId,
     pub reason: String,
 }
+
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
+pub struct OriginalSavedGameCatalogueFailed {
+    pub reason: String,
+}

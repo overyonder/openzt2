@@ -144,12 +144,14 @@ pub struct GuestNeedDefinition {
     /// Authored deprivation permille at which an active need trigger clears.
     #[serde(default)]
     pub cessation_threshold: Option<u16>,
-    pub critical_threshold: u16,
+    pub critical_q16: i32,
 }
 /// Authored viewing and happiness states use signed thresholds (cessation -100
 /// in the official binder); these immutable policies retain source percentage units.
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct GuestSignedNeedDefinition {
+    #[serde(default)]
+    pub critical_q16: Option<i32>,
     pub initial_q16: i32,
     pub adjustment_q16: i32,
     pub trigger_q16: Option<i32>,
@@ -272,12 +274,12 @@ pub struct GuestSpeciesAdjustment {
     pub percent_per_adjustment: f32,
     pub maximum_percent_adjustment: f32,
 }
-#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct GuestNeedSurveyPolicy {
     pub check_interval_ns: u64,
-    pub maximum_critical_hits_per_month: u16,
-    pub maximum_education_points_per_view: u16,
-    pub maximum_entertainment_points_per_view: u16,
+    pub maximum_critical_hits_per_month: f32,
+    pub maximum_education_points_per_view: f32,
+    pub maximum_entertainment_points_per_view: f32,
     pub monitored: GuestNeedSurveySignals,
 }
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

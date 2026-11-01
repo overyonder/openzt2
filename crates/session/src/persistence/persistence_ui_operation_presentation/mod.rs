@@ -42,16 +42,28 @@ pub(super) fn project_outstanding_world_snapshot_operations_onto_ui_wait_cursor(
     mut load_world_snapshot_completions: MessageReader<WorldSnapshotLoadedFromSlot>,
     mut delete_world_snapshot_completions: MessageReader<WorldSnapshotDeletedFromSlot>,
     mut world_snapshot_persistence_failures: MessageReader<WorldSnapshotPersistenceFailed>,
+    mut original_load_requests: MessageReader<
+        openzt2_interface_state::persistence::saved_game_source_types::LoadOriginalSavedGame,
+    >,
+    mut original_load_completions: MessageReader<
+        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded,
+    >,
+    mut original_load_failures: MessageReader<
+        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed,
+    >,
     mut outstanding_world_snapshot_operation_count: Local<u32>,
     mut wait_cursor_updates: MessageWriter<SetWaitCursor>,
 ) {
     let started_world_snapshot_operation_count = save_world_snapshot_requests.read().count()
         + load_world_snapshot_requests.read().count()
-        + delete_world_snapshot_requests.read().count();
+        + delete_world_snapshot_requests.read().count()
+        + original_load_requests.read().count();
     let finished_world_snapshot_operation_count = save_world_snapshot_completions.read().count()
         + load_world_snapshot_completions.read().count()
         + delete_world_snapshot_completions.read().count()
-        + world_snapshot_persistence_failures.read().count();
+        + world_snapshot_persistence_failures.read().count()
+        + original_load_completions.read().count()
+        + original_load_failures.read().count();
     let wait_cursor_was_active = *outstanding_world_snapshot_operation_count != 0;
     *outstanding_world_snapshot_operation_count = outstanding_world_snapshot_operation_count
         .saturating_add(u32::try_from(started_world_snapshot_operation_count).unwrap_or(u32::MAX))
@@ -142,3 +154,48 @@ pub(super) fn close_save_dialogs_after_world_snapshot_save(
         }
     }
 }
+
+pub(super) fn present_original_saved_game_failures(
+    mut commands: Commands,
+    mut catalogue_failures: MessageReader<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameCatalogueFailed>,
+    mut load_failures: MessageReader<
+        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed,
+    >,
+    mut presented: MessageReader<
+        openzt2_interface_state::ui::notification_contracts::NotificationPresented,
+    >,
+    mut rejected: MessageReader<
+        openzt2_interface_state::ui::notification_contracts::NotificationRejected,
+    >,
+    owners: Query<(), With<OriginalSavedGameFailureNotification>>,
+    mut notifications: MessageWriter<
+        openzt2_interface_state::ui::notification_contracts::ShowNotification,
+    >,
+) {
+    use openzt2_interface_state::ui::notification_contracts::{
+        NotificationMessage, ShowNotification,
+    };
+    for operation in presented
+        .read()
+        .map(|message| message.operation)
+        .chain(rejected.read().map(|message| message.operation))
+    {
+        if owners.contains(operation) {
+            commands.entity(operation).despawn();
+        }
+    }
+    for reason in catalogue_failures
+        .read()
+        .map(|failure| &failure.reason)
+        .chain(load_failures.read().map(|failure| &failure.reason))
+    {
+        let operation = commands.spawn(OriginalSavedGameFailureNotification).id();
+        notifications.write(ShowNotification {
+            operation,
+            message: NotificationMessage::Text(reason.clone()),
+        });
+    }
+}
+
+#[derive(Component)]
+pub(super) struct OriginalSavedGameFailureNotification;

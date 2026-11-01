@@ -4,6 +4,9 @@ use bevy::{prelude::*, text::EditableText};
 use openzt2_game_data::ui_document::{
     action::persistence::UiPersistenceAction, document::UiDocumentRole,
 };
+use openzt2_interface_state::persistence::saved_game_source_types::{
+    LoadOriginalSavedGame, SavedGameSource,
+};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
@@ -81,7 +84,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     persistence_action_nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
-    selected_rows: Query<(&UiListRow, &UiSelected, &UiValue)>,
+    selected_rows: Query<(&UiListRow, &UiSelected, &SavedGameSource)>,
     lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     mut persistence_action_messages: PersistenceUiActionMessageWriters,
     mut commands: Commands,
@@ -129,6 +132,16 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                         });
                 }
                 UiPersistenceAction::SaveWorldSnapshotToSelectedSlot => {
+                    if matches!(
+                        super::save_slot_catalogue_ui_presentation::selected_save_slot_in_document(
+                            ui_document_owner.0,
+                            &selected_rows,
+                            &lists
+                        ),
+                        Some(SavedGameSource::Original(_))
+                    ) {
+                        continue;
+                    }
                     let slot = ui_values
                         .get(activated_ui_node.node)
                         .map_or(0, |value| value.0.max(0) as u32);
@@ -181,6 +194,16 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                         });
                 }
                 UiPersistenceAction::DeleteWorldSnapshotFromSelectedSlot => {
+                    if matches!(
+                        super::save_slot_catalogue_ui_presentation::selected_save_slot_in_document(
+                            ui_document_owner.0,
+                            &selected_rows,
+                            &lists
+                        ),
+                        Some(SavedGameSource::Original(_))
+                    ) {
+                        continue;
+                    }
                     let slot = ui_values
                         .get(activated_ui_node.node)
                         .map_or(0, |value| value.0.max(0) as u32);
@@ -225,7 +248,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     }
                 }
                 UiPersistenceAction::LoadWorldSnapshotFromSelectedSlot => {
-                    let Some(slot) =
+                    let Some(source) =
                         super::save_slot_catalogue_ui_presentation::selected_save_slot_in_document(
                             ui_document_owner.0,
                             &selected_rows,
@@ -234,11 +257,20 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
                     else {
                         continue;
                     };
-                    persistence_action_messages
-                        .load_world_snapshot_requests
-                        .write(LoadWorldSnapshotFromSlot {
-                            save_slot_identifier: SaveSlotId(slot),
-                        });
+                    match source {
+                        SavedGameSource::Native(save_slot_identifier) => {
+                            persistence_action_messages
+                                .load_world_snapshot_requests
+                                .write(LoadWorldSnapshotFromSlot {
+                                    save_slot_identifier,
+                                });
+                        }
+                        SavedGameSource::Original(source_identifier) => {
+                            persistence_action_messages
+                                .load_original_saved_game_requests
+                                .write(LoadOriginalSavedGame { source_identifier });
+                        }
+                    }
                 }
                 UiPersistenceAction::OpenSaveSlotCatalogueForSaving
                 | UiPersistenceAction::OpenSaveSlotCatalogueForLoading => {

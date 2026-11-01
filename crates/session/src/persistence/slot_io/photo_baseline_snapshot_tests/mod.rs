@@ -169,6 +169,8 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .add_message::<WorldLoadFinished>()
     .add_message::<WorldLoadFailed>()
     .add_message::<WorldSnapshotLoadedFromSlot>()
+    .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded>()
+    .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed>()
     .add_message::<WorldSnapshotPersistenceFailed>()
     .add_message::<RestoreShowPlatformUpgrade>()
     .add_plugins(PhotosPlugin)
@@ -349,7 +351,7 @@ pub(crate) fn prepare_photo_snapshot_application(world: &mut World) {
             saved_world_document: None,
             terrain_restored: false,
             behavior_documents: Vec::new(),
-            save_slot_identifier: SaveSlotId(0),
+            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
             scenario_definition_identifier: Some(SCENARIO),
             session_mode: Some(WorldSessionMode::Freeform),
             baseline_world_load_requested: true,
@@ -398,7 +400,7 @@ pub(crate) fn prepare_unvalidated_snapshot_application(
             saved_world_document: None,
             terrain_restored: false,
             behavior_documents: Vec::new(),
-            save_slot_identifier: SaveSlotId(0),
+            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
             scenario_definition_identifier: None,
             session_mode: None,
             baseline_world_load_requested: false,
@@ -500,7 +502,7 @@ fn snapshot_replacement_is_requested_after_ingame_teardown_removes_world_resourc
             saved_world_document: None,
             terrain_restored: false,
             behavior_documents: Vec::new(),
-            save_slot_identifier: SaveSlotId(0),
+            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
             scenario_definition_identifier: None,
             session_mode: None,
             baseline_world_load_requested: false,
@@ -607,7 +609,7 @@ fn loading_initializes_photo_receivers_before_snapshot_reference_validation_and_
             saved_world_document: None,
             terrain_restored: false,
             behavior_documents: Vec::new(),
-            save_slot_identifier: SaveSlotId(0),
+            source: openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource::Native(SaveSlotId(0)),
             scenario_definition_identifier: Some(SCENARIO),
             session_mode: Some(WorldSessionMode::Freeform),
             baseline_world_load_requested: true,

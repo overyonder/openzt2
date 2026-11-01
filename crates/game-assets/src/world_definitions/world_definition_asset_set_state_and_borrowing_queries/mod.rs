@@ -3,13 +3,14 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -18,14 +19,16 @@ use openzt2_game_data::{
         biomes_locations_and_details::*,
         camera_definitions::*,
         catalogue_and_progression::{
-            animal_adoption_offer_definition_types::*, catalogue_definition_types::*,
-            research_and_unlock_definition_types::*, zoo_rating_fame_and_award_definition_types::*,
-            zoopedia_entry_types::*,
+            animal_adoption_offer_definition_types::*,
+            animal_adoption_species_eligibility::AnimalAdoptionSpeciesEligibility,
+            catalogue_definition_types::*, research_and_unlock_definition_types::*,
+            zoo_rating_fame_and_award_definition_types::*, zoopedia_entry_types::*,
         },
         environment::*,
         extinct_animal_recovery::*,
         facilities_and_maintenance::*,
         fences_and_gates::*,
+        guest_favourite_animal_trend_policy::GuestFavouriteAnimalTrendPolicy,
         guest_simulation_definitions::*,
         immersive_mode_policy::*,
         need_adjustment::NeedAdjustmentPolicy,
@@ -37,7 +40,6 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
-    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -46,6 +48,7 @@ use super::world_definition_document_asset_and_demand_loaded_dependency_paths::W
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) enum DefinitionKind {
+    EntityNaming,
     Object,
     Placeable,
     Facility,
@@ -66,6 +69,7 @@ pub(super) enum DefinitionKind {
     Tranquilizer,
     Rampage,
     Catalogue,
+    AnimalAdoptionSpeciesEligibility,
     Zoopedia,
     Research,
     Unlock,
@@ -123,6 +127,7 @@ pub(super) enum SingletonKind {
     FossilPlacement,
     SimulationTiming,
     GuestGeneration,
+    GuestFavouriteAnimalTrend,
     BehaviorSelection,
     NeedAdjustment,
     TranquilizerMode,
@@ -387,6 +392,26 @@ impl<'a> WorldDefinitionsView<'a> {
         StaffAquaticTankCleaningRequestPolicy
     );
     finder!(find_guest, Guest, guests, GuestDefinition);
+    finder!(
+        find_entity_naming,
+        EntityNaming,
+        entity_naming,
+        openzt2_game_data::world_definitions::entity_naming::EntityNamingDefinition
+    );
+    finder!(
+        find_animal_adoption_species_eligibility,
+        AnimalAdoptionSpeciesEligibility,
+        animal_adoption_species_eligibility,
+        AnimalAdoptionSpeciesEligibility
+    );
+
+    pub fn animal_adoption_species_eligibility(
+        self,
+    ) -> impl Iterator<Item = &'a AnimalAdoptionSpeciesEligibility> {
+        self.records
+            .range(kind_range(DefinitionKind::AnimalAdoptionSpeciesEligibility))
+            .filter_map(move |((_, id), _)| self.find_animal_adoption_species_eligibility(*id))
+    }
     /// The guest body's actor manifest, from the asset that declares the guest.
     pub fn load_guest_model_animation_set<T: Asset>(self, guest: AssetId) -> Option<Handle<T>> {
         let asset = self
@@ -876,6 +901,12 @@ impl<'a> WorldDefinitionsView<'a> {
         GuestGeneration,
         guest_generation,
         GuestGenerationPolicy
+    );
+    singleton!(
+        guest_favourite_animal_trend,
+        GuestFavouriteAnimalTrend,
+        guest_favourite_animal_trend,
+        GuestFavouriteAnimalTrendPolicy
     );
     singleton!(
         behavior_selection_policy,

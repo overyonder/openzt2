@@ -58,6 +58,7 @@ pub(super) fn lower(
             )
         })?;
     let mut starting_zoo_record = StartingZooRecord {
+        next_persistent_identifier: None,
         id: AssetId::from_key(&format!("start:{map}")),
         profile: AssetId::default(),
         map: AssetId::from_key(&map),

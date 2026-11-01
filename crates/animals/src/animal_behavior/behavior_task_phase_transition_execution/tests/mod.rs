@@ -15,7 +15,10 @@ fn record_guest_selection_attempts(
     clock: Res<ZooClock>,
     mut actors: Query<
         (&BehaviorTargetRetryDelays, &mut SelectionAttempts),
-        With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+        (
+            With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+            Without<BehaviorTaskExecutionState>,
+        ),
     >,
 ) {
     for (delays, mut attempts) in &mut actors {
@@ -29,7 +32,10 @@ fn record_staff_selection_attempts(
     clock: Res<ZooClock>,
     mut actors: Query<
         (&BehaviorTargetRetryDelays, &mut SelectionAttempts),
-        With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+        (
+            With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+            Without<BehaviorTaskExecutionState>,
+        ),
     >,
 ) {
     for (delays, mut attempts) in &mut actors {
@@ -41,6 +47,12 @@ fn record_staff_selection_attempts(
 
 #[test]
 fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_updates() {
+    for (interval, cap) in [(50, 2000), (2, 5)] {
+        check_guest_and_staff_selection_window(interval, cap);
+    }
+}
+
+fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
     use openzt2_world_state::application_schedule::FixedGameSet;
     use openzt2_zoo_state::guests::guest_simulation_types::Guest;
@@ -50,8 +62,8 @@ fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_upda
         enabled: true,
         minimum_score: 0.0,
         outside_range_need_value: 0.0,
-        rejected_target_retry_interval: 50,
-        rejected_target_retry_interval_cap: 2000,
+        rejected_target_retry_interval: interval,
+        rejected_target_retry_interval_cap: cap,
     };
     let document = WorldDefinitionDocument {
         behavior_selection_policy: Some(policy),
@@ -131,7 +143,7 @@ fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_upda
                 program: AssetId::from_key("refused-service"),
                 target: Some(target),
                 object: None,
-                document,
+                document: document.clone(),
                 declaration: 0,
                 phase: BehaviorTaskExecutionPhase::Set,
                 action: 0,
@@ -142,10 +154,11 @@ fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_upda
             },
         ))
         .id();
-    for update in 1..=51 {
+    let first_available_update = u64::from(interval) + 1;
+    for update in 1..=first_available_update {
         app.world_mut().resource_mut::<ZooClock>().tick = update;
         app.world_mut().run_schedule(FixedUpdate);
-        if update <= 50 {
+        if update < first_available_update {
             for actor in [guest, staff] {
                 assert!(app
                     .world()
@@ -168,18 +181,68 @@ fn guest_and_staff_selection_share_the_window_on_opposite_sides_of_behavior_upda
                 .get::<SelectionAttempts>(actor)
                 .unwrap()
                 .accepted_updates,
-            [51]
+            [first_available_update]
         );
     }
-    app.world_mut().resource_mut::<ZooClock>().tick = 52;
+    app.world_mut().resource_mut::<ZooClock>().tick = first_available_update + 1;
     app.world_mut().run_schedule(FixedUpdate);
     assert_eq!(
         app.world()
             .get::<SelectionAttempts>(fresh_failure)
             .unwrap()
             .accepted_updates,
-        [52]
+        [first_available_update + 1]
     );
+
+    if interval != 2 || cap != 5 {
+        return;
+    }
+    let mut update = first_available_update + 1;
+    for expected_delay in [4, 5, 5] {
+        for actor in [guest, staff] {
+            app.world_mut()
+                .get_mut::<SelectionAttempts>(actor)
+                .unwrap()
+                .accepted_updates
+                .clear();
+            app.world_mut().entity_mut(actor).insert((
+                PendingBehaviorTaskFailure,
+                BehaviorTaskExecutionState {
+                    execution_id: update,
+                    program: AssetId::from_key("refused-service"),
+                    target: Some(target),
+                    object: None,
+                    document: document.clone(),
+                    declaration: 0,
+                    phase: BehaviorTaskExecutionPhase::Set,
+                    action: 0,
+                    repetitions: 0,
+                    next_action_tick: 0,
+                    interaction_slot: None,
+                    stack: ArrayVec::new(),
+                },
+            ));
+        }
+        let failure_update = update + 1;
+        let available_update = failure_update + expected_delay + 1;
+        while update < available_update {
+            update += 1;
+            app.world_mut().resource_mut::<ZooClock>().tick = update;
+            app.world_mut().run_schedule(FixedUpdate);
+            for actor in [guest, staff] {
+                let attempts = &app
+                    .world()
+                    .get::<SelectionAttempts>(actor)
+                    .unwrap()
+                    .accepted_updates;
+                if update < available_update {
+                    assert!(attempts.is_empty(), "actor {actor:?} retried at {update}");
+                } else {
+                    assert_eq!(attempts, &[available_update]);
+                }
+            }
+        }
+    }
 }
 
 #[test]

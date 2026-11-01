@@ -1,5 +1,6 @@
 use super::world_definition_source_value_reading_and_conversion::simple_error;
 use crate::source_document::resolved_source_record_index::BindError;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_shows_and_training::ShowPlatformUpgradePolicy;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::environment::EnvironmentDefinition;
@@ -9,7 +10,6 @@ use openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefin
 use openzt2_game_data::world_definitions::transportation_and_tours::{
     TourCategoryScore, TourRatingRange,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -34,6 +34,7 @@ impl WorldDefinitionLoweringTables {
         self.document.environments.push(EnvironmentDefinition {
             id,
             family: AssetId::default(),
+            light_program: None,
             light_keyframes: Vec::new(),
             fog_keyframes: Vec::new(),
             sky_keyframes: Vec::new(),
@@ -60,6 +61,7 @@ impl WorldDefinitionLoweringTables {
         }
         append!(
             objects,
+            entity_naming,
             placeables,
             facilities,
             maintenance_definitions,
@@ -79,6 +81,7 @@ impl WorldDefinitionLoweringTables {
             tranquilizers,
             rampage_rules,
             catalogue,
+            animal_adoption_species_eligibility,
             zoopedia,
             research,
             unlocks,
@@ -121,6 +124,9 @@ impl WorldDefinitionLoweringTables {
             if incoming.family != AssetId::default() {
                 environment.family = incoming.family;
             }
+            if incoming.light_program.is_some() {
+                environment.light_program = incoming.light_program;
+            }
             environment.light_keyframes.extend(incoming.light_keyframes);
             environment.fog_keyframes.extend(incoming.fog_keyframes);
             environment.sky_keyframes.extend(incoming.sky_keyframes);
@@ -152,6 +158,7 @@ impl WorldDefinitionLoweringTables {
             staff_manager,
             fossil_placement,
             guest_generation,
+            guest_favourite_animal_trend,
             behavior_selection_policy,
             need_adjustment,
             tank_surface_policy,

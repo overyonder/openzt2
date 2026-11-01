@@ -1,4 +1,5 @@
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
+use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -43,6 +44,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         &GuestFavouriteAnimal,
         &GlobalTransform,
         &mut GuestSpeciesViewCounts,
+        &mut GuestSurveyExperience,
         Option<&BehaviorTaskExecutionState>,
         Option<&mut ActiveGuestAnimalViewingMeter>,
     )>,
@@ -74,7 +76,7 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         else {
             continue;
         };
-        let Ok((archetype, favourite, position, mut counts, task, meter)) =
+        let Ok((archetype, favourite, position, mut counts, mut experience, task, meter)) =
             guests.get_mut(reaction.guest)
         else {
             continue;
@@ -129,7 +131,9 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
                 meter.apply_view_score(score);
             }
         }
-        if row.entertainment_score * preferred * distance_factor != 0.0 {
+        experience.saw_favorite_animal |= favourite.0 == Some(species.species);
+        experience.observe_entertainment(row.entertainment_score * distance_factor);
+        if row.entertainment_score * distance_factor != 0.0 {
             *count = count.saturating_add(1);
         }
     }

@@ -4,6 +4,7 @@ pub mod prefab_world_instance_spawning;
 // One-time translation from authored scenario and prefab rows into the live ECS.
 
 pub mod expanding_column_presentation;
+mod generated_entity_name_application;
 mod named_physical_presentation_projection;
 mod persistent_id_assignment;
 mod physical_presentation_state;
@@ -61,6 +62,16 @@ pub struct WorldSpawnPlugin;
 impl Plugin for WorldSpawnPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream>();
+        app.add_systems(
+            Update,
+            (
+                generated_entity_name_application::initialize_world_entity_name_counters,
+                generated_entity_name_application::register_and_name_spawned_world_entities,
+            )
+                .chain()
+                .in_set(GameSet::Intent)
+                .run_if(in_state(GamePhase::InGame)),
+        );
         app.configure_sets(
             Update,
             (

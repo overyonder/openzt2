@@ -8,6 +8,7 @@ pub mod behavior_task_execution_types;
 pub mod construction;
 pub mod donations;
 pub mod economy;
+pub mod entity_naming_types;
 pub mod environment;
 pub mod extinct_animals;
 pub mod feeding;

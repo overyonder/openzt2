@@ -428,6 +428,27 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 continue;
             }
         };
+        let runtime_continuation = world_snapshot_capture_queries
+            .world_roots
+            .single()
+            .map_err(|_| WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
+            .and_then(|(root, ..)| {
+                world_snapshot_capture_queries
+                    .runtime_continuation
+                    .capture(root)
+            });
+        let runtime_continuation = match runtime_continuation {
+            Ok(record) => record,
+            Err(reason) => {
+                publish_persistence_failure_for_slot_operation(
+                    &mut persistence_failures,
+                    WorldSnapshotPersistenceOperation::SaveToSlot,
+                    save_request.save_slot_identifier,
+                    reason,
+                );
+                continue;
+            }
+        };
         let snapshot_container_encoding_result =
             append_captured_world_snapshot_sections_and_finalize_container(
                 &mut snapshot_scratch_storage.snapshot_container_bytes,
@@ -439,10 +460,10 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &maintenance_snapshot,
                 &staff_snapshot_records,
                 &tank_snapshot_records,
-                &topology_snapshot_records,
+                Some(&topology_snapshot_records),
                 &economy_snapshot_records,
                 &donation_snapshot_records,
-                &placement_snapshot_records,
+                Some(&placement_snapshot_records),
                 &progression_snapshot_records,
                 &simulation_time_snapshot_record,
                 &show_stage_snapshot_records,
@@ -452,6 +473,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
                 &photo_snapshot_records,
                 &photo_challenge_progress_snapshot_records,
                 &behavior_snapshot_records,
+                Some(&runtime_continuation),
             );
         if let Err(failure_reason) = snapshot_container_encoding_result {
             snapshot_scratch_storage.clear_logical_contents();

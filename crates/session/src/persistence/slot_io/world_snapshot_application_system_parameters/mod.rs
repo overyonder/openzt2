@@ -36,6 +36,14 @@ pub(in crate::persistence) struct WorldSnapshotApplicationMessages<'w, 's> {
     pub(super) world_unload_requests: MessageWriter<'w, UnloadWorld>,
     pub(super) completed_world_loads: MessageReader<'w, 's, WorldLoadFinished>,
     pub(super) failed_world_loads: MessageReader<'w, 's, WorldLoadFailed>,
+    pub(super) original_snapshot_loads: MessageWriter<
+        'w,
+        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded,
+    >,
+    pub(super) original_snapshot_failures: MessageWriter<
+        'w,
+        openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed,
+    >,
     pub(super) completed_snapshot_loads: MessageWriter<'w, WorldSnapshotLoadedFromSlot>,
     pub(super) persistence_failures: MessageWriter<'w, WorldSnapshotPersistenceFailed>,
     pub(super) show_platform_upgrade_restore_requests:

@@ -3,7 +3,7 @@ use openzt2_game_data::AssetId;
 
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
-use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
+use openzt2_interface_state::persistence::saved_game_source_types::SavedGameSource;
 
 #[derive(Component, Clone)]
 pub(crate) struct PendingSnapshotApplication {
@@ -17,7 +17,7 @@ pub(crate) struct PendingSnapshotApplication {
         >,
     >,
     pub(super) placement_hydration: Option<Vec<u64>>,
-    pub(in crate::persistence) save_slot_identifier: SaveSlotId,
+    pub(in crate::persistence) source: SavedGameSource,
     pub(in crate::persistence) scenario_definition_identifier: Option<AssetId>,
     pub(in crate::persistence) session_mode: Option<WorldSessionMode>,
     pub(in crate::persistence) baseline_world_load_requested: bool,
@@ -31,7 +31,7 @@ impl std::fmt::Debug for PendingSnapshotApplication {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("PendingSnapshotApplication")
-            .field("slot", &self.save_slot_identifier)
+            .field("source", &self.source)
             .field("world_decoded", &self.world_snapshot.is_some())
             .field("terrain_decoded", &self.terrain_snapshot.is_some())
             .field("saved_world_document", &self.saved_world_document)

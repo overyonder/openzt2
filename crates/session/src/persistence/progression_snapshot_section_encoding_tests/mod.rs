@@ -22,6 +22,7 @@ use super::{
 fn progression_snapshot_section_round_trips_bounded_native_facts() {
     let original_progression_snapshot_records = ProgressionSnapshotRecords {
         fame: Fame {
+            current_percent: Some(61.25),
             half_stars: 6,
             maximum_reached: 8,
             maximum_percent_reached: Some(83.25),
@@ -87,6 +88,32 @@ fn progression_snapshot_section_round_trips_bounded_native_facts() {
         &mut progression_snapshot_section_bytes,
         &original_progression_snapshot_records,
     );
+    let mut legacy = progression_snapshot_section_bytes.clone();
+    legacy.truncate(legacy.len() - 8);
+    let legacy_record = decode_and_validate_progression_snapshot_section(
+        &legacy,
+        original_progression_snapshot_records.snapshot_record_count(),
+    )
+    .unwrap();
+    assert_eq!(legacy_record.fame.current_percent, None);
+    let mut legacy_roundtrip = Vec::new();
+    append_encoded_progression_snapshot_section(&mut legacy_roundtrip, &legacy_record);
+    assert_eq!(legacy_roundtrip, legacy);
+    let mut malformed = progression_snapshot_section_bytes.clone();
+    let end = malformed.len();
+    malformed[end - 4..].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert!(decode_and_validate_progression_snapshot_section(
+        &malformed,
+        original_progression_snapshot_records.snapshot_record_count()
+    )
+    .is_err());
+    malformed[end - 8] = b'X';
+    malformed[end - 4..].copy_from_slice(&61.25_f32.to_le_bytes());
+    assert!(decode_and_validate_progression_snapshot_section(
+        &malformed,
+        original_progression_snapshot_records.snapshot_record_count()
+    )
+    .is_err());
     let decoded_progression_snapshot_records = decode_and_validate_progression_snapshot_section(
         &progression_snapshot_section_bytes,
         original_progression_snapshot_records.snapshot_record_count(),

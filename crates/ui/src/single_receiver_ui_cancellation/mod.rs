@@ -233,7 +233,15 @@ fn topmost_cancel_hotkey_receiver_scope(ui: &UiCancellationReceivers) -> Option<
                 order = ui.context.navigation_order(*entity),
                 "eligible authored UI cancellation receiver");
         })
-        .max_by_key(|(entity, _, _)| ui.context.navigation_order(*entity))
+        .max_by_key(|(entity, owner, _)| {
+            // The application-wide binding is a fallback for screens without
+            // their own receiver, even when its root follows them in UiStack.
+            let application_root = ui.roots.get(owner.0).ok()
+                .and_then(|root| ui.documents.get(&root.document))
+                .is_some_and(|document| document.canonical_ui_document().role
+                    == openzt2_game_data::ui_document::document::UiDocumentRole::ApplicationRoot);
+            (!application_root, ui.context.navigation_order(*entity))
+        })
         .map(|(_, owner, _)| ui.context.document_scope(owner.0))
 }
 

@@ -11,6 +11,10 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveProg
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatusChanged;
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
+use openzt2_zoo_state::scenario::{
+    scenario_script_timing_types::ScenarioScriptTiming,
+    scenario_session_types::{ActiveScenarioSession, ScenarioSessionState},
+};
 
 use super::{
     challenge_offer_types::CreateScenarioChallengeOfferFromLuaSourcePathRequest,
@@ -22,6 +26,9 @@ use super::{
 
 pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     scenarios: Res<WorldScenarios>,
+    selected: Option<Res<SelectedScenarioDocument>>,
+    time: Res<Time<Fixed>>,
+    mut sessions: Query<(Entity, &ActiveScenarioSession, &mut ScenarioScriptTiming)>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
@@ -50,9 +57,40 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
     ),
 ) {
-    let Some(scenarios) = scenarios.get(&scenario_assets) else {
-        return;
+    let scenarios = scenarios.get(&scenario_assets);
+    let handle_for = |scenario| {
+        selected
+            .as_ref()
+            .map(|selected| &selected.0)
+            .filter(|handle| {
+                scenario_assets
+                    .get(*handle)
+                    .is_some_and(|asset| asset.document.find_scenario_record(scenario).is_some())
+            })
+            .or_else(|| scenarios.as_ref()?.handle_for_scenario(scenario))
     };
+    let mut evaluation_due = std::collections::BTreeMap::new();
+    let mut always_run_due = Vec::new();
+    for (entity, session, mut timing) in &mut sessions {
+        let Some(handle) = handle_for(session.definition) else {
+            continue;
+        };
+        let Some(definition) = scenario_assets
+            .get(handle)
+            .and_then(|asset| asset.document.find_scenario_record(session.definition))
+        else {
+            continue;
+        };
+        let (evaluate, always_run) =
+            timing.advance(time.delta_secs(), definition.evaluation_interval_seconds);
+        evaluation_due.insert(
+            session.definition,
+            evaluate && session.state == ScenarioSessionState::Running,
+        );
+        if always_run {
+            always_run_due.push((entity, session.definition));
+        }
+    }
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
         spawn_sources
@@ -65,7 +103,10 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
         if *status != ScenarioObjectiveStatus::Active {
             continue;
         }
-        let Some(handle) = scenarios.handle_for_scenario(objective.scenario) else {
+        if evaluation_due.get(&objective.scenario) == Some(&false) {
+            continue;
+        }
+        let Some(handle) = handle_for(objective.scenario) else {
             continue;
         };
         let Some(asset) = scenario_assets.get(handle) else {
@@ -166,10 +207,63 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
             }
         }
     }
+    for (entity, scenario) in always_run_due {
+        let Some(handle) = handle_for(scenario) else {
+            continue;
+        };
+        let Some(asset) = scenario_assets.get(handle) else {
+            continue;
+        };
+        let source = SelectedScenarioDocument(handle.clone());
+        for binding in asset
+            .document
+            .scenario_script_bindings
+            .iter()
+            .filter(|binding| {
+                binding.scenario == scenario && binding.phase == ScenarioScriptPhase::AlwaysRun
+            })
+        {
+            match execute_loaded_scenario_lua_script_binding(
+                &mut runtime,
+                &source,
+                &scenario_assets,
+                &scripts,
+                &script_index,
+                binding,
+                queries,
+            ) {
+                Ok(result) => {
+                    if let Some(error) = &result.failure {
+                        error!(entry = %binding.entry, %error, "scenario Lua always-run call failed");
+                    }
+                    publish_commands_produced_by_scenario_lua_script(
+                        entity,
+                        result,
+                        &mut outputs.0,
+                        &mut outputs.1,
+                        &mut outputs.2,
+                        &mut outputs.3,
+                        &mut outputs.4,
+                        &mut outputs.5,
+                        &mut outputs.6,
+                        &mut outputs.7,
+                        &mut outputs.8,
+                        &mut outputs.9,
+                        &mut outputs.10,
+                        &mut outputs.11,
+                    );
+                }
+                Err(error) => {
+                    error!(entry = %binding.entry, %error, "scenario Lua always-run call failed")
+                }
+            }
+        }
+    }
 }
 
 pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
     scenarios: Res<WorldScenarios>,
+    selected: Option<Res<SelectedScenarioDocument>>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
     script_index: Res<LuaScriptArchivePathIndex>,
@@ -193,8 +287,17 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         MessageWriter<openzt2_zoo_state::progression::fame_types::SetScenarioMaximumFame>,
     ),
 ) {
-    let Some(scenarios) = scenarios.get(&scenario_assets) else {
-        return;
+    let scenarios = scenarios.get(&scenario_assets);
+    let handle_for = |scenario| {
+        selected
+            .as_ref()
+            .map(|selected| &selected.0)
+            .filter(|handle| {
+                scenario_assets
+                    .get(*handle)
+                    .is_some_and(|asset| asset.document.find_scenario_record(scenario).is_some())
+            })
+            .or_else(|| scenarios.as_ref()?.handle_for_scenario(scenario))
     };
     let spawn_sources = std::cell::RefCell::new(spawn_sources);
     let spawn_animal = |kind, position, rotation, reserved: &[_]| {
@@ -216,7 +319,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
             ScenarioObjectiveStatus::Failed => ScenarioScriptPhase::Failure,
             ScenarioObjectiveStatus::Inactive | ScenarioObjectiveStatus::Active => continue,
         };
-        let Some(handle) = scenarios.handle_for_scenario(objective.scenario) else {
+        let Some(handle) = handle_for(objective.scenario) else {
             continue;
         };
         let Some(asset) = scenario_assets.get(handle) else {
@@ -232,7 +335,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         affected_scenarios.insert(objective.scenario, event.objective);
     }
     for (scenario, source_entity) in affected_scenarios {
-        let Some(handle) = scenarios.handle_for_scenario(scenario) else {
+        let Some(handle) = handle_for(scenario) else {
             continue;
         };
         let Some(asset) = scenario_assets.get(handle) else {
@@ -282,7 +385,7 @@ pub(super) fn execute_scenario_objective_success_and_failure_lua_scripts(
         }
     }
     for (source_entity, scenario, objective_id, phase) in invocations {
-        let Some(handle) = scenarios.handle_for_scenario(scenario) else {
+        let Some(handle) = handle_for(scenario) else {
             continue;
         };
         let Some(asset) = scenario_assets.get(handle) else {

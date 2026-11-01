@@ -13,6 +13,7 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
     ];
     let mut document = WorldScenarioDocument::default();
     document.scenarios.push(ScenarioDefinitionRecord {
+        evaluation_interval_seconds: 1.0,
         id: definition,
         name_key: definition,
         description_key: definition,
@@ -56,6 +57,10 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
 #[test]
 fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     let (mut source, root, definition, _) = initialize_world();
+    source.entity_mut(root).insert(ScenarioScriptTiming {
+        evaluation_elapsed_seconds: 2.25,
+        always_run_elapsed_seconds: 0.75,
+    });
     source.entity_mut(root).insert(ActiveScenarioSession {
         definition,
         started_tick: 41,
@@ -89,6 +94,31 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
         .unwrap()
         .unwrap();
     let bytes = encode(Some(&saved)).unwrap();
+    let legacy = postcard::to_allocvec(&saved).unwrap();
+    let legacy_record = decode(
+        &legacy,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: record_count(Some(&saved)),
+            payload_start_byte_offset: 0,
+            payload_byte_count: legacy.len() as u64,
+        },
+    )
+    .unwrap()
+    .unwrap();
+    assert!(legacy_record.timing.is_none());
+    let mut invalid = bytes.clone();
+    let end = invalid.len();
+    invalid[end - 4..].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert!(decode(
+        &invalid,
+        WorldSnapshotSectionDirectoryEntry {
+            encoded_record_count: record_count(Some(&saved)),
+            payload_start_byte_offset: 0,
+            payload_byte_count: invalid.len() as u64
+        }
+    )
+    .is_err());
+
     let decoded = decode(
         &bytes,
         WorldSnapshotSectionDirectoryEntry {
@@ -111,7 +141,7 @@ fn campaign_state_round_trip_keeps_completed_rules_and_live_deadlines() {
     {
         let (mut commands, mut allocator, mut parameters) =
             apply_state.get_mut(&mut destination).unwrap();
-        let prepared = prepare(decoded, definition, &parameters).unwrap();
+        let prepared = prepare(decoded, definition, restored_root, &parameters).unwrap();
         apply(
             &mut commands,
             prepared,

@@ -206,25 +206,6 @@ pub struct GuestArrivalState {
     pub rng: DeterministicRng,
 }
 
-/// Current zoo-survey aggregate. This is derived simulation state, not an
-/// entity registry or copied guest world.
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct GuestSurvey {
-    pub next_tick: u64,
-    pub month: u32,
-    pub critical_hits: u16,
-    pub education_points: u32,
-    pub entertainment_points: u32,
-    /// Remaining room beneath the authored monthly critical-need limit.
-    pub critical_need_rate_permille: u16,
-    /// Score contributed by the most recently applied education view.
-    pub education_view_rate_permille: u16,
-    /// Score contributed by the most recently applied entertainment view.
-    pub entertainment_view_rate_permille: u16,
-    /// Aggregate for the most recently applied view reaction.
-    pub view_score_permille: u16,
-}
-
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AdjustGuestSurveyData {
     pub guest: Entity,

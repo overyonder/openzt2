@@ -48,6 +48,7 @@ use super::super::{
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
+    pub(super) runtime_continuation: super::runtime_continuation_snapshot_capture::RuntimeContinuationSnapshotCapture<'w, 's>,
     pub(super) behavior: super::behavior_snapshot_capture::BehaviorSnapshotCapture<'w, 's>,
     pub(super) terrain: super::terrain_snapshot_capture_parameters::TerrainSnapshotCapture<'w,'s>,
     pub(super) asset_server: Option<Res<'w, AssetServer>>,
@@ -79,6 +80,7 @@ pub(in crate::persistence) struct WorldSnapshotCaptureQueries<'w, 's> {
         'w,
         's,
         (
+            Entity,
             &'static WorldRoot,
             &'static SelectedWorldIdentity,
             Option<&'static Name>,

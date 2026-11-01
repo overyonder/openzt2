@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    world_scenario::{ScenarioDefinitionRecord, WorldScenarioDocument},
     AssetId,
+    world_scenario::{ScenarioDefinitionRecord, WorldScenarioDocument},
 };
 
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
@@ -9,6 +9,7 @@ use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_depen
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -19,6 +20,7 @@ use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveDead
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectivePrerequisiteEntities;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveProgress;
 use openzt2_zoo_state::scenario::scenario_objective_types::ScenarioObjectiveStatus;
+use openzt2_zoo_state::scenario::scenario_script_timing_types::ScenarioScriptTiming;
 use openzt2_zoo_state::scenario::scenario_session_types::ActiveScenarioSession;
 use openzt2_zoo_state::scenario::scenario_session_types::ScenarioSessionState;
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
@@ -32,14 +34,19 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
     clock: Res<ZooClock>,
     active: Query<(), With<ActiveScenarioSession>>,
     mut allocator: ResMut<PersistentIdAllocator>,
-    roots: Query<(Entity, &WorldRoot), (With<WorldLoadCompleted>, Without<ActiveScenarioSession>)>,
+    roots: Query<
+        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>),
+        (With<WorldLoadCompleted>, Without<ActiveScenarioSession>),
+    >,
     existing: Query<(), With<ScenarioObjective>>,
 ) {
     if !active.is_empty() || !existing.is_empty() {
         return;
     }
-    for (root, world) in &roots {
-        let Some(view) = scenarios.get(&assets) else {
+    for (root, world, saved_handles) in &roots {
+        let Some(view) = scenarios.get(&assets).and_then(|view| {
+            saved_handles.map_or(Some(view), |handles| view.with_document(&handles.start))
+        }) else {
             continue;
         };
         let Some(handle) = view.handle_for_scenario(world.scenario).cloned() else {
@@ -50,11 +57,14 @@ pub(super) fn instantiate_selected_scenario_and_authored_objectives(
         };
 
         commands.insert_resource(SelectedScenarioDocument(handle));
-        commands.entity(root).insert(ActiveScenarioSession {
-            definition: scenario.id,
-            started_tick: clock.tick,
-            state: ScenarioSessionState::Running,
-        });
+        commands.entity(root).insert((
+            ActiveScenarioSession {
+                definition: scenario.id,
+                started_tick: clock.tick,
+                state: ScenarioSessionState::Running,
+            },
+            ScenarioScriptTiming::default(),
+        ));
         spawn_authored_scenario_objectives(
             &mut commands,
             &mut allocator,

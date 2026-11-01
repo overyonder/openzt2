@@ -9,7 +9,7 @@ use super::{
 pub(super) fn capture_world_snapshot_record_from_live_world(
     world_snapshot_capture_queries: &WorldSnapshotCaptureQueries,
 ) -> Result<WorldSnapshotRecord, WorldSnapshotPersistenceFailure> {
-    let (world_root, world_selection, optional_world_name) = world_snapshot_capture_queries
+    let (_, world_root, world_selection, optional_world_name) = world_snapshot_capture_queries
         .world_roots
         .single()
         .map_err(|_| WorldSnapshotPersistenceFailure::CorruptSnapshotSection)?;

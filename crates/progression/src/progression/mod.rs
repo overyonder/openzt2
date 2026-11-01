@@ -127,6 +127,13 @@ impl Plugin for ProgressionPlugin {
             )
             .add_systems(
                 FixedUpdate,
+                fame_history_recording::record_completed_month_fame_history
+                    .after(FixedGameSet::Clock)
+                    .before(FixedGameSet::Think)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 (
                     zoo_rating_recomputation::recompute_animal_welfare_rating,
                     zoo_rating_recomputation::recompute_guest_satisfaction_rating,
@@ -147,7 +154,6 @@ impl Plugin for ProgressionPlugin {
                     research_execution::refresh_authored_research_availability,
                     research_execution::advance_active_research_projects_by_one_tick
                         .run_if(simulation_is_running),
-                    fame_history_recording::record_current_fame_in_monthly_history,
                 )
                     .chain()
                     .in_set(FixedGameSet::Economy)

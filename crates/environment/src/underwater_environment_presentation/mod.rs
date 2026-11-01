@@ -233,11 +233,7 @@ pub(crate) fn update_water_ray_environment_light_samples(
             continue;
         };
         let ambient = super::daylight_environment_sampling::sample_environment_ambient_light_at_daylight_fraction(definitions, definition, EnvironmentLightTarget::Object, time);
-        let family = (definition.family != definition.id)
-            .then(|| definitions.find_environment(definition.family))
-            .flatten();
-        let first_kind = definition.light_samples.iter()
-            .chain(family.into_iter().flat_map(|family| family.light_samples.iter()))
+        let first_kind = super::daylight_environment_sampling::iterate_environment_and_referenced_light_samples(definitions, definition)
             .find(|sample| sample.target == EnvironmentLightTarget::Object && sample.kind != openzt2_game_data::world_definitions::environment::EnvironmentLightKind::Ambient)
             .map(|sample| (match sample.kind {
                 openzt2_game_data::world_definitions::environment::EnvironmentLightKind::Sun => 1,

@@ -6,13 +6,13 @@ use std::{
 };
 
 use bevy::{asset::AssetLoadFailedEvent, prelude::*};
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 use crate::asset_source::AssetArchives;
 
 use super::{
     world_definition_asset_set_state_and_borrowing_queries::{
-        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
+        DefinitionKind, SingletonKind, WorldDefinitions, kind_range,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,
@@ -87,6 +87,7 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
     matches!(
         path.as_str(),
         "config/traversability.xml"
+            | "config/favorite.xml"
             | "config/adoption.xml"
             | "config/timekeeper.xml"
             | "config/puzzlemgr.xml"
@@ -420,6 +421,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     index!(StaffTankCleaningRequest, staff_tank_cleaning_requests);
     index!(StaffRequest, staff_requests);
     index!(Guest, guests);
+    index!(EntityNaming, entity_naming);
     index!(ViewingOpportunity, viewing_opportunities);
     index!(Fence, fences);
     index!(Path, paths);
@@ -431,6 +433,10 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     index!(Tranquilizer, tranquilizers);
     index!(Rampage, rampage_rules);
     index!(Catalogue, catalogue);
+    index!(
+        AnimalAdoptionSpeciesEligibility,
+        animal_adoption_species_eligibility
+    );
     index!(Zoopedia, zoopedia);
     index!(Research, research);
     index!(Unlock, unlocks);
@@ -497,6 +503,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(FossilPlacement, fossil_placement);
     singleton!(SimulationTiming, simulation_timing);
     singleton!(GuestGeneration, guest_generation);
+    singleton!(GuestFavouriteAnimalTrend, guest_favourite_animal_trend);
     singleton!(BehaviorSelection, behavior_selection_policy);
     singleton!(NeedAdjustment, need_adjustment);
     singleton!(TranquilizerMode, tranquilizer_mode);

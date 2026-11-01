@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AssetId;
 
-pub const WORLD_SCENARIO_VERSION: u32 = 34;
+pub const WORLD_SCENARIO_VERSION: u32 = 36;
 
 /// Maximum distinct subject identities selected across one authored photo set.
 /// The shipped sequential sets top out at three independently selected types.
@@ -48,6 +48,7 @@ pub enum ScenarioScriptPhase {
     Evaluate,
     Success,
     Failure,
+    AlwaysRun,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
@@ -115,6 +116,8 @@ pub struct WorldLocationRecord {
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct StartingZooRecord {
+    #[serde(default)]
+    pub next_persistent_identifier: Option<u64>,
     pub id: AssetId,
     pub profile: AssetId,
     pub map: AssetId,
@@ -237,7 +240,11 @@ pub enum CampaignScenarioState {
     Completed,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "scenario scheduling retains authored floating-point seconds"
+)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ScenarioDefinitionRecord {
     pub id: AssetId,
     pub name_key: AssetId,
@@ -246,6 +253,7 @@ pub struct ScenarioDefinitionRecord {
     #[serde(default)]
     pub objective_groups: Vec<ScenarioObjectiveGroupRecord>,
     pub time_limit_ticks: u64,
+    pub evaluation_interval_seconds: f32,
     pub flags: ScenarioRecordFlags,
     /// Authored `ZTScenarioMgr/uimods`: interface nodes this scenario shows
     /// or hides while it runs.

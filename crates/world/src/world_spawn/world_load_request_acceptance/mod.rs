@@ -177,6 +177,19 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         performance.finish_and_report(&archives, "failed");
         return;
     };
+    if start_record.next_persistent_identifier == Some(0) {
+        failed.write(WorldLoadFailed {
+            operation: request.operation,
+            root: None,
+            scenario: request.scenario,
+            reason: WorldLoadFailure::InvalidRecord(0),
+        });
+        *queued = None;
+        demanded_starts.clear();
+        drop(_performance_timer);
+        performance.finish_and_report(&archives, "failed");
+        return;
+    }
     let zoo_name = &start_record.name;
     let Some(terrain_path) = scenarios
         .get(&map_asset)
@@ -221,7 +234,12 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             .entity(root)
             .insert(WorldLoadOperationOwner(operation));
     }
-    commands.insert_resource(PersistentIdAllocator::new(root));
+    let allocator = match start_record.next_persistent_identifier {
+        Some(next) => PersistentIdAllocator::from_snapshot(root, next)
+            .expect("validated starting persistent identifier"),
+        None => PersistentIdAllocator::new(root),
+    };
+    commands.insert_resource(allocator);
     info!(?root, scenario = ?request.scenario, "accepted world load and installed its persistent-id allocator");
     let default_starting_cash = match request.mode {
         openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
@@ -271,6 +289,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     }
     info!(fame_half_stars, starting_fame_percent = ?starting_fame.map(|policy| policy.percent), "initialized starting zoo fame");
     commands.insert_resource(Fame {
+        current_percent: starting_fame.map(|policy| policy.percent),
         half_stars: fame_half_stars,
         maximum_reached: fame_half_stars,
         maximum_percent_reached: starting_fame

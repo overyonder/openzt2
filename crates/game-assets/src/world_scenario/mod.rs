@@ -50,3 +50,5 @@ pub mod world_scenario_document_source;
 mod canonical_world_scenario_document_loading;
 pub mod world_scenario_document_source_encoding;
 mod world_scenario_script_dependency_loading;
+
+pub(crate) mod original_saved_world_configuration_loading;

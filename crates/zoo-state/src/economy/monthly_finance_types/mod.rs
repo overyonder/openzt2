@@ -135,7 +135,7 @@ impl MonthlyFinanceHistory {
                     && month.upkeep.0 >= 0
                     && month.donation_income <= month.income
                     && month.active_users >= 0
-                    && month.total_users >= month.active_users
+                    && month.total_users >= 0
             });
         if !valid_totals || !valid_shape {
             return false;
@@ -294,5 +294,36 @@ impl MonthlyFinanceHistory {
         } else {
             self.len += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn carried_visitors_survive_month_rollover_and_restoration() {
+        let mut history = MonthlyFinanceHistory::default();
+        history.enter_calendar_month(12, Money(100));
+        history.record_guest_arrival();
+        history.record_guest_arrival();
+        history.enter_calendar_month(13, Money(100));
+        assert_eq!(history.current_month_finance().unwrap().active_users, 2);
+        assert_eq!(history.current_month_finance().unwrap().total_users, 0);
+        let months = history
+            .retained_month_finance_records()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut restored = MonthlyFinanceHistory::default();
+        assert!(restored.restore_saved_monthly_finance_history(
+            &months,
+            13,
+            Money::ZERO,
+            Money::ZERO,
+            Money::ZERO,
+            2,
+            true,
+        ));
+        assert_eq!(restored, history);
     }
 }
