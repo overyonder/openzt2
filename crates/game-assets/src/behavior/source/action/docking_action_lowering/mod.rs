@@ -58,7 +58,9 @@ pub(super) fn lower_docking_action_source_node(
         "BFBehDockRadial" => true,
         _ => return Ok(None),
     };
-    // Interpolation and target-node alignment remain unsupported for radial docks.
+    // Interpolation and target-node alignment remain unsupported for radial
+    // docks, except `Floor`, the target's own ground point that radial docks
+    // already circle, as in the keeper's `DockCure_Land`.
     if docking_action_source_node
         .attributes
         .iter()
@@ -72,7 +74,8 @@ pub(super) fn lower_docking_action_source_node(
                         | "targetAnim"
                         | "locoSpeed"
                         | "subjectNode"
-                )
+                ) && !(attribute.name() == "targetNode"
+                    && attribute.value().trim().eq_ignore_ascii_case("floor"))
             } else {
                 !matches!(
                     attribute.name(),

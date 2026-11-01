@@ -94,6 +94,7 @@ fn enter_selected_behavior_set(
         Option<&GuestArchetype>,
     ),
     tick: u64,
+    loops: bool,
 ) -> bool {
     let (Some(view), Some(catalogue)) = (
         lookup
@@ -115,7 +116,12 @@ fn enter_selected_behavior_set(
     ) else {
         return false;
     };
-    let frame = task.create_return_frame_after_action(task.action.saturating_add(1));
+    // A looping switch returns to itself to select again.
+    let frame = task.create_return_frame_after_action(if loops {
+        task.action
+    } else {
+        task.action.saturating_add(1)
+    });
     if !task.push_return_frame(frame) {
         return false;
     }
@@ -176,6 +182,7 @@ pub(super) fn play_locomotion_medium_behavior_sets(
             animal_types.borrow_for(actor),
             (species, staff, guest),
             clock.tick,
+            false,
         ) {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -300,6 +307,7 @@ pub(super) fn play_animation_node_behavior_sets(
                 animal_types.borrow_for(actor),
                 (species, staff, guest),
                 clock.tick,
+                sets.loops,
             )
         }) {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
