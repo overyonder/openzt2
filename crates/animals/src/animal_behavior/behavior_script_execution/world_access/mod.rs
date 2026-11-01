@@ -13,7 +13,10 @@ use openzt2_zoo_state::economy::account_transaction_types::{
 };
 use openzt2_zoo_state::economy::authored_transaction_amount::authored_currency_to_money;
 use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
-use openzt2_zoo_state::animal_lifecycle::types::{AnimalLifeStage, Mate, Parents};
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
+use openzt2_zoo_state::animal_lifecycle::types::{
+    AnimalLifeStage, AnimalSex, Mate, Parents, SpeciesHandle,
+};
 use openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
@@ -51,6 +54,18 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
     tokens: Query<'w, 's, (&'static BehaviorSelfToken, &'static ChildOf)>,
     lineage: Query<'w, 's, (Entity, &'static Parents)>,
     life_stages: Query<'w, 's, &'static AnimalLifeStage>,
+    animals: Query<
+        'w,
+        's,
+        (
+            &'static AnimalSex,
+            &'static SpeciesHandle,
+            Option<&'static Name>,
+            Option<&'static Mate>,
+        ),
+    >,
+    species_assets: Res<'w, Assets<SpeciesAsset>>,
+    species_index: Res<'w, SpeciesAssets>,
 }
 
 impl BehaviorScriptWorldAccess<'_, '_> {
@@ -134,6 +149,53 @@ impl BehaviorScriptWorldAccess<'_, '_> {
             .filter(|(_, parents)| parents.mother == Some(entity) || parents.father == Some(entity))
             .map(|(child, _)| child)
             .collect()
+    }
+
+    /// `BFAI_GET_RELATED_ENTITY` `mother`, `father` and `mate`. Parentage
+    /// comes from `Parents`, as do the relations derived from it.
+    pub(super) fn related(&self, entity: Entity, relation: &str) -> Option<Entity> {
+        match relation {
+            "mother" => self.lineage.get(entity).ok()?.1.mother,
+            "father" => self.lineage.get(entity).ok()?.1.father,
+            "mate" => self.animals.get(entity).ok()?.3.map(|mate| mate.0),
+            _ => None,
+        }
+    }
+
+    /// `BFG_GET_ATTR_BOOLEAN` `b_Male`.
+    pub(super) fn is_male(&self, entity: Entity) -> Option<bool> {
+        self.animals
+            .get(entity)
+            .ok()
+            .map(|animal| animal.0 .0 == openzt2_game_data::species::Sex::Male)
+    }
+
+    /// `BFG_GET_ATTR_STRING` `s_Endangerment` and `s_name` of an animal.
+    pub(super) fn animal_string(&self, entity: Entity, name: &str) -> Option<String> {
+        use openzt2_game_data::species::ConservationStatus;
+        let (_, species, animal_name, _) = self.animals.get(entity).ok()?;
+        match name {
+            "s_name" => Some(animal_name.map_or_else(String::new, |name| name.as_str().to_owned())),
+            "s_Endangerment" => {
+                let status = self
+                    .species_index
+                    .get(&self.species_assets)?
+                    .find(species.species)?
+                    .conservation;
+                Some(
+                    match status {
+                        ConservationStatus::Unspecified => "",
+                        ConservationStatus::LowRisk => "LowRisk",
+                        ConservationStatus::Vulnerable => "Vulnerable",
+                        ConservationStatus::Endangered => "Endangered",
+                        ConservationStatus::Critical => "Critical",
+                        ConservationStatus::Extinct => "Extinct",
+                    }
+                    .to_owned(),
+                )
+            }
+            _ => None,
+        }
     }
 
     /// `BFG_GET_ATTR_BOOLEAN` `b_Adult`.

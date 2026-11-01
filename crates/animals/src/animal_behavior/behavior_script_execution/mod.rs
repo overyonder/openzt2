@@ -142,29 +142,48 @@ pub(super) fn execute_authored_behavior_script_actions(
                 scope.create_function(move |lua, name: String| {
                     let manager = lua.create_table()?;
                     match name.as_str() {
-                        "BFGManager" => manager.set(
-                            "BFG_GET_ENTITIES",
-                            scope.create_function(
-                                move |lua, (_, binder_type): (Table, String)| {
-                                    let found = lua.create_table()?;
-                                    for (index, entity) in world_view
-                                        .entities_of_type(&binder_type)
-                                        .into_iter()
-                                        .enumerate()
-                                    {
-                                        let row = lua.create_table()?;
-                                        row.set(
-                                            "value",
-                                            lua.create_userdata(BehaviorScriptEntityReference(
-                                                entity,
-                                            ))?,
-                                        )?;
-                                        found.set(index + 1, row)?;
-                                    }
-                                    Ok(found)
-                                },
-                            )?,
-                        )?,
+                        "BFGManager" => {
+                            manager.set(
+                                "BFG_GET_ENTITIES",
+                                scope.create_function(
+                                    move |lua, (_, binder_type): (Table, String)| {
+                                        let found = lua.create_table()?;
+                                        for (index, entity) in world_view
+                                            .entities_of_type(&binder_type)
+                                            .into_iter()
+                                            .enumerate()
+                                        {
+                                            let row = lua.create_table()?;
+                                            row.set(
+                                                "value",
+                                                lua.create_userdata(
+                                                    BehaviorScriptEntityReference(entity),
+                                                )?,
+                                            )?;
+                                            found.set(index + 1, row)?;
+                                        }
+                                        Ok(found)
+                                    },
+                                )?,
+                            )?;
+                            // `findType` (`entity.lua`) prefers a selected entity,
+                            // which behavior scripts do not have.
+                            manager.set(
+                                "BFG_GET_SELECTED_ENTITY",
+                                scope.create_function(|_, _: Table| Ok(mlua::Value::Nil))?,
+                            )?;
+                        }
+                        // `justgavebirth.lua` reports an endangered birth.
+                        // ponytail: births already raise `AnimalBorn`; the
+                        // endangered-birth message and mother name are not shown.
+                        "ZTWorldMgr" => {
+                            for method in ["ZT_SET_BIRTH_MOTHER_NAME", "ZT_NOTIFY_OF_BIRTH"] {
+                                manager.set(
+                                    method,
+                                    scope.create_function(|_, _: mlua::MultiValue| Ok(()))?,
+                                )?;
+                            }
+                        }
                         "ZTEconomyMgr" => manager.set(
                             "ZT_GENERIC_TRANSACTION",
                             scope.create_function(move |_, (_, transaction): (Table, Table)| {
@@ -286,11 +305,27 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "BFAI_HAS_TOKEN" => Ok(mlua::Value::Boolean(
                                         world_view.has_token(entity, &text()?),
                                     )),
-                                    "BFAI_GET_RELATED_ENTITIES" if text()? == "child" => {
+                                    // `justgavebirth.lua`: parents, mates and children.
+                                    "BFAI_GET_RELATED_ENTITY" => {
+                                        match world_view.related(entity, &text()?) {
+                                            Some(related) => {
+                                                Ok(mlua::Value::UserData(lua.create_userdata(
+                                                    BehaviorScriptEntityReference(related),
+                                                )?))
+                                            }
+                                            None => Ok(mlua::Value::Nil),
+                                        }
+                                    }
+                                    "BFAI_GET_RELATED_ENTITIES"
+                                        if matches!(text()?.as_str(), "child" | "mate") =>
+                                    {
+                                        let related = if text()? == "child" {
+                                            world_view.children(entity)
+                                        } else {
+                                            world_view.related(entity, "mate").into_iter().collect()
+                                        };
                                         let found = lua.create_table()?;
-                                        for (index, child) in
-                                            world_view.children(entity).into_iter().enumerate()
-                                        {
+                                        for (index, child) in related.into_iter().enumerate() {
                                             let row = lua.create_table()?;
                                             row.set(
                                                 "value",
@@ -310,6 +345,22 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "BFAI_ADD_RELATIONSHIP" => {
                                         let relationship: Table = lua.unpack(value.clone())?;
                                         let relation: String = relationship.get("relation")?;
+                                        // Kinship is derived from `Parents`, which the birth
+                                        // that runs this script already set.
+                                        if matches!(
+                                            relation.as_str(),
+                                            "mother"
+                                                | "father"
+                                                | "child"
+                                                | "sibling"
+                                                | "grandchild"
+                                                | "grandMM"
+                                                | "grandMF"
+                                                | "grandFM"
+                                                | "grandFF"
+                                        ) {
+                                            return Ok(mlua::Value::Nil);
+                                        }
                                         if relation != "mate" {
                                             return Err(mlua::Error::runtime(format!(
                                                 "unmapped behavior relationship {relation}"
@@ -330,12 +381,13 @@ pub(super) fn execute_authored_behavior_script_actions(
                         "BFG_GET_ATTR_BOOLEAN",
                         scope.create_function(move |_, (subject, name): (Table, String)| {
                             let entity = subject_entity(&subject)?;
-                            if name != "b_Adult" {
-                                return Err(mlua::Error::runtime(format!(
+                            match name.as_str() {
+                                "b_Adult" => Ok(world_view.is_adult(entity)),
+                                "b_Male" => Ok(world_view.is_male(entity)),
+                                _ => Err(mlua::Error::runtime(format!(
                                     "unmapped behavior boolean attribute {name}"
-                                )));
+                                ))),
                             }
-                            Ok(world_view.is_adult(entity))
                         })?,
                     )?;
                     table.set(
@@ -343,9 +395,12 @@ pub(super) fn execute_authored_behavior_script_actions(
                         scope.create_function(|_, (subject, name): (Table, String)| {
                             let reference: AnyUserData = subject.get("entity")?;
                             let entity = reference.borrow::<BehaviorScriptEntityReference>()?.0;
-                            clothing.attribute(entity, &name).ok_or_else(|| {
-                                mlua::Error::runtime(format!("missing clothing attribute {name}"))
-                            })
+                            world_view
+                                .animal_string(entity, &name)
+                                .or_else(|| clothing.attribute(entity, &name))
+                                .ok_or_else(|| {
+                                    mlua::Error::runtime(format!("missing string attribute {name}"))
+                                })
                         })?,
                     )?;
                     table.set(
