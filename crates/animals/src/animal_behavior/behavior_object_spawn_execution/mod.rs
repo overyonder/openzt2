@@ -9,7 +9,7 @@ mod types;
 use at_actor::spawn_behavior_objects_at_actor;
 use delivery::deliver_behavior_object_spawns;
 use preparation::prepare_behavior_object_spawns;
-use types::PendingBehaviorObjectSpawn;
+use types::{PendingAtActorSpawnPrefab, PendingBehaviorObjectSpawn};
 
 use avian3d::prelude::RigidBody;
 use bevy::{asset::LoadState, prelude::*};

@@ -21,6 +21,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
             &WorldMember,
             Option<&mut BehaviorRandomStream>,
             Option<&mut GuestRng>,
+            Option<&PendingAtActorSpawnPrefab>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -28,7 +29,7 @@ pub(super) fn spawn_behavior_objects_at_actor(
     let Some(view) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, mut task, world, animal_random, guest_random) in &mut actors {
+    for (actor, mut task, world, animal_random, guest_random, pending) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -47,7 +48,11 @@ pub(super) fn spawn_behavior_objects_at_actor(
         let presentation = if object.prefab == AssetId::default() {
             None
         } else {
-            let Some(handle) = view.scene(object.prefab) else {
+            let Some(handle) = pending
+                .filter(|pending| pending.object == object.id)
+                .map(|pending| pending.prefab.clone())
+                .or_else(|| view.scene(object.prefab))
+            else {
                 if definitions.is_complete() {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
@@ -60,8 +65,13 @@ pub(super) fn spawn_behavior_objects_at_actor(
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             }
-            // Wait for the model rather than spawning an invisible object.
+            // Wait for the model rather than spawning an invisible object,
+            // holding its handle so the load isn't cancelled meanwhile.
             let Some(prefab) = prefabs.get(&handle) else {
+                commands.entity(actor).insert(PendingAtActorSpawnPrefab {
+                    object: object.id,
+                    prefab: handle,
+                });
                 continue;
             };
             Some((handle, prefab))
@@ -119,6 +129,9 @@ pub(super) fn spawn_behavior_objects_at_actor(
             commands.entity(spawned).insert(LooseLitterWaste {
                 uncontained_waste_units: 1,
             });
+        }
+        if pending.is_some() {
+            commands.entity(actor).remove::<PendingAtActorSpawnPrefab>();
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);
     }
