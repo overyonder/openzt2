@@ -2,6 +2,7 @@
 
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorConditionEligibilityFact,
         BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
@@ -9,24 +10,14 @@ use openzt2_game_data::{
         BehaviorWelfareEligibilityFact,
     },
     world_definitions::guest_simulation_definitions::GuestNeedKind,
-    AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::animal_welfare::types::NeedTriggerState;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
 use super::guest_simulation_types::*;
-
-/// Trigger bits follow `GuestNeedKind` declaration order, then the signed
-/// viewing and happiness states; the hysteresis algorithm is shared.
-#[derive(Component, Default)]
-pub(super) struct GuestNeedTriggers {
-    state: NeedTriggerState,
-    happiness_authored: bool,
-}
 
 #[derive(QueryData)]
 pub(super) struct GuestTaskNeedFacts {

@@ -44,6 +44,7 @@ impl SelectedUiSourceResolutionProfile {
                 .map(|(role, source_path)| (*role, (*source_path).to_owned()))
                 .collect(),
             role_compositions: vec![
+                (UiDocumentRole::MainMenu, "ui/layout/credits.xml".into()),
                 // Edge scrolling includes its hover regions, cursors and pan events.
                 (UiDocumentRole::InGameHud, "ui/layout/edgescroll.xml".into()),
                 (UiDocumentRole::InGameHud, "ui/layout/pause.xml".into()),

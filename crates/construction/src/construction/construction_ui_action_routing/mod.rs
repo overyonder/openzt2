@@ -23,6 +23,7 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_world_state::world_spawn::world_entity_crating::RemoveWorldEntityFromCrate;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 
+use crate::construction::construction_edit_history_operations;
 use crate::topology::topology_construction_preview_types::FencePreview;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -40,6 +41,8 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::TankEditKind;
+use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
+use openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress;
 
 #[derive(SystemParam)]
 pub(super) struct ConstructionUiIntents<'w, 's> {
@@ -59,6 +62,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     commits: MessageWriter<'w, CommitConstruction>,
     cancellations: MessageWriter<'w, CancelConstruction>,
     history: MessageWriter<'w, ApplyConstructionTransaction>,
+    pending_transactions: Query<'w, 's, &'static EditCommitProgress>,
     uncrate: MessageWriter<'w, RemoveWorldEntityFromCrate>,
     fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
 }
@@ -239,10 +243,18 @@ pub(super) fn route_construction_ui_actions(
                     intents.tools.write(SelectConstructionTool(tool));
                 }
                 UiConstructionAction::Undo => {
-                    if let Some(transaction) = history
-                        .cursor
-                        .checked_sub(1)
-                        .and_then(|index| history.entries.get(index).copied())
+                    if intents
+                        .pending_transactions
+                        .iter()
+                        .any(|progress| progress.phase != EditCommitPhase::Complete)
+                    {
+                        continue;
+                    }
+                    if let Some(transaction) =
+                        construction_edit_history_operations::requested_undo_or_redo_transaction(
+                            &history,
+                            ConstructionEditDirection::Undo,
+                        )
                     {
                         intents.history.write(ApplyConstructionTransaction {
                             transaction,

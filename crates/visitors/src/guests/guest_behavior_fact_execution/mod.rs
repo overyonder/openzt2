@@ -10,23 +10,16 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
+use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
+use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
 use openzt2_zoo_state::maintenance::maintenance_types::{
     AdjustFacilityContainedWaste, FacilityContainedWaste,
 };
 
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
-
-/// Source instance attributes start at zero and accumulate authored purchase outcomes.
-#[derive(Component, Default)]
-pub(crate) struct GuestFoodPurchaseCounts {
-    pub(crate) favorite_q16: i32,
-    pub(crate) nonfavorite_q16: i32,
-}
 
 pub(super) fn apply_authored_guest_behavior_fact_modifications(
     assets: Res<Assets<BehaviorDocumentAsset>>,

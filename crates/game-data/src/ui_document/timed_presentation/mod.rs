@@ -18,11 +18,3 @@ pub struct UiTimedEventRecord {
     pub due_ms: u32,
     pub action: UiPresentationActionRecord,
 }
-
-#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct UiCreditsCardRecord {
-    pub node: AssetId,
-    pub show_at_ms: u32,
-    pub hide_at_ms: u32,
-    pub wind_after_hide: bool,
-}

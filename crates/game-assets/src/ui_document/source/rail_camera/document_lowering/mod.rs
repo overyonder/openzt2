@@ -5,14 +5,15 @@ use std::{collections::BTreeSet, io};
 use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentNode,
 };
+use crate::source_document::path::AssetPath;
 use openzt2_game_data::{
+    AssetId,
     scene_prefab::{
         PrefabDirectionalLightKey, PrefabEntity, PrefabEnvironmentKey, PrefabRailCamera,
         PrefabRailCameraCommand, PrefabRailCameraHotkey, PrefabRailCameraKey, PrefabRenderable,
         PrefabTransform, ScenePrefabAssetDependency, ScenePrefabAssetDependencyKind,
         ScenePrefabDocument, ScenePrefabEntityFlags, ScenePrefabRenderableVisibilityFlags,
     },
-    AssetId,
 };
 
 use crate::source_coordinate_conversion::{
@@ -28,11 +29,16 @@ use super::source_value_reading::{
     source_element_child,
 };
 
+const RAIL_CAMERA_SCENE_LABEL: &str = "railcamera";
+
 pub(in crate::ui_document::source) fn lower_rail_camera_documents_to_scene_prefab_documents(
     documents: &[OrderedSourceDocument],
+    primary_source_path: &str,
 ) -> io::Result<Vec<(String, ScenePrefabDocument)>> {
+    let primary_source_key = AssetPath::new(primary_source_path).key();
     documents
         .iter()
+        .filter(|document| document.path.key() == primary_source_key)
         .filter_map(|document| {
             find_source_descendant(document.root.element_children(), "ZTRailCam").map(
                 |rail_camera_node| {
@@ -46,11 +52,20 @@ pub(in crate::ui_document::source) fn lower_rail_camera_documents_to_scene_prefa
         .collect()
 }
 
+pub(in crate::ui_document::source) fn rail_camera_scene_asset_path(
+    source_document_path: &str,
+) -> String {
+    format!(
+        "{}#{RAIL_CAMERA_SCENE_LABEL}",
+        AssetPath::new(source_document_path).key()
+    )
+}
+
 fn lower_one_rail_camera_document_to_scene_prefab_document(
     document: &OrderedSourceDocument,
     rail: &OrderedSourceDocumentNode,
 ) -> io::Result<(String, ScenePrefabDocument)> {
-    let path = format!("{}#RailCamera", document.path.as_str());
+    let path = rail_camera_scene_asset_path(document.path.as_str());
     let mut root = create_rail_camera_scene_prefab_entity(
         &path,
         u32::MAX,
@@ -249,7 +264,7 @@ fn lower_one_rail_camera_document_to_scene_prefab_document(
         }),
         dependencies,
     };
-    Ok((path, document))
+    Ok((RAIL_CAMERA_SCENE_LABEL.into(), document))
 }
 
 fn create_rail_camera_scene_prefab_entity(

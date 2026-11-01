@@ -10,7 +10,6 @@ use openzt2_zoo_state::economy::account_transaction_types::TransactionCompleted;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionKind;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRejected;
 use openzt2_zoo_state::economy::account_transaction_types::TransactionRequest;
-use openzt2_zoo_state::habitat::habitat_types::Habitat;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::AnimalAdoptionAvailabilityPolicy;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
@@ -23,9 +22,7 @@ use super::{
     adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     animal_adoption_contracts::{AdoptAnimal, AnimalAdopted, PendingAdoption},
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
-    animal_habitat_placement_validation::{
-        validate_animal_habitat_against_authored_aquatic_requirements, AnimalAquaticHabitatQueries,
-    },
+    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
     animal_spawn_resolution::resolve_species_and_variant_to_animal_spawn_components,
     types::Parents,
@@ -44,10 +41,10 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     species_index: Res<SpeciesAssets>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    habitats: Query<&WorldMember, With<Habitat>>,
+    worlds: Query<Entity, With<WorldRoot>>,
     adoption_policy: Query<&AnimalAdoptionAvailabilityPolicy, With<WorldRoot>>,
     adoption_offer_inventories: Query<&AnimalAdoptionOfferInventory, With<WorldRoot>>,
-    aquatic_habitats: AnimalAquaticHabitatQueries,
+    placement_sites: AnimalPlacementSiteQueries,
     mut transaction_requests: MessageWriter<TransactionRequest>,
     mut spawn_requests: MessageWriter<SpawnAnimalRequest>,
 ) {
@@ -64,11 +61,12 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
         if !species.flags.contains(SpeciesFlags::ADOPTABLE) {
             continue;
         }
-        let Ok(world_membership) = habitats.get(adoption_request.habitat) else {
+        let Ok(world) = worlds.get(adoption_request.world) else {
             continue;
         };
 
-        let operation_entity = commands.spawn(*world_membership).id();
+        let world_membership = WorldMember { root: world };
+        let operation_entity = commands.spawn(world_membership).id();
         let preview_identifier = PersistentId(operation_entity.to_bits().max(1));
         let mut random_stream =
             DeterministicRng::from_entity(*zoo_seed, preview_identifier, RngDomain::Reproduction);
@@ -101,13 +99,18 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
             }
         }
 
-        if validate_animal_habitat_against_authored_aquatic_requirements(
-            world_definitions,
-            adoption_request.species,
-            adoption_request.habitat,
-            &aquatic_habitats,
-        )
-        .is_err()
+        let Some(variant) = species_index.find_variant(resolved_components.variant) else {
+            commands.entity(operation_entity).despawn();
+            continue;
+        };
+        if placement_sites
+            .validate(
+                variant.placement_surface_policy,
+                world,
+                adoption_request.habitat,
+                adoption_request.transform.translation,
+            )
+            .is_err()
         {
             commands.entity(operation_entity).despawn();
             continue;
@@ -134,6 +137,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
             variant: resolved_components.variant,
             sex: resolved_components.sex,
             offer_slot_index: adoption_request.offer_slot_index,
+            world,
             habitat: adoption_request.habitat,
             transform: adoption_request.transform,
             cost: adoption_cost,
@@ -153,6 +157,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
                 species: adoption_request.species,
                 variant: Some(resolved_components.variant),
                 sex: Some(resolved_components.sex),
+                world,
                 habitat: adoption_request.habitat,
                 transform: adoption_request.transform,
                 parents: Parents::NONE,
@@ -182,6 +187,7 @@ pub(super) fn request_paid_animal_adoption_spawns_after_completed_transactions(
             species: adoption.species,
             variant: Some(adoption.variant),
             sex: Some(adoption.sex),
+            world: adoption.world,
             habitat: adoption.habitat,
             transform: adoption.transform,
             parents: Parents::NONE,

@@ -1,8 +1,9 @@
 use super::authored_node_layout_projection::apply_authored_node_region_to_bevy_node;
 use super::authored_text_projection::apply_authored_text_record_to_bevy_text_and_layout;
 use bevy::prelude::*;
-use openzt2_game_data::ui_document::action::scenarios::ObjectiveStatusFilter;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_game_data::ui_document::action::scenarios::ObjectiveStatusFilter;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
 use openzt2_game_data::ui_document::node::UiNodeKind;
@@ -13,10 +14,8 @@ use openzt2_game_data::ui_document::widget_control::UiAxis;
 use openzt2_game_data::ui_document::widget_control::UiDragOperation;
 use openzt2_game_data::ui_document::widget_control::UiTooltipPresentation;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
-use openzt2_game_data::AssetId;
 
 use crate::authored_button_attention_pulse_presentation::UiAuthoredButtonAttentionPulse;
-use crate::authored_credits_sequence_presentation::UiAuthoredCreditsSequencePlayback;
 use crate::authored_drag_gesture::UiAuthoredDragGesturePolicy;
 use crate::authored_globe_presentation_types::UiGlobeBiomeAsset;
 use crate::authored_globe_presentation_types::UiGlobeBiomeModel;
@@ -425,16 +424,6 @@ pub(super) fn project_widget(
             commands.entity(entity).insert(
                 crate::authored_timed_action_sequence::UiAuthoredTimedActionSequencePlayback::new(
                     node_index, actions,
-                ),
-            );
-        }
-        UiWidgetRecord::CreditsSequence {
-            repeat_after_ms, ..
-        } => {
-            commands.entity(entity).insert(
-                UiAuthoredCreditsSequencePlayback::from_authored_sequence(
-                    node_index,
-                    *repeat_after_ms,
                 ),
             );
         }

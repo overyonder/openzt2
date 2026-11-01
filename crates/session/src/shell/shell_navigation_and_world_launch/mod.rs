@@ -86,6 +86,8 @@ pub(super) fn select_world_from_activated_choice_view(
     }
 }
 
+const DEFAULT_CHALLENGE_STARTING_CASH_CENTS: i64 = 3_000_000;
+
 /// Clears the old world selection when switching play modes.
 pub(super) fn select_requested_play_mode_and_enter_map_selection(
     mut selections: MessageReader<SelectWorldSessionMode>,
@@ -95,7 +97,10 @@ pub(super) fn select_requested_play_mode_and_enter_map_selection(
     for SelectWorldSessionMode(mode) in selections.read() {
         selection.mode = Some(*mode);
         selection.scenario = None;
-        selection.starting_cash_cents = None;
+        selection.starting_cash_cents = match mode {
+            WorldSessionMode::Challenge => Some(DEFAULT_CHALLENGE_STARTING_CASH_CENTS),
+            _ => None,
+        };
         next_phase.set(GamePhase::MapSelection);
     }
 }

@@ -14,14 +14,12 @@ use openzt2_zoo_state::construction::construction_tool_and_placement_policy_type
 use openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
-use openzt2_zoo_state::habitat::habitat_types::Habitat;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPrefabHydrated;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRequest;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::AnimalAdoptionAvailabilityPolicy;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
@@ -30,9 +28,7 @@ use super::{
         BeginAnimalAdoptionPlacement, BeginAnimalRelocation,
     },
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
-    animal_habitat_placement_validation::{
-        validate_animal_habitat_against_authored_aquatic_requirements, AnimalAquaticHabitatQueries,
-    },
+    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
 };
 
 pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
@@ -138,9 +134,8 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     )>,
     habitat_index: Res<HabitatIndex>,
     topology_grid: Res<TopologyGrid>,
-    habitats: Query<&WorldMember, With<Habitat>>,
-    adoption_policy: Query<&AnimalAdoptionAvailabilityPolicy, With<WorldRoot>>,
-    aquatic_habitats: AnimalAquaticHabitatQueries,
+    adoption_policy: Query<(Entity, Option<&AnimalAdoptionAvailabilityPolicy>), With<WorldRoot>>,
+    placement_sites: AnimalPlacementSiteQueries,
     hydrated_previews: Query<(), With<ObjectPlacementPreviewPrefabHydrated>>,
     mut previews: Query<(Entity, &mut ConstructionPreview)>,
 ) {
@@ -156,6 +151,10 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     else {
         return;
     };
+    let Ok((world, availability)) = adoption_policy.single() else {
+        return;
+    };
+    let availability = availability.copied().unwrap_or_default();
     let Some(species) = species_index.find(animal_placement.species) else {
         return;
     };
@@ -178,20 +177,21 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
         } else if matches!(
             animal_placement.operation,
             AnimalPlacementOperation::Adoption { .. }
-        ) && adoption_policy.single().is_ok_and(|policy| !policy.enabled)
+        ) && !availability.enabled
         {
             PlacementValidity::Invalid(PlacementFailure::Locked)
-        } else if habitat.is_none_or(|habitat| {
-            habitats.get(habitat).is_err()
-                || validate_animal_habitat_against_authored_aquatic_requirements(
-                    world_definitions,
-                    animal_placement.species,
-                    habitat,
-                    &aquatic_habitats,
-                )
-                .is_err()
-        }) {
-            PlacementValidity::Invalid(PlacementFailure::InvalidHabitat)
+        } else if let Err(failure) = placement_sites.validate(
+            animal_placement
+                .variant
+                .and_then(|variant| species_index.find_variant(variant))
+                .map_or(species.placement_surface_policy, |variant| {
+                    variant.placement_surface_policy
+                }),
+            world,
+            habitat,
+            preview.transform.translation,
+        ) {
+            PlacementValidity::Invalid(failure)
         } else if matches!(
             animal_placement.operation,
             AnimalPlacementOperation::Relocation(_)
@@ -205,13 +205,11 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
             else {
                 continue;
             };
-            if let Ok(policy) = adoption_policy.single() {
-                adoption_cost.0 = adoption_cost
-                    .0
-                    .saturating_mul(i64::from(policy.multiplier_permille))
-                    / 1000;
-            }
-            if unlimited_zoo_cash.is_none() && zoo_cash.0 .0 < adoption_cost.0 {
+            adoption_cost.0 = adoption_cost
+                .0
+                .saturating_mul(i64::from(availability.multiplier_permille))
+                / 1000;
+            if unlimited_zoo_cash.is_none() && zoo_cash.0.0 < adoption_cost.0 {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
                 PlacementValidity::Valid {
@@ -238,6 +236,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     habitat_index: Res<HabitatIndex>,
     topology_grid: Res<TopologyGrid>,
     previews: Query<&ConstructionPreview>,
+    worlds: Query<Entity, With<WorldRoot>>,
     mut adoption_requests: MessageWriter<AdoptAnimal>,
     mut construction_tool_requests: MessageWriter<SelectConstructionTool>,
     mut animals: Query<
@@ -271,16 +270,17 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
     }) else {
         return;
     };
-    let Some(habitat) = locate_habitat_at_world_position(
+    let Ok(world) = worlds.single() else {
+        return;
+    };
+    let habitat = locate_habitat_at_world_position(
         &habitat_index,
         Vec2::new(
             valid_preview.transform.translation.x,
             valid_preview.transform.translation.z,
         ),
         *topology_grid,
-    ) else {
-        return;
-    };
+    );
     match animal_placement.operation {
         AnimalPlacementOperation::Adoption {
             sex,
@@ -291,6 +291,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
                 variant: animal_placement.variant,
                 sex,
                 offer_slot_index,
+                world,
                 habitat,
                 transform: valid_preview.transform,
             });

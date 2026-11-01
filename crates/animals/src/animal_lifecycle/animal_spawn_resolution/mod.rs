@@ -1,12 +1,10 @@
-use bevy::prelude::{Query, With};
 use openzt2_game_data::{
-    species::{LifeStage, Sex, Species, SpeciesVariant},
     AssetId,
+    species::{LifeStage, Sex, Species, SpeciesVariant},
 };
 
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_zoo_state::habitat::habitat_types::Habitat;
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::simulation_time::deterministic_random_stream::RngDomain;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
@@ -15,9 +13,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
-    animal_habitat_placement_validation::{
-        validate_animal_habitat_against_authored_aquatic_requirements, AnimalAquaticHabitatQueries,
-    },
+    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnFailure, SpawnAnimalRequest},
     animal_spawn_resolution_types::ResolvedAnimalSpawnComponents,
     types::{
@@ -32,8 +28,7 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     species_index: SpeciesView<'_>,
     definitions: WorldDefinitionsView<'_>,
     allocator: &mut PersistentIdAllocator,
-    habitats: &Query<&WorldMember, With<Habitat>>,
-    aquatic_habitats: &AnimalAquaticHabitatQueries<'_, '_>,
+    placement_sites: &AnimalPlacementSiteQueries<'_, '_>,
 ) -> Result<(PersistentId, WorldMember, ResolvedAnimalSpawnComponents), AnimalSpawnFailure> {
     let species = species_index
         .find(request.species)
@@ -41,16 +36,9 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     if request.sex == Some(Sex::Any) {
         return Err(AnimalSpawnFailure::InvalidSex);
     }
-    let world = habitats
-        .get(request.habitat)
-        .map_err(|_| AnimalSpawnFailure::InvalidHabitat)?;
-    validate_animal_habitat_against_authored_aquatic_requirements(
-        definitions,
-        request.species,
-        request.habitat,
-        aquatic_habitats,
-    )
-    .map_err(AnimalSpawnFailure::MarinePlacement)?;
+    let world = WorldMember {
+        root: request.world,
+    };
     if !allocator.owns_world(world.root) {
         return Err(AnimalSpawnFailure::PersistentId(
             openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError::WrongWorld,
@@ -79,10 +67,21 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     } else {
         AnimalSpawnFailure::InvalidSex
     })?;
+    let variant = species_index
+        .find_variant(resolved.variant)
+        .ok_or(AnimalSpawnFailure::InvalidVariant)?;
+    placement_sites
+        .validate(
+            variant.placement_surface_policy,
+            request.world,
+            request.habitat,
+            request.transform.translation,
+        )
+        .map_err(|_| AnimalSpawnFailure::InvalidHabitat)?;
     let id = allocator
         .allocate(world.root)
         .map_err(AnimalSpawnFailure::PersistentId)?;
-    Ok((id, *world, resolved))
+    Ok((id, world, resolved))
 }
 
 pub(super) fn resolve_species_and_variant_to_animal_spawn_components(
@@ -158,8 +157,12 @@ pub fn lower_species_and_variant_to_animal_spawn_components(
     ticks_per_day: u32,
     rng: &mut DeterministicRng,
 ) -> Option<ResolvedAnimalSpawnComponents> {
-    let [juvenile_start_days, young_start_days, adult_start_days, elder_start_days] =
-        species.stage_start_days;
+    let [
+        juvenile_start_days,
+        young_start_days,
+        adult_start_days,
+        elder_start_days,
+    ] = species.stage_start_days;
     let stage_start_ticks = [
         ticks_from_days(juvenile_start_days, ticks_per_day)?,
         ticks_from_days(young_start_days, ticks_per_day)?,

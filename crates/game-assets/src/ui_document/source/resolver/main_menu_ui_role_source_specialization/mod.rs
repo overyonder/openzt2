@@ -12,16 +12,12 @@ pub(super) fn specialize_main_menu_ui_source_document_for_semantic_role(
         return;
     }
     if role == UiDocumentRole::MainMenu {
-        source.root.children.iter_mut().for_each(|child| {
-            if child.name.as_deref() == Some("back ground pieces") {
-                child.state.visible = true;
-            }
-        });
         source.root.children.retain(|child| {
             !matches!(
                 child.name.as_deref(),
                 Some(
-                    "Splash Background"
+                    "back ground pieces"
+                        | "Splash Background"
                         | "Click To Continue"
                         | "Logo Screen"
                         | "Zoo Logo Animation"

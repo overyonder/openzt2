@@ -5,14 +5,13 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUi
 use crate::ui_document::source::lower::authored_ui_event_action_lowering;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::timed_presentation::{
-    UiCreditsCardRecord, UiLocalizedCountdownRecord, UiTimedEventRecord,
+    UiLocalizedCountdownRecord, UiTimedEventRecord,
 };
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
-use openzt2_game_data::AssetId;
-use std::collections::BTreeMap;
 use std::io;
 
 fn convert_authored_presentation_delay_seconds_to_milliseconds(
@@ -40,9 +39,6 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
         return Ok(UiWidgetRecord::LocalizedCountdown(record));
     }
     match name.unwrap_or_default() {
-        "credits" => {
-            lower_authored_credits_sequence_to_canonical_widget_record(events, role, input)
-        }
         "EarthQuake"
             if events.len() == 5
                 && events
@@ -266,92 +262,6 @@ fn lower_authored_button_pulser_to_canonical_widget_record(
     })
 }
 
-fn lower_authored_credits_sequence_to_canonical_widget_record(
-    events: &[SourceUiTimedEvent],
-    role: UiDocumentRole,
-    input: &AuthoredUiDocument,
-) -> io::Result<UiWidgetRecord> {
-    let mut credits_cards = Vec::new();
-    let mut elapsed = 0u32;
-    let mut open = BTreeMap::<[u8; 16], usize>::new();
-    let mut repeat_after_ms = 0;
-    let mut suspend_rail_camera = false;
-    for timed in events {
-        elapsed = elapsed
-            .checked_add(convert_authored_presentation_delay_seconds_to_milliseconds(
-                timed.delay_seconds,
-                input,
-            )?)
-            .ok_or_else(|| invalid_at(input, "credits sequence duration overflow"))?;
-        let event = &timed.event;
-        if event.message == "UI_ACTIVATE_ON" {
-            repeat_after_ms = elapsed;
-            continue;
-        }
-        if event.message != "UI_CHILD" {
-            return Err(invalid_at(
-                input,
-                "credits sequence contains a non-credits action",
-            ));
-        }
-        let target = event.target_child.as_deref().unwrap_or_default();
-        let child = event
-            .child
-            .as_deref()
-            .map(|child| child.message.as_str())
-            .unwrap_or_default();
-        if target == "railcam" && matches!(child, "UI_ACTIVATE_OFF" | "UI_ACTIVATE_ON") {
-            suspend_rail_camera = true;
-            continue;
-        }
-        let id = UiDocumentRole::node_id(role, target);
-        match child {
-            "UI_SHOW" => {
-                let index = credits_cards.len();
-                credits_cards.push(UiCreditsCardRecord {
-                    node: id,
-                    show_at_ms: elapsed,
-                    hide_at_ms: u32::MAX,
-                    wind_after_hide: false,
-                });
-                open.insert(id.0, index);
-            }
-            "UI_HIDE" => {
-                let index = open.remove(&id.0).ok_or_else(|| {
-                    invalid_at(
-                        input,
-                        format!("credits hide has no preceding show for {target:?}"),
-                    )
-                })?;
-                credits_cards[index].hide_at_ms = elapsed;
-            }
-            "UI_WIND_ANIMATION" => {
-                let index = credits_cards
-                    .iter()
-                    .rposition(|card| card.node == id)
-                    .ok_or_else(|| {
-                        invalid_at(
-                            input,
-                            format!("credits wind has no presented card for {target:?}"),
-                        )
-                    })?;
-                credits_cards[index].wind_after_hide = true;
-            }
-            _ => {
-                return Err(invalid_at(
-                    input,
-                    format!("credits sequence has unknown focused operation {child:?}"),
-                ));
-            }
-        }
-    }
-    Ok(UiWidgetRecord::CreditsSequence {
-        cards: credits_cards,
-        repeat_after_ms,
-        suspend_rail_camera,
-    })
-}
-
 fn lower_authored_localized_countdown_to_canonical_record(
     events: &[SourceUiTimedEvent],
     role: UiDocumentRole,
@@ -382,8 +292,14 @@ fn lower_authored_localized_countdown_to_canonical_record(
             .unwrap_or_default()
             .split_ascii_whitespace()
             .collect::<Vec<_>>();
-        let ["global", "scripts/uiutil.lua", "setReplacementText", node, localization, count] =
-            words.as_slice()
+        let [
+            "global",
+            "scripts/uiutil.lua",
+            "setReplacementText",
+            node,
+            localization,
+            count,
+        ] = words.as_slice()
         else {
             return Err(invalid_at(
                 input,

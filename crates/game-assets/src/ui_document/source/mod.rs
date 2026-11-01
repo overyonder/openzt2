@@ -39,7 +39,8 @@ pub(in crate::ui_document) async fn lower(
     .await?;
     let dependencies = selected_ui_source_dependency_winner_planning::
         plan_selected_ui_source_dependency_winners_and_image_dimensions(&documents, archives);
-    let rail_cameras = lower_rail_camera_documents_to_scene_prefab_documents(&documents)?;
+    let rail_cameras =
+        lower_rail_camera_documents_to_scene_prefab_documents(&documents, source_path)?;
     let documents = lower_selected_ui_source_documents_to_canonical_result_documents(
         &documents,
         dependencies,

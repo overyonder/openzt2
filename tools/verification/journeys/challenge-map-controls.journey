@@ -1,0 +1,20 @@
+# Compare the mutually exclusive cash controls across repeated mode changes.
+start main-menu
+click "Challenge Button"
+phase map-selection
+until settled
+capture challenge-map-controls
+click "Cancel Map"
+phase main-menu
+click "Freeform Button"
+phase map-selection
+until settled
+capture freeform-map-controls
+click "Cancel Map"
+phase main-menu
+click "Challenge Button"
+phase map-selection
+until settled
+capture challenge-map-controls-return
+click "Cancel Map"
+phase main-menu

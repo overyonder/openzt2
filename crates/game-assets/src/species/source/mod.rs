@@ -9,8 +9,8 @@ use self::variants::lower_species_root_actor_to_fallback_canonical_variant;
 use self::variants::lower_species_variant_source_record_to_canonical_variant;
 use crate::source_document::authored_species_purchase_family_queries::find_authored_species_purchase_family_root;
 use crate::source_document::blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex;
-use crate::source_document::document_semantics::classify_source_document;
 use crate::source_document::document_semantics::SourceDocumentKind;
+use crate::source_document::document_semantics::classify_source_document;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocument;
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 use crate::source_document::resolved_source_record_index::BindError;
@@ -18,12 +18,12 @@ use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::resolved_source_record_index::SourceIndex;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::ConservationStatus;
 use openzt2_game_data::species::Species;
 use openzt2_game_data::species::SpeciesDocument;
 use openzt2_game_data::species::SpeciesFlags;
 use openzt2_game_data::species::SpeciesVariantBinding;
-use openzt2_game_data::AssetId;
 use std::collections::BTreeSet;
 
 pub mod adoption;
@@ -226,6 +226,7 @@ fn lower_species_source_record_to_canonical_species(
     }
 
     Ok(Species {
+        placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(species)?,
         donation: donation::lower_animal_donation_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(species.key)),
         authored_species_name: find_effective_authored_animal_shared_attribute(

@@ -1,8 +1,8 @@
 use super::*;
 use openzt2_game_data::{
+    AssetId,
     species::*,
     world_definitions::{document::WorldDefinitionDocument, simulation_time::*},
-    AssetId,
 };
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
@@ -11,6 +11,7 @@ fn document() -> SpeciesDocument {
     let id = AssetId::from_key("test_species");
     SpeciesDocument {
         species: vec![Species {
+            placement_surface_policy: Default::default(),
             donation: None,
             id,
             authored_species_name: "test_species".to_owned(),
@@ -50,6 +51,7 @@ fn document() -> SpeciesDocument {
                 authored_species_name_override: None,
                 authored_product_name_override: None,
                 variant: SpeciesVariant {
+                    placement_surface_policy: Default::default(),
                     id: AssetId::from_key(&format!("young_{index}")),
                     behavior_subject_type_identifiers: vec![],
                     navigation_collision_policy: None,

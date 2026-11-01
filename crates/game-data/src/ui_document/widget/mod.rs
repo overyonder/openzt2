@@ -3,7 +3,7 @@ use super::{
     globe_presentation::UiGlobePresentationDefinition,
     node_layout::UiNodeRegionDefinition,
     overview_map_presentation::{UiMapColorsRecord, UiMapLayerRecord},
-    timed_presentation::{UiCreditsCardRecord, UiLocalizedCountdownRecord, UiTimedEventRecord},
+    timed_presentation::{UiLocalizedCountdownRecord, UiTimedEventRecord},
     widget_control::{
         UiAxis, UiButtonRecord, UiDragOperation, UiGridRecord, UiSliderRecord, UiTextRecord,
         UiTooltipPresentation,
@@ -86,11 +86,6 @@ pub enum UiWidgetRecord {
     LocalizedCountdown(UiLocalizedCountdownRecord),
     TimedSequence {
         events: Vec<UiTimedEventRecord>,
-    },
-    CreditsSequence {
-        cards: Vec<UiCreditsCardRecord>,
-        repeat_after_ms: u32,
-        suspend_rail_camera: bool,
     },
     EarthquakeTrigger,
     EarthquakeRunner,

@@ -10,7 +10,6 @@ pub mod animation;
 mod authored_button_attention_pulse_presentation;
 use openzt2_interface_state::ui::authored_button_runtime_policy;
 mod authored_composite_button_activation_forwarding;
-mod authored_credits_sequence_presentation;
 mod authored_drag_gesture;
 pub mod authored_globe_presentation_types;
 mod authored_globe_scene_presentation;
@@ -280,7 +279,6 @@ impl Plugin for GameUiPlugin {
                         authored_tooltip_presentation::update_authored_tooltip_presentations,
                         authored_multi_icon_presentation::present_multi_icons
                             .after(projection::project_ui_documents),
-                        authored_credits_sequence_presentation::advance_authored_credits_sequence_presentations,
                         (authored_fame_star_presentation::create_fame_star_scenes,
                          authored_fame_star_presentation::hydrate_fame_stars,
                          authored_fame_star_presentation::frame_fame_star_models,

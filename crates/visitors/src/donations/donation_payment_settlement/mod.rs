@@ -1,3 +1,4 @@
+use openzt2_zoo_state::donations::donation_guest_decision_types::DonationProgress;
 use std::collections::BTreeMap;
 
 use bevy::prelude::*;
@@ -9,7 +10,6 @@ use openzt2_zoo_state::economy::account_transaction_types::TransactionRejection;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 
 use super::{
-    donation_guest_decision_types::DonationProgress,
     donation_opportunity_types::DonationOpportunity,
     donation_payment_calculations::{
         accumulate_completed_donation_total, completed_transaction_matches_pending_donation_payment,

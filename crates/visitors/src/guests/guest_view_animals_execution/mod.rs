@@ -1,4 +1,5 @@
 //! Authored animal viewing: a docked guest watches the nearest animal in view.
+use openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter;
 
 use bevy::prelude::*;
 use openzt2_game_data::behavior::action_record::BehaviorAction;
@@ -12,32 +13,11 @@ use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_n
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, GuestRng, Viewing};
-
-#[derive(Component)]
-pub(super) struct ActiveGuestAnimalViewingMeter {
-    execution_id: u64,
-    origin: BehaviorTaskReturnFrame,
-    stack_depth: usize,
-    remaining: f32,
-    maximum: f32,
-}
-
-impl ActiveGuestAnimalViewingMeter {
-    pub(super) fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        self.execution_id == task.execution_id
-            && task.is_at_or_nested_under(&self.origin, self.stack_depth)
-    }
-
-    pub(super) fn apply_view_score(&mut self, score: f32) {
-        self.remaining = (self.remaining + score).min(self.maximum);
-    }
-}
 
 /// Starts, holds and ends the native observation for the running view action.
 /// The observation's area is the task's target, the path viewed from.

@@ -44,7 +44,8 @@ pub(super) fn normalize_observed_authored_ui_widget_source_shapes(
             .retain(|attribute| attribute.name() != "template");
     }
     normalize_authored_profile_name_edit_watch_bindings(&mut document)?;
-    let rail_scene = format!("{path}#RailCamera");
+    let rail_scene =
+        super::super::rail_camera::document_lowering::rail_camera_scene_asset_path(&path);
     normalize_root(&mut document.root, &rail_scene);
     Ok(document)
 }
@@ -156,9 +157,9 @@ fn normalize_node(node: &mut OrderedSourceDocumentNode) {
         "ZTZoopediaComponent" | "ZTZooStatusComponent" => {
             node.name = "UILayout".into();
         }
-        // Credits use a layout with a separate playback timeline.
+        // Credits own the same child presentation timeline as timed layouts.
         "ZTCredits" => {
-            node.name = "UILayout".into();
+            node.name = "ZTUITimedEvents".into();
         }
         _ => {}
     }

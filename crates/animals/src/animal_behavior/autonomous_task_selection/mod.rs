@@ -23,6 +23,7 @@ use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -51,6 +52,7 @@ pub(super) fn select_idle_animal_tasks(
     species_index: Res<SpeciesAssets>,
     clock: Res<ZooClock>,
     mut execution_sequence: ResMut<BehaviorTaskExecutionSequence>,
+    target_retry_delays: Query<&BehaviorTargetRetryDelays>,
     mut animals: Query<
         (
             Entity,
@@ -388,6 +390,12 @@ pub(super) fn select_idle_animal_tasks(
                     continue;
                 }
                 let distance = facts.transform.translation().distance(target_position);
+                if target_retry_delays
+                    .get(animal)
+                    .is_ok_and(|delays| delays.rejects(target.entity))
+                {
+                    continue;
+                }
                 if !distance.is_finite() {
                     continue;
                 }

@@ -4,7 +4,6 @@ use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
-use openzt2_interface_state::shell::shell_screen_presentation_types::MainMenuBackdrop;
 use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 
@@ -49,15 +48,6 @@ pub(super) fn create_or_reuse_selected_mode_map_selection_screen(
             Visibility::Inherited,
         ))
         .id();
-    let main_menu_backdrop_owner = commands
-        .spawn((
-            MainMenuBackdrop,
-            Visibility::Inherited,
-            GlobalZIndex(-1),
-            ChildOf(map_selection_screen_owner),
-        ))
-        .id();
-    requested_ui_roles.request(UiDocumentRole::MainMenuBackdrop, main_menu_backdrop_owner);
     requested_ui_roles.request(map_selection_document_role, map_selection_screen_owner);
 }
 

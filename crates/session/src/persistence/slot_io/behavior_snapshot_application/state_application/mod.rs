@@ -64,6 +64,7 @@ pub(super) fn apply_prepared_behavior_actor(
         Docking,
         EntityPursuit,
         SelectedNaturalWaterTarget,
+        openzt2_zoo_state::economy::behavior_transaction_state::PendingBehaviorTransaction,
     )>();
     if let Some(score) = &record.task.score {
         entity.insert(BehaviorTaskEffectiveScore {
@@ -232,6 +233,20 @@ pub(super) fn apply_prepared_behavior_actor(
                 }
             }
         }
+    }
+    if let (Some(pending), Some(origin)) = (&record.transaction, prepared.transaction_origin) {
+        entity.insert(
+            openzt2_zoo_state::economy::behavior_transaction_state::PendingBehaviorTransaction {
+                execution_id: pending.execution_id,
+                stack_depth: pending.stack_depth,
+                origin,
+                facility: resolve(&pending.facility),
+                transaction: pending.transaction,
+                cost_override: pending.cost_override.map(f32::from_bits),
+                payment: None,
+                next_transaction: pending.next_transaction,
+            },
+        );
     }
     entity.insert(task);
     if let (Some(owner), Some(origin)) = (&record.synchronized, prepared.synchronized_origin) {

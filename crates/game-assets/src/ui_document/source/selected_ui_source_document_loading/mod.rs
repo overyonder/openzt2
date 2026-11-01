@@ -25,16 +25,17 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
     template_declaration_paths: &BTreeMap<String, String>,
     load_context: &mut LoadContext<'_>,
 ) -> io::Result<Vec<OrderedSourceDocument>> {
-    let mut source_documents = vec![parse_blue_fang_source_document(
-        AssetPath::new(primary_source_path),
-        primary_source_bytes,
-    )
-    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?];
+    let mut source_documents = vec![
+        parse_blue_fang_source_document(AssetPath::new(primary_source_path), primary_source_bytes)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
+    ];
     let mut planned_source_paths = BTreeSet::from([AssetPath::new(primary_source_path).key()]);
 
     let (_, winning_asset_paths) = asset_archives.resolved_paths();
     let load_authored_biome_panels =
         AssetPath::new(primary_source_path).key() == "ui/layout/shell.xml";
+    let load_authored_credits =
+        AssetPath::new(primary_source_path).key() == "ui/layout/mainmenu.xml";
     let is_xml = |path: &Path| {
         path.extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("xml"))
@@ -43,6 +44,15 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
         SelectedUiSourceResolutionProfile::for_primary_source_path(primary_source_path)
             .supporting_source_paths()
             .into_iter()
+            .chain(winning_asset_paths.iter().filter_map(|path| {
+                (load_authored_credits
+                    && path
+                        .parent()
+                        .and_then(Path::to_str)
+                        .is_some_and(|parent| parent.eq_ignore_ascii_case("ui/layout/credits"))
+                    && is_xml(path.as_path()))
+                .then(|| path.to_string_lossy().into_owned())
+            }))
             .chain(winning_asset_paths.iter().filter_map(|path| {
                 (load_authored_biome_panels
                     && path.parent() == Some(Path::new("biomes"))

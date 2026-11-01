@@ -10,6 +10,7 @@ pub(crate) mod construction_domain_application_dispatch;
 pub mod construction_domain_preparation_collection;
 mod construction_economy_result_completion;
 mod construction_edit_history_application_request;
+mod construction_edit_history_control_projection;
 mod construction_edit_history_input_routing;
 mod construction_edit_history_operations;
 mod construction_edit_history_settlement;
@@ -128,6 +129,8 @@ impl Plugin for ConstructionPlugin {
                 Update,
                 (
                     crate::construction::construction_tool_and_action_routing::cancel_preview.in_set(openzt2_zoo_state::construction::ConstructionPreviewCancellationSet),
+                    crate::construction::construction_edit_history_control_projection::project_construction_undo_availability
+                        .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
                     crate::construction::selected_biome_ui_projection::project_biome_panel_visibility,
                     crate::construction::selected_biome_ui_projection::project_selected_biome_name,
                 )

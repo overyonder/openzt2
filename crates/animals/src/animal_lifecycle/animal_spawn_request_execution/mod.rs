@@ -4,15 +4,13 @@ use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::habitat::habitat_types::Habitat;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     animal_entity_spawning::spawn_animal_entity_from_resolved_components,
-    animal_habitat_placement_validation::AnimalAquaticHabitatQueries,
+    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
     animal_spawn_resolution::resolve_animal_spawn_request_to_identifiers_and_components,
 };
@@ -27,8 +25,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     mut persistent_identifiers: ResMut<PersistentIdAllocator>,
-    habitats: Query<&WorldMember, With<Habitat>>,
-    aquatic_habitats: AnimalAquaticHabitatQueries,
+    placement_sites: AnimalPlacementSiteQueries,
     mut spawned_animals: MessageWriter<AnimalSpawned>,
     mut rejected_spawns: MessageWriter<AnimalSpawnRejected>,
 ) {
@@ -46,8 +43,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
                 species_index,
                 world_definitions,
                 &mut persistent_identifiers,
-                &habitats,
-                &aquatic_habitats,
+                &placement_sites,
             ) {
                 Ok(resolved_spawn) => resolved_spawn,
                 Err(_) => {
@@ -63,7 +59,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
             resolved_components,
             persistent_identifier,
             world_membership,
-            Some(request.habitat),
+            request.habitat,
             request.transform,
             request.parents,
             zoo_clock.tick,

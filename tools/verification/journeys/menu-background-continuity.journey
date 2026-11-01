@@ -1,0 +1,22 @@
+# Capture foreground replacement while the shared menu background stays alive.
+start main-menu
+capture menu-background-initial
+click "Game Options Button"
+wait 1
+capture menu-background-opening-options
+until visible "Back"
+click "Back"
+wait 1
+capture menu-background-returning-from-options
+until visible "Freeform Button"
+click "Freeform Button"
+wait 1
+capture menu-background-opening-map-selection
+phase map-selection
+until visible "Cancel Map"
+click "Cancel Map"
+wait 1
+capture menu-background-returning-from-map-selection
+phase main-menu
+until visible "Freeform Button"
+capture menu-background-restored

@@ -23,6 +23,7 @@ pub(super) fn install_definitions(
     let variant_id = AssetId::from_key("test:variant");
     let document = SpeciesDocument {
         species: vec![Species {
+            placement_surface_policy: Default::default(),
             donation: None,
             id: species_id,
             authored_species_name: "test:species".to_owned(),
@@ -59,6 +60,7 @@ pub(super) fn install_definitions(
             authored_species_name_override: None,
             authored_product_name_override: None,
             variant: SpeciesVariant {
+                placement_surface_policy: Default::default(),
                 id: variant_id,
                 behavior_subject_type_identifiers: ["b_carnivore", "b_fooddisheater"]
                     .map(AssetId::from_key)

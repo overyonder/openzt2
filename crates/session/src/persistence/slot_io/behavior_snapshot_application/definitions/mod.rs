@@ -81,6 +81,7 @@ pub(super) fn actor_references(
         .chain(record.membership.iter().map(|membership| &membership.container))
         .chain(record.water_target.iter().map(|water| &water.region))
         .chain(record.staff_job.iter().map(|job| &job.target))
+        .chain(record.transaction.iter().map(|pending| &pending.facility))
         .chain(record.synchronized.iter().map(|owner| &owner.target))
         .chain(record.navigation.iter().flat_map(|nav| {
             nav.pursuit_target.iter()
@@ -165,6 +166,9 @@ pub(super) fn prepare_behavior_snapshot_documents(
         if let Some(owner) = &record.synchronized {
             paths.insert(owner.origin.document.clone());
         }
+        if let Some(pending) = &record.transaction {
+            paths.insert(pending.origin.document.clone());
+        }
         if let Some(nav) = &record.navigation {
             paths.extend(
                 nav.move_completion
@@ -207,6 +211,14 @@ pub(super) fn prepare_behavior_snapshot_documents(
             if !matches!(
                 resolve_behavior_frame_action(&owner.origin, documents, &handles)?,
                 openzt2_game_data::behavior::action_record::BehaviorAction::SynchronizedSets(_)
+            ) {
+                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+            }
+        }
+        if let Some(pending) = &record.transaction {
+            if !matches!(
+                resolve_behavior_frame_action(&pending.origin, documents, &handles)?,
+                openzt2_game_data::behavior::action_record::BehaviorAction::Economy { .. }
             ) {
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }

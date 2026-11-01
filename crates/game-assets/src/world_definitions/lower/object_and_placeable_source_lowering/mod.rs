@@ -13,6 +13,7 @@ use super::world_definition_source_value_reading_and_conversion::{
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     EntranceDefinition, FootprintCell, FootprintCellFlags, PlaceableDefinition,
     PlacementConstraints,
@@ -22,7 +23,6 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -241,6 +241,9 @@ pub(super) fn bind_placeable(
         .collect::<Result<Vec<_>, BindError>>()?;
     output.document.placeables.push(PlaceableDefinition {
         id: id(record.key),
+        surface_policy: super::authored_placement_footprint_lowering::authored_surface_policy(
+            record,
+        )?,
         weight: number_or(record, &["weight"], 1.0)?,
         footprint: footprint.clone(),
         pivot_cm: array(record, &["pivotX", "pivotY"], [0_i16; 2])?,
