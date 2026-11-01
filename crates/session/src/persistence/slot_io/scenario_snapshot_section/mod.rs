@@ -1,3 +1,4 @@
+pub(super) mod original_saved_game_conversion;
 use super::super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure as Failure,
     snapshot_container_types::WorldSnapshotSectionDirectoryEntry,

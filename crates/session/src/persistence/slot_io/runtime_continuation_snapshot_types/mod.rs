@@ -4,6 +4,8 @@ use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
 
 #[derive(Debug, Clone)]
 pub(super) struct RuntimeContinuationSnapshot {
+    pub general_economy:
+        Option<openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger>,
     pub entity_names: Option<Vec<(u64, String)>>,
     pub world_audio_preset: Option<openzt2_game_data::audio::AudioDocument>,
     pub entity_name_counters: Option<openzt2_zoo_state::entity_naming_types::EntityNameTagCounters>,

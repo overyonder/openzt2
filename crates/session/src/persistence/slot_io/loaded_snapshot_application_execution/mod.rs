@@ -193,6 +193,7 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     &mut commands,
                     &snapshot_scratch_storage.snapshot_container_bytes,
                     profile_options.profile_identifier,
+                    pending.source,
                     root,
                     persistent_identifier_allocator,
                     live_world_snapshot_application_state,

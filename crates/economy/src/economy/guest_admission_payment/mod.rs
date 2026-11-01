@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, platform::collections::HashSet, prelude::*};
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
@@ -77,6 +78,7 @@ pub(super) fn request_guest_admission_payment_after_entrance_reached(
                 AdmissionPaymentPending {
                     guest: arrival.guest,
                 },
+                GeneralEconomyTransaction::Admission,
             ))
             .id();
         transaction_requests.write(TransactionRequest {

@@ -34,6 +34,7 @@ pub(in super::super) fn begin_loading_requested_world_snapshot_from_save_slot(
         Or<(
             With<PersistenceSlotFilesystemTask>,
             With<PendingSnapshotApplication>,
+            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
         )>,
     >,
     mut snapshot_scratch_storage: ResMut<ReusableWorldSnapshotByteBuffer>,

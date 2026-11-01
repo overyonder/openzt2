@@ -1,11 +1,12 @@
 //! Loads a Blue Fang audio document.
 
+pub mod saved_world;
+
 pub mod xml;
 
 use std::path::Path;
 
 use openzt2_game_data::{
-    AssetId,
     audio::{
         AudioAmbientPolicy, AudioCrowdPolicy, AudioCue, AudioDocument, AudioMixerPolicy,
         AudioSoundscapeAllowedEntities, AudioSoundscapeBiome, AudioSoundscapeContent,
@@ -14,6 +15,7 @@ use openzt2_game_data::{
         VARIANT_LOOPED, VARIANT_RANDOM_PAN, VARIANT_RANDOM_PITCH, VARIANT_RANDOM_VOLUME,
         VARIANT_STREAMED,
     },
+    AssetId,
 };
 
 use crate::source_document::ordered_source_document_types::{

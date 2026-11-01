@@ -24,5 +24,6 @@ pub mod species;
 pub mod terrain;
 pub mod texture;
 pub mod ui_document;
+pub mod world_asset_preparation;
 pub mod world_definitions;
 pub mod world_scenario;

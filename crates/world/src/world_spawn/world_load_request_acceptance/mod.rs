@@ -24,6 +24,7 @@ use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::guest_admission_types::ZooAdmissionsOpen;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::selected_world_identity::SelectedWorldIdentity;
@@ -248,6 +249,16 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     commands.insert_resource(ZooCash(Money(
         request.starting_cash_cents.unwrap_or(default_starting_cash),
     )));
+    commands.insert_resource(start_record.general_cash_cents.map_or_else(
+        GeneralEconomyLedger::default,
+        |cash| {
+            GeneralEconomyLedger::from_starting_balance(
+                u32::from(start_record.calendar[0]) * 12
+                    + u32::from(start_record.calendar[1].saturating_sub(1)),
+                Money(cash),
+            )
+        },
+    ));
     let admission_cents = admission_cents
         .or_else(|| {
             definitions

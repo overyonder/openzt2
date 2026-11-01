@@ -59,7 +59,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         &mut PhotoChallengeProgress,
     )>,
     progression_snapshot_application_parameters: &ProgressionSnapshotApplicationParameters,
-) -> Result<u64, WorldSnapshotPersistenceFailure> {
+) -> Result<(u64, std::collections::BTreeSet<u64>), WorldSnapshotPersistenceFailure> {
     // Animal rows replace the baseline population. Other baseline identities must not collide.
     let animal_identifiers_are_available = animal_snapshot_records.iter().all(|record| {
         entities_with_persistent_identifiers
@@ -317,13 +317,39 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         && every_transport_member_and_vehicle_refers_to_a_saved_circuit
         && every_imported_persistent_identifier_is_valid_and_unique
     {
-        Ok(existing_persistent_identifiers
+        let identities = existing_persistent_identifiers
             .iter()
             .chain(imported_persistent_identifiers.iter())
             .map(|id| id.0)
-            .max()
-            .unwrap_or(0))
+            .collect::<std::collections::BTreeSet<_>>();
+        Ok((identities.last().copied().unwrap_or(0), identities))
     } else {
+        let conflicting_imports = imported_persistent_identifiers
+            .iter()
+            .filter(|id| persistent_identifier_exists(**id))
+            .map(|id| id.0)
+            .collect::<Vec<_>>();
+        let missing_economy_owners = economy_snapshot_records
+            .entity_economy_records
+            .iter()
+            .filter(|record| {
+                !existing_persistent_identifiers.contains(&record.persistent_identifier)
+                    && !imported_persistent_identifiers.contains(&record.persistent_identifier)
+            })
+            .map(|record| record.persistent_identifier.0)
+            .collect::<Vec<_>>();
+        bevy::log::warn!(
+            animal_identifiers_are_available,
+            waste_identifiers_are_available,
+            staff_identifiers_are_available,
+            every_required_existing_entity_is_present,
+            every_photo_challenge_completion_refers_to_a_saved_photo,
+            every_transport_member_and_vehicle_refers_to_a_saved_circuit,
+            every_imported_persistent_identifier_is_valid_and_unique,
+            ?conflicting_imports,
+            ?missing_economy_owners,
+            "snapshot reference inventory rejected"
+        );
         Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
     }
 }

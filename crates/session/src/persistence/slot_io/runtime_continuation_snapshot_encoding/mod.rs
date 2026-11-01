@@ -22,7 +22,8 @@ pub(super) fn append_runtime_continuation_snapshot(
             | (u16::from(record.entity_name_counters.is_some()) << 4)
             | (u16::from(record.registered_entity_name_identifiers.is_some()) << 5)
             | (u16::from(record.world_audio_preset.is_some()) << 6)
-            | (u16::from(record.entity_names.is_some()) << 7))
+            | (u16::from(record.entity_names.is_some()) << 7)
+            | (u16::from(record.general_economy.is_some()) << 8))
             .to_le_bytes(),
     );
     for value in [
@@ -105,6 +106,17 @@ pub(super) fn append_runtime_continuation_snapshot(
         );
         bytes.extend_from_slice(&payload);
     }
+    if let Some(general) = &record.general_economy {
+        let payload = super::monthly_finance_history_encoding::encode_monthly_finance_history(
+            general.history(),
+        );
+        bytes.extend_from_slice(
+            &u32::try_from(payload.len())
+                .map_err(|_| Failure::CapacityExceeded)?
+                .to_le_bytes(),
+        );
+        bytes.extend_from_slice(&payload);
+    }
     Ok(())
 }
 
@@ -116,7 +128,7 @@ pub(super) fn decode_runtime_continuation_snapshot(
         return Err(Failure::CorruptSnapshotSection);
     }
     let flags = u16::from_le_bytes(take(&mut bytes)?);
-    if flags & !255 != 0 {
+    if flags & !511 != 0 {
         return Err(Failure::CorruptSnapshotSection);
     }
     let next_persistent_identifier = u64::from_le_bytes(take(&mut bytes)?);
@@ -244,10 +256,26 @@ pub(super) fn decode_runtime_continuation_snapshot(
     } else {
         None
     };
+    let general_economy = if flags & 256 != 0 {
+        let length = u32::from_le_bytes(take(&mut bytes)?) as usize;
+        let (payload, rest) = bytes
+            .split_at_checked(length)
+            .ok_or(Failure::CorruptSnapshotSection)?;
+        bytes = rest;
+        Some(
+            openzt2_zoo_state::economy::general_economy_types::GeneralEconomyLedger::from_saved(
+                super::monthly_finance_history_encoding::decode_monthly_finance_history(payload)?,
+            )
+            .ok_or(Failure::CorruptSnapshotSection)?,
+        )
+    } else {
+        None
+    };
     if !bytes.is_empty() {
         return Err(Failure::CorruptSnapshotSection);
     }
     let record = RuntimeContinuationSnapshot {
+        general_economy,
         entity_names,
         world_audio_preset,
         entity_name_counters,
@@ -329,6 +357,7 @@ mod tests {
     fn continuation_preserves_exhausted_counters_presence_and_next_random_draw() {
         for flags in 0..16 {
             let mut record = RuntimeContinuationSnapshot {
+                general_economy: None,
                 entity_names: None,
                 world_audio_preset: None,
                 entity_name_counters: None,
@@ -403,6 +432,7 @@ mod tests {
     #[test]
     fn naming_absence_and_invalid_registration_lists_are_distinct() {
         let mut record = RuntimeContinuationSnapshot {
+            general_economy: None,
             entity_names: None,
             world_audio_preset: None,
             entity_name_counters: None,
@@ -439,6 +469,7 @@ mod tests {
     #[test]
     fn malformed_headers_and_truncated_continuations_are_rejected() {
         let record = RuntimeContinuationSnapshot {
+            general_economy: None,
             entity_names: None,
             world_audio_preset: None,
             entity_name_counters: None,
@@ -460,7 +491,7 @@ mod tests {
         bad_version[0] = 4;
         assert!(decode_runtime_continuation_snapshot(&bad_version).is_err());
         let mut unknown_flags = bytes.clone();
-        unknown_flags[2] = 1;
+        unknown_flags[2] = 2;
         assert!(decode_runtime_continuation_snapshot(&unknown_flags).is_err());
         bytes[3..11].fill(0);
         assert!(decode_runtime_continuation_snapshot(&bytes).is_err());

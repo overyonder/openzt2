@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::economy::general_economy_types::GeneralEconomyTransaction;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
@@ -42,7 +43,11 @@ pub(super) fn apply_scenario_cash_and_admission_commands(
         }
 
         let transaction_operation = commands
-            .spawn((*world_member, ScenarioEconomyCommandTransaction))
+            .spawn((
+                *world_member,
+                ScenarioEconomyCommandTransaction,
+                GeneralEconomyTransaction::CashGrant,
+            ))
             .id();
         transaction_requests.write(TransactionRequest {
             operation: transaction_operation,

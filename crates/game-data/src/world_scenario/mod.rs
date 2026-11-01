@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AssetId;
 
-pub const WORLD_SCENARIO_VERSION: u32 = 36;
+pub const WORLD_SCENARIO_VERSION: u32 = 37;
 
 /// Maximum distinct subject identities selected across one authored photo set.
 /// The shipped sequential sets top out at three independently selected types.
@@ -132,6 +132,8 @@ pub struct StartingZooRecord {
     /// Exact persisted admissions state from `ZTStatus.zoo_is_open`.
     pub admissions_open: bool,
     pub cash_cents: i64,
+    #[serde(default)]
+    pub general_cash_cents: Option<i64>,
     /// Saved admission price. Older starting-zoo documents omit it and defer
     /// to the active guest-generation policy.
     pub admission_cents: Option<i64>,

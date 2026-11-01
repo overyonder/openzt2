@@ -7,8 +7,8 @@ pub mod entities;
 use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::{
-    world_definitions::simulation_time::SimulationTimingDefinition,
-    world_scenario::StartingZooRecord, AssetId,
+    AssetId, world_definitions::simulation_time::SimulationTimingDefinition,
+    world_scenario::StartingZooRecord,
 };
 
 use crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;
@@ -76,6 +76,7 @@ pub(super) fn lower(
         name: name.to_owned(),
         admissions_open: admissions_open == "true",
         cash_cents: cents(document, economy, "cash")?,
+        general_cash_cents: general_cash_for_relative_month(document, &roots, 0)?,
         admission_cents: status
             .attribute("adultAdmission")
             .map(|_| cents(document, status, "adultAdmission"))
@@ -116,6 +117,60 @@ pub(super) fn lower(
         &mut starting_zoo_record,
     )?;
     Ok(starting_zoo_record)
+}
+
+fn general_cash_for_relative_month(
+    document: &OrderedSourceDocument,
+    roots: &[&OrderedSourceDocumentNode],
+    current_month: u32,
+) -> io::Result<Option<i64>> {
+    let Some(manager) = descendants(roots).find(|node| local(&node.name) == "ZTEconomyMgr") else {
+        return Ok(None);
+    };
+    let mut components = manager.element_children().filter(|node| {
+        local(&node.name) == "ZTEconomyComponent"
+            && node.attribute("category") == Some("generalEconomyComponent")
+    });
+    let Some(component) = components.next() else {
+        return Ok(None);
+    };
+    if components.next().is_some() {
+        return Err(at(
+            document,
+            manager,
+            "general economy component is repeated",
+        ));
+    }
+    if component.attribute("version") != Some("1") {
+        return Err(at(
+            document,
+            component,
+            "general economy requires version 1",
+        ));
+    }
+    let mut current = None;
+    for row in component
+        .element_children()
+        .filter(|node| local(&node.name) == "BFGEconomyData")
+    {
+        let month = required(document, row, "key")?
+            .parse::<u32>()
+            .map_err(|_| {
+                at(
+                    document,
+                    row,
+                    "general economy month is not an unsigned integer",
+                )
+            })?;
+        if month == current_month && current.replace(cents(document, row, "cash")?).is_some() {
+            return Err(at(
+                document,
+                row,
+                "general economy current month is repeated",
+            ));
+        }
+    }
+    Ok(current)
 }
 
 fn cents(

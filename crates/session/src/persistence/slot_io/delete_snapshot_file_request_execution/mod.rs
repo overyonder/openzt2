@@ -32,6 +32,7 @@ pub(in super::super) fn begin_deleting_requested_save_slot_snapshot_file(
         Or<(
             With<PersistenceSlotFilesystemTask>,
             With<PendingSnapshotApplication>,
+            With<super::original_saved_game_load_preparation::OriginalSavedGameLoadPreparation>,
         )>,
     >,
     mut persistence_failures: MessageWriter<WorldSnapshotPersistenceFailed>,
