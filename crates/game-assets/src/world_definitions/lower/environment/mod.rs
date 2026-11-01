@@ -19,6 +19,7 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::biomes_locations_and_details::WorldLocationDefinition;
 use openzt2_game_data::world_definitions::environment::{
     AmbientSpawnDefinition, EnvironmentFogKeyframe, EnvironmentFogQuality, EnvironmentFogSample,
@@ -26,7 +27,6 @@ use openzt2_game_data::world_definitions::environment::{
     EnvironmentMapSample, EnvironmentSkyKeyframe, EnvironmentVisualFlags, EnvironmentVisualKind,
     EnvironmentVisualSample, WeatherDefinition, WeatherTransitionRule,
 };
-use openzt2_game_data::AssetId;
 
 pub(super) fn bind_location_entries_document(
     document: &DataDocument,
@@ -672,10 +672,12 @@ pub(super) fn bind_environment(
         .collect();
     let family =
         external_fog_family.unwrap_or_else(|| environment_family_from_path(&record.source_path()));
+    let light_program = record.value(&["lights"]).map(environment_id_from_path);
     let initial_weather = asset(record, &["initialWeather", "weather"]);
     let wind_mps = array(record, &["minimumWindMps", "maximumWindMps"], [0_f32; 2])?;
     let definition = output.environment_definition(environment);
     definition.family = family;
+    definition.light_program = light_program;
     definition.light_keyframes = light_keyframes;
     definition.fog_keyframes = fog_keyframes;
     definition.sky_keyframes = sky_keyframes;

@@ -227,6 +227,10 @@ pub(super) fn append_encoded_progression_snapshot_section(
                 .to_le_bytes(),
         );
     }
+    if let Some(percent) = progression_snapshot_records.fame.current_percent {
+        progression_snapshot_section_bytes.extend_from_slice(b"FAM1");
+        progression_snapshot_section_bytes.extend_from_slice(&percent.to_le_bytes());
+    }
 }
 
 pub(super) fn decode_and_validate_progression_snapshot_section(
@@ -235,7 +239,8 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
 ) -> Result<ProgressionSnapshotRecords, WorldSnapshotPersistenceFailure> {
     let mut progression_snapshot_section_reader =
         ProgressionSnapshotSectionReader::new(progression_snapshot_section_bytes);
-    let fame = Fame {
+    let mut fame = Fame {
+        current_percent: None,
         half_stars: progression_snapshot_section_reader.read_u8()?,
         maximum_reached: progression_snapshot_section_reader.read_u8()?,
         maximum_percent_reached: {
@@ -351,8 +356,11 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
             )
         })
         .ok_or(WorldSnapshotPersistenceFailure::CapacityExceeded)?;
-    if calculated_progression_snapshot_section_byte_count
-        != progression_snapshot_section_bytes.len()
+    if ![
+        calculated_progression_snapshot_section_byte_count,
+        calculated_progression_snapshot_section_byte_count.saturating_add(8),
+    ]
+    .contains(&progression_snapshot_section_bytes.len())
     {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
@@ -430,6 +438,14 @@ pub(super) fn decode_and_validate_progression_snapshot_section(
             })
         })
         .collect::<Result<Vec<_>, WorldSnapshotPersistenceFailure>>()?;
+    if progression_snapshot_section_reader.remaining_byte_count() == 8 {
+        if progression_snapshot_section_reader.read_fixed_byte_array::<4>()? != *b"FAM1" {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        fame.current_percent = Some(f32::from_le_bytes(
+            progression_snapshot_section_reader.read_fixed_byte_array()?,
+        ));
+    }
     let progression_snapshot_records = ProgressionSnapshotRecords {
         fame,
         zoo_rating,

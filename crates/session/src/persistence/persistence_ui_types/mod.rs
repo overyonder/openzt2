@@ -21,6 +21,10 @@ pub struct OpenLoadSlotCatalogueAfterWorldSnapshotSave;
 #[derive(SystemParam)]
 pub(super) struct PersistenceUiActionMessageWriters<'w> {
     pub(super) save_world_snapshot_requests: MessageWriter<'w, SaveWorldSnapshotToSlot>,
+    pub(super) load_original_saved_game_requests: MessageWriter<
+        'w,
+        openzt2_interface_state::persistence::saved_game_source_types::LoadOriginalSavedGame,
+    >,
     pub(super) load_world_snapshot_requests: MessageWriter<'w, LoadWorldSnapshotFromSlot>,
     pub(super) delete_world_snapshot_requests: MessageWriter<'w, DeleteWorldSnapshotFromSlot>,
     pub(super) create_profile_requests: MessageWriter<'w, CreateProfile>,

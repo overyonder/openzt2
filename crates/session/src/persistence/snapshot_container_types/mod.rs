@@ -48,10 +48,11 @@ pub(super) enum WorldSnapshotSectionKind {
     SimulationTime,
     Environment,
     AdoptionOffers,
+    RuntimeContinuation,
 }
 
 impl WorldSnapshotSectionKind {
-    pub(super) const ENCODING_ORDER: [Self; 26] = [
+    pub(super) const ENCODING_ORDER: [Self; 27] = [
         Self::World,
         Self::Terrain,
         Self::Topology,
@@ -78,6 +79,7 @@ impl WorldSnapshotSectionKind {
         Self::SimulationTime,
         Self::Environment,
         Self::AdoptionOffers,
+        Self::RuntimeContinuation,
     ];
 
     pub(super) const fn section_directory_index(self) -> usize {

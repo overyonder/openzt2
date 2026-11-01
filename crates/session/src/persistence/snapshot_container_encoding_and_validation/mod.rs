@@ -12,8 +12,8 @@ use super::{
 };
 
 pub(super) const WORLD_SNAPSHOT_CONTAINER_MAGIC_SIGNATURE_BYTES: [u8; 8] = *b"OZT2SAVE";
-// Version 13 identifies photo challenges across documents. Earlier containers are rejected.
-pub(super) const WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION: u32 = 13;
+// Version 14 adds exact runtime continuation; version 13 remains readable.
+pub(super) const WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION: u32 = 14;
 pub(super) const WORLD_SNAPSHOT_CONTAINER_HEADER_BYTE_COUNT: usize = 76;
 pub(super) const WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT: usize = 24;
 pub(super) const WORLD_SNAPSHOT_SECTION_COUNT: usize = WORLD_SNAPSHOT_SECTION_KIND_COUNT;
@@ -136,7 +136,7 @@ pub(super) fn validate_world_snapshot_container_and_section_directory(
     {
         return Err(WorldSnapshotPersistenceFailure::InvalidSnapshotHeader);
     }
-    if world_snapshot_container_header.format_version != WORLD_SNAPSHOT_CONTAINER_FORMAT_VERSION {
+    if !matches!(world_snapshot_container_header.format_version, 13 | 14) {
         return Err(WorldSnapshotPersistenceFailure::UnsupportedSnapshotFormatVersion);
     }
     if world_snapshot_container_header.profile_identifier != required_profile_identifier {
@@ -147,9 +147,12 @@ pub(super) fn validate_world_snapshot_container_and_section_directory(
     {
         return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
     }
-    if world_snapshot_container_header.section_directory_entry_count
-        != WORLD_SNAPSHOT_SECTION_COUNT as u32
-    {
+    let section_count = if world_snapshot_container_header.format_version == 13 {
+        26
+    } else {
+        WORLD_SNAPSHOT_SECTION_COUNT
+    };
+    if world_snapshot_container_header.section_directory_entry_count != section_count as u32 {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
     let required_encoded_payload_byte_count = snapshot_container_bytes
@@ -172,13 +175,14 @@ pub(super) fn validate_world_snapshot_container_and_section_directory(
     let mut section_directory_entries =
         array::from_fn(|_| WorldSnapshotSectionDirectoryEntry::default());
     let first_section_payload_byte_offset = WORLD_SNAPSHOT_CONTAINER_HEADER_BYTE_COUNT
-        .checked_add(
-            WORLD_SNAPSHOT_SECTION_COUNT * WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT,
-        )
+        .checked_add(section_count * WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT)
         .ok_or(WorldSnapshotPersistenceFailure::CapacityExceeded)?;
     let mut previous_section_payload_end_byte_offset = first_section_payload_byte_offset;
     let mut total_encoded_record_count = 0_u64;
-    for expected_snapshot_section_kind in WorldSnapshotSectionKind::ENCODING_ORDER {
+    for expected_snapshot_section_kind in WorldSnapshotSectionKind::ENCODING_ORDER
+        .into_iter()
+        .take(section_count)
+    {
         let byte_offset = section_directory_byte_offset(expected_snapshot_section_kind);
         if read_little_endian_u16_at_byte_offset(snapshot_container_bytes, byte_offset)
             != expected_snapshot_section_kind.wire_format_tag()
@@ -234,15 +238,22 @@ fn calculate_world_snapshot_container_blake3_checksum(snapshot_container_bytes: 
 fn validate_world_snapshot_section_directory_shape(
     snapshot_container_bytes: &[u8],
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
+    let header = parse_world_snapshot_container_header(snapshot_container_bytes)?;
+    let section_count = match header.section_directory_entry_count {
+        26 => 26,
+        count if count == WORLD_SNAPSHOT_SECTION_COUNT as u32 => WORLD_SNAPSHOT_SECTION_COUNT,
+        _ => return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection),
+    };
     let section_directory_end_byte_offset = WORLD_SNAPSHOT_CONTAINER_HEADER_BYTE_COUNT
-        .checked_add(
-            WORLD_SNAPSHOT_SECTION_COUNT * WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT,
-        )
+        .checked_add(section_count * WORLD_SNAPSHOT_SECTION_DIRECTORY_ENTRY_BYTE_COUNT)
         .ok_or(WorldSnapshotPersistenceFailure::CapacityExceeded)?;
     if snapshot_container_bytes.len() < section_directory_end_byte_offset {
         return Err(WorldSnapshotPersistenceFailure::InvalidSnapshotHeader);
     }
-    for snapshot_section_kind in WorldSnapshotSectionKind::ENCODING_ORDER {
+    for snapshot_section_kind in WorldSnapshotSectionKind::ENCODING_ORDER
+        .into_iter()
+        .take(section_count)
+    {
         if read_little_endian_u16_at_byte_offset(
             snapshot_container_bytes,
             section_directory_byte_offset(snapshot_section_kind),

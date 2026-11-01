@@ -41,6 +41,11 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
             if terrain.is_some() != world_snapshot_record.source_document.is_some() {
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
+        } else if snapshot_section == WorldSnapshotSectionKind::RuntimeContinuation {
+            super::runtime_continuation_snapshot_section::decode_runtime_continuation_section(
+                snapshot_container_bytes,
+                section_byte_range,
+            )?;
         } else if snapshot_section == WorldSnapshotSectionKind::Topology {
             super::fence_topology_snapshot_section::decode_fence_topology_records(
                 snapshot_container_bytes,

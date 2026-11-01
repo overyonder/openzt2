@@ -193,11 +193,11 @@ mod tests {
     use super::*;
     use crate::world_scenario::world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetHandle;
     use openzt2_game_data::{
+        AssetId,
         world_scenario::{
             ScenarioCampaignRecord, ScenarioDefinitionRecord, ScenarioRecordFlags,
             WorldScenarioDocument,
         },
-        AssetId,
     };
 
     #[test]
@@ -241,16 +241,20 @@ mod tests {
         let scenarios = app.world().resource::<WorldScenarios>();
         // The campaign label remains browsable while its independently loaded
         // scenario is pending. Full-catalogue consumers cannot publish yet.
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .campaign(campaign_id)
-            .is_some());
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .scenario(authored_key)
-            .is_none());
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .campaign(campaign_id)
+                .is_some()
+        );
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .scenario(authored_key)
+                .is_none()
+        );
         assert!(!scenarios.catalogue_documents_are_loaded(assets));
         app.world_mut()
             .resource_mut::<Assets<WorldScenarioDocumentAsset>>()
@@ -264,6 +268,7 @@ mod tests {
                         objectives: vec![],
                         objective_groups: vec![],
                         time_limit_ticks: 0,
+                        evaluation_interval_seconds: 1.0,
                         flags: ScenarioRecordFlags::ALLOW_PAUSE,
                         ui_modifications: vec![],
                     }],

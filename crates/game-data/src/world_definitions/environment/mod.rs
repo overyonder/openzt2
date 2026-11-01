@@ -82,6 +82,8 @@ pub struct EnvironmentLightSample {
 pub struct EnvironmentDefinition {
     pub id: AssetId,
     pub family: AssetId,
+    #[serde(default)]
+    pub light_program: Option<AssetId>,
     pub light_keyframes: Vec<EnvironmentLightKeyframe>,
     pub fog_keyframes: Vec<EnvironmentFogKeyframe>,
     pub sky_keyframes: Vec<EnvironmentSkyKeyframe>,

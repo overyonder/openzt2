@@ -145,8 +145,8 @@ pub(super) fn sample_environment_directional_light_at_daylight_fraction<'a>(
     child_index: Option<u16>,
     fraction: f32,
 ) -> Option<SampledEnvironmentDirectionalLight<'a>> {
-    let rows = iterate_environment_and_inherited_family_light_samples(catalogue, definition)
-        .filter(|row| {
+    let rows =
+        iterate_environment_and_referenced_light_samples(catalogue, definition).filter(|row| {
             row.target == target
                 && environment_light_kind_rank(&row.kind) == kind_rank
                 && child_index.is_none_or(|child_index| row.child_index == child_index)
@@ -206,7 +206,7 @@ pub(super) fn collect_authored_environment_light_kind_ranks(
     let mut ranks = [0; 3];
     let mut count = 0;
     for rank in 1..=3 {
-        let present = iterate_environment_and_inherited_family_light_samples(catalogue, definition)
+        let present = iterate_environment_and_referenced_light_samples(catalogue, definition)
             .any(|row| row.target == target && environment_light_kind_rank(&row.kind) == rank);
         if present {
             ranks[count] = rank;
@@ -223,7 +223,7 @@ pub(super) fn sample_environment_ambient_light_at_daylight_fraction(
     fraction: f32,
 ) -> Vec3 {
     (0..4).fold(Vec3::ZERO, |ambient, kind| {
-        let rows = iterate_environment_and_inherited_family_light_samples(catalogue, definition)
+        let rows = iterate_environment_and_referenced_light_samples(catalogue, definition)
             .filter(|row| row.target == target && environment_light_kind_rank(&row.kind) == kind);
         let count = rows.clone().count();
         let Some(sample) = select_cyclic_daylight_curve_sample(fraction, count, |index| {
@@ -322,15 +322,14 @@ pub(super) fn sample_environment_fog_at_daylight_fraction<'a>(
     })
 }
 
-fn iterate_environment_and_inherited_family_light_samples<'a>(
+pub(super) fn iterate_environment_and_referenced_light_samples<'a>(
     catalogue: WorldDefinitionsView<'a>,
     definition: &'a EnvironmentDefinition,
 ) -> impl Clone
-       + Iterator<
-    Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentLightSample,
-> {
-    let family = (definition.family != definition.id)
-        .then(|| catalogue.find_environment(definition.family))
++ Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentLightSample> {
+    let light_program = definition.light_program.unwrap_or(definition.family);
+    let family = (light_program != definition.id)
+        .then(|| catalogue.find_environment(light_program))
         .flatten()
         .map_or(&[][..], |family| family.light_samples.as_slice());
     definition.light_samples.iter().chain(family)
@@ -340,8 +339,7 @@ fn iterate_environment_and_inherited_family_fog_samples<'a>(
     catalogue: WorldDefinitionsView<'a>,
     definition: &'a EnvironmentDefinition,
 ) -> impl Clone
-       + Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentFogSample>
-{
++ Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentFogSample> {
     let family = (definition.family != definition.id)
         .then(|| catalogue.find_environment(definition.family))
         .flatten()

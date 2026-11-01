@@ -49,6 +49,7 @@ pub(super) enum WorldDefinitionSourceRecordKind {
     Ambient,
     Timing,
     GuestPolicy,
+    GuestFavouriteAnimalTrendPolicy,
     TankPolicy,
     TankEdit,
     FencePlacementMode,
@@ -174,7 +175,7 @@ pub(super) fn classify_world_definition_source_record(
         ),
         (
             "ztfavoriteanimalmgr",
-            WorldDefinitionSourceRecordKind::Container,
+            WorldDefinitionSourceRecordKind::GuestFavouriteAnimalTrendPolicy,
         ),
         (
             "bfgentitytriggermgr",

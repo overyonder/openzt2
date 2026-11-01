@@ -8,8 +8,12 @@ use super::{
 pub(super) fn validate_progression_snapshot_record_invariants(
     progression_snapshot_records: &ProgressionSnapshotRecords,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
-    if progression_snapshot_records.fame.half_stars
-        > progression_snapshot_records.fame.maximum_reached
+    if progression_snapshot_records
+        .fame
+        .current_percent
+        .is_some_and(|value| !value.is_finite() || !(0.0..=100.0).contains(&value))
+        || progression_snapshot_records.fame.half_stars
+            > progression_snapshot_records.fame.maximum_reached
         || progression_snapshot_records
             .fame
             .maximum_percent_reached

@@ -19,6 +19,8 @@ use openzt2_zoo_state::maintenance::maintenance_types::{
     AdjustFacilityContainedWaste, FacilityContainedWaste,
 };
 
+use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
+
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
 pub(super) fn apply_authored_guest_behavior_fact_modifications(
@@ -77,6 +79,9 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                         | BehaviorFact::Amusement
                         | BehaviorFact::DeparturePoints
                         | BehaviorFact::Happiness
+                        | BehaviorFact::Education
+                        | BehaviorFact::FoundDonationBox
+                        | BehaviorFact::MissedDonationBox
                         | BehaviorFact::AteFavoriteFood
                         | BehaviorFact::AteNonFavoriteFood
                         | BehaviorFact::TrashLevel
@@ -137,6 +142,33 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
                 satisfaction_changes.write(AdjustGuestSatisfaction {
                     guest: subject,
                     delta_q16: authored_delta.saturating_neg(),
+                });
+                continue;
+            }
+            if matches!(
+                modification.modified_fact,
+                BehaviorFact::Education
+                    | BehaviorFact::FoundDonationBox
+                    | BehaviorFact::MissedDonationBox
+            ) {
+                let fact = modification.modified_fact;
+                commands.queue(move |world: &mut World| {
+                    let Ok(mut entity) = world.get_entity_mut(subject) else {
+                        return;
+                    };
+                    if !entity.contains::<GuestSurveyExperience>() {
+                        entity.insert(GuestSurveyExperience::default());
+                    }
+                    let mut experience = entity
+                        .get_mut::<GuestSurveyExperience>()
+                        .expect("inserted survey experience");
+                    let value = match fact {
+                        BehaviorFact::Education => &mut experience.education_points,
+                        BehaviorFact::FoundDonationBox => &mut experience.found_donation_box,
+                        BehaviorFact::MissedDonationBox => &mut experience.missed_donation_box,
+                        _ => unreachable!(),
+                    };
+                    *value += authored_delta as f32 / 65_536.0;
                 });
                 continue;
             }

@@ -464,6 +464,12 @@ fn bind_record_shard(
     authored_type_registry_source_order: [u64; 2],
 ) -> Result<RecordShard, BindError> {
     let mut shard = RecordShard::default();
+    if let Some(naming) = entity_naming_source_lowering::lower_entity_naming(record) {
+        shard.tables.document.entity_naming.push(naming);
+    }
+    if let Some(candidate) = animal_adoption_species_eligibility_source_lowering::lower_animal_adoption_species_eligibility(record)? {
+        shard.tables.document.animal_adoption_species_eligibility.push(candidate);
+    }
     let kind = record.semantic_type();
     if canonicalize_source_document_record_key(&kind) == "ztaimgr" {
         if let Some(show_manager) = record.descendant_record("ZTAIShowMgr") {
@@ -671,6 +677,11 @@ fn bind_record_shard(
         Some(WorldDefinitionSourceRecordKind::GuestPolicy) => {
             bind_guest_policy(record, &mut shard.tables)?
         }
+        Some(WorldDefinitionSourceRecordKind::GuestFavouriteAnimalTrendPolicy) => {
+            shard.tables.document.guest_favourite_animal_trend = Some(
+                guest_favourite_animal_trend_policy_source_lowering::lower_guest_favourite_animal_trend_policy(record)?
+            );
+        }
         Some(WorldDefinitionSourceRecordKind::TankPolicy) => {
             bind_tank_policy(record, &mut shard.tables)?
         }
@@ -785,6 +796,7 @@ fn bind_record_shard(
 pub mod ambient_class_source_vocabulary;
 pub mod ambient_spawn_element_source_lowering;
 pub mod animal_adoption_offer_configuration_source_lowering;
+mod animal_adoption_species_eligibility_source_lowering;
 pub mod animal_health_source_lowering;
 pub mod aquatic_habitat_source_lowering;
 pub mod authored_fence_source_lowering;
@@ -800,12 +812,14 @@ pub mod catalogue_category_source_vocabulary;
 pub mod catalogue_entry_source_lowering;
 pub mod commerce_facility_source_lowering;
 pub mod entity_information_panel_source_lowering;
+mod entity_naming_source_lowering;
 pub mod environment;
 pub mod environment_source_path_identity;
 pub mod extinct_animal_recovery_source_lowering;
 pub mod facility_and_maintenance_source_lowering;
 pub mod fence_and_path_source_lowering;
 pub mod guest_definition_source_lowering;
+mod guest_favourite_animal_trend_policy_source_lowering;
 pub mod guest_generation_policy_source_lowering;
 pub mod guest_viewing_source_lowering;
 pub mod immersive_mode_and_camera;

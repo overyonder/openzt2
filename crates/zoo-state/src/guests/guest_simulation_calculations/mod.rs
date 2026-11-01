@@ -43,25 +43,6 @@ pub fn apply_permille_delta(value: u16, delta: i16) -> u16 {
     (i32::from(value) + i32::from(delta)).clamp(0, i32::from(PERMILLE_MAX)) as u16
 }
 
-pub fn survey_rate_permille(points: u32, maximum: u32) -> u16 {
-    if maximum == 0 {
-        return 0;
-    }
-    (u64::from(points.min(maximum)) * u64::from(PERMILLE_MAX) / u64::from(maximum)) as u16
-}
-
-pub fn survey_view_score_permille(
-    critical_need_rate: u16,
-    education_view_rate: u16,
-    entertainment_view_rate: u16,
-    arrived: bool,
-) -> u16 {
-    let average_view_rate =
-        (u32::from(education_view_rate) + u32::from(entertainment_view_rate)) / 2;
-    let arrived_rate = if arrived { PERMILLE_MAX } else { 0 };
-    ((u32::from(critical_need_rate) + average_view_rate + u32::from(arrived_rate)) / 3) as u16
-}
-
 pub fn push_memory(
     memories: &mut GuestMemories,
     entry: GuestMemoryEntry,

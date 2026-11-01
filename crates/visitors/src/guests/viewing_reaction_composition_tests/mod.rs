@@ -8,15 +8,16 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, guest_simulation_definitions::*, world_objects::*,
     },
-    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 
-fn policy_document() -> WorldDefinitionDocument {
+pub(super) fn policy_document() -> WorldDefinitionDocument {
     let id = AssetId::from_key("viewing-test");
     WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
@@ -123,9 +124,9 @@ fn policy_document() -> WorldDefinitionDocument {
             },
             need_survey: GuestNeedSurveyPolicy {
                 check_interval_ns: 1,
-                maximum_critical_hits_per_month: 100,
-                maximum_education_points_per_view: 25,
-                maximum_entertainment_points_per_view: 25,
+                maximum_critical_hits_per_month: 100.0,
+                maximum_education_points_per_view: 25.0,
+                maximum_entertainment_points_per_view: 25.0,
                 monitored: Default::default(),
             },
         }),
@@ -147,7 +148,6 @@ fn fixture() -> (App, Entity, Entity, Entity) {
     let mut app = App::new();
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
-        .init_resource::<GuestSurvey>()
         .add_message::<GuestReaction>()
         .add_message::<GuestReactionApplied>()
         .add_message::<BehaviorViewEventEmitted>()
@@ -229,8 +229,14 @@ fn reversed_reaction_delivery_preserves_distinct_event_effects() {
     app.world_mut().write_message(second);
     app.world_mut().write_message(first);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 50);
-    assert_eq!(app.world().resource::<GuestSurvey>().education_points, 50);
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
+    assert_eq!(
+        app.world()
+            .get::<GuestSurveyExperience>(guest)
+            .unwrap()
+            .education_points,
+        6.0
+    );
     // Starting another observation does not make an already applied event new.
     {
         let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
@@ -241,7 +247,7 @@ fn reversed_reaction_delivery_preserves_distinct_event_effects() {
     let replay = request(&app, guest, 2);
     app.world_mut().write_message(replay);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 50);
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
 }
 
 #[test]
@@ -338,5 +344,5 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
     app.world_mut().entity_mut(guest).insert(viewing);
     emit(&mut app, subject, 3);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 50);
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 60);
 }

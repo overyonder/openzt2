@@ -18,10 +18,12 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_world_state::world_spawn::{
     persistent_id_types::{PersistentId, PersistentIdAllocator},
     world_membership_types::{WorldMember, WorldRoot},
 };
+use openzt2_zoo_state::scenario::scenario_script_timing_types::ScenarioScriptTiming;
 use openzt2_zoo_state::scenario::{
     scenario_objective_types::*,
     scenario_session_types::{
@@ -47,6 +49,8 @@ pub(super) struct ScenarioObjectiveSnapshot {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct ScenarioSnapshot {
+    #[serde(skip)]
+    timing: Option<ScenarioScriptTiming>,
     version: u8,
     definition: AssetId,
     started_tick: u64,
@@ -58,7 +62,15 @@ pub(super) struct ScenarioSnapshot {
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
-    sessions: Query<'w, 's, &'static ActiveScenarioSession, With<WorldRoot>>,
+    sessions: Query<
+        'w,
+        's,
+        (
+            &'static ActiveScenarioSession,
+            Option<&'static ScenarioScriptTiming>,
+        ),
+        With<WorldRoot>,
+    >,
     objectives: Query<
         'w,
         's,
@@ -73,6 +85,7 @@ pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
     >,
     scenarios: Option<Res<'w, WorldScenarios>>,
     assets: Option<Res<'w, Assets<WorldScenarioDocumentAsset>>>,
+    selected: Option<Res<'w, SelectedScenarioDocument>>,
     runtime: Option<NonSend<'w, ScenarioLuaVirtualMachineContexts>>,
     ui: crate::scenario::scenario_lua_ui::ScenarioUiSnapshotCapture<'w>,
 }
@@ -80,7 +93,7 @@ pub(in crate::persistence) struct ScenarioSnapshotCapture<'w, 's> {
 pub(super) fn capture(
     parameters: &ScenarioSnapshotCapture,
 ) -> Result<Option<ScenarioSnapshot>, Failure> {
-    let Some(session) = parameters.sessions.iter().next() else {
+    let Some((session, timing)) = parameters.sessions.iter().next() else {
         return Ok(None);
     };
     let assets = parameters
@@ -91,6 +104,10 @@ pub(super) fn capture(
         .scenarios
         .as_deref()
         .and_then(|scenarios| scenarios.get(assets))
+        .and_then(|view| match parameters.selected.as_deref() {
+            Some(selected) => view.with_document(&selected.0),
+            None => Some(view),
+        })
         .ok_or(Failure::UnknownAssetIdentifier)?;
     let scenario = view
         .scenario(session.definition)
@@ -121,6 +138,7 @@ pub(super) fn capture(
     }
     objectives.sort_by_key(|objective| objective.id);
     Ok(Some(ScenarioSnapshot {
+        timing: timing.copied(),
         version: 1,
         definition: session.definition,
         started_tick: session.started_tick,
@@ -148,7 +166,12 @@ pub(super) fn encode(snapshot: Option<&ScenarioSnapshot>) -> Result<Vec<u8>, Fai
         return Ok(Vec::new());
     };
     validate(snapshot)?;
-    let bytes = postcard::to_allocvec(snapshot).map_err(|_| Failure::CorruptSnapshotSection)?;
+    let mut bytes = postcard::to_allocvec(snapshot).map_err(|_| Failure::CorruptSnapshotSection)?;
+    if let Some(timing) = snapshot.timing {
+        bytes.extend_from_slice(b"STM1");
+        bytes.extend_from_slice(&timing.evaluation_elapsed_seconds.to_le_bytes());
+        bytes.extend_from_slice(&timing.always_run_elapsed_seconds.to_le_bytes());
+    }
     if bytes.len() > MAX_PAYLOAD_BYTES {
         return Err(Failure::CapacityExceeded);
     }
@@ -165,12 +188,26 @@ pub(super) fn decode(
     if section.payload_byte_count > MAX_PAYLOAD_BYTES as u64 {
         return Err(Failure::CapacityExceeded);
     }
-    let (snapshot, remaining): (ScenarioSnapshot, _) = postcard::take_from_bytes(
+    let (mut snapshot, remaining): (ScenarioSnapshot, _) = postcard::take_from_bytes(
         &bytes[section.payload_byte_range_within_container(bytes.len())?],
     )
     .map_err(|_| Failure::CorruptSnapshotSection)?;
     if !remaining.is_empty() {
-        return Err(Failure::CorruptSnapshotSection);
+        if remaining.len() != 12 || &remaining[..4] != b"STM1" {
+            return Err(Failure::CorruptSnapshotSection);
+        }
+        snapshot.timing = Some(ScenarioScriptTiming {
+            evaluation_elapsed_seconds: f32::from_le_bytes(
+                remaining[4..8]
+                    .try_into()
+                    .map_err(|_| Failure::CorruptSnapshotSection)?,
+            ),
+            always_run_elapsed_seconds: f32::from_le_bytes(
+                remaining[8..12]
+                    .try_into()
+                    .map_err(|_| Failure::CorruptSnapshotSection)?,
+            ),
+        });
     }
     validate(&snapshot)?;
     if section.encoded_record_count != record_count(Some(&snapshot)) {
@@ -180,7 +217,12 @@ pub(super) fn decode(
 }
 
 fn validate(snapshot: &ScenarioSnapshot) -> Result<(), Failure> {
-    if snapshot.version != 1
+    if snapshot.timing.is_some_and(|timing| {
+        !timing.evaluation_elapsed_seconds.is_finite()
+            || timing.evaluation_elapsed_seconds < 0.0
+            || !timing.always_run_elapsed_seconds.is_finite()
+            || timing.always_run_elapsed_seconds < 0.0
+    }) || snapshot.version != 1
         || snapshot.state > 2
         || snapshot.definition == AssetId::default()
         || snapshot.objectives.len() > 65_536
@@ -227,7 +269,8 @@ pub(in crate::persistence) struct ScenarioSnapshotApplication<'w, 's> {
     scripts: Option<Res<'w, Assets<LuaScriptAsset>>>,
     script_index: Option<Res<'w, LuaScriptArchivePathIndex>>,
     runtime: Option<NonSendMut<'w, ScenarioLuaVirtualMachineContexts>>,
-    existing: Query<'w, 's, Entity, With<ScenarioObjective>>,
+    existing: Query<'w, 's, (Entity, &'static WorldMember), With<ScenarioObjective>>,
+    documents: Query<'w, 's, &'static SelectedWorldDocumentHandles>,
 }
 
 pub(super) struct PreparedScenarioSnapshot {
@@ -241,6 +284,7 @@ pub(super) struct PreparedScenarioSnapshot {
 pub(super) fn prepare(
     snapshot: Option<ScenarioSnapshot>,
     expected: AssetId,
+    root: Entity,
     parameters: &ScenarioSnapshotApplication,
 ) -> Result<Option<PreparedScenarioSnapshot>, Failure> {
     let Some(snapshot) = snapshot else {
@@ -254,6 +298,10 @@ pub(super) fn prepare(
         .scenarios
         .as_deref()
         .and_then(|scenarios| scenarios.get(assets))
+        .and_then(|view| match parameters.documents.get(root) {
+            Ok(documents) => view.with_document(&documents.start),
+            Err(_) => Some(view),
+        })
         .ok_or(Failure::UnknownAssetIdentifier)?;
     let definition = view
         .scenario(snapshot.definition)
@@ -335,8 +383,10 @@ pub(super) fn apply(
             .reserve_imported(root, PersistentId(objective.id))
             .map_err(|_| Failure::BrokenPersistentEntityReference)?;
     }
-    for entity in &parameters.existing {
-        commands.entity(entity).despawn();
+    for (entity, member) in &parameters.existing {
+        if member.root == root {
+            commands.entity(entity).despawn();
+        }
     }
     let snapshot = prepared.snapshot;
     let mut entities = BTreeMap::new();
@@ -388,6 +438,11 @@ pub(super) fn apply(
             _ => ScenarioSessionState::Lost,
         },
     });
+    if let Some(timing) = snapshot.timing {
+        commands.entity(root).insert(timing);
+    } else {
+        commands.entity(root).remove::<ScenarioScriptTiming>();
+    }
     commands.insert_resource(SelectedScenarioDocument(prepared.document));
     crate::scenario::scenario_lua_ui::restore_saved_scenario_ui(commands, snapshot.ui);
     if let Some(runtime) = prepared.runtime {
@@ -413,3 +468,12 @@ pub(super) fn scripts_are_pending(
 
 #[cfg(test)]
 mod tests;
+
+impl ScenarioSnapshotApplication<'_, '_> {
+    pub(super) fn replaced_entities(&self, root: Entity) -> Vec<Entity> {
+        self.existing
+            .iter()
+            .filter_map(|(entity, member)| (member.root == root).then_some(entity))
+            .collect()
+    }
+}

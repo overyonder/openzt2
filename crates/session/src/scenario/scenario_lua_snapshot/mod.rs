@@ -179,11 +179,12 @@ fn restore_value(
     })
 }
 
-pub(super) fn prepare_runtime(
+fn prepare_runtime(
     saved: &ScenarioLuaSavedState,
     document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
     scripts: &Assets<LuaScriptAsset>,
     index: &LuaScriptArchivePathIndex,
+    replace_initialized_globals: bool,
 ) -> mlua::Result<ScenarioLuaVirtualMachine> {
     let lua = Lua::new();
     let loaded = RefCell::new(BTreeSet::new());
@@ -205,7 +206,7 @@ pub(super) fn prepare_runtime(
         }
         Ok(())
     })?;
-    restore_globals(&lua, saved)?;
+    restore_globals(&lua, saved, replace_initialized_globals)?;
     Ok(ScenarioLuaVirtualMachine {
         lua_virtual_machine: lua,
         scenario_document_asset_identifier: document,
@@ -214,24 +215,30 @@ pub(super) fn prepare_runtime(
     })
 }
 
-fn restore_globals(lua: &Lua, saved: &ScenarioLuaSavedState) -> mlua::Result<()> {
+fn restore_globals(
+    lua: &Lua,
+    saved: &ScenarioLuaSavedState,
+    replace_initialized_globals: bool,
+) -> mlua::Result<()> {
     let standard = standard_global_names()?;
     let globals = lua.globals();
-    let remove = globals
-        .pairs::<mlua::String, Value>()
-        .filter_map(|entry| match entry {
-            Ok((key, value))
-                if !standard.contains(&key.as_bytes().to_vec())
-                    && !matches!(value, Value::Function(_)) =>
-            {
-                Some(Ok(key))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<mlua::Result<Vec<_>>>()?;
-    for key in remove {
-        globals.raw_set(key, Value::Nil)?;
+    if replace_initialized_globals {
+        let remove = globals
+            .pairs::<mlua::String, Value>()
+            .filter_map(|entry| match entry {
+                Ok((key, value))
+                    if !standard.contains(&key.as_bytes().to_vec())
+                        && !matches!(value, Value::Function(_)) =>
+                {
+                    Some(Ok(key))
+                }
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<mlua::Result<Vec<_>>>()?;
+        for key in remove {
+            globals.raw_set(key, Value::Nil)?;
+        }
     }
     let mut count = 0;
     let mut keys = BTreeSet::new();
@@ -248,6 +255,16 @@ fn restore_globals(lua: &Lua, saved: &ScenarioLuaSavedState) -> mlua::Result<()>
 }
 
 pub(crate) struct PreparedScenarioLuaRuntime(ScenarioLuaVirtualMachine);
+
+pub(crate) fn normalize_original_saved_scenario_lua_state(
+    saved_arguments: &ScenarioLuaSavedState,
+    document: bevy::asset::AssetId<WorldScenarioDocumentAsset>,
+    scripts: &Assets<LuaScriptAsset>,
+    index: &LuaScriptArchivePathIndex,
+) -> mlua::Result<ScenarioLuaSavedState> {
+    let runtime = prepare_runtime(saved_arguments, document, scripts, index, false)?;
+    capture_runtime(&runtime)
+}
 
 impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
     pub(crate) fn capture_saved_scenario_state(
@@ -266,7 +283,7 @@ impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
         scripts: &Assets<LuaScriptAsset>,
         index: &LuaScriptArchivePathIndex,
     ) -> mlua::Result<PreparedScenarioLuaRuntime> {
-        prepare_runtime(saved, document, scripts, index).map(PreparedScenarioLuaRuntime)
+        prepare_runtime(saved, document, scripts, index, true).map(PreparedScenarioLuaRuntime)
     }
 
     pub(crate) fn install_saved_scenario_state(
@@ -282,6 +299,45 @@ impl super::scenario_lua_types::ScenarioLuaVirtualMachineContexts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn original_argument_overlay_keeps_initialized_globals_through_canonical_restore() {
+        let lua = Lua::new();
+        let module = "initialized = { value = 7 }; function evaluate(data) if not data.paid then rewards = (rewards or 0) + 100; data.paid = true end; return initialized.value, rewards or 0 end";
+        lua.load(module).exec().unwrap();
+        let saved_arguments = ScenarioLuaSavedState {
+            modules: Vec::new(),
+            globals: vec![(
+                b"__openzt2_rule_arguments".to_vec(),
+                ScenarioLuaSavedValue::Table(vec![(
+                    ScenarioLuaSavedValue::Bytes(vec![7; 16]),
+                    ScenarioLuaSavedValue::Table(vec![(
+                        ScenarioLuaSavedValue::Bytes(b"paid".to_vec()),
+                        ScenarioLuaSavedValue::Boolean(true),
+                    )]),
+                )]),
+            )],
+        };
+        restore_globals(&lua, &saved_arguments, false).unwrap();
+        let context = ScenarioLuaVirtualMachine {
+            lua_virtual_machine: lua,
+            scenario_document_asset_identifier: Handle::<WorldScenarioDocumentAsset>::default()
+                .id(),
+            loaded_lua_script_asset_identifiers: BTreeSet::new(),
+            executed_source_paths: Vec::new(),
+        };
+        let encoded = postcard::to_allocvec(&capture_runtime(&context).unwrap()).unwrap();
+        let saved = postcard::from_bytes(&encoded).unwrap();
+        let restored = Lua::new();
+        restored.load(module).exec().unwrap();
+        restore_globals(&restored, &saved, true).unwrap();
+        let arguments: mlua::Table = restored.globals().get("__openzt2_rule_arguments").unwrap();
+        let data: mlua::Table = arguments
+            .get(restored.create_string([7; 16]).unwrap())
+            .unwrap();
+        let evaluate: mlua::Function = restored.globals().get("evaluate").unwrap();
+        assert_eq!(evaluate.call::<(u32, u32)>(data).unwrap(), (7, 0));
+    }
 
     #[test]
     fn restored_rule_arguments_and_globals_do_not_repeat_completed_effects() {
@@ -346,7 +402,7 @@ mod tests {
         let saved: ScenarioLuaSavedState = postcard::from_bytes(&encoded).unwrap();
         let restored = Lua::new();
         restored.load(script).exec().unwrap();
-        restore_globals(&restored, &saved).unwrap();
+        restore_globals(&restored, &saved, true).unwrap();
         let arguments: mlua::Table = restored.globals().get("__openzt2_rule_arguments").unwrap();
         let data: mlua::Table = arguments
             .get(restored.create_string(rule_key).unwrap())

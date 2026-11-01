@@ -1,5 +1,8 @@
 //! Native OpenZT2 profiles and deterministic ECS snapshot persistence.
 
+mod original_profile_save_discovery;
+mod original_profile_save_locations;
+
 mod durable_filesystem_operations;
 #[cfg(test)]
 mod durable_filesystem_operations_tests;
@@ -85,6 +88,8 @@ impl Plugin for PersistencePlugin {
                 .in_set(openzt2_interface_state::ui::UiSet::Routing),
         );
         app.init_resource::<ReusableWorldSnapshotByteBuffer>()
+            .init_resource::<original_profile_save_locations::OriginalProfileSaveLocations>()
+            .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameCatalogueFailed>()
             .init_resource::<ProfileIndex>()
             .init_resource::<ProfileOptions>()
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
@@ -93,6 +98,9 @@ impl Plugin for PersistencePlugin {
             .init_resource::<openzt2_zoo_state::progression::profile_challenge_types::ProfileChallengeCompletionCounts>()
             .add_message::<SaveWorldSnapshotToSlot>()
             .add_message::<LoadWorldSnapshotFromSlot>()
+            .add_message::<openzt2_interface_state::persistence::saved_game_source_types::LoadOriginalSavedGame>()
+            .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoaded>()
+            .add_message::<openzt2_interface_state::persistence::saved_game_source_types::OriginalSavedGameLoadFailed>()
             .add_message::<DeleteWorldSnapshotFromSlot>()
             .add_message::<WorldSnapshotSavedToSlot>()
             .add_message::<WorldSnapshotLoadedFromSlot>()
@@ -129,6 +137,8 @@ impl Plugin for PersistencePlugin {
             .add_systems(
                 Update,
                 (
+                    slot_io::original_saved_game_catalogue_execution::begin_original_saved_game_catalogue_loading,
+                    slot_io::original_saved_game_catalogue_execution::complete_original_saved_game_catalogue_loading,
                     profile_request_execution::begin_loading_profile_index,
                     profile_request_execution::begin_creating_requested_profiles,
                     profile_request_execution::begin_selecting_requested_profiles.after(GameSet::Intent),
@@ -139,10 +149,12 @@ impl Plugin for PersistencePlugin {
                         select_persisted_profile_or_create_localized_first_profile,
                     profile_request_execution::begin_persisting_changed_active_profile_options,
                     persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests,
+                    save_slot_catalogue_ui_presentation::project_original_save_delete_control_state,
                     save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
                     save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates,
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
                     persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor,
+                    persistence_ui_operation_presentation::present_original_saved_game_failures,
                     persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save
                         .after(openzt2_interface_state::ui::UiSet::Projection),
                     persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save,

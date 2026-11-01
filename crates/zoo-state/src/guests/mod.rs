@@ -1,4 +1,5 @@
 pub mod guest_simulation_calculations;
+pub mod guest_survey_types;
 
 #[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuestDestinationSelection;
@@ -8,6 +9,7 @@ pub struct GuestLifecycleAdvance;
 
 #[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct GuestReactionApplication;
+pub mod guest_favourite_animal_trend_types;
 pub mod guest_simulation_types;
 
 #[derive(bevy::prelude::SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]

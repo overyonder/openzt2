@@ -15,11 +15,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
     GuestDefinition, GuestDestinationWeight, GuestMemoryPolicy, GuestNeedDefinition, GuestNeedKind,
     GuestRarity, GuestReactionDefinition, GuestSignedNeedDefinition, MemoryReplacement,
 };
-use openzt2_game_data::AssetId;
 
 pub(super) fn bind_guest(
     record: &RecordView<'_, '_>,
@@ -56,7 +56,10 @@ pub(super) fn bind_guest(
                     .attribute_named_any(&["cessationThreshold"])
                     .map(|value| parse::<u16>(value, record, "guest need cessation threshold"))
                     .transpose()?,
-                critical_threshold: element_number(&need, &["criticalThreshold"], 1_000)?,
+                critical_q16: guest_critical_threshold_q16(
+                    element_number::<f64>(&need, &["criticalThreshold"], 1_000.0)? / 10.0,
+                    record,
+                )?,
             })
         })
         .collect::<Result<Vec<_>, BindError>>()?;
@@ -383,6 +386,10 @@ fn bind_authored_guest_signed_need(
         .transpose()?
         .unwrap_or_default();
     Ok(Some(GuestSignedNeedDefinition {
+        critical_q16: state
+            .attribute_named_any(&["CriticalThreshold"])
+            .map(|value| q16(value, "guest need critical threshold"))
+            .transpose()?,
         initial_q16: q16(initial, attribute)?,
         adjustment_q16: adjustment,
         trigger_q16: state
@@ -481,7 +488,7 @@ fn bind_authored_guest_need_definitions(
                 .map(|value| parse::<f64>(value, record, "guest need cessation threshold"))
                 .transpose()?
                 .map(|value| (value * 10.0).clamp(0.0, 1_000.0).round() as u16),
-            critical_threshold: (critical_threshold * 10.0).clamp(0.0, 1_010.0).round() as u16,
+            critical_q16: guest_critical_threshold_q16(critical_threshold, record)?,
         })
     })
     .collect()
@@ -570,4 +577,15 @@ fn lower_guest_donation_policy(
             search_radius_m,
         },
     ))
+}
+
+fn guest_critical_threshold_q16(value: f64, record: &RecordView<'_, '_>) -> Result<i32, BindError> {
+    let value = (value * 65_536.0).round();
+    if !value.is_finite() || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&value) {
+        return Err(BindError::record(
+            record,
+            "guest need critical threshold exceeds signed Q16",
+        ));
+    }
+    Ok(value as i32)
 }

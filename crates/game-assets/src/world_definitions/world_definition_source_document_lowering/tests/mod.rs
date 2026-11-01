@@ -4,6 +4,32 @@ use crate::source_document::{
 };
 
 #[test]
+fn environment_retains_distinct_light_and_fog_programs() {
+    let environment = parse_blue_fang_source_document(
+        AssetPath::new("world/environments/env1coastal_small.xml"),
+        br#"<BFWorldEnvironment lights="world/lights/ScrubLights.xml"><fog file="world/environments/coastal_fog.xml"/></BFWorldEnvironment>"#,
+    ).unwrap();
+    let document = lower_resolved_world_definition_source_document_closure_to_canonical_document(
+        &[environment],
+        &BlueFangActorManifestModelAndSceneResolutionIndex::default(),
+        "world/environments/env1coastal_small.xml",
+        [0, 0],
+    )
+    .unwrap()
+    .unwrap();
+    let environment = &document.environments[0];
+    assert_eq!(
+        environment.family,
+        openzt2_game_data::AssetId::from_key("coastal")
+    );
+    assert_eq!(
+        environment.light_program,
+        Some(openzt2_game_data::AssetId::from_key("scrub"))
+    );
+    assert!(environment.light_samples.is_empty());
+}
+
+#[test]
 fn fossil_policy_requires_mode_dependency_and_preserves_its_authored_dig_range() {
     let manager = parse_blue_fang_source_document(
         AssetPath::new("config/puzzlemgr.xml"),

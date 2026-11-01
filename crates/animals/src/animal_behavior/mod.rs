@@ -36,6 +36,7 @@ mod behavior_task_phase_transition_execution;
 mod behavior_termination_execution;
 mod behavior_token_execution;
 mod behavior_trick_learning_execution;
+mod behavior_trigger_execution;
 mod behavior_wander_execution;
 mod behavior_water_docking_execution;
 mod natural_water_targets;
@@ -66,6 +67,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_face_target_execution::register_face_target_execution(application);
         behavior_token_execution::register_token_execution(application);
+        behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);
         application.add_systems(
             FixedUpdate,

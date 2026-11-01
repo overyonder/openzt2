@@ -63,6 +63,7 @@ use super::guest_simulation_types::GuestThirst;
 use super::guest_simulation_types::GuestViewingNeed;
 use super::guest_simulation_types::RequestGuestArrivals;
 use super::guest_simulation_types::VisitTime;
+use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 
 pub(super) fn initialize_guest_arrivals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -117,7 +118,7 @@ pub(crate) struct GuestArrivalParams<'w, 's> {
     active_definitions: Res<'w, WorldDefinitions>,
     state: Option<ResMut<'w, GuestArrivalState>>,
     ids: ResMut<'w, PersistentIdAllocator>,
-    roots: Query<'w, 's, Entity, With<WorldRoot>>,
+    roots: Query<'w, 's, (Entity, &'static mut GuestFavouriteAnimalTrend), With<WorldRoot>>,
     entrances: Query<
         'w,
         's,
@@ -149,7 +150,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         active_definitions,
         state,
         mut ids,
-        roots,
+        mut roots,
         entrances,
         grid,
         guests,
@@ -170,6 +171,12 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    let Some(current_fame_percent) = fame.current_percent else {
+        return;
+    };
+    if definitions.has_pending_assets() {
+        return;
+    }
     let forced_count = requested_arrivals.read().fold(0_u32, |total, request| {
         total.saturating_add(u32::from(request.count))
     });
@@ -180,10 +187,16 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
     if !scheduled_due && forced_count == 0 {
         return;
     }
-    let Ok(root) = roots.single() else {
+    let Ok((root, mut favourite_trend)) = roots.single_mut() else {
         return;
     };
     let Some(policy) = definitions.guest_generation() else {
+        failed.write(GuestArrivalFailed {
+            reason: GuestArrivalFailure::MissingPolicy,
+        });
+        return;
+    };
+    let Some(favourite_policy) = definitions.guest_favourite_animal_trend() else {
         failed.write(GuestArrivalFailed {
             reason: GuestArrivalFailure::MissingPolicy,
         });
@@ -228,7 +241,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         let probability = guest_spawn_probability(
             policy,
             fame.half_stars,
-            admission.0 .0,
+            admission.0.0,
             seen_species.len() as u32,
         );
         random_unit(&mut state.rng) < probability
@@ -302,8 +315,13 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         ) else {
             break;
         };
-        let favourite = (!seen_species.is_empty())
-            .then(|| seen_species[state.rng.next_u32() as usize % seen_species.len()]);
+        let favourite = super::guest_favourite_animal_trend_execution::choose_favourite_animal_for_spawned_guest(
+            favourite_policy,
+            &mut favourite_trend,
+            definitions.animal_adoption_species_eligibility(),
+            current_fame_percent,
+            &mut state.rng,
+        );
         debug!(tick = clock.tick, guest = ?guest_id, ?position, entrance = ?entrance.inside,
             distance_m = position.xz().distance(entrance.inside.xz()),
             "guest spawned for arrival at its displaced entrance point");

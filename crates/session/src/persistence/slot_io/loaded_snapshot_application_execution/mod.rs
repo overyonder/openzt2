@@ -8,8 +8,10 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
 use openzt2_interface_state::persistence::profile_types::ProfileOptions;
-use openzt2_interface_state::persistence::save_slot_types::SaveSlotId;
 use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFromSlot;
+use openzt2_interface_state::persistence::saved_game_source_types::{
+    OriginalSavedGameLoadFailed, OriginalSavedGameLoaded, SavedGameSource,
+};
 
 use super::super::{
     persistence_failure_types::{
@@ -53,6 +55,8 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
         mut completed_world_loads,
         mut failed_world_loads,
         mut completed_snapshot_loads,
+        mut original_snapshot_loads,
+        mut original_snapshot_failures,
         mut persistence_failures,
         mut show_platform_upgrade_restore_requests,
     } = world_snapshot_application_messages;
@@ -96,10 +100,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
             discard_pending_snapshot_application_after_load_failure(
                 &mut commands,
                 pending_snapshot_application_entity,
-                pending_snapshot_application.save_slot_identifier,
+                pending_snapshot_application.source,
                 WorldSnapshotPersistenceFailure::CorruptSnapshotSection,
                 &mut snapshot_scratch_storage,
                 &mut persistence_failures,
+                &mut original_snapshot_failures,
             );
             return;
         }
@@ -117,10 +122,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                 discard_pending_snapshot_application_after_load_failure(
                     &mut commands,
                     pending_snapshot_application_entity,
-                    pending_snapshot_application.save_slot_identifier,
+                    pending_snapshot_application.source,
                     WorldSnapshotPersistenceFailure::UnknownAssetIdentifier,
                     &mut snapshot_scratch_storage,
                     &mut persistence_failures,
+                    &mut original_snapshot_failures,
                 );
             } else {
                 for result in completed_world_loads.read() {
@@ -167,10 +173,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     discard_pending_snapshot_application_after_load_failure(
                         &mut commands,
                         pending_snapshot_application_entity,
-                        pending_snapshot_application.save_slot_identifier,
+                        pending_snapshot_application.source,
                         reason,
                         &mut snapshot_scratch_storage,
                         &mut persistence_failures,
+                        &mut original_snapshot_failures,
                     );
                     return;
                 }
@@ -208,9 +215,17 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                     .entity(pending_snapshot_application_entity)
                     .despawn();
                 commands.entity(root).remove::<WorldLoadOperationOwner>();
-                completed_snapshot_loads.write(WorldSnapshotLoadedFromSlot {
-                    save_slot_identifier: pending_snapshot_application.save_slot_identifier,
-                });
+                match pending_snapshot_application.source {
+                    SavedGameSource::Native(save_slot_identifier) => {
+                        completed_snapshot_loads.write(WorldSnapshotLoadedFromSlot {
+                            save_slot_identifier,
+                        });
+                    }
+                    SavedGameSource::Original(source_identifier) => {
+                        original_snapshot_loads
+                            .write(OriginalSavedGameLoaded { source_identifier });
+                    }
+                }
                 snapshot_scratch_storage.clear_logical_contents();
             }
             Err(persistence_failure) => {
@@ -224,10 +239,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                 discard_pending_snapshot_application_after_load_failure(
                     &mut commands,
                     pending_snapshot_application_entity,
-                    pending_snapshot_application.save_slot_identifier,
+                    pending_snapshot_application.source,
                     persistence_failure,
                     &mut snapshot_scratch_storage,
                     &mut persistence_failures,
+                    &mut original_snapshot_failures,
                 );
             }
         }
@@ -284,10 +300,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
                 discard_pending_snapshot_application_after_load_failure(
                     &mut commands,
                     pending_snapshot_application_entity,
-                    pending_snapshot_application.save_slot_identifier,
+                    pending_snapshot_application.source,
                     reason,
                     &mut snapshot_scratch_storage,
                     &mut persistence_failures,
+                    &mut original_snapshot_failures,
                 );
                 return;
             }
@@ -312,10 +329,11 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
             discard_pending_snapshot_application_after_load_failure(
                 &mut commands,
                 pending_snapshot_application_entity,
-                pending_snapshot_application.save_slot_identifier,
+                pending_snapshot_application.source,
                 reason,
                 &mut snapshot_scratch_storage,
                 &mut persistence_failures,
+                &mut original_snapshot_failures,
             );
             return;
         }
@@ -335,19 +353,30 @@ pub(in super::super) fn coordinate_pending_snapshot_validation_baseline_world_lo
 fn discard_pending_snapshot_application_after_load_failure(
     commands: &mut Commands,
     pending_snapshot_application_entity: Entity,
-    save_slot_identifier: SaveSlotId,
+    source: SavedGameSource,
     persistence_failure: WorldSnapshotPersistenceFailure,
     snapshot_scratch_storage: &mut ReusableWorldSnapshotByteBuffer,
     persistence_failure_messages: &mut MessageWriter<WorldSnapshotPersistenceFailed>,
+    original_failures: &mut MessageWriter<OriginalSavedGameLoadFailed>,
 ) {
     commands
         .entity(pending_snapshot_application_entity)
         .despawn();
-    publish_persistence_failure_for_slot_operation(
-        persistence_failure_messages,
-        WorldSnapshotPersistenceOperation::LoadFromSlot,
-        save_slot_identifier,
-        persistence_failure,
-    );
+    match source {
+        SavedGameSource::Native(save_slot_identifier) => {
+            publish_persistence_failure_for_slot_operation(
+                persistence_failure_messages,
+                WorldSnapshotPersistenceOperation::LoadFromSlot,
+                save_slot_identifier,
+                persistence_failure,
+            )
+        }
+        SavedGameSource::Original(source_identifier) => {
+            original_failures.write(OriginalSavedGameLoadFailed {
+                source_identifier,
+                reason: format!("{persistence_failure:?}"),
+            });
+        }
+    }
     snapshot_scratch_storage.clear_logical_contents();
 }

@@ -78,3 +78,14 @@ mod world_snapshot_capture;
 mod world_snapshot_capture_system_parameters;
 mod world_snapshot_section_encoding;
 pub(super) mod world_snapshot_types;
+
+pub(super) mod original_saved_game_catalogue_execution;
+mod original_saved_game_catalogue_reading;
+
+mod runtime_continuation_snapshot_application;
+mod runtime_continuation_snapshot_capture;
+mod runtime_continuation_snapshot_encoding;
+mod runtime_continuation_snapshot_section;
+mod runtime_continuation_snapshot_types;
+
+mod behavior_snapshot_identity_high_water_marks;

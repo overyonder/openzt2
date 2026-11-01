@@ -96,6 +96,7 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
 
         let mut catalogue = photo_fixture_catalogue();
         catalogue.starting_zoos.push(StartingZooRecord {
+            next_persistent_identifier: None,
             environment: SCENARIO,
             id: SCENARIO,
             profile: PROFILE,
@@ -165,6 +166,7 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
             environments: vec![EnvironmentDefinition {
                 id: SCENARIO,
                 family: SCENARIO,
+                light_program: None,
                 light_keyframes: vec![],
                 fog_keyframes: vec![],
                 sky_keyframes: vec![],

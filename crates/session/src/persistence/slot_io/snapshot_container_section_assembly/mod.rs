@@ -44,10 +44,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     maintenance_snapshot: &super::maintenance_snapshot_types::MaintenanceSnapshot,
     staff_snapshot_records: &[super::staff_snapshot_types::StaffSnapshotRecord],
     tank_snapshot_records: &[TankSnapshotRecord],
-    topology_snapshot_records: &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
+    topology_snapshot_records: Option<
+        &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
+    >,
     economy_snapshot_records: &EconomySnapshotRecords,
     donation_snapshot_records: &[super::donation_snapshot_section::DonationSnapshotRecord],
-    placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
+    placement_snapshot_records: Option<
+        &[super::placement_snapshot_section::PlacementSnapshotRecord],
+    >,
     progression_snapshot_records: &ProgressionSnapshotRecords,
     simulation_time_snapshot_record: &SimulationTimeSnapshotRecord,
     show_stage_snapshot_records: &[ShowStageSnapshotRecord],
@@ -57,11 +61,18 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     photo_snapshot_records: &[PhotoSnapshotRecord],
     photo_challenge_progress_snapshot_records: &[PhotoChallengeProgressSnapshotRecord],
     behavior_snapshot_records: &[super::behavior_snapshot_types::BehaviorActorSnapshot],
+    runtime_continuation: Option<
+        &super::runtime_continuation_snapshot_types::RuntimeContinuationSnapshot,
+    >,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     validate_animal_adoption_offer_inventory_presence_for_session_mode(
         animal_adoption_offer_inventory,
         world_snapshot_record.session_mode,
     )?;
+    let runtime_bytes =
+        super::runtime_continuation_snapshot_section::encode_runtime_continuation_section(
+            runtime_continuation,
+        )?;
     let mut world_bytes = Vec::new();
     append_encoded_world_snapshot_section(&mut world_bytes, world_snapshot_record)?;
     if world_snapshot_record.source_document.is_some() != terrain_snapshot_record.is_some() {
@@ -70,15 +81,18 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     let terrain_bytes = terrain_snapshot_record
         .map(super::terrain_snapshot_section_encoding::encode_terrain_snapshot_record)
         .transpose()?;
-    let placement_bytes =
-        super::placement_snapshot_section::encode_placement_records(placement_snapshot_records)?;
+    let placement_bytes = placement_snapshot_records
+        .map(super::placement_snapshot_section::encode_placement_records)
+        .transpose()?
+        .unwrap_or_default();
     let behavior_bytes =
         super::behavior_snapshot_section_encoding::encode_behavior_actor_snapshots(
             behavior_snapshot_records,
         )?;
-    let topology_bytes = super::fence_topology_snapshot_section::encode_fence_topology_records(
-        topology_snapshot_records,
-    )?;
+    let topology_bytes = topology_snapshot_records
+        .map(super::fence_topology_snapshot_section::encode_fence_topology_records)
+        .transpose()?
+        .unwrap_or_default();
     let scenario_bytes = super::scenario_snapshot_section::encode(scenario_snapshot)?;
     let donation_bytes =
         super::donation_snapshot_section::encode_donation_records(donation_snapshot_records)?;
@@ -94,6 +108,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     WorldSnapshotSectionKind::ENCODING_ORDER
         .into_iter()
         .try_for_each(|snapshot_section| match snapshot_section {
+            WorldSnapshotSectionKind::RuntimeContinuation => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    u32::from(runtime_continuation.is_some()),
+                    |bytes| bytes.extend_from_slice(&runtime_bytes),
+                )
+            }
             WorldSnapshotSectionKind::Terrain => {
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
@@ -110,7 +132,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
-                    topology_snapshot_records.len() as u32,
+                    topology_snapshot_records.map_or(0, <[_]>::len) as u32,
                     |bytes| bytes.extend_from_slice(&topology_bytes),
                 )
             }
@@ -189,7 +211,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
                     snapshot_section,
-                    placement_snapshot_records.len() as u32,
+                    placement_snapshot_records.map_or(0, <[_]>::len) as u32,
                     |bytes| bytes.extend_from_slice(&placement_bytes),
                 )
             }
@@ -314,13 +336,13 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 snapshot_container_bytes,
                 tank_snapshot_records
                     .len()
-                    .saturating_add(topology_snapshot_records.len())
+                    .saturating_add(topology_snapshot_records.map_or(0, <[_]>::len))
                     .saturating_add(animal_snapshot_records.len())
                     .saturating_add(
                         super::scenario_snapshot_section::persistent_ids(scenario_snapshot).count(),
                     )
                     .saturating_add(donation_snapshot_records.len())
-                    .saturating_add(placement_snapshot_records.len())
+                    .saturating_add(placement_snapshot_records.map_or(0, <[_]>::len))
                     .saturating_add(maintenance_snapshot.waste.len())
                     .saturating_add(staff_snapshot_records.len())
                     .saturating_add(show_stage_snapshot_records.len())

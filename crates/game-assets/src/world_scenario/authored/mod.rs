@@ -9,6 +9,7 @@ use crate::source_document::ordered_source_document_types::{
 };
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_data::{
+    AssetId,
     world_definitions::simulation_time::SimulationTimingDefinition,
     world_scenario::{
         CampaignScenarioRecord, PhotoChallengeMemberRecord, PhotoChallengeRule,
@@ -17,7 +18,6 @@ use openzt2_game_data::{
         ScenarioObjectiveGroupRecord, ScenarioObjectiveRecord, ScenarioRecordFlags,
         ScenarioScriptBinding, ScenarioScriptPhase, WorldLocationRecord, WorldScenarioDocument,
     },
-    AssetId,
 };
 
 pub(in crate::world_scenario) fn lower_documents(
@@ -95,6 +95,15 @@ pub(in crate::world_scenario) fn lower_documents(
                 );
                 if !rules.is_empty() {
                     let scenario = source_stem(&path)?;
+                    collect_bindings(
+                        document,
+                        &document.root,
+                        &scenario,
+                        &scenario,
+                        "alwaysrunaction",
+                        ScenarioScriptPhase::AlwaysRun,
+                        &mut bindings,
+                    )?;
                     let mut objective_groups = Vec::new();
                     collect_objective_groups(
                         document,
@@ -196,6 +205,14 @@ pub(in crate::world_scenario) fn lower_documents(
                         objectives,
                         objective_groups,
                         time_limit_ticks: 0,
+                        evaluation_interval_seconds: match document.root.attribute("interval") {
+                            Some(value) => crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                                .filter(|value| value.is_finite())
+                                .ok_or_else(|| {
+                                    at_root(document, "scenario interval is not finite seconds")
+                                })?,
+                            None => 1.0,
+                        },
                         flags,
                         ui_modifications: lower_scenario_ui_modifications(&document.root),
                     };
@@ -207,6 +224,7 @@ pub(in crate::world_scenario) fn lower_documents(
                         existing.objectives = record.objectives;
                         existing.objective_groups = record.objective_groups;
                         existing.flags = record.flags;
+                        existing.evaluation_interval_seconds = record.evaluation_interval_seconds;
                         existing.ui_modifications = record.ui_modifications;
                         if existing.name_key == AssetId::default() {
                             existing.name_key = record.name_key;
@@ -435,13 +453,50 @@ fn collect_bindings(
     else {
         return Ok(());
     };
+    collect_action_bindings(
+        document,
+        container,
+        AssetId::from_key(scenario),
+        AssetId::from_key(objective),
+        phase,
+        output,
+    )
+}
+
+pub(crate) fn lower_scenario_manager_always_run_bindings(
+    document: &OrderedSourceDocument,
+    manager: &OrderedSourceDocumentNode,
+    scenario: AssetId,
+) -> io::Result<Vec<ScenarioScriptBinding>> {
+    let mut bindings = Vec::new();
+    if let Some(container) = child(manager, "alwaysrunaction") {
+        collect_action_bindings(
+            document,
+            container,
+            scenario,
+            scenario,
+            ScenarioScriptPhase::AlwaysRun,
+            &mut bindings,
+        )?;
+    }
+    Ok(bindings)
+}
+
+fn collect_action_bindings(
+    document: &OrderedSourceDocument,
+    container: &OrderedSourceDocumentNode,
+    scenario: AssetId,
+    objective: AssetId,
+    phase: ScenarioScriptPhase,
+    output: &mut Vec<ScenarioScriptBinding>,
+) -> io::Result<()> {
     for action in descendants(container.element_children())
         .filter(|node| local(&node.name) == "BFScenarioScriptAction")
     {
         let entry = required(document, action, "entry")?.trim_start_matches(['@', '#']);
         output.push(ScenarioScriptBinding {
-            scenario: AssetId::from_key(scenario),
-            objective: AssetId::from_key(objective),
+            scenario,
+            objective,
             script: required(document, action, "script")?.to_owned(),
             entry: entry.strip_suffix("()").unwrap_or(entry).to_owned(),
             phase,

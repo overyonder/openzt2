@@ -1,176 +1,197 @@
-use super::guest_definition_queries::find_guest_definition;
-use super::guest_definition_queries::guest_need_rows;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestDefinition;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedDefinition;
-use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestNeedSurveySignals;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
-use super::guest_simulation_calculations::survey_rate_permille;
-use super::guest_simulation_types::AdjustGuestSurveyData;
-use super::guest_simulation_types::Guest;
-use super::guest_simulation_types::GuestArchetype;
-use super::guest_simulation_types::GuestDessert;
-use super::guest_simulation_types::GuestGift;
-use super::guest_simulation_types::GuestHunger;
-use super::guest_simulation_types::GuestRestroom;
-use super::guest_simulation_types::GuestSurvey;
-use super::guest_simulation_types::GuestThirst;
+use openzt2_game_assets::world_definitions::{
+    world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+};
+use openzt2_game_data::AssetId;
+use openzt2_world_state::{
+    simulation_time::simulation_clock_types::ZooCalendar,
+    world_spawn::world_load_completion_marker::WorldLoadCompleted,
+};
+use openzt2_zoo_state::{
+    animal_behavior::behavior_trigger_types::BehaviorSubjectTrigger,
+    guests::{
+        guest_simulation_types::{AdjustGuestSurveyData, GuestArchetype, GuestFoodPurchaseCounts},
+        guest_survey_types::{
+            GuestCriticalNeedObservations, GuestSurvey, GuestSurveyExperience, GuestSurveyRating,
+        },
+    },
+};
 
 pub(super) fn initialize_guest_survey(
     roots: Query<(), With<WorldLoadCompleted>>,
     survey: Option<Res<GuestSurvey>>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active: Res<WorldDefinitions>,
     mut commands: Commands,
 ) {
-    if survey.is_none() && !roots.is_empty() {
-        commands.insert_resource(GuestSurvey::default());
+    if survey.is_some() || roots.is_empty() {
+        return;
+    }
+    let Some(policy) = active
+        .get(&definitions)
+        .and_then(|definitions| definitions.guest_generation())
+    else {
+        return;
+    };
+    commands.insert_resource(GuestSurvey {
+        critical_need_countdown_seconds: policy.need_survey.check_interval_ns as f32 * 1e-9,
+        ..Default::default()
+    });
+}
+
+pub(super) fn advance_guest_survey_day(
+    calendar: Res<ZooCalendar>,
+    survey: Option<ResMut<GuestSurvey>>,
+) {
+    if let Some(mut survey) = survey {
+        survey.advance_day_of_month(calendar.day);
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) fn route_guest_survey_triggers(
+    mut triggers: MessageReader<BehaviorSubjectTrigger>,
+    mut requests: MessageWriter<AdjustGuestSurveyData>,
+) {
+    let survey = AssetId::from_key("adjust_surveydata");
+    for trigger in triggers.read().filter(|trigger| trigger.trigger == survey) {
+        requests.write(AdjustGuestSurveyData {
+            guest: trigger.subject,
+        });
+    }
+}
+
 pub(crate) fn adjust_guest_survey_data(
     mut requests: MessageReader<AdjustGuestSurveyData>,
-    clock: Res<ZooClock>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
+    active: Res<WorldDefinitions>,
     survey: Option<ResMut<GuestSurvey>>,
     guests: Query<(
         &GuestArchetype,
-        &GuestHunger,
-        &GuestThirst,
-        &GuestDessert,
-        &GuestGift,
-        &GuestRestroom,
+        &GuestCriticalNeedObservations,
+        &GuestSurveyExperience,
+        Option<&GuestFoodPurchaseCounts>,
     )>,
 ) {
-    let Some(mut survey) = survey else { return };
-    let Some(definitions) = active_definitions.get(&definitions) else {
+    let Some(mut survey) = survey else {
+        return;
+    };
+    let Some(definitions) = active.get(&definitions) else {
         return;
     };
     let Some(policy) = definitions
         .guest_generation()
-        .map(|policy| &policy.need_survey)
+        .map(|policy| policy.need_survey)
     else {
         return;
     };
-    reset_survey_month(&mut survey, clock.absolute_day / 30);
-    let monitored = policy.monitored;
-    let hits = requests
-        .read()
-        .filter_map(|request| guests.get(request.guest).ok())
-        .filter(|(archetype, hunger, thirst, dessert, gift, restroom)| {
-            find_guest_definition(definitions, archetype.0).is_some_and(|(_, definition)| {
-                guest_has_authored_critical_survey_need(
-                    definition, monitored, hunger, thirst, dessert, gift, restroom,
-                )
-            })
-        })
-        .count() as u16;
-    update_critical_survey_score(&mut survey, hits, policy.maximum_critical_hits_per_month);
-}
-
-#[allow(clippy::type_complexity)]
-
-pub(crate) fn survey_guest_needs(
-    clock: Res<ZooClock>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    survey: Option<ResMut<GuestSurvey>>,
-    guests: Query<
-        (
-            &GuestArchetype,
-            &GuestHunger,
-            &GuestThirst,
-            &GuestDessert,
-            &GuestGift,
-            &GuestRestroom,
-        ),
-        With<Guest>,
-    >,
-) {
-    let Some(mut survey) = survey else { return };
-    let Some(asset) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let Some(policy) = asset.guest_generation() else {
-        return;
-    };
-    if clock.tick < survey.next_tick {
-        return;
-    }
-    let fixed_hz = u64::from(asset.timing().fixed_hz.max(1));
-    let interval = policy
-        .need_survey
-        .check_interval_ns
-        .saturating_mul(fixed_hz)
-        .saturating_add(999_999_999)
-        / 1_000_000_000;
-    survey.next_tick = clock.tick.saturating_add(interval.max(1));
-    reset_survey_month(&mut survey, clock.absolute_day / 30);
-    let monitored = policy.need_survey.monitored;
-    let hits = guests
-        .iter()
-        .filter(|(archetype, hunger, thirst, dessert, gift, restroom)| {
-            find_guest_definition(asset, archetype.0).is_some_and(|(_, definition)| {
-                guest_has_authored_critical_survey_need(
-                    definition, monitored, hunger, thirst, dessert, gift, restroom,
-                )
-            })
-        })
-        .count() as u16;
-    let maximum_critical_hits = policy.need_survey.maximum_critical_hits_per_month;
-    update_critical_survey_score(&mut survey, hits, maximum_critical_hits);
-}
-
-fn reset_survey_month(survey: &mut GuestSurvey, month: u32) {
-    if survey.month != month {
-        survey.month = month;
-        survey.critical_hits = 0;
-        survey.education_points = 0;
-        survey.entertainment_points = 0;
+    for request in requests.read() {
+        let Ok((archetype, counters, experience, food)) = guests.get(request.guest) else {
+            continue;
+        };
+        if definitions.find_guest(archetype.0).is_none() {
+            continue;
+        }
+        let ratings = super::guest_survey_scoring::score_guest_survey(
+            counters,
+            *experience,
+            food.unwrap_or(&GuestFoodPurchaseCounts::default()),
+            policy,
+        );
+        for (rating, value) in [
+            GuestSurveyRating::Recommendation,
+            GuestSurveyRating::Happiness,
+            GuestSurveyRating::Entertainment,
+            GuestSurveyRating::Education,
+            GuestSurveyRating::Food,
+            GuestSurveyRating::Drink,
+            GuestSurveyRating::Dessert,
+            GuestSurveyRating::FavoriteFood,
+            GuestSurveyRating::Donation,
+            GuestSurveyRating::Gift,
+            GuestSurveyRating::Bathroom,
+        ]
+        .into_iter()
+        .zip(ratings)
+        {
+            survey.record_rating(rating, value);
+        }
     }
 }
 
-fn update_critical_survey_score(survey: &mut GuestSurvey, hits: u16, maximum_critical_hits: u16) {
-    survey.critical_hits = survey
-        .critical_hits
-        .saturating_add(hits)
-        .min(maximum_critical_hits);
-    survey.critical_need_rate_permille = survey_rate_permille(
-        u32::from(maximum_critical_hits.saturating_sub(survey.critical_hits)),
-        u32::from(maximum_critical_hits),
-    );
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-fn guest_has_authored_critical_survey_need(
-    definition: &GuestDefinition,
-    monitored: GuestNeedSurveySignals,
-    hunger: &GuestHunger,
-    thirst: &GuestThirst,
-    dessert: &GuestDessert,
-    gift: &GuestGift,
-    restroom: &GuestRestroom,
-) -> bool {
-    let Some(needs) = guest_need_rows(definition) else {
-        return false;
-    };
-    (monitored.contains_all(GuestNeedSurveySignals::HUNGER)
-        && guest_need_pressure_reached_authored_threshold(hunger.value, needs[0]))
-        || (monitored.contains_all(GuestNeedSurveySignals::THIRST)
-            && guest_need_pressure_reached_authored_threshold(thirst.value, needs[1]))
-        || (monitored.contains_all(GuestNeedSurveySignals::DESSERT)
-            && guest_need_pressure_reached_authored_threshold(dessert.value, needs[2]))
-        || (monitored.contains_all(GuestNeedSurveySignals::GIFT)
-            && guest_need_pressure_reached_authored_threshold(gift.value, needs[3]))
-        || (monitored.contains_all(GuestNeedSurveySignals::BATHROOM)
-            && guest_need_pressure_reached_authored_threshold(restroom.value, needs[5]))
-}
-
-fn guest_need_pressure_reached_authored_threshold(
-    wellness_permille: u16,
-    need: &GuestNeedDefinition,
-) -> bool {
-    1_000_u16.saturating_sub(wellness_permille) >= need.critical_threshold
+    #[test]
+    fn authored_survey_trigger_records_each_channel_once_before_the_next_action() {
+        let mut app = App::new();
+        app.init_resource::<Assets<WorldDefinitionAsset>>()
+            .insert_resource(GuestSurvey {
+                critical_need_countdown_seconds: 5.0,
+                previous_day_of_month: 9,
+                current_day_of_month: 1,
+                ..Default::default()
+            })
+            .add_message::<BehaviorSubjectTrigger>()
+            .add_message::<AdjustGuestSurveyData>()
+            .add_systems(
+                Update,
+                (route_guest_survey_triggers, adjust_guest_survey_data).chain(),
+            );
+        let document = super::super::viewing_reaction_composition_tests::policy_document();
+        let handle = app
+            .world_mut()
+            .resource_mut::<Assets<WorldDefinitionAsset>>()
+            .add(WorldDefinitionAsset::from_test_document(document.clone()));
+        let mut active = WorldDefinitions::default();
+        active.index_test_document(handle, &document);
+        app.insert_resource(active);
+        let guest = app
+            .world_mut()
+            .spawn((
+                GuestArchetype(AssetId::from_key("viewing-test")),
+                GuestCriticalNeedObservations::default(),
+                GuestSurveyExperience {
+                    happiness_sum: 100.0,
+                    happiness_samples: 2,
+                    entertainment_sum: 25.0,
+                    entertainment_views: 1,
+                    education_points: 25.0,
+                    saw_favorite_animal: true,
+                    ..Default::default()
+                },
+            ))
+            .id();
+        app.world_mut().write_message(BehaviorSubjectTrigger {
+            subject: guest,
+            trigger: AssetId::from_key("adjust_surveydata"),
+        });
+        app.update();
+        let survey = app.world().resource::<GuestSurvey>();
+        assert!(
+            survey
+                .ratings
+                .iter()
+                .all(|history| history.daily_counts[0] == 1 && history.cumulative_count == 0)
+        );
+        assert_eq!(
+            survey.ratings[GuestSurveyRating::Recommendation as usize].daily_ratings[0],
+            100.0
+        );
+        assert_eq!(
+            survey.ratings[GuestSurveyRating::Happiness as usize].daily_ratings[0],
+            50.0
+        );
+        assert_eq!(survey.critical_need_countdown_seconds, 5.0);
+        app.world_mut().entity_mut(guest).despawn();
+        app.update();
+        assert!(
+            app.world()
+                .resource::<GuestSurvey>()
+                .ratings
+                .iter()
+                .all(|history| history.daily_counts[0] == 1)
+        );
+    }
 }

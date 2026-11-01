@@ -8,6 +8,7 @@ use crate::{
     },
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     world_scenario::{
+        original_saved_world_configuration_loading::load_saved_world_configuration,
         saved_world_map_metadata::lower_saved_world_map_metadata,
         world_scenario_document_source::WorldScenarioDocumentSource,
         world_source_document_dependency_lowering::lower_saved_world_starting_document_with_scene_dependencies,
@@ -24,6 +25,7 @@ pub struct OriginalSavedGameAsset {
     pub document: OrderedSourceDocument,
     pub source: WorldScenarioDocumentSource,
     pub terrain: Handle<TerrainAsset>,
+    pub unlimited_cash: bool,
 }
 
 #[derive(TypePath)]
@@ -98,15 +100,43 @@ impl AssetLoader for OriginalSavedGameAssetLoader {
                 "saved world has no map metadata",
             )
         })?;
+        let manager = document
+            .root
+            .element_children()
+            .find(|node| node.name == "BFContext")
+            .and_then(|context| {
+                context
+                    .element_children()
+                    .find(|node| node.name == "BFGManager")
+            })
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidData, "saved world has no BFGManager")
+            })?;
+        let next = manager
+            .attribute("topLevelGlobalID")
+            .and_then(|value| value.parse::<u64>().ok())
+            .filter(|next| *next != 0)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "saved BFGManager topLevelGlobalID is not a nonzero u64",
+                )
+            })?;
+        starting_zoos[0].next_persistent_identifier = Some(next);
         starting_zoos[0].id = map.starting_zoo;
         starting_zoos[0].map = map.id;
         source.document.starting_zoos = starting_zoos;
         source.scenes = starting.scenes;
+        let (configuration, unlimited_cash) =
+            load_saved_world_configuration(&document, map.id, &self.archives, context).await?;
+        source.document.scenarios = configuration.scenarios;
+        source.document.scenario_script_bindings = configuration.scenario_script_bindings;
         let terrain = context.load(path);
         Ok(OriginalSavedGameAsset {
             document,
             source,
             terrain,
+            unlimited_cash,
         })
     }
 

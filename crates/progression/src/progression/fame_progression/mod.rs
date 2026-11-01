@@ -6,7 +6,8 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle};
-use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestSurvey};
+use openzt2_zoo_state::guests::guest_simulation_types::Guest;
+use openzt2_zoo_state::guests::guest_survey_types::{GuestSurvey, GuestSurveyRating};
 
 use super::{
     award_and_progression_fact_types::{
@@ -15,8 +16,8 @@ use super::{
     catalogue_definition_index_queries::find_catalogue_definition_index,
     catalogue_unlock_set_operations::mark_catalogue_definition_unlocked_at_index,
     fame_calculations::{
-        calculate_authentic_zoo_fame, select_fame_level_for_rating_and_guest_count,
-        update_current_and_maximum_fame, ZooFameCalculationInputs,
+        ZooFameCalculationInputs, calculate_authentic_zoo_fame,
+        select_fame_level_for_rating_and_guest_count, update_current_and_maximum_fame,
     },
     fame_types::Fame,
     profile_challenge_types::TotalAnimalsReleasedCount,
@@ -40,7 +41,7 @@ pub(super) fn apply_scenario_maximum_fame_requests(
             fame.maximum_percent_reached = Some(request.percent);
             fame.maximum_reached = fame
                 .maximum_reached
-                .max((request.percent / 10.0).floor() as u8);
+                .max(Fame::half_stars_for_percent(request.percent));
             changed.write(ProgressionFactChanged::Fame);
         }
     }
@@ -92,13 +93,16 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
             .0
             .saturating_add(earned_awards.iter().count() as u32);
         let education_view_rate = survey.as_ref().map_or(rating.education_permille, |s| {
-            s.education_view_rate_permille.max(rating.education_permille)
+            s.rating_permille(GuestSurveyRating::Education)
+                .unwrap_or(rating.education_permille)
+                .max(rating.education_permille)
         });
         let entertainment_view_rate =
             survey
                 .as_ref()
                 .map_or(rating.guest_satisfaction_permille, |s| {
-                    s.entertainment_view_rate_permille
+                    s.rating_permille(GuestSurveyRating::Entertainment)
+                        .unwrap_or(rating.guest_satisfaction_permille)
                         .max(rating.guest_satisfaction_permille)
                 });
         calculate_authentic_zoo_fame(&ZooFameCalculationInputs {
@@ -142,8 +146,8 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
     use openzt2_game_data::AssetId;
+    use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 
     #[test]
     fn authentic_fame_progression_advances_fame_and_emits_change() {
@@ -170,18 +174,28 @@ mod tests {
             .index_test_document(world_handle, &world_document);
 
         app.world_mut().resource_mut::<Fame>().half_stars = 1;
-        app.world_mut().resource_mut::<ZooRating>().animal_welfare_permille = 700;
-        app.world_mut().resource_mut::<ZooRating>().guest_satisfaction_permille = 800;
-        app.world_mut().resource_mut::<ZooRating>().education_permille = 400;
+        app.world_mut()
+            .resource_mut::<ZooRating>()
+            .animal_welfare_permille = 700;
+        app.world_mut()
+            .resource_mut::<ZooRating>()
+            .guest_satisfaction_permille = 800;
+        app.world_mut()
+            .resource_mut::<ZooRating>()
+            .education_permille = 400;
         app.world_mut().resource_mut::<ScenarioAwardPointTotal>().0 = 1;
 
         let species_a = AssetId::from_key("species-a");
         let species_b = AssetId::from_key("species-b");
 
-        app.world_mut().spawn((Animal, SpeciesHandle { species: species_a }));
-        app.world_mut().spawn((Animal, SpeciesHandle { species: species_a }));
-        app.world_mut().spawn((Animal, SpeciesHandle { species: species_b }));
-        app.world_mut().spawn((Animal, SpeciesHandle { species: species_b }));
+        app.world_mut()
+            .spawn((Animal, SpeciesHandle { species: species_a }));
+        app.world_mut()
+            .spawn((Animal, SpeciesHandle { species: species_a }));
+        app.world_mut()
+            .spawn((Animal, SpeciesHandle { species: species_b }));
+        app.world_mut()
+            .spawn((Animal, SpeciesHandle { species: species_b }));
 
         for _ in 0..10 {
             app.world_mut().spawn(Guest);

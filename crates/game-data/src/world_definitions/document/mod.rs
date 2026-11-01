@@ -60,6 +60,8 @@ use super::{
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct WorldDefinitionDocument {
     pub objects: Vec<WorldObjectDefinition>,
+    #[serde(default)]
+    pub entity_naming: Vec<super::entity_naming::EntityNamingDefinition>,
     pub placeables: Vec<PlaceableDefinition>,
     pub facilities: Vec<FacilityDefinition>,
     pub maintenance_definitions: Vec<MaintenanceDefinition>,
@@ -84,6 +86,8 @@ pub struct WorldDefinitionDocument {
     pub rampage_rules: Vec<RampageRule>,
     pub catalogue: Vec<CatalogueEntry>,
     pub animal_adoption_offer_configuration: Option<AnimalAdoptionOfferConfiguration>,
+    #[serde(default)]
+    pub animal_adoption_species_eligibility: Vec<super::catalogue_and_progression::animal_adoption_species_eligibility::AnimalAdoptionSpeciesEligibility>,
     pub zoopedia: Vec<ZoopediaEntry>,
     pub research: Vec<ResearchDefinition>,
     pub unlocks: Vec<UnlockDefinition>,
@@ -112,6 +116,8 @@ pub struct WorldDefinitionDocument {
     pub cameras: Vec<CameraTuningDefinition>,
     pub simulation_timing: Option<SimulationTimingDefinition>,
     pub guest_generation: Option<GuestGenerationPolicy>,
+    #[serde(default)]
+    pub guest_favourite_animal_trend: Option<super::guest_favourite_animal_trend_policy::GuestFavouriteAnimalTrendPolicy>,
     #[serde(default)]
     pub need_adjustment: Option<super::need_adjustment::NeedAdjustmentPolicy>,
     #[serde(default)]

@@ -11,12 +11,15 @@ pub(crate) mod guest_arrival_execution;
 mod guest_behavior_fact_execution;
 mod guest_definition_queries;
 pub(crate) mod guest_destination_and_viewing_execution;
+mod guest_favourite_animal_trend_execution;
 pub(crate) mod guest_lifecycle_and_memory_execution;
 pub(crate) mod guest_need_execution;
 mod guest_self_task_selection;
 use openzt2_zoo_state::guests::guest_simulation_calculations;
 use openzt2_zoo_state::guests::guest_simulation_types;
 pub(crate) mod guest_survey_execution;
+mod guest_survey_need_sampling;
+mod guest_survey_scoring;
 mod guest_target_eligibility;
 mod guest_task_need_facts;
 mod guest_task_progress_diagnostics;
@@ -41,13 +44,15 @@ use guest_lifecycle_and_memory_execution::{
 };
 use guest_need_execution::{apply_guest_satisfaction_adjustments, decay_guest_needs};
 use guest_survey_execution::{
-    adjust_guest_survey_data, initialize_guest_survey, survey_guest_needs,
+    adjust_guest_survey_data, advance_guest_survey_day, initialize_guest_survey,
+    route_guest_survey_triggers,
 };
 
 use guest_simulation_types::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_zoo_state::guests::guest_survey_types::GuestSurvey;
 
 pub struct GuestsPlugin;
 
@@ -59,6 +64,7 @@ impl Plugin for GuestsPlugin {
             .add_message::<GuestReactionApplied>()
             .add_message::<AdjustGuestSatisfaction>()
             .add_message::<AdjustGuestSurveyData>()
+            .add_message::<openzt2_zoo_state::animal_behavior::behavior_trigger_types::BehaviorSubjectTrigger>()
             .add_message::<GuestArrived>()
             .add_message::<GuestReachedEntrance>()
             .add_message::<GuestDeparted>()
@@ -68,9 +74,9 @@ impl Plugin for GuestsPlugin {
                 Update,
                 (
                     initialize_guest_arrivals,
+                    guest_favourite_animal_trend_execution::initialize_loaded_world_guest_favourite_animal_trends.after(initialize_guest_arrivals),
                     initialize_guest_survey,
                     report_changed_guest_arrival_failures,
-                    adjust_guest_survey_data,
                     apply_guest_satisfaction_adjustments,
                 )
                     .in_set(GameSet::Intent)
@@ -97,7 +103,11 @@ impl Plugin for GuestsPlugin {
                     guest_behavior_fact_execution::apply_authored_guest_behavior_fact_modifications
                         .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
                     guest_task_need_facts::observe_guest_need_triggers,
-                    survey_guest_needs,
+                    guest_survey_need_sampling::initialize_guest_survey_observations,
+                    advance_guest_survey_day,
+                    guest_survey_need_sampling::sample_current_guest_need_observations,
+                    route_guest_survey_triggers,
+                    adjust_guest_survey_data,
                     react_to_visible_litter,
                     choose_guest_destination.in_set(GuestDestinationSelection),
                     guest_self_task_selection::select_idle_guest_tasks,
@@ -105,6 +115,7 @@ impl Plugin for GuestsPlugin {
                 )
                     .chain()
                     .in_set(FixedGameSet::Think)
+                    .after(openzt2_zoo_state::animal_behavior::behavior_trigger_types::BehaviorTriggerDelivery)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(

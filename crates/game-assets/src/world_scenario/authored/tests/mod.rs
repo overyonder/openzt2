@@ -4,6 +4,25 @@ use crate::source_document::{
 };
 
 #[test]
+fn manager_interval_and_always_run_action_keep_separate_owner() {
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("scenario/goals/freeform.xml"),
+        br#"<ZTScenarioMgr interval="4"><alwaysrunaction><BFScenarioScriptAction script="scripts/alwaysrun.lua" entry="exec"/></alwaysrunaction><children><BFScenarioRule name="monitor"><evaluate><BFScenarioScriptAction script="scenario/scripts/freeform.lua" entry="monitor"/></evaluate></BFScenarioRule></children></ZTScenarioMgr>"#,
+    ).unwrap();
+    let document = lower_documents(&[&source], &[], &BTreeMap::new(), None).unwrap();
+    let scenario = &document.scenarios[0];
+    assert_eq!(scenario.evaluation_interval_seconds, 4.0);
+    let always_run = document
+        .scenario_script_bindings
+        .iter()
+        .find(|binding| binding.phase == ScenarioScriptPhase::AlwaysRun)
+        .unwrap();
+    assert_eq!(always_run.objective, scenario.id);
+    assert_ne!(always_run.objective, scenario.objectives[0].id);
+    assert_eq!(always_run.entry, "exec");
+}
+
+#[test]
 fn nested_group_completion_keeps_both_parallel_rules_and_its_callback() {
     let source = parse_blue_fang_source_document(
         AssetPath::new("scenario/goals/startup.xml"),

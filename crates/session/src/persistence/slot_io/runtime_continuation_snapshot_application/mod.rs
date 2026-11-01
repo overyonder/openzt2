@@ -2,10 +2,11 @@ use std::collections::HashSet;
 
 use bevy::prelude::*;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_zoo_state::guests::guest_favourite_animal_trend_types::GuestFavouriteAnimalTrend;
 use openzt2_zoo_state::{
     behavior_task_execution_types::BehaviorTaskExecutionSequence,
     economy::service_types::ServiceRequestSequence,
-    guests::guest_simulation_types::{GuestArrivalState, GuestSurvey},
+    guests::{guest_simulation_types::GuestArrivalState, guest_survey_types::GuestSurvey},
     locomotion::locomotion_types::NavigationRequestSequence,
 };
 
@@ -70,7 +71,102 @@ pub(super) fn apply_runtime_continuation_snapshot(
     );
     apply_optional_resource::<GuestArrivalState>(commands, record.guest_arrivals);
     apply_optional_resource::<GuestSurvey>(commands, record.guest_survey);
+    if let Some(counters) = &record.entity_name_counters {
+        commands.entity(world_root).insert(counters.clone());
+    } else {
+        commands
+            .entity(world_root)
+            .remove::<openzt2_zoo_state::entity_naming_types::EntityNameTagCounters>();
+    }
+    apply_entity_name_registration(
+        commands,
+        world_root,
+        record.registered_entity_name_identifiers.as_deref(),
+    );
+    if let Some(names) = record.entity_names.clone() {
+        commands.queue(move |world: &mut World| {
+            use openzt2_world_state::world_spawn::{
+                persistent_id_types::PersistentId, world_membership_types::WorldMember,
+            };
+            let entities = world
+                .query::<(Entity, &PersistentId, &WorldMember)>()
+                .iter(world)
+                .filter(|(_, _, member)| member.root == world_root)
+                .map(|(entity, id, _)| (entity, id.0))
+                .collect::<Vec<_>>();
+            for (entity, id) in entities {
+                if let Ok(index) = names.binary_search_by_key(&id, |(id, _)| *id) {
+                    world
+                        .entity_mut(entity)
+                        .insert(Name::new(names[index].1.clone()));
+                } else {
+                    world.entity_mut(entity).remove::<Name>();
+                }
+            }
+        });
+    }
+    let audio = record.world_audio_preset.clone();
+    commands.queue(move |world: &mut World| {
+        use openzt2_game_assets::audio::audio_asset_types::AudioAsset;
+        use openzt2_zoo_state::audio::audio_environment_types::WorldAudioPreset;
+        if let Some(mut document) = audio {
+            let asset = AudioAsset::from_world_preset(
+                document.soundscape_contents.remove(0),
+                document.crowd,
+            );
+            let handle = world.resource_mut::<Assets<AudioAsset>>().add(asset);
+            world
+                .entity_mut(world_root)
+                .insert(WorldAudioPreset(handle));
+        } else {
+            world.entity_mut(world_root).remove::<WorldAudioPreset>();
+        }
+    });
+    if let Some(trend) = record.guest_favourite_animal_trend {
+        commands.entity(world_root).insert(trend);
+    } else {
+        commands
+            .entity(world_root)
+            .remove::<GuestFavouriteAnimalTrend>();
+    }
     Ok(())
+}
+
+pub(super) fn apply_entity_name_registration(
+    commands: &mut Commands,
+    world_root: Entity,
+    registered: Option<&[u64]>,
+) {
+    let registered = registered.map(<[u64]>::to_vec);
+    commands.queue(move |world: &mut World| {
+        use openzt2_world_state::world_spawn::{
+            persistent_id_types::PersistentId,
+            world_membership_types::{DefinitionId, WorldMember},
+        };
+        use openzt2_zoo_state::entity_naming_types::EntityNameRegistered;
+        let entities = world
+            .query::<(Entity, &PersistentId, &WorldMember, Option<&DefinitionId>)>()
+            .iter(world)
+            .filter(|(_, _, member, definition)| {
+                member.root == world_root && (registered.is_some() || definition.is_some())
+            })
+            .map(|(entity, id, _, _)| {
+                (
+                    entity,
+                    registered
+                        .as_ref()
+                        .is_none_or(|ids| ids.binary_search(&id.0).is_ok()),
+                )
+            })
+            .collect::<Vec<_>>();
+        for (entity, present) in entities {
+            if present {
+                world.entity_mut(entity).insert(EntityNameRegistered);
+            } else {
+                world.entity_mut(entity).remove::<EntityNameRegistered>();
+            }
+        }
+    });
 }
 
 fn apply_optional_resource<T: Resource>(commands: &mut Commands, resource: Option<T>) {
@@ -109,6 +205,10 @@ mod tests {
 
     fn record() -> RuntimeContinuationSnapshot {
         RuntimeContinuationSnapshot {
+            entity_names: Some(Vec::new()),
+            world_audio_preset: None,
+            entity_name_counters: None,
+            registered_entity_name_identifiers: Some(Vec::new()),
             next_persistent_identifier: 800,
             navigation_sequence: 900,
             behavior_execution_sequence: 1000,
@@ -118,23 +218,32 @@ mod tests {
                 rng: DeterministicRng::from_raw([1234, 789]),
             }),
             guest_survey: Some(GuestSurvey {
-                next_tick: 555,
-                month: 18,
-                critical_hits: 7,
-                education_points: 40,
-                entertainment_points: 90,
-                critical_need_rate_permille: 750,
-                education_view_rate_permille: 200,
-                entertainment_view_rate_permille: 450,
-                view_score_permille: 691,
+                critical_need_countdown_seconds: 5.0,
+                previous_day_of_month: 9,
+                current_day_of_month: 1,
+                ..Default::default()
             }),
+            guest_favourite_animal_trend: Some(
+                GuestFavouriteAnimalTrend::from_saved_state(
+                    [Some(openzt2_game_data::AssetId::from_key("first")), None],
+                    37,
+                    0,
+                )
+                .unwrap(),
+            ),
         }
     }
 
     #[test]
     fn exact_resource_continuation_preserves_gaps_random_draw_and_absence() {
         let mut world = World::new();
-        let root = world.spawn_empty().id();
+        let root = world
+            .spawn(
+                openzt2_world_state::world_spawn::world_membership_types::WorldRoot {
+                    scenario: openzt2_game_data::AssetId::from_key("scenario"),
+                },
+            )
+            .id();
         let other_root = world.spawn_empty().id();
         let mut queue = CommandQueue::default();
         let saved = record();
@@ -184,6 +293,7 @@ mod tests {
         absent.service_request_sequence = None;
         absent.guest_arrivals = None;
         absent.guest_survey = None;
+        absent.guest_favourite_animal_trend = None;
         apply_runtime_continuation_snapshot(
             &mut Commands::new(&mut queue, &world),
             root,
@@ -195,10 +305,113 @@ mod tests {
         assert!(!world.contains_resource::<ServiceRequestSequence>());
         assert!(!world.contains_resource::<GuestArrivalState>());
         assert!(!world.contains_resource::<GuestSurvey>());
+        assert!(world.get::<GuestFavouriteAnimalTrend>(root).is_none());
         assert_eq!(
             world.resource::<NavigationRequestSequence>().last_issued(),
             900
         );
+    }
+
+    #[test]
+    fn historical_name_counts_and_registration_presence_survive_serialized_application() {
+        use openzt2_game_data::AssetId;
+        use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
+        use openzt2_zoo_state::entity_naming_types::{EntityNameRegistered, EntityNameTagCounters};
+        let tag = AssetId::from_key("tree");
+        let mut saved = record();
+        saved.entity_names = Some(vec![(7, "Front Gate".into())]);
+        saved.world_audio_preset = Some(openzt2_game_data::audio::AudioDocument {
+            soundscape_contents: vec![openzt2_game_data::audio::AudioSoundscapeContent {
+                biome: tag,
+                name: "grassland".into(),
+                loop_cue: Some(AssetId::from_key("loop")),
+                cues: vec![openzt2_game_data::audio::AudioSoundscapeCue {
+                    cue: AssetId::from_key("animal"),
+                    weight: 1.0,
+                    day_mask: 3,
+                }],
+            }],
+            crowd: Some(openzt2_game_data::audio::AudioCrowdPolicy {
+                thresholds: [-1, 15, 50, 60, 100, 160, 170, 170],
+                cues: [Some(AssetId::from_key("quiet")), None, None, None, None],
+            }),
+            ..Default::default()
+        });
+        saved.entity_name_counters =
+            Some(EntityNameTagCounters::from_saved_entries([(tag, 85)]).unwrap());
+        saved.registered_entity_name_identifiers = Some(vec![7]);
+        let mut bytes = Vec::new();
+        append_runtime_continuation_snapshot(&mut bytes, &saved).unwrap();
+        let mut decoded = decode_runtime_continuation_snapshot(&bytes).unwrap();
+        let mut world = World::new();
+        world.init_resource::<Assets<openzt2_game_assets::audio::audio_asset_types::AudioAsset>>();
+        let root = world
+            .spawn(
+                openzt2_world_state::world_spawn::world_membership_types::WorldRoot {
+                    scenario: tag,
+                },
+            )
+            .id();
+        let counted = world
+            .spawn((PersistentId(7), WorldMember { root }, DefinitionId(tag)))
+            .id();
+        let fresh = world
+            .spawn((
+                PersistentId(8),
+                WorldMember { root },
+                DefinitionId(tag),
+                EntityNameRegistered,
+            ))
+            .id();
+        let other_root = world.spawn_empty().id();
+        let other = world
+            .spawn((
+                PersistentId(9),
+                WorldMember { root: other_root },
+                DefinitionId(tag),
+            ))
+            .id();
+        let mut queue = CommandQueue::default();
+        apply_runtime_continuation_snapshot(
+            &mut Commands::new(&mut queue, &world),
+            root,
+            &decoded,
+            high_water_marks(&[]),
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        assert_eq!(
+            world.get::<EntityNameTagCounters>(root).unwrap().value(tag),
+            Some(85)
+        );
+        assert_eq!(world.get::<Name>(counted).unwrap().as_str(), "Front Gate");
+        assert!(world.get::<EntityNameRegistered>(counted).is_some());
+        assert!(world.get::<EntityNameRegistered>(fresh).is_none());
+        assert!(world.get::<EntityNameRegistered>(other).is_none());
+        let recaptured = {
+            let mut state = SystemState::<RuntimeContinuationSnapshotCapture>::new(&mut world);
+            state.get(&world).unwrap().capture(root).unwrap()
+        };
+        let mut recaptured_bytes = Vec::new();
+        append_runtime_continuation_snapshot(&mut recaptured_bytes, &recaptured).unwrap();
+        assert_eq!(recaptured_bytes, bytes);
+        decoded.world_audio_preset = None;
+        decoded.entity_name_counters = None;
+        decoded.registered_entity_name_identifiers = None;
+        apply_runtime_continuation_snapshot(
+            &mut Commands::new(&mut queue, &world),
+            root,
+            &decoded,
+            high_water_marks(&[]),
+        )
+        .unwrap();
+        queue.apply(&mut world);
+        assert!(world
+            .get::<openzt2_zoo_state::audio::audio_environment_types::WorldAudioPreset>(root)
+            .is_none());
+        assert!(world.get::<EntityNameTagCounters>(root).is_none());
+        assert!(world.get::<EntityNameRegistered>(fresh).is_some());
+        assert!(world.get::<EntityNameRegistered>(other).is_none());
     }
 
     #[test]
@@ -280,15 +493,13 @@ mod tests {
             let root = world.spawn_empty().id();
             world.insert_resource(NavigationRequestSequence::from_snapshot(55));
             let mut queue = CommandQueue::default();
-            assert!(
-                apply_runtime_continuation_snapshot(
-                    &mut Commands::new(&mut queue, &world),
-                    root,
-                    &saved,
-                    invalid
-                )
-                .is_err()
-            );
+            assert!(apply_runtime_continuation_snapshot(
+                &mut Commands::new(&mut queue, &world),
+                root,
+                &saved,
+                invalid
+            )
+            .is_err());
             queue.apply(&mut world);
             assert_eq!(
                 world.resource::<NavigationRequestSequence>().last_issued(),
@@ -298,12 +509,10 @@ mod tests {
         }
         let mut absent = saved;
         absent.service_request_sequence = None;
-        assert!(
-            validate_runtime_continuation_identity_high_water_marks(
-                &absent,
-                high_water_marks(&[0])
-            )
-            .is_err()
-        );
+        assert!(validate_runtime_continuation_identity_high_water_marks(
+            &absent,
+            high_water_marks(&[0])
+        )
+        .is_err());
     }
 }

@@ -32,6 +32,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     baseline_staff: &[Entity],
     baseline_placements: &[Entity],
     baseline_topology: &[Entity],
+    baseline_scenario: &[Entity],
     topology_snapshot_records: &[openzt2_zoo_state::topology::topology_edit_types::TopologySnapshot],
     placement_snapshot_records: &[super::placement_snapshot_section::PlacementSnapshotRecord],
     tank_snapshot_records: &[LoadedTankSnapshotRecord],
@@ -58,7 +59,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         &mut PhotoChallengeProgress,
     )>,
     progression_snapshot_application_parameters: &ProgressionSnapshotApplicationParameters,
-) -> Result<(), WorldSnapshotPersistenceFailure> {
+) -> Result<u64, WorldSnapshotPersistenceFailure> {
     // Animal rows replace the baseline population. Other baseline identities must not collide.
     let animal_identifiers_are_available = animal_snapshot_records.iter().all(|record| {
         entities_with_persistent_identifiers
@@ -89,6 +90,7 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                 && !baseline_staff.contains(entity)
                 && !baseline_placements.contains(entity)
                 && !baseline_topology.contains(entity)
+                && !baseline_scenario.contains(entity)
         })
         .map(|(_, persistent_identifier)| *persistent_identifier)
         .collect::<Vec<_>>();
@@ -315,7 +317,12 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
         && every_transport_member_and_vehicle_refers_to_a_saved_circuit
         && every_imported_persistent_identifier_is_valid_and_unique
     {
-        Ok(())
+        Ok(existing_persistent_identifiers
+            .iter()
+            .chain(imported_persistent_identifiers.iter())
+            .map(|id| id.0)
+            .max()
+            .unwrap_or(0))
     } else {
         Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)
     }

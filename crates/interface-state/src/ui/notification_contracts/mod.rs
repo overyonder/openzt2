@@ -1,10 +1,16 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NotificationMessage {
+    Localized(AssetId),
+    Text(String),
+}
+
+#[derive(Message, Debug, Clone, PartialEq, Eq)]
 pub struct ShowNotification {
     pub operation: Entity,
-    pub message: AssetId,
+    pub message: NotificationMessage,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,8 +30,8 @@ pub enum NotificationFailure {
     ProjectionFailed,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct PendingNotification {
     pub operation: Entity,
-    pub message: AssetId,
+    pub message: NotificationMessage,
 }

@@ -7,6 +7,7 @@ pub(crate) fn update_current_and_maximum_fame(
 ) -> bool {
     let previous_fame = *fame;
     fame.half_stars = next_half_stars;
+    fame.current_percent = Some(next_percent);
     fame.maximum_reached = fame.maximum_reached.max(next_half_stars);
     fame.maximum_percent_reached = Some(
         fame.maximum_percent_reached
@@ -82,7 +83,7 @@ pub(crate) fn calculate_authentic_zoo_fame(inputs: &ZooFameCalculationInputs) ->
 
     let total_fame = adjusted_animal_fame + adjusted_guest_fame + total_zoo_fame;
     let clamped_fame = total_fame.clamp(1.0, 100.0);
-    let half_stars = (clamped_fame / 10.0).floor().clamp(1.0, 10.0) as u8;
+    let half_stars = Fame::half_stars_for_percent(clamped_fame).clamp(1, 10);
 
     (half_stars, clamped_fame)
 }

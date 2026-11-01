@@ -49,6 +49,7 @@ pub(super) fn refresh_audio_assets_from_archive_overlay(
     index.mixer = None;
     index.ambient = None;
     index.water = None;
+    index.crowd = None;
     index.dirty = true;
     index.revision = Some(revision);
 }
@@ -82,6 +83,7 @@ pub(super) fn index_loaded_audio_assets(
     let mut mixer = None;
     let mut ambient = None;
     let mut water = None;
+    let mut crowd = None;
     let biome_directories = index
         .handles
         .iter()
@@ -141,6 +143,9 @@ pub(super) fn index_loaded_audio_assets(
         if asset.document.water.is_some() {
             water = Some(handle.clone());
         }
+        if asset.document.crowd.is_some() {
+            crowd = Some(handle.clone());
+        }
     }
     for asset in index.handles.iter().filter_map(|handle| assets.get(handle)) {
         for cue in &asset.document.cues {
@@ -164,5 +169,6 @@ pub(super) fn index_loaded_audio_assets(
     index.mixer = mixer;
     index.ambient = ambient;
     index.water = water;
+    index.crowd = crowd;
     index.dirty = false;
 }

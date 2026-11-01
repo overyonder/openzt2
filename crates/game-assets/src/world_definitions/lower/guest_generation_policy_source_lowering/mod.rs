@@ -150,7 +150,7 @@ pub(super) fn bind_guest_policy(
         },
         need_survey: GuestNeedSurveyPolicy {
             check_interval_ns: seconds_ns(
-                required_element_number(&needs, &["CriticalCheckInterval"])?,
+                required_element_number::<f64>(&needs, &["CriticalCheckInterval"])?.max(0.0),
                 record,
             )?,
             maximum_critical_hits_per_month: required_element_number(

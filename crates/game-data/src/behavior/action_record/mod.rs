@@ -79,4 +79,5 @@ pub enum BehaviorAction {
     HeadLook(action::head_look::BehaviorHeadLookAction),
     Wander(action::wander::BehaviorWanderAction),
     SendSelfTokens(Vec<action::token::BehaviorSelfTokenDelivery>),
+    SendSubjectTrigger(crate::AssetId),
 }
