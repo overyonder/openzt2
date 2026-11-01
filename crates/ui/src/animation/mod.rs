@@ -13,7 +13,7 @@ pub struct UiShowHideAnimation {
     pub exit_rate: f32,
     pub delay_ms: f32,
     pub delay_remaining_ms: f32,
-    pub bob_ms: f32,
+    pub bob_factor: f32,
     pub interpolation: UiNodeAnimationInterpolation,
     pub forward: bool,
     pub running: bool,
@@ -94,18 +94,19 @@ pub(super) fn advance_ui_animations(
             (animation.elapsed_ms - step_ms).max(0.0)
         };
         let linear_amount = if animation.duration_ms == 0.0 {
-            if animation.forward {
-                1.0
-            } else {
-                0.0
-            }
+            if animation.forward { 1.0 } else { 0.0 }
         } else {
             animation.elapsed_ms / animation.duration_ms
         };
         let amount = match animation.interpolation {
             UiNodeAnimationInterpolation::Linear => linear_amount,
             UiNodeAnimationInterpolation::Sinusoidal => {
-                (1.0 - (linear_amount * std::f32::consts::PI).cos()) * 0.5
+                if animation.bob_factor == 0.0 {
+                    (1.0 - (linear_amount * std::f32::consts::PI).cos()) * 0.5
+                } else {
+                    let angular_extent = animation.bob_factor * std::f32::consts::FRAC_PI_2;
+                    (angular_extent * linear_amount).sin() / angular_extent.sin()
+                }
             }
         };
         apply_rect(&mut node, &animation, amount, origin.map(|origin| origin.0));
@@ -126,11 +127,6 @@ pub(super) fn advance_ui_animations(
             }
         }
         if animation.elapsed_ms == 0.0 || animation.elapsed_ms == animation.duration_ms {
-            if animation.forward && animation.bob_ms > 0.0 {
-                animation.forward = false;
-                animation.delay_remaining_ms = animation.bob_ms;
-                continue;
-            }
             animation.running = false;
             if !animation.forward {
                 *visibility = Visibility::Hidden;
@@ -193,6 +189,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sine_bob_overshoots_then_keeps_the_shown_endpoint_until_hidden() {
+        let mut application = App::new();
+        application
+            .init_resource::<Time<Real>>()
+            .add_message::<UiAnimationCompleted>()
+            .add_systems(Update, advance_ui_animations);
+        let child = application.world_mut().spawn_empty().id();
+        let entity = application
+            .world_mut()
+            .spawn((
+                Node::default(),
+                Visibility::Inherited,
+                UiShowHideAnimation {
+                    elapsed_ms: 0.0,
+                    duration_ms: 500.0,
+                    exit_rate: 1.0,
+                    delay_ms: 0.0,
+                    delay_remaining_ms: 0.0,
+                    bob_factor: 1.3,
+                    interpolation: UiNodeAnimationInterpolation::Sinusoidal,
+                    forward: true,
+                    running: true,
+                    base_rect: [0.0; 4],
+                    rect_intervals: [Some([0.0, 100.0]), None, None, None],
+                    animates_color: false,
+                    affects_text_color: false,
+                    start_color: [255; 4],
+                    end_color: [255; 4],
+                },
+            ))
+            .add_child(child)
+            .id();
+        application
+            .world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(400));
+        application.update();
+        let Val::Px(position) = application.world().get::<Node>(entity).unwrap().left else {
+            panic!("animation did not position its node");
+        };
+        assert!(position > 100.0);
+        application
+            .world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_millis(100));
+        application.update();
+        assert_eq!(
+            application.world().get::<Node>(entity).unwrap().left,
+            px(100.0)
+        );
+        application
+            .world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(2));
+        application.update();
+        assert_eq!(
+            application.world().get::<Visibility>(entity),
+            Some(&Visibility::Inherited)
+        );
+        let mut animation = application
+            .world_mut()
+            .get_mut::<UiShowHideAnimation>(entity)
+            .unwrap();
+        assert!(animation.forward && !animation.running);
+        animation.start_authored_visibility_transition(false);
+        application.update();
+        assert_eq!(
+            application.world().get::<Visibility>(entity),
+            Some(&Visibility::Hidden)
+        );
+    }
+
+    #[test]
     fn show_hide_rect_animates_negative_position_and_keeps_unanimated_extent() {
         let animation = UiShowHideAnimation {
             elapsed_ms: 0.0,
@@ -200,7 +269,7 @@ mod tests {
             exit_rate: 1.0,
             delay_ms: 0.0,
             delay_remaining_ms: 0.0,
-            bob_ms: 0.0,
+            bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
             forward: true,
             running: true,
@@ -233,7 +302,7 @@ mod tests {
             exit_rate: 1.0,
             delay_ms: 0.0,
             delay_remaining_ms: 0.0,
-            bob_ms: 0.0,
+            bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
             forward: false,
             running: true,
@@ -262,7 +331,7 @@ mod tests {
             exit_rate: 0.02,
             delay_ms: 50.0,
             delay_remaining_ms: 0.0,
-            bob_ms: 0.0,
+            bob_factor: 0.0,
             interpolation: UiNodeAnimationInterpolation::Linear,
             forward: false,
             running: true,

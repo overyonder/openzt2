@@ -140,6 +140,7 @@ fn install_start_document(app: &mut App) -> Handle<WorldScenarioDocumentAsset> {
 
 fn begin_normal_reentry(app: &mut App) -> Entity {
     app.world_mut().write_message(BeginWorldLoad {
+        saved_world_document: None,
         operation: None,
         scenario: SCENARIO,
         mode: WorldSessionMode::Freeform,
@@ -271,6 +272,7 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
         .resource_mut::<WorldScenarios>()
         .queue_test_document(handle.clone());
     app.world_mut().write_message(BeginWorldLoad {
+        saved_world_document: None,
         operation: None,
         scenario: SCENARIO,
         mode: WorldSessionMode::Freeform,

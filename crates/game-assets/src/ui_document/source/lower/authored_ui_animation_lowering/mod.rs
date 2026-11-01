@@ -21,7 +21,7 @@ pub(super) fn lower_animation(
         source.exit_rate,
         source.initial_seconds,
         source.initial_direction,
-        source.bob_seconds,
+        source.bob_factor,
         source.delay_seconds,
         source.function.as_deref(),
         source.start,
@@ -40,7 +40,7 @@ pub(super) fn lower_widget_animation(
         source.exit_rate,
         source.initial_time,
         source.initial_direction,
-        source.bob_seconds,
+        source.bob_factor,
         source.delay_seconds,
         source.function.as_deref(),
         source.start,
@@ -56,7 +56,7 @@ pub(super) fn lower_animation_values(
     exit_rate: Option<f32>,
     initial_seconds: Option<f32>,
     initial_direction: Option<bool>,
-    bob_seconds: Option<f32>,
+    bob_factor: Option<f32>,
     delay_seconds: Option<f32>,
     source_interpolation_name: Option<&str>,
     start: Option<SourceUiRect>,
@@ -67,7 +67,7 @@ pub(super) fn lower_animation_values(
     let seconds = seconds.unwrap_or(0.0);
     let exit_rate = exit_rate.unwrap_or(1.0);
     let initial_seconds = initial_seconds.unwrap_or(0.0);
-    let bob_seconds = bob_seconds.unwrap_or(0.0);
+    let bob_factor = bob_factor.unwrap_or(0.0);
     let delay_seconds = delay_seconds.unwrap_or(0.0);
     if !seconds.is_finite()
         || seconds < 0.0
@@ -75,12 +75,12 @@ pub(super) fn lower_animation_values(
         || exit_rate < 0.0
         || !initial_seconds.is_finite()
         || initial_seconds < 0.0
-        || !bob_seconds.is_finite()
-        || bob_seconds < 0.0
+        || !bob_factor.is_finite()
+        || bob_factor < 0.0
         || !delay_seconds.is_finite()
         || delay_seconds < 0.0
     {
-        return Err(invalid_at(input, "UI animation timing is invalid"));
+        return Err(invalid_at(input, "UI animation parameters are invalid"));
     }
     let interpolation = match source_interpolation_name {
         Some("linear") => UiNodeAnimationInterpolation::Linear,
@@ -112,7 +112,7 @@ pub(super) fn lower_animation_values(
         initial_ms: (initial_seconds * 1000.0).round() as u32,
         initial_forward: initial_direction.unwrap_or(true),
         delay_ms: (delay_seconds * 1000.0).round() as u32,
-        bob_ms: (bob_seconds * 1000.0).round() as u32,
+        bob_factor,
         interpolation,
         rect_intervals,
         animates_color: colors.is_some(),

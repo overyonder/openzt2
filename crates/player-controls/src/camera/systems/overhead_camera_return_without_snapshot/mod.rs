@@ -1,6 +1,8 @@
 //! Recover the authored overhead camera when no temporary return pose exists.
 
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
+
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -33,7 +35,11 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     graphics: Res<GraphicsSettings>,
-    roots: Query<(&SelectedWorldIdentity, &WorldTerrainHorizontalBounds)>,
+    roots: Query<(
+        &SelectedWorldIdentity,
+        &WorldTerrainHorizontalBounds,
+        Option<&SelectedWorldDocumentHandles>,
+    )>,
     mut cameras: Query<
         (
             Entity,
@@ -63,10 +69,16 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
             if *mode == CameraMode::Overhead {
                 continue;
             }
-            let Ok((identity, world_bounds)) = roots.get(member.root) else {
+            let Ok((identity, world_bounds, documents)) = roots.get(member.root) else {
                 continue;
             };
-            let Some(map) = scenarios.map(identity.map) else {
+            let scoped_scenarios = match documents {
+                Some(documents) => scenarios
+                    .with_document(&documents.map)
+                    .and_then(|view| view.with_document(&documents.start)),
+                None => Some(scenarios),
+            };
+            let Some(map) = scoped_scenarios.and_then(|view| view.map(identity.map)) else {
                 continue;
             };
             let camera_id = AssetId(map.camera.0);

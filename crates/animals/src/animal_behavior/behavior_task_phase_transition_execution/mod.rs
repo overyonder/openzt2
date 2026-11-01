@@ -28,6 +28,14 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 
+pub(super) fn begin_behavior_target_candidate_selection_updates(
+    mut actors: Query<&mut BehaviorTargetRetryDelays>,
+) {
+    for mut retry_delays in &mut actors {
+        retry_delays.begin_candidate_selection_update();
+    }
+}
+
 pub(super) fn advance_behavior_tasks_through_return_failure_completion_and_final_outcome(
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,

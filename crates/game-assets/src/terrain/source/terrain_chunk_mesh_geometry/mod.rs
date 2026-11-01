@@ -3,10 +3,10 @@ use crate::model_source::conversion_error::ConversionError;
 
 use bevy::math::Vec3;
 
-use super::blue_fang_terrain_source_types::ParsedBlueFangTerrainSourceData;
+use openzt2_game_data::terrain::TerrainSlopeTile;
 
 pub(super) fn terrain_chunk_triangle_indices(
-    terrain: &ParsedBlueFangTerrainSourceData,
+    slope_tiles: &[TerrainSlopeTile],
     width: usize,
     origin_x: usize,
     origin_z: usize,
@@ -45,7 +45,7 @@ pub(super) fn terrain_chunk_triangle_indices(
                     "terrain chunk vertex index exceeds u32",
                 ))?;
             let source_z = origin_z + cells_z - z - 1;
-            let alternate = !terrain.slope_tiles[source_z / 4 * tile_columns + (origin_x + x) / 4]
+            let alternate = !slope_tiles[source_z / 4 * tile_columns + (origin_x + x) / 4]
                 .uses_alternate_diagonal;
             Ok::<_, ConversionError>(if alternate {
                 [

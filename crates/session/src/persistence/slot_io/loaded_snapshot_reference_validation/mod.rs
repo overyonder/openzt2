@@ -5,7 +5,6 @@ use openzt2_interface_state::photos::photo_challenge_types::PhotoChallenge;
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeProgress;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
-use openzt2_zoo_state::economy::facility_economy_types::FacilityProfit;
 use openzt2_zoo_state::shows::show_stage_types::ShowName;
 use openzt2_zoo_state::shows::show_stage_types::ShowStage;
 use openzt2_zoo_state::shows::show_stage_types::ShowStageOpenState;
@@ -44,7 +43,6 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
     photo_challenge_progress_snapshot_records: &[PhotoChallengeProgressSnapshotRecord],
     entities_with_persistent_identifiers: &Query<(Entity, &PersistentId)>,
     tank_persistent_identifiers: &Query<&PersistentId, With<Tank>>,
-    facility_persistent_identifiers: &Query<&PersistentId, With<FacilityProfit>>,
     show_stages_with_mutable_snapshot_state: &mut Query<
         (
             Entity,
@@ -112,17 +110,26 @@ pub(super) fn validate_loaded_snapshot_references_and_imported_persistent_identi
                 }
             })
             && economy_snapshot_records
-                .facility_economy_records
+                .entity_economy_records
                 .iter()
                 .all(|record| {
-                    placement_snapshot_records.iter().any(|placement| {
-                        placement.persistent_identifier == record.persistent_identifier.0
-                    }) || facility_persistent_identifiers
-                        .iter()
-                        .any(|persistent_identifier| {
-                            *persistent_identifier == record.persistent_identifier
-                                && persistent_identifier_exists(*persistent_identifier)
-                        })
+                    let id = record.persistent_identifier;
+                    persistent_identifier_exists(id)
+                        || placement_snapshot_records
+                            .iter()
+                            .any(|record| record.persistent_identifier == id.0)
+                        || animal_snapshot_records
+                            .iter()
+                            .any(|record| record.persistent_identifier == id.0)
+                        || staff_snapshot_records
+                            .iter()
+                            .any(|record| record.persistent_identifier == id.0)
+                        || loose_waste_records
+                            .iter()
+                            .any(|record| record.persistent_identifier == id.0)
+                        || topology_snapshot_records
+                            .iter()
+                            .any(|record| record.id() == id)
                 })
             && show_snapshot_records.stage_records.iter().all(|record| {
                 show_stages_with_mutable_snapshot_state.iter_mut().any(

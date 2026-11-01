@@ -12,7 +12,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
-use openzt2_zoo_state::economy::service_types::ServiceRequest;
+use openzt2_zoo_state::economy::service_types::{PendingServiceRequest, ServiceRequestSequence};
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
@@ -575,6 +575,7 @@ pub(crate) fn cancel_failed_guest_destinations(
 }
 
 pub(crate) fn begin_viewing(
+    mut service_request_sequence: ResMut<ServiceRequestSequence>,
     mut arrived: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
     mut guests: Query<
@@ -589,7 +590,6 @@ pub(crate) fn begin_viewing(
     >,
     targets: Query<(&Visibility, Option<&ServiceFacility>), With<Inspectable>>,
     mut commands: Commands,
-    mut services: MessageWriter<ServiceRequest>,
     clock: Res<ZooClock>,
 ) {
     // Both results may be queued before this consumer runs. Failure must win
@@ -650,8 +650,13 @@ pub(crate) fn begin_viewing(
                     commands.entity(guest).remove::<GuestDestination>();
                     continue;
                 };
-                services.write(ServiceRequest {
-                    customer: guest,
+                let Some(sequence) = service_request_sequence.allocate() else {
+                    warn!(?guest, "service request sequence exhausted");
+                    commands.entity(guest).remove::<GuestDestination>();
+                    continue;
+                };
+                commands.entity(guest).insert(PendingServiceRequest {
+                    sequence,
                     facility: destination.entity,
                     service: facility.definition,
                 });

@@ -21,6 +21,7 @@ fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecution
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 0,
             tick_in_day: 1,

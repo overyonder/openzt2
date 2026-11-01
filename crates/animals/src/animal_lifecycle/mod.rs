@@ -31,6 +31,7 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::simulation_time::simulation_control_queries::simulation_is_running;
+use openzt2_zoo_state::construction::FixedConstructionSet;
 use openzt2_zoo_state::placement::ObjectPlacementPreviewUpdateSet;
 
 use animal_adoption_contracts::{
@@ -106,16 +107,42 @@ impl Plugin for AnimalLifecyclePlugin {
             )
             .add_systems(
                 FixedUpdate,
+                animal_adoption_execution::request_animal_adoption_payment_or_unpaid_spawn
+                    .in_set(FixedConstructionSet::RequestEconomy)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
                 (
-                    animal_adoption_execution::request_animal_adoption_payment_or_unpaid_spawn,
-                    animal_adoption_execution::
-                        request_paid_animal_adoption_spawns_after_completed_transactions,
-                    adoption_offer_inventory_execution::
-                        advance_and_repopulate_animal_adoption_offer_inventory,
-                    animal_adoption_execution::
-                        reject_animal_adoptions_after_rejected_transactions,
-                    animal_spawn_request_execution::
-                        spawn_animals_requested_by_gameplay_operations,
+                    animal_adoption_execution::request_paid_animal_adoption_spawns_after_completed_transactions,
+                    animal_adoption_execution::reject_animal_adoptions_after_rejected_transactions,
+                    animal_adoption_execution::remove_settled_animal_adoption_refunds,
+                )
+                    .chain()
+                    .in_set(FixedConstructionSet::CompleteEconomy)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                animal_spawn_request_execution::spawn_animals_requested_by_gameplay_operations
+                    .in_set(FixedConstructionSet::Apply)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    animal_adoption_execution::complete_animal_adoptions_after_successful_spawns,
+                    adoption_offer_inventory_execution::consume_completed_animal_adoption_offer_counts,
+                    animal_adoption_execution::refund_paid_animal_adoptions_after_rejected_spawns,
+                )
+                    .chain()
+                    .in_set(FixedConstructionSet::Cleanup)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    adoption_offer_inventory_execution::advance_and_repopulate_animal_adoption_offer_inventory,
                     animal_birth_execution::complete_due_animal_pregnancies,
                 )
                     .chain()
@@ -126,12 +153,6 @@ impl Plugin for AnimalLifecyclePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    animal_adoption_execution::
-                        complete_animal_adoptions_after_successful_spawns,
-                    adoption_offer_inventory_execution::
-                        consume_completed_animal_adoption_offer_counts,
-                    animal_adoption_execution::
-                        refund_paid_animal_adoptions_after_rejected_spawns,
                     animal_release_execution::release_eligible_adult_animals_from_the_zoo,
                     outgoing_animal_adoption_execution::transfer_animals_out_for_adoption,
                     animal_lineage_reference_cleanup::
@@ -146,3 +167,6 @@ impl Plugin for AnimalLifecyclePlugin {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod adoption_transaction_tests;

@@ -1,4 +1,4 @@
-use bevy::{platform::collections::HashSet, prelude::*};
+use bevy::prelude::*;
 use openzt2_game_data::world_definitions::facilities_and_maintenance::FacilityPaymentTrigger;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -6,30 +6,29 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 
 use super::{
     facility_economy_types::{Inventory, Price, ServiceFacility, Wallet},
-    service_types::{ServiceProgress, ServiceRequest, ServiceReservation},
+    service_types::{PendingServiceRequest, ServiceProgress, ServiceReservation},
 };
 
 pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
-    mut service_requests: MessageReader<ServiceRequest>,
+    service_requests: Query<(Entity, &PendingServiceRequest)>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     customers: Query<(&Wallet, Option<&ServiceReservation>)>,
     mut facilities: Query<(&Price, &mut ServiceFacility, Option<&mut Inventory>)>,
     mut commands: Commands,
-    mut customers_accepted_this_tick: Local<HashSet<Entity>>,
 ) {
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    customers_accepted_this_tick.clear();
 
-    for request in service_requests.read() {
-        let Ok((wallet, existing_reservation)) = customers.get(request.customer) else {
+    let mut requests = service_requests.iter().collect::<Vec<_>>();
+    requests.sort_unstable_by_key(|(_, request)| request.sequence);
+    for (customer, request) in requests {
+        commands.entity(customer).remove::<PendingServiceRequest>();
+        let Ok((wallet, existing_reservation)) = customers.get(customer) else {
             continue;
         };
-        if existing_reservation.is_some()
-            || customers_accepted_this_tick.contains(&request.customer)
-        {
+        if existing_reservation.is_some() {
             continue;
         }
         let Some(service_definition) = world_definitions.find_facility(request.service) else {
@@ -38,7 +37,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
         if service_definition.payment_trigger != FacilityPaymentTrigger::TimedTicks {
             // The guest buy behavior handles these services.
             warn!(
-                customer = ?request.customer,
+                customer = ?customer,
                 facility = ?request.facility,
                 "timed service requested for a behavior-paid facility"
             );
@@ -52,7 +51,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
         // The requested service must match the live facility.
         if facility.payment_trigger != FacilityPaymentTrigger::TimedTicks {
             warn!(
-                customer = ?request.customer,
+                customer = ?customer,
                 facility = ?request.facility,
                 requested_service = ?request.service,
                 "timed reservation requested for a behavior-paid facility"
@@ -61,7 +60,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
         }
         if facility.definition != request.service {
             warn!(
-                customer = ?request.customer,
+                customer = ?customer,
                 facility = ?request.facility,
                 requested_service = ?request.service,
                 "live facility does not provide the requested service definition; refusing timed reservation"
@@ -89,7 +88,7 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
             }
         }
 
-        commands.entity(request.customer).insert((
+        commands.entity(customer).insert((
             ServiceReservation {
                 facility: request.facility,
                 service: request.service,
@@ -100,7 +99,6 @@ pub(super) fn reserve_requested_facility_capacity_and_inventory_for_customers(
                 remaining_ticks: service_definition.service_ticks,
             },
         ));
-        customers_accepted_this_tick.insert(request.customer);
     }
 }
 
@@ -163,7 +161,6 @@ mod behavior_owned_service_reservation_gate_tests {
         // plugin is involved, matching the established test fixture pattern.
         let mut application = App::new();
         application
-            .add_message::<ServiceRequest>()
             .insert_resource(Assets::<WorldDefinitionAsset>::default())
             .init_resource::<WorldDefinitions>()
             .add_systems(
@@ -210,11 +207,14 @@ mod behavior_owned_service_reservation_gate_tests {
         guest: Entity,
         service: AssetId,
     ) {
-        application.world_mut().write_message(ServiceRequest {
-            customer: guest,
-            facility: facility_entity,
-            service,
-        });
+        application
+            .world_mut()
+            .entity_mut(guest)
+            .insert(PendingServiceRequest {
+                sequence: 0,
+                facility: facility_entity,
+                service,
+            });
     }
 
     #[test]
@@ -229,6 +229,10 @@ mod behavior_owned_service_reservation_gate_tests {
         write_service_request(&mut application, cart, guest, cart_facility_id());
 
         application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(guest)
+            .is_none());
 
         assert!(
             application
@@ -263,6 +267,10 @@ mod behavior_owned_service_reservation_gate_tests {
         write_service_request(&mut application, cart, guest, timed_diner_id());
 
         application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(guest)
+            .is_none());
 
         assert!(
             application.world().get::<ServiceReservation>(guest).is_none(),
@@ -293,6 +301,10 @@ mod behavior_owned_service_reservation_gate_tests {
         write_service_request(&mut application, cart, guest, timed_diner_id());
 
         application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(guest)
+            .is_none());
 
         assert!(
             application
@@ -323,6 +335,10 @@ mod behavior_owned_service_reservation_gate_tests {
         write_service_request(&mut application, cart, guest, timed_diner_id());
 
         application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(guest)
+            .is_none());
 
         let reservation = application
             .world()
@@ -337,6 +353,78 @@ mod behavior_owned_service_reservation_gate_tests {
                 .unwrap()
                 .occupied,
             1
+        );
+    }
+    #[test]
+    fn pending_handoff_waits_for_definitions_and_preserves_arrival_order_once() {
+        let (mut application, facility, first_guest) = create_application_with_facility_documents();
+        insert_live_facility(
+            &mut application,
+            facility,
+            timed_diner_id(),
+            FacilityPaymentTrigger::TimedTicks,
+        );
+        let second_guest = application.world_mut().spawn(Wallet(Money(5_000))).id();
+        for (guest, sequence) in [(first_guest, 1), (second_guest, 0)] {
+            application
+                .world_mut()
+                .entity_mut(guest)
+                .insert(PendingServiceRequest {
+                    sequence,
+                    facility,
+                    service: timed_diner_id(),
+                });
+        }
+        let definitions = application
+            .world_mut()
+            .remove_resource::<WorldDefinitions>()
+            .unwrap();
+        application
+            .world_mut()
+            .insert_resource(WorldDefinitions::default());
+        application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(first_guest)
+            .is_some());
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(second_guest)
+            .is_some());
+        application.world_mut().insert_resource(definitions);
+        application.update();
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(first_guest)
+            .is_none());
+        assert!(application
+            .world()
+            .get::<PendingServiceRequest>(second_guest)
+            .is_none());
+        assert!(application
+            .world()
+            .get::<ServiceReservation>(first_guest)
+            .is_none());
+        assert!(application
+            .world()
+            .get::<ServiceReservation>(second_guest)
+            .is_some());
+        application.update();
+        assert_eq!(
+            application
+                .world()
+                .get::<ServiceFacility>(facility)
+                .unwrap()
+                .occupied,
+            1
+        );
+        assert_eq!(
+            application.world().get::<Wallet>(first_guest).unwrap().0,
+            Money(5_000)
+        );
+        assert_eq!(
+            application.world().get::<Wallet>(second_guest).unwrap().0,
+            Money(5_000)
         );
     }
 }

@@ -379,6 +379,7 @@ mod tests {
     fn same_tick_arrival_completes_and_duplicate_arrival_is_ignored() {
         let mut app = App::new();
         app.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,
@@ -441,6 +442,7 @@ mod tests {
     fn nested_set_move_advances_the_current_nested_action() {
         let mut app = App::new();
         app.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,
@@ -487,6 +489,7 @@ mod tests {
     fn superseded_move_arrival_is_ignored_and_duplicate_failure_is_consumed_once() {
         let mut app = App::new();
         app.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 0,
             tick_in_day: 1,
@@ -580,6 +583,7 @@ mod tests {
     fn same_request_failure_wins_over_same_frame_arrival() {
         let mut app = App::new();
         app.insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 0,
             tick_in_day: 1,

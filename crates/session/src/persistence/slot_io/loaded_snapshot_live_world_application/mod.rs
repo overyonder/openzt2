@@ -80,7 +80,6 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         mut loaded_photo_images,
         mut photo_challenges_with_mutable_progress,
         tank_persistent_identifiers,
-        facility_persistent_identifiers,
         mut zoo_cash,
         mut zoo_admission_price,
         mut zoo_admissions_open_state,
@@ -266,6 +265,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         &snapshot_container_bytes[simulation_time_snapshot_section
             .payload_byte_range_within_container(snapshot_container_bytes.len())?],
     )?;
+    simulation_time_snapshot_record.validate_against_timing(world_definitions.timing())?;
     let show_snapshot_records = decode_and_validate_show_snapshot_section(
         snapshot_container_bytes,
         validated_snapshot_container.section_directory_entry(WorldSnapshotSectionKind::Shows),
@@ -332,7 +332,6 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         &photo_challenge_progress_snapshot_records,
         &entities_with_persistent_identifiers,
         &tank_persistent_identifiers,
-        &facility_persistent_identifiers,
         &mut show_stages_with_mutable_snapshot_state,
         &photo_album_persistent_identifiers,
         &mut photo_challenges_with_mutable_progress,
@@ -442,16 +441,6 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         &entities_with_persistent_identifiers,
         world_root_entity,
     )?;
-    apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
-        commands,
-        economy_snapshot_records,
-        &restored_identities,
-        &mut zoo_cash,
-        &mut zoo_admission_price,
-        &mut zoo_admissions_open_state,
-        &mut monthly_finance_history,
-    )?;
-
     let restored_animals = super::animal_snapshot_application::apply_animal_snapshot_records(
         commands,
         &animal_snapshot_records,
@@ -488,6 +477,16 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         world_definitions,
     )?;
     restored_identities.extend(restored_staff);
+    apply_economy_snapshot_records_to_live_economy_resources_and_facilities(
+        commands,
+        economy_snapshot_records,
+        &restored_identities,
+        &mut zoo_cash,
+        &mut zoo_admission_price,
+        &mut zoo_admissions_open_state,
+        &mut monthly_finance_history,
+    )?;
+
     super::maintenance_snapshot_application::apply_maintained_object_records(
         commands,
         &maintained_object_records,

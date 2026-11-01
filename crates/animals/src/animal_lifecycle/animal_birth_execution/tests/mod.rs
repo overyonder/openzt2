@@ -1,8 +1,8 @@
 use super::*;
 use openzt2_game_data::{
-    AssetId,
     species::*,
     world_definitions::{document::WorldDefinitionDocument, simulation_time::*},
+    AssetId,
 };
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
@@ -96,6 +96,7 @@ fn setup(entity_padding: usize) -> (App, Entity, Entity) {
         .init_resource::<WorldDefinitions>()
         .insert_resource(ZooSeed(123))
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 99,
             absolute_day: 0,
             tick_in_day: 99,

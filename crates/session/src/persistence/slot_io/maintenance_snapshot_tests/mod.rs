@@ -51,6 +51,7 @@ fn fixture() -> (App, Entity) {
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 90,
             absolute_day: 0,
             tick_in_day: 90,

@@ -3,9 +3,7 @@ use openzt2_game_data::AssetId;
 use super::super::{
     persistence_failure_types::WorldSnapshotPersistenceFailure,
     progression_snapshot_section_encoding::decode_and_validate_progression_snapshot_section,
-    simulation_time_snapshot_section::{
-        decode_simulation_time_snapshot_record, SIMULATION_TIME_SNAPSHOT_RECORD_BYTE_COUNT,
-    },
+    simulation_time_snapshot_section::decode_simulation_time_snapshot_record,
     snapshot_container_encoding_and_validation::validate_world_snapshot_container_and_section_directory,
     snapshot_container_types::{ValidatedWorldSnapshotContainer, WorldSnapshotSectionKind},
 };
@@ -34,7 +32,16 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
     for snapshot_section in WorldSnapshotSectionKind::ENCODING_ORDER.into_iter().skip(1) {
         let section_byte_range =
             validated_snapshot_container.section_directory_entry(snapshot_section);
-        if snapshot_section == WorldSnapshotSectionKind::Topology {
+        if snapshot_section == WorldSnapshotSectionKind::Terrain {
+            let terrain =
+                super::terrain_snapshot_container_section::decode_terrain_snapshot_section(
+                    snapshot_container_bytes,
+                    section_byte_range,
+                )?;
+            if terrain.is_some() != world_snapshot_record.source_document.is_some() {
+                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+            }
+        } else if snapshot_section == WorldSnapshotSectionKind::Topology {
             super::fence_topology_snapshot_section::decode_fence_topology_records(
                 snapshot_container_bytes,
                 section_byte_range,
@@ -97,10 +104,7 @@ pub(super) fn validate_supported_snapshot_container_and_every_section_payload(
                 section_byte_range.encoded_record_count,
             )?;
         } else if snapshot_section == WorldSnapshotSectionKind::SimulationTime {
-            if section_byte_range.encoded_record_count != 1
-                || section_byte_range.payload_byte_count
-                    != SIMULATION_TIME_SNAPSHOT_RECORD_BYTE_COUNT
-            {
+            if section_byte_range.encoded_record_count != 1 {
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
             let section_payload_bytes = &snapshot_container_bytes[section_byte_range

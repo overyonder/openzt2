@@ -35,6 +35,7 @@ use super::{
 pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     snapshot_container_bytes: &mut Vec<u8>,
     world_snapshot_record: &WorldSnapshotRecord,
+    terrain_snapshot_record: Option<&super::terrain_snapshot_types::TerrainSnapshotRecord>,
     scenario_snapshot: Option<&super::scenario_snapshot_section::ScenarioSnapshot>,
     animal_adoption_offer_inventory: Option<
         &openzt2_animals::animal_lifecycle::adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
@@ -61,6 +62,14 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
         animal_adoption_offer_inventory,
         world_snapshot_record.session_mode,
     )?;
+    let mut world_bytes = Vec::new();
+    append_encoded_world_snapshot_section(&mut world_bytes, world_snapshot_record)?;
+    if world_snapshot_record.source_document.is_some() != terrain_snapshot_record.is_some() {
+        return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+    }
+    let terrain_bytes = terrain_snapshot_record
+        .map(super::terrain_snapshot_section_encoding::encode_terrain_snapshot_record)
+        .transpose()?;
     let placement_bytes =
         super::placement_snapshot_section::encode_placement_records(placement_snapshot_records)?;
     let behavior_bytes =
@@ -85,6 +94,18 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
     WorldSnapshotSectionKind::ENCODING_ORDER
         .into_iter()
         .try_for_each(|snapshot_section| match snapshot_section {
+            WorldSnapshotSectionKind::Terrain => {
+                append_encoded_world_snapshot_section_to_container(
+                    snapshot_container_bytes,
+                    snapshot_section,
+                    u32::from(terrain_bytes.is_some()),
+                    |bytes| {
+                        if let Some(terrain) = &terrain_bytes {
+                            bytes.extend_from_slice(terrain);
+                        }
+                    },
+                )
+            }
             WorldSnapshotSectionKind::Topology => {
                 append_encoded_world_snapshot_section_to_container(
                     snapshot_container_bytes,
@@ -98,7 +119,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                 snapshot_section,
                 1,
                 |section_bytes| {
-                    append_encoded_world_snapshot_section(section_bytes, world_snapshot_record);
+                    section_bytes.extend_from_slice(&world_bytes);
                 },
             ),
             WorldSnapshotSectionKind::Behavior => {
@@ -189,7 +210,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                             economy_snapshot_records.monthly_finance_records.len() as u32
                         )
                         .saturating_add(
-                            economy_snapshot_records.facility_economy_records.len() as u32
+                            economy_snapshot_records.entity_economy_records.len() as u32
                         ),
                     |section_bytes| {
                         append_encoded_economy_snapshot_section(
@@ -310,7 +331,7 @@ pub(super) fn append_captured_world_snapshot_sections_and_finalize_container(
                     .saturating_add(transport_snapshot_records.vehicle_records.len())
                     .saturating_add(1)
                     .saturating_add(economy_snapshot_records.monthly_finance_records.len())
-                    .saturating_add(economy_snapshot_records.facility_economy_records.len())
+                    .saturating_add(economy_snapshot_records.entity_economy_records.len())
                     .saturating_add(photo_snapshot_records.len())
                     .saturating_add(photo_challenge_progress_snapshot_records.len())
                     .saturating_add(progression_snapshot_records.snapshot_record_count() as usize)

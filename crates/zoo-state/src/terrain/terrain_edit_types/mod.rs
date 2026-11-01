@@ -14,6 +14,12 @@ pub struct TerrainChanged {
     pub max: UVec2,
 }
 
+/// Rebuilds presentation from the chunk's current authoritative samples.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerrainPresentationRestored {
+    pub chunk: Entity,
+}
+
 #[derive(Component, Debug)]
 pub struct TerrainEdit {
     pub deltas: Vec<TerrainEditDelta>,

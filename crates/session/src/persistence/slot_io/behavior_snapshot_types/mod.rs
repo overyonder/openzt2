@@ -1,4 +1,4 @@
-use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffJobKind};
+use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
 use openzt2_zoo_state::{
     animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg,
     behavior_task_execution_types::BehaviorTaskExecutionPhase,
@@ -13,6 +13,9 @@ use serde::{Deserialize, Serialize};
 pub(super) enum BehaviorSnapshotEntityReference {
     Persistent(u64),
     PathTile([i32; 3]),
+    SelectedWorldTerrainWater {
+        source_region: usize,
+    },
     TerrainWater {
         terrain: String,
         source_region: usize,

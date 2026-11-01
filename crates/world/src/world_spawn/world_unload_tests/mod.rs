@@ -97,6 +97,7 @@ fn repeated_unload_retires_owned_hierarchies_before_the_next_system() {
     let unrelated = app.world_mut().spawn_empty().id();
     app.insert_resource(PersistentIdAllocator::new(root))
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 17,
             absolute_day: 1,
             tick_in_day: 2,
@@ -150,6 +151,7 @@ fn delayed_unload_cannot_retire_a_later_worlds_allocator_or_simulation() {
         .spawn((WorldMember { root: later }, Disabled))
         .id();
     let clock = ZooClock {
+        fractional_tick: Default::default(),
         tick: 17,
         absolute_day: 1,
         tick_in_day: 2,

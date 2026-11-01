@@ -356,8 +356,9 @@ impl AssetArchives {
 
     pub fn resolve_ui_reference(&self, from: &Path, reference: &str) -> Option<PathBuf> {
         self.files
-            .resolve_ui_reference(from, reference)
+            .resolve_ui_reference_without_basename_fallback(from, reference)
             .or_else(|| self.resolve_loose_reference(from, reference))
+            .or_else(|| self.files.resolve_ui_reference(from, reference))
     }
 
     /// Lists one explicitly authored source subtree after overlay selection.
@@ -799,6 +800,51 @@ mod tests {
         Err(std::io::Error::other(format!(
             "compatible image source did not load {expected:?}"
         )))
+    }
+
+    #[test]
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
+    ) -> std::io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let base = directory.archive(
+            "x300_000.z2f",
+            &[("ui/shared/extinct_icon.dds", b"toolbar icon")],
+        )?;
+        std::fs::create_dir(directory.0.join("xp"))?;
+        std::fs::write(directory.0.join("xp/Extinct_icon.dds"), b"expansion logo")?;
+        let (_, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![base])?;
+        let owner = Path::new("xpinfo/cp2.xml");
+        let reference = "xp/Extinct_icon.dds";
+        let selected = archives
+            .resolve_ui_reference(owner, reference)
+            .ok_or_else(|| std::io::Error::other("expansion logo did not resolve"))?;
+        assert_eq!(selected, Path::new("xp/extinct_icon.dds"));
+        assert_eq!(archives.read_source(&selected)?, b"expansion logo");
+        assert_eq!(
+            archives.resolve_ui_reference(Path::new("xp/menu.xml"), "Extinct_icon.dds"),
+            Some(PathBuf::from("xp/extinct_icon.dds")),
+        );
+        assert_eq!(
+            archives.resolve_ui_reference(owner, "extinct_icon.dds"),
+            Some(PathBuf::from("ui/shared/extinct_icon.dds"))
+        );
+
+        let patch = directory.archive("patch.z2f", &[("xp/Extinct_icon.dds", b"archive logo")])?;
+        let base = directory.0.join("x300_000.z2f");
+        let (_, patched_archives) =
+            create_bevy_asset_source_for_enabled_z2f_archives(vec![base, patch])?;
+        let selected = patched_archives
+            .resolve_ui_reference(owner, reference)
+            .ok_or_else(|| std::io::Error::other("archived expansion logo did not resolve"))?;
+        assert_eq!(patched_archives.read_source(&selected)?, b"archive logo");
+        let extensionless = patched_archives
+            .resolve_ui_reference(owner, "xp/Extinct_icon")
+            .ok_or_else(|| std::io::Error::other("extensionless archived logo did not resolve"))?;
+        assert_eq!(
+            patched_archives.read_source(&extensionless)?,
+            b"archive logo"
+        );
+        Ok(())
     }
 
     #[test]

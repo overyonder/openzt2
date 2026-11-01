@@ -173,7 +173,10 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
             Err(gap) => return Err(gap),
         }
     }
-    compose_authored_credits_fragments_into_timeline(&mut parsed_ui_source_documents_by_path);
+    compose_authored_credits_fragments_into_timeline(
+        &mut parsed_ui_source_documents_by_path,
+        selected_source_documents,
+    );
     if let Some(menu) = parsed_ui_source_documents_by_path.get_mut("ui/layout/mainmenu.xml") {
         attach_expansion_icons_to_authored_menu_list(
             &mut menu.root,

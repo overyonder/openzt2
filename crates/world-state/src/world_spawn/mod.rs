@@ -14,6 +14,7 @@ pub mod prefab_object_presentation_attachment_projection;
 pub mod prefab_presentation_types;
 pub mod prefab_source_asset_handle;
 pub mod prefab_transform_conversion;
+pub mod selected_world_document_handles;
 pub mod selected_world_identity;
 pub mod selected_world_terrain_asset_handle;
 pub mod starting_animal_hydration;

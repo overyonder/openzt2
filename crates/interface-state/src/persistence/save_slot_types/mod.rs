@@ -51,6 +51,7 @@ pub struct SaveSlotRecord {
 #[derive(Resource, Debug, Default)]
 pub struct SaveSlotCatalogue {
     pub save_slot_records: Vec<SaveSlotRecord>,
+    pub original_saved_game_records: Vec<super::saved_game_source_types::OriginalSavedGameRecord>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

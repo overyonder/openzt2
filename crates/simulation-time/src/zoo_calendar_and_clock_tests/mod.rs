@@ -19,6 +19,7 @@ const TEST_SIMULATION_CALENDAR_POLICY: SimulationCalendarPolicy = SimulationCale
 #[test]
 fn tick_day_deadline_and_calendar_boundaries_are_exact() {
     let mut zoo_clock = ZooClock {
+        fractional_tick: Default::default(),
         tick: 58,
         absolute_day: 58,
         tick_in_day: 9,
@@ -27,6 +28,7 @@ fn tick_day_deadline_and_calendar_boundaries_are_exact() {
     assert_eq!(
         zoo_clock,
         ZooClock {
+            fractional_tick: Default::default(),
             tick: 59,
             absolute_day: 59,
             tick_in_day: 0,
@@ -76,4 +78,27 @@ fn gregorian_calendar_policy_handles_century_and_four_hundred_year_rules() {
             day: 1,
         }
     );
+}
+
+#[test]
+fn fractional_clock_phase_survives_tick_and_day_advancement() {
+    use openzt2_world_state::simulation_time::simulation_clock_types::ZooClockFraction;
+    let phase = ZooClockFraction::from_ratio(1, 10).unwrap();
+    let mut clock = ZooClock {
+        tick: 2399,
+        absolute_day: 0,
+        tick_in_day: 2399,
+        fractional_tick: phase,
+    };
+    assert!(advance_zoo_clock_by_one_tick(&mut clock, 2400));
+    assert_eq!(
+        (clock.tick, clock.absolute_day, clock.tick_in_day),
+        (2400, 1, 0)
+    );
+    assert_eq!(clock.fractional_tick, phase);
+    assert!(advance_zoo_clock_by_one_tick(&mut clock, 2400));
+    assert_eq!(clock.fractional_tick, phase);
+    assert!(ZooClockFraction::from_ratio(1, 0).is_none());
+    assert!(ZooClockFraction::from_ratio(1, 1).is_none());
+    assert_eq!(ZooClockFraction::from_ratio(2, 20), Some(phase));
 }

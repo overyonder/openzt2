@@ -114,6 +114,10 @@ pub(in super::super) fn apply_completed_persistence_slot_filesystem_tasks(
                         .entity(task_entity)
                         .remove::<PersistenceSlotFilesystemTask>()
                         .insert(PendingSnapshotApplication {
+                            world_snapshot: None,
+                            terrain_snapshot: None,
+                            saved_world_document: None,
+                            terrain_restored: false,
                             behavior_documents: Vec::new(),
                             save_slot_identifier,
                             scenario_definition_identifier: None,

@@ -55,6 +55,17 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         }
         return Err(error);
     }
+    let original_saves =
+        openzt2_game_assets::original_saved_game_source::OriginalSavedGameSources::new(
+            2 * 1024 * 1024 * 1024,
+        );
+    game_application.register_asset_source("original-saves", original_saves.asset_source());
+    game_application.insert_resource(original_saves);
+    let saved_worlds = openzt2_game_assets::saved_world_asset_source::SavedWorldAssetSource::new(
+        2 * 1024 * 1024 * 1024,
+    );
+    game_application.register_asset_source("saved-worlds", saved_worlds.asset_source());
+    game_application.insert_resource(saved_worlds);
     add_game_persistence_directories(&mut game_application, verification_request.as_ref())?;
     add_default_bevy_platform_plugins(&mut game_application, verification_request.as_ref());
     add_openzt2_game_states_and_update_schedules(&mut game_application);

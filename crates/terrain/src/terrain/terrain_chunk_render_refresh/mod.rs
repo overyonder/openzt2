@@ -17,7 +17,7 @@ pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut chunks: Query<(
         &TerrainChunk,
-        &EditedTerrainSamples,
+        Option<&EditedTerrainSamples>,
         &TerrainDirty,
         &Mesh3d,
         &TerrainSurfaceImage,
@@ -38,7 +38,9 @@ pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
                 asset == &chunk.asset && (chunk.coord - *coord).abs().cmple(IVec2::ONE).all()
             })
         })
-        .map(|(chunk, edited, _, _, _, _)| (chunk.asset.clone(), chunk.coord, edited.clone()))
+        .filter_map(|(chunk, edited, _, _, _, _)| {
+            edited.map(|edited| (chunk.asset.clone(), chunk.coord, edited.clone()))
+        })
         .collect::<Vec<_>>();
     for (chunk, edited, dirty, mesh_handle, surface_handle, mut applied) in &mut chunks {
         if applied.0 >= dirty.revision {
@@ -48,7 +50,7 @@ pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
             continue;
         };
         if dirty.flags.contains(TerrainDirtyFlags::HEIGHT) {
-            let Some(rebuilt) = construct_terrain_chunk_mesh(chunk, asset, Some(edited)) else {
+            let Some(rebuilt) = construct_terrain_chunk_mesh(chunk, asset, edited) else {
                 continue;
             };
             let Some(mut mesh) = meshes.get_mut(&mesh_handle.0) else {

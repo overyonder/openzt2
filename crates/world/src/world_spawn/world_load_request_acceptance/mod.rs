@@ -92,6 +92,25 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         return;
     }
 
+    let saved_document = request
+        .saved_world_document
+        .and_then(|identifier| asset_server.get_id_handle(identifier));
+    if let Some(handle) = &saved_document {
+        demanded_starts.insert(request.scenario, handle.clone());
+    }
+    if request.saved_world_document.is_some() && saved_document.is_none() {
+        failed.write(WorldLoadFailed {
+            operation: request.operation,
+            root: None,
+            scenario: request.scenario,
+            reason: WorldLoadFailure::MissingScenario,
+        });
+        *queued = None;
+        demanded_starts.clear();
+        drop(_performance_timer);
+        performance.finish_and_report(&archives, "failed");
+        return;
+    }
     let Some((
         map_asset,
         start_asset,
@@ -108,6 +127,7 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         &asset_server,
         &mut demanded_starts,
         request.scenario,
+        saved_document.as_ref(),
     )
     else {
         let failed_start = demanded_starts.values().any(|handle| {
@@ -124,8 +144,9 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
                 )
         });
         if failed_start
-            || (!active_scenarios.has_pending_document_loads(&asset_server, &scenarios)
-                && !pending_start)
+            || (!pending_start
+                && (request.saved_world_document.is_some()
+                    || !active_scenarios.has_pending_document_loads(&asset_server, &scenarios)))
         {
             failed.write(WorldLoadFailed {
                 operation: request.operation,
@@ -188,6 +209,10 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             },
             Name::new(zoo_name.to_owned()),
             selection,
+            openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles {
+                map: map_asset.clone(),
+                start: start_asset.clone(),
+            },
             SelectedWorldTerrainAssetHandle(terrain_handle),
         ))
         .id();
@@ -270,6 +295,7 @@ fn locate_selected_starting_zoo(
     asset_server: &AssetServer,
     demanded_starts: &mut BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
     scenario_id: AssetId,
+    saved_document: Option<&Handle<WorldScenarioDocumentAsset>>,
 ) -> Option<(
     Handle<WorldScenarioDocumentAsset>,
     Handle<WorldScenarioDocumentAsset>,
@@ -281,6 +307,36 @@ fn locate_selected_starting_zoo(
     Option<i64>,
     u8,
 )> {
+    if let Some(handle) = saved_document {
+        let document = &scenarios.get(handle)?.document;
+        let (map_id, start_id, cash) = if let Some(map) = document.find_world_map(scenario_id) {
+            (map.id, map.starting_zoo, None)
+        } else {
+            let scenario = document
+                .campaigns
+                .iter()
+                .flat_map(|campaign| &campaign.scenarios)
+                .find(|scenario| scenario.id == scenario_id)?;
+            (
+                scenario.map,
+                scenario.starting_zoo,
+                Some(scenario.starting_cash_cents),
+            )
+        };
+        let map = document.find_world_map(map_id)?;
+        let start = document.find_starting_zoo(start_id)?;
+        return Some((
+            handle.clone(),
+            handle.clone(),
+            map_id,
+            map.terrain,
+            start_id,
+            start.entities.len(),
+            cash.unwrap_or(start.cash_cents),
+            start.admission_cents,
+            start.fame_half_stars,
+        ));
+    }
     active.get(scenarios).and_then(|view| {
         let (map_id, start_id, scenario_cash) =
             if let Some(scenario) = view.campaign_scenario(scenario_id) {

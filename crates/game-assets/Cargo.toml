@@ -21,6 +21,7 @@ futures-lite = "2.6"
 dirs.workspace = true
 chrono.workspace = true
 ron.workspace = true
+postcard.workspace = true
 arrayvec.workspace = true
 async-channel = "2.5"
 anyhow = "1.0"

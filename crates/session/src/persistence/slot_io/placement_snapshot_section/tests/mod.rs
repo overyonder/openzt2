@@ -8,7 +8,7 @@ use crate::persistence::slot_io::{
     economy_snapshot_section_encoding::{
         append_encoded_economy_snapshot_section, decode_and_validate_economy_snapshot_section,
     },
-    economy_snapshot_types::{EconomySnapshotRecords, FacilityEconomySnapshotRecord},
+    economy_snapshot_types::{EconomySnapshotRecords, EntityEconomySnapshotRecord},
 };
 use bevy::ecs::system::SystemState;
 use openzt2_construction::placement::persistence_test_support::{
@@ -135,6 +135,7 @@ fn fixture() -> (App, Entity, Handle<ScenePrefabAsset>) {
         .init_resource::<ZooAdmissionsOpen>()
         .init_resource::<MonthlyFinanceHistory>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 1,
             absolute_day: 3,
             tick_in_day: 1,
@@ -290,6 +291,7 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
     let saved_profit = *source.world().get::<FacilityProfit>(acceptor).unwrap();
     let saved_age = *source.world().get::<OperatingSinceDay>(acceptor).unwrap();
     let economy = EconomySnapshotRecords {
+        unlimited_cash: Some(false),
         zoo_cash: saved_cash,
         admission_price: Money(250),
         admissions_open: true,
@@ -300,11 +302,18 @@ fn purchased_box_survives_cold_restore_and_accepts_another_completed_payment() {
         lifetime_users: 0,
         monthly_finance_history_initialized: false,
         monthly_finance_records: vec![],
-        facility_economy_records: vec![FacilityEconomySnapshotRecord {
+        entity_economy_records: vec![EntityEconomySnapshotRecord {
             persistent_identifier: PersistentId(42),
-            opening_zoo_day: saved_age.0,
-            total_profit_cents: saved_profit.total.0,
-            transaction_count: saved_profit.transactions,
+            complete_component_state: true,
+            opening_zoo_day: Some(saved_age.0),
+            profit: Some((saved_profit.total.0, saved_profit.transactions)),
+            price_index: None,
+            maintenance_schedule_index: None,
+            wallet: None,
+            price: None,
+            service: None,
+            inventory: None,
+            usage: None,
         }],
     };
     let mut economy_bytes = Vec::new();

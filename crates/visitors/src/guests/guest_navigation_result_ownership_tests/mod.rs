@@ -12,7 +12,7 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::ZooEntrance;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
-use openzt2_zoo_state::economy::service_types::ServiceRequest;
+use openzt2_zoo_state::economy::service_types::{PendingServiceRequest, ServiceRequestSequence};
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
@@ -142,14 +142,15 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
     let mut app = App::new();
     app.add_message::<Arrived>()
         .add_message::<NavigationFailed>()
-        .add_message::<ServiceRequest>()
         .insert_resource(
             openzt2_world_state::simulation_time::simulation_clock_types::ZooClock {
+                fractional_tick: Default::default(),
                 tick: 0,
                 absolute_day: 0,
                 tick_in_day: 0,
             },
         )
+        .init_resource::<ServiceRequestSequence>()
         .add_systems(Update, begin_viewing);
     let facility = app
         .world_mut()
@@ -188,7 +189,19 @@ fn current_arrival_hands_off_service_once_without_rechecking_render_transform() 
         });
     }
     app.update();
-    assert_eq!(app.world().resource::<Messages<ServiceRequest>>().len(), 1);
+    assert_eq!(
+        app.world()
+            .get::<PendingServiceRequest>(guest)
+            .unwrap()
+            .sequence,
+        0
+    );
+    assert_eq!(
+        app.world()
+            .resource::<ServiceRequestSequence>()
+            .next_sequence(),
+        1
+    );
     assert!(app.world().get::<GuestDestination>(guest).is_none());
     assert_eq!(
         app.world().get::<GuestNavigationRequest>(guest).unwrap().0,

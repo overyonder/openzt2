@@ -14,10 +14,10 @@ pub(super) struct DemandLoadedAssetHandle<T: Asset> {
     pub(super) handle: Handle<T>,
 }
 
-#[derive(Debug)]
-pub(super) struct DemandLoadedAssetPath {
-    pub(super) id: AssetId,
-    pub(super) path: Box<str>,
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DemandLoadedAssetPath {
+    pub id: AssetId,
+    pub path: Box<str>,
 }
 
 #[derive(Asset, TypePath, Debug)]

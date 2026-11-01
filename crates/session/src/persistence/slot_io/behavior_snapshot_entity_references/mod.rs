@@ -11,7 +11,7 @@ pub(super) fn planned_behavior_topology_references(
     records: &[TopologySnapshot],
 ) -> Result<Vec<BehaviorSnapshotEntityReference>, WorldSnapshotPersistenceFailure> {
     use openzt2_navigation::habitat::habitat_region_derivation::{
-        HabitatFenceSegment, derive_enclosed_habitat_regions_from_fence_segments,
+        derive_enclosed_habitat_regions_from_fence_segments, HabitatFenceSegment,
     };
     let nodes = records
         .iter()
@@ -81,6 +81,7 @@ use super::{
 #[derive(QueryData)]
 pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) entity: Entity,
+    pub(super) selected_world_terrain: Option<&'static openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle>,
     pub(super) animal_terrain_water_contact: Option<&'static openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact>,
     pub(super) behavior_random_stream: Option<&'static openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
     pub(super) behavior_self_token: Option<&'static openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken>,
@@ -139,6 +140,24 @@ pub(super) fn capture_behavior_entity_reference(
         ));
     }
     if let Some(water) = entity.terrain_water_region_source {
+        let mut owner = Some(entity.entity);
+        loop {
+            let Some(candidate) = owner.and_then(|owner| entities.get(owner).ok()) else {
+                break;
+            };
+            if let Some(terrain) = candidate.selected_world_terrain {
+                if terrain.0.id() == water.terrain().id() {
+                    return Ok(BehaviorSnapshotEntityReference::SelectedWorldTerrainWater {
+                        source_region: water.source_region_index(),
+                    });
+                }
+                break;
+            }
+            owner = candidate
+                .world_member
+                .map(|member| member.root)
+                .or_else(|| candidate.child_of.map(ChildOf::parent));
+        }
         let path = water
             .terrain()
             .path()
@@ -210,6 +229,22 @@ pub(super) fn index_behavior_snapshot_entity_references(
         if index.insert(reference, entity.entity).is_some() {
             return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
         }
+        if let Some((water, terrain)) = entity
+            .terrain_water_region_source
+            .and_then(|water| water.terrain().path().map(|path| (water, path)))
+        {
+            let alias = BehaviorSnapshotEntityReference::TerrainWater {
+                terrain: terrain.to_string(),
+                source_region: water.source_region_index(),
+            };
+            if index
+                .get(&alias)
+                .is_some_and(|candidate| *candidate != entity.entity)
+            {
+                return Err(WorldSnapshotPersistenceFailure::DuplicatePersistentEntityIdentifier);
+            }
+            index.insert(alias, entity.entity);
+        }
         if let Some(id) = entity.persistent_id {
             let alias = BehaviorSnapshotEntityReference::Persistent(id.0);
             if index
@@ -232,4 +267,40 @@ pub(super) fn index_behavior_snapshot_entity_references(
         }
     }
     Ok(index)
+}
+
+#[cfg(test)]
+mod selected_terrain_tests {
+    use super::*;
+    use bevy::ecs::system::SystemState;
+    use openzt2_world_state::world_spawn::{
+        selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle,
+        world_membership_types::WorldMember,
+    };
+
+    #[test]
+    fn water_reference_follows_selected_world_owner_without_persisting_asset_uri() {
+        let mut world = World::new();
+        let terrain = Handle::default();
+        let root = world
+            .spawn(SelectedWorldTerrainAssetHandle(terrain.clone()))
+            .id();
+        let chunk = world.spawn(WorldMember { root }).id();
+        let owner = world
+            .spawn((ChildOf(chunk), TerrainWaterRegionSource::new(terrain, 3)))
+            .id();
+        let mut state = SystemState::<BehaviorSnapshotEntities>::new(&mut world);
+        let entities = state.get(&world).unwrap();
+        let reference = capture_behavior_entity_reference(owner, &entities).unwrap();
+        assert_eq!(
+            reference,
+            BehaviorSnapshotEntityReference::SelectedWorldTerrainWater { source_region: 3 }
+        );
+        assert_eq!(
+            index_behavior_snapshot_entity_references(&entities)
+                .unwrap()
+                .get(&reference),
+            Some(&owner)
+        );
+    }
 }

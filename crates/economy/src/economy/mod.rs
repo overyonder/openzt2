@@ -44,7 +44,7 @@ use self::{
     guest_admission_types::{AdmissionPrice, ZooAdmissionsOpen},
     monthly_finance_types::MonthlyFinanceHistory,
     scenario_economy_command_types::ScenarioEconomyCommand,
-    service_types::{ServiceCompleted, ServiceRequest},
+    service_types::{ServiceCompleted, ServiceRequestSequence},
     zoo_cash_types::ZooCash,
 };
 
@@ -56,7 +56,7 @@ impl Plugin for EconomyPlugin {
             .add_message::<TransactionCompleted>()
             .add_message::<TransactionRejected>()
             .add_message::<ScenarioEconomyCommand>()
-            .add_message::<ServiceRequest>()
+            .init_resource::<ServiceRequestSequence>()
             .add_message::<ServiceCompleted>()
             .init_resource::<ZooCash>()
             .init_resource::<AdmissionPrice>()

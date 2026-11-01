@@ -10,6 +10,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 fn paired_tasks() -> (App, Entity, Entity) {
     let mut app = App::new();
     app.insert_resource(ZooClock {
+        fractional_tick: Default::default(),
         tick: 20,
         absolute_day: 0,
         tick_in_day: 20,

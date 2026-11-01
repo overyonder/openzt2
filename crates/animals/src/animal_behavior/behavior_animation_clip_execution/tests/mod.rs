@@ -13,6 +13,7 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,

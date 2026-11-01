@@ -173,6 +173,7 @@ pub(super) fn begin_loading_selected_world(
             continue;
         }
         begin_load.write(BeginWorldLoad {
+            saved_world_document: None,
             operation: None,
             scenario,
             mode,

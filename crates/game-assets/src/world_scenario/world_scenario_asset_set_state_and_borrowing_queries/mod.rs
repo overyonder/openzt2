@@ -143,6 +143,7 @@ impl WorldScenarios {
             .then_some(WorldScenariosView {
                 owner: self,
                 assets,
+                documents: [None; 2],
             })
     }
 }
@@ -151,9 +152,40 @@ impl WorldScenarios {
 pub struct WorldScenariosView<'a> {
     owner: &'a WorldScenarios,
     assets: &'a Assets<WorldScenarioDocumentAsset>,
+    documents: [Option<(
+        &'a Handle<WorldScenarioDocumentAsset>,
+        &'a WorldScenarioDocumentAsset,
+    )>; 2],
 }
 
 impl<'a> WorldScenariosView<'a> {
+    pub fn with_document(mut self, handle: &'a Handle<WorldScenarioDocumentAsset>) -> Option<Self> {
+        let document = self.assets.get(handle)?;
+        if self
+            .documents
+            .iter()
+            .flatten()
+            .any(|(existing, _)| existing.id() == handle.id())
+        {
+            return Some(self);
+        }
+        *self.documents.iter_mut().find(|entry| entry.is_none())? = Some((handle, document));
+        Some(self)
+    }
+
+    fn scoped_document(
+        self,
+        contains: impl Fn(&WorldScenarioDocumentAsset) -> bool,
+    ) -> Option<(
+        &'a Handle<WorldScenarioDocumentAsset>,
+        &'a WorldScenarioDocumentAsset,
+    )> {
+        self.documents
+            .into_iter()
+            .flatten()
+            .find(|(_, document)| contains(document))
+    }
+
     fn asset(
         self,
         index: &'a BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
@@ -163,7 +195,9 @@ impl<'a> WorldScenariosView<'a> {
     }
 
     pub fn map(self, id: AssetId) -> Option<&'a openzt2_game_data::world_scenario::WorldMapRecord> {
-        self.asset(&self.owner.maps, id)?
+        self.scoped_document(|document| document.document.find_world_map(id).is_some())
+            .map(|(_, document)| document)
+            .or_else(|| self.asset(&self.owner.maps, id))?
             .document
             .find_world_map(id)
     }
@@ -183,7 +217,9 @@ impl<'a> WorldScenariosView<'a> {
         self,
         id: AssetId,
     ) -> Option<&'a openzt2_game_data::world_scenario::StartingZooRecord> {
-        self.asset(&self.owner.starts, id)?
+        self.scoped_document(|document| document.document.find_starting_zoo(id).is_some())
+            .map(|(_, document)| document)
+            .or_else(|| self.asset(&self.owner.starts, id))?
             .document
             .find_starting_zoo(id)
     }
@@ -203,9 +239,17 @@ impl<'a> WorldScenariosView<'a> {
         self,
         id: AssetId,
     ) -> Option<&'a openzt2_game_data::world_scenario::CampaignScenarioRecord> {
-        self.campaigns()
+        self.documents
+            .into_iter()
+            .flatten()
+            .flat_map(|(_, document)| &document.document.campaigns)
             .flat_map(|campaign| &campaign.scenarios)
             .find(|scenario| scenario.id == id)
+            .or_else(|| {
+                self.campaigns()
+                    .flat_map(|campaign| &campaign.scenarios)
+                    .find(|scenario| scenario.id == id)
+            })
     }
 
     pub fn campaign_for_scenario(
@@ -246,11 +290,15 @@ impl<'a> WorldScenariosView<'a> {
     }
 
     pub fn handle_for_map(self, id: AssetId) -> Option<&'a Handle<WorldScenarioDocumentAsset>> {
-        self.owner.maps.get(&id)
+        self.scoped_document(|document| document.document.find_world_map(id).is_some())
+            .map(|(handle, _)| handle)
+            .or_else(|| self.owner.maps.get(&id))
     }
 
     pub fn handle_for_start(self, id: AssetId) -> Option<&'a Handle<WorldScenarioDocumentAsset>> {
-        self.owner.starts.get(&id)
+        self.scoped_document(|document| document.document.find_starting_zoo(id).is_some())
+            .map(|(handle, _)| handle)
+            .or_else(|| self.owner.starts.get(&id))
     }
 
     pub fn has_terrain(self, id: AssetId) -> bool {
@@ -342,3 +390,6 @@ impl<'a> WorldScenariosView<'a> {
             .filter_map(move |id| self.photo_set(*id))
     }
 }
+
+#[cfg(test)]
+mod tests;

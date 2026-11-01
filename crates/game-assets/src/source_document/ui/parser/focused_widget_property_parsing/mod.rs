@@ -31,7 +31,7 @@ pub(super) fn parse_authored_show_hide_animation(
         exit_rate: node.attribute("exitRate").and_then(parse_source_f32),
         initial_seconds: node.attribute("initialTime").and_then(parse_source_f32),
         initial_direction: node.attribute("initialDir").and_then(parse_source_bool),
-        bob_seconds: node.attribute("bob").and_then(parse_source_f32),
+        bob_factor: node.attribute("bob").and_then(parse_source_f32),
         delay_seconds: node.attribute("delay").and_then(parse_source_f32),
         function: node.attribute("function").map(str::to_owned),
         start: node

@@ -41,6 +41,7 @@ fn install_action_app() -> (App, Entity, Entity) {
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .insert_resource(ZooClock {
+            fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,

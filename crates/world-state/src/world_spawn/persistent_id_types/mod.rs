@@ -14,6 +14,14 @@ impl PersistentIdAllocator {
         Self { root, next: 1 }
     }
 
+    pub const fn from_snapshot(root: Entity, next: u64) -> Result<Self, PersistentIdError> {
+        if next == 0 {
+            Err(PersistentIdError::Zero)
+        } else {
+            Ok(Self { root, next })
+        }
+    }
+
     pub fn owns_world(&self, root: Entity) -> bool {
         self.root == root
     }

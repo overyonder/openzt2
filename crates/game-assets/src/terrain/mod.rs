@@ -1,5 +1,6 @@
 //! Terrain asset registration.
 
+mod canonical_terrain_asset_loading;
 pub mod source;
 
 pub mod terrain_asset_types_and_borrowing_queries;
@@ -20,12 +21,20 @@ impl Plugin for TerrainAssetPlugin {
     fn build(&self, application: &mut App) {
         application
             .init_asset::<TerrainAsset>()
-            .preregister_asset_loader::<TerrainSourceAssetLoader>(&["dat"]);
+            .preregister_asset_loader::<TerrainSourceAssetLoader>(&["dat"])
+            .preregister_asset_loader::<canonical_terrain_asset_loading::CanonicalTerrainAssetLoader>(&["ozterrain"]);
     }
 
     fn finish(&self, application: &mut App) {
         let terrain_source_asset_loader =
             TerrainSourceAssetLoader::from_world(application.world_mut());
         application.register_asset_loader(terrain_source_asset_loader);
+        let canonical_loader =
+            canonical_terrain_asset_loading::CanonicalTerrainAssetLoader::from_world(
+                application.world_mut(),
+            );
+        application.register_asset_loader(canonical_loader);
     }
 }
+
+mod terrain_asset_dependency_construction;

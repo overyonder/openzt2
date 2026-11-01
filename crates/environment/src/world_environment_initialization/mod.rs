@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
@@ -46,7 +47,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     seed: Option<Res<ZooSeed>>,
     allocator: Option<ResMut<PersistentIdAllocator>>,
     roots: Query<
-        (Entity, &WorldRoot),
+        (Entity, &WorldRoot, Option<&SelectedWorldDocumentHandles>),
         (
             With<WorldLoadCompleted>,
             With<openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld>,
@@ -63,12 +64,21 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let Some(scenarios) = active_scenarios.get(&scenarios) else {
+    let Some(scenario_catalogue) = active_scenarios.get(&scenarios) else {
         return;
     };
-    for (root, world) in &roots {
+    for (root, world, documents) in &roots {
+        let scoped_catalogue = match documents {
+            Some(documents) => scenario_catalogue
+                .with_document(&documents.map)
+                .and_then(|view| view.with_document(&documents.start)),
+            None => Some(scenario_catalogue),
+        };
+        let Some(scoped_catalogue) = scoped_catalogue else {
+            continue;
+        };
         let Some((environment_id, biome_id)) =
-            select_scenario_environment_and_biome(scenarios, world.scenario)
+            select_scenario_environment_and_biome(scoped_catalogue, world.scenario)
         else {
             warn!(scenario = ?world.scenario, "loaded map has no native environment binding");
             continue;
