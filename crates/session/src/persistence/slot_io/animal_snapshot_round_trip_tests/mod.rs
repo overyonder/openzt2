@@ -139,6 +139,9 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         mother: Some(mother),
         father: Some(father),
     });
+    source
+        .entity_mut(mother)
+        .insert(openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode::Decaffeinated);
     source.entity_mut(mother).insert(Pregnancy {
         father,
         due_tick: 999,
@@ -243,6 +246,11 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     assert_eq!(
         destination.get::<Pregnancy>(restored[&51]).unwrap().father,
         restored[&72]
+    );
+    assert_eq!(
+        destination
+            .get::<openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode>(restored[&51]),
+        Some(&openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode::Decaffeinated)
     );
     assert_eq!(
         destination.get::<Name>(restored_child).unwrap().as_str(),

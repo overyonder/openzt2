@@ -18,6 +18,7 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 use std::collections::BTreeMap;
 
 pub(super) fn resolve_saved_animal_components(
@@ -100,6 +101,13 @@ pub(super) fn apply_animal_snapshot_records(
         }
         if record.release_restricted {
             entity.insert(ReleaseRestricted);
+        }
+        if let Some(caffeinated) = record.caffeinated {
+            entity.insert(if caffeinated {
+                CaffeineMode::Caffeinated
+            } else {
+                CaffeineMode::Decaffeinated
+            });
         }
         if record.crating_restricted {
             entity.insert(CratingRestricted);

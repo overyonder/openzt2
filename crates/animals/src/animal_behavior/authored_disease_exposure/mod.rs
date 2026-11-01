@@ -26,18 +26,9 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 use super::autonomous_task_selection::candidate_facts::AnimalCandidateFacts;
 use super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes;
 
-// ponytail: the schedule and stream live in memory, so a loaded game starts
-// a fresh interval and stream; save them if exposure must replay exactly.
-#[derive(Default)]
-pub(super) struct DiseaseExposureSchedule {
-    next_check_tick: Option<u64>,
-    random: Option<DeterministicRng>,
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) fn expose_animals_to_authored_diseases(
     mut commands: Commands,
-    mut schedule: Local<DiseaseExposureSchedule>,
     clock: Res<ZooClock>,
     seed: Res<ZooSeed>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -57,16 +48,16 @@ pub(super) fn expose_animals_to_authored_diseases(
     let interval = ((f64::from(policy.check_interval_seconds) * f64::from(view.timing().fixed_hz))
         .ceil() as u64)
         .max(1);
-    let next_check_tick = schedule
-        .next_check_tick
-        .get_or_insert(clock.tick + interval);
-    if clock.tick < *next_check_tick {
+    // Checks fall on multiples of the interval, each with its own stream, so
+    // a loaded game replays them without saving any schedule.
+    if clock.tick == 0 || clock.tick % interval != 0 {
         return;
     }
-    *next_check_tick = clock.tick + interval;
-    let random = schedule.random.get_or_insert_with(|| {
-        DeterministicRng::from_entity(*seed, PersistentId(0), RngDomain::Disease)
-    });
+    let random = &mut DeterministicRng::from_entity(
+        *seed,
+        PersistentId(clock.tick / interval),
+        RngDomain::Disease,
+    );
     let held = tokens
         .iter()
         .map(|(token, parent)| (parent.parent(), token.name))
