@@ -47,11 +47,8 @@ fn validate_maintained_object_records(
     for (index, record) in records.iter().enumerate() {
         if matches!(record.persistent_identifier, 0 | u64::MAX)
             || index > 0 && records[index - 1].persistent_identifier >= record.persistent_identifier
-            || record
-                .condition_permille
-                .is_some_and(|condition| condition > 1_000)
-            || record.condition_permille.is_none()
-                && record.contained_waste.is_none()
+            || record.condition_permille.is_some()
+            || record.contained_waste.is_none()
                 && record.next_waste_production_tick.is_none()
                 && record.compost_poo_level.is_none()
             || record
@@ -117,6 +114,16 @@ pub(super) fn decode_maintenance_snapshot(
     if maintenance_record_count(&snapshot) != section.encoded_record_count as usize {
         return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
     }
+    // Older saves also kept worn condition, alone for objects without bins.
+    let mut snapshot = snapshot;
+    for record in &mut snapshot.objects {
+        record.condition_permille = None;
+    }
+    snapshot.objects.retain(|record| {
+        record.contained_waste.is_some()
+            || record.next_waste_production_tick.is_some()
+            || record.compost_poo_level.is_some()
+    });
     validate_loose_waste_records(&snapshot.waste)?;
     validate_maintained_object_records(&snapshot.objects)?;
     Ok(snapshot)

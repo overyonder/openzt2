@@ -17,7 +17,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_zoo_state::maintenance::maintenance_types::MaintainableObjectConditionPermille;
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -84,7 +83,6 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
     for (index, value) in values.iter().enumerate() {
         match value {
             StartingZooSpawnValue::Name { entity, .. }
-            | StartingZooSpawnValue::Condition { entity, .. }
             | StartingZooSpawnValue::CashRegister { entity, .. } => {
                 if hydration
                     .spawned_world_prefab_root_at_record_index(*entity)
@@ -156,14 +154,6 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
                     .spawned_world_prefab_root_at_record_index(*entity)
                     .expect("validated authored name target");
                 commands.entity(target).insert(Name::new(text.clone()));
-            }
-            StartingZooSpawnValue::Condition { entity, permille } => {
-                let target = hydration
-                    .spawned_world_prefab_root_at_record_index(*entity)
-                    .expect("validated authored condition target");
-                commands
-                    .entity(target)
-                    .insert(MaintainableObjectConditionPermille(*permille));
             }
             StartingZooSpawnValue::CashRegister { entity, cents } => {
                 let target = hydration

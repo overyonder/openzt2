@@ -7,14 +7,13 @@ use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::economy::service_types::ServiceCompleted;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooDayAdvanced;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::maintenance_types::{
     AuthoredMaintenanceFactsResolutionMarker, FacilityContainedWaste,
-    IncrementalZooCleanlinessTotals, LooseLitterWaste, MaintainableObjectConditionPermille,
+    IncrementalZooCleanlinessTotals, LooseLitterWaste,
 };
 
 pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
@@ -40,78 +39,16 @@ pub(super) fn initialize_authored_maintenance_facts_for_world_objects(
         else {
             continue;
         };
-        let initial_condition =
-            MaintainableObjectConditionPermille(maintenance_definition.initial_condition_permille);
-        if maintenance_definition.waste_capacity_units == 0 {
-            commands
-                .entity(world_object_entity)
-                .insert_if_new(initial_condition)
-                .insert(AuthoredMaintenanceFactsResolutionMarker);
-        } else {
-            commands
-                .entity(world_object_entity)
-                .insert_if_new((
-                    initial_condition,
-                    FacilityContainedWaste {
-                        contained_waste_units: maintenance_definition
-                            .initial_waste_units
-                            .min(maintenance_definition.waste_capacity_units),
-                        contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
-                    },
-                ))
-                .insert(AuthoredMaintenanceFactsResolutionMarker);
+        let mut world_object = commands.entity(world_object_entity);
+        if maintenance_definition.waste_capacity_units != 0 {
+            world_object.insert_if_new(FacilityContainedWaste {
+                contained_waste_units: maintenance_definition
+                    .initial_waste_units
+                    .min(maintenance_definition.waste_capacity_units),
+                contained_waste_capacity_units: maintenance_definition.waste_capacity_units,
+            });
         }
-    }
-}
-
-pub(super) fn deteriorate_maintainable_world_objects_after_zoo_days_advance(
-    mut advanced_zoo_days: MessageReader<ZooDayAdvanced>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    mut maintainable_world_objects: Query<(
-        &DefinitionId,
-        &mut MaintainableObjectConditionPermille,
-    )>,
-    mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
-) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
-        // A later policy cannot establish the rate for days it did not govern.
-        advanced_zoo_days.clear();
-        return;
-    };
-    if world_definitions.has_pending_assets() {
-        advanced_zoo_days.clear();
-        return;
-    }
-    for advanced_zoo_day in advanced_zoo_days.read() {
-        let elapsed_zoo_days = advanced_zoo_day
-            .current_day
-            .saturating_sub(advanced_zoo_day.previous_day);
-        if elapsed_zoo_days == 0 {
-            continue;
-        }
-        for (definition_id, mut maintainable_object_condition) in &mut maintainable_world_objects {
-            let Some(maintenance_definition) =
-                world_definitions.find_maintenance_by_object(definition_id.0)
-            else {
-                continue;
-            };
-            let condition_loss_permille =
-                u32::from(maintenance_definition.deterioration_per_zoo_day_permille)
-                    .saturating_mul(elapsed_zoo_days)
-                    .min(1_000) as u16;
-            if condition_loss_permille == 0 || maintainable_object_condition.0 == 0 {
-                continue;
-            }
-            let previous_condition = *maintainable_object_condition;
-            maintainable_object_condition.0 = maintainable_object_condition
-                .0
-                .saturating_sub(condition_loss_permille);
-            cleanliness_totals.replace_maintainable_object_condition(
-                previous_condition,
-                *maintainable_object_condition,
-            );
-        }
+        world_object.insert(AuthoredMaintenanceFactsResolutionMarker);
     }
 }
 
@@ -125,7 +62,6 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
         &DefinitionId,
         &Transform,
         &WorldMember,
-        Option<&mut MaintainableObjectConditionPermille>,
         Option<&mut FacilityContainedWaste>,
     )>,
     mut cleanliness_totals: ResMut<IncrementalZooCleanlinessTotals>,
@@ -134,13 +70,8 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
         return;
     };
     for completed_service in completed_services.read() {
-        let Ok((
-            definition_id,
-            transform,
-            world_member,
-            maintainable_object_condition,
-            waste_container,
-        )) = facilities.get_mut(completed_service.facility)
+        let Ok((definition_id, transform, world_member, waste_container)) =
+            facilities.get_mut(completed_service.facility)
         else {
             continue;
         };
@@ -154,9 +85,7 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
         else {
             continue;
         };
-        if maintainable_object_condition.is_none()
-            || (service_effect.contained_waste_units != 0 && waste_container.is_none())
-        {
+        if service_effect.contained_waste_units != 0 && waste_container.is_none() {
             continue;
         }
 
@@ -187,16 +116,6 @@ pub(super) fn apply_completed_service_maintenance_effects_to_facilities(
             ))
         };
 
-        if let Some(mut maintainable_object_condition) = maintainable_object_condition {
-            let previous_condition = *maintainable_object_condition;
-            maintainable_object_condition.0 = maintainable_object_condition
-                .0
-                .saturating_sub(service_effect.condition_loss_permille);
-            cleanliness_totals.replace_maintainable_object_condition(
-                previous_condition,
-                *maintainable_object_condition,
-            );
-        }
         if let Some(mut waste_container) = waste_container {
             let previous_waste_container = *waste_container;
             waste_container.contained_waste_units = waste_container

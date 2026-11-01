@@ -44,9 +44,6 @@ pub struct FacilityDefinition {
 pub struct MaintenanceDefinition {
     pub id: AssetId,
     pub object: AssetId,
-    pub initial_condition_permille: u16,
-    pub deterioration_per_zoo_day_permille: u16,
-    pub repair_below_permille: u16,
     pub waste_capacity_units: u16,
     #[serde(default)]
     pub initial_waste_units: u16,
@@ -58,13 +55,11 @@ pub struct MaintenanceDefinition {
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FacilityServiceMaintenanceEffect {
     pub service: AssetId,
-    pub condition_loss_permille: u16,
     pub contained_waste_units: u16,
     pub loose_litter_units: u16,
 }
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct CleanlinessPolicy {
-    pub condition_weight: u16,
     pub waste_weight: u16,
     pub litter_weight: u16,
     pub litter_reference_units: u32,

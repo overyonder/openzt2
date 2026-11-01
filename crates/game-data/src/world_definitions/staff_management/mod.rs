@@ -25,7 +25,6 @@ pub enum StaffJobKind {
     CleanHabitat,
     EmptyBin,
     SweepLitter,
-    Repair,
     Treat,
     Educate,
     Entertain,
@@ -163,7 +162,6 @@ pub struct StaffHeadPresentation {
 pub enum StaffJobEffect {
     Fill { amount: u16 },
     Clean { amount: u16 },
-    Repair { amount: u16 },
     Treat { treatment: AssetId },
     Educate { amount: u16 },
     Tranquilize { definition: AssetId },

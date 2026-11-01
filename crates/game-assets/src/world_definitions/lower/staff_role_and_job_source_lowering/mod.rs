@@ -67,9 +67,6 @@ pub(super) fn bind_staff_job(
         | StaffJobKind::MaintainTank => StaffJobEffect::Clean {
             amount: number_or(record, &["amount", "cleanAmount"], 1)?,
         },
-        StaffJobKind::Repair => StaffJobEffect::Repair {
-            amount: number_or(record, &["amount", "repairAmount"], 1)?,
-        },
         StaffJobKind::Treat => StaffJobEffect::Treat {
             treatment: asset(record, &["treatment"]),
         },
