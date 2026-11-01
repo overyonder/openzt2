@@ -1,0 +1,33 @@
+name: Issue status from commits
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  issues: write
+
+jobs:
+  update-status:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Move referenced issues to awaiting-verification
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          COMMIT_MESSAGES: ${{ toJson(github.event.commits.*.message) }}
+        run: |
+          numbers=$(jq -r '.[]' <<<"$COMMIT_MESSAGES" \
+            | sed -nE 's/^Refs #([0-9]+)[[:space:]]*$/\1/p' | sort -un)
+          for number in $numbers; do
+            issue=$(gh issue view "$number" --json state,labels) || continue
+            [[ $(jq -r .state <<<"$issue") == OPEN ]] || continue
+            for label in $(jq -r '.labels[].name' <<<"$issue"); do
+              case $label in
+                awaiting-triage | backlog | in-progress | under-pr)
+                  gh issue edit "$number" --remove-label "$label" \
+                    --add-label awaiting-verification
+                  ;;
+              esac
+            done
+          done
