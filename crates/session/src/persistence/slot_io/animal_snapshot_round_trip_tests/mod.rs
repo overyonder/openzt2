@@ -10,7 +10,9 @@ use super::{
         snapshot_container_types::{WorldSnapshotSectionDirectoryEntry, WorldSnapshotSectionKind},
     },
     animal_snapshot_application::apply_animal_snapshot_records,
-    animal_snapshot_capture::{capture_animal_snapshot_records, AnimalSnapshotEntities},
+    animal_snapshot_capture::{
+        capture_animal_snapshot_records, AnimalSnapshotEntities, PendingTokenSnapshotEntities,
+    },
     animal_snapshot_section_encoding::{
         decode_animal_snapshot_records, encode_animal_snapshot_records,
     },
@@ -91,8 +93,10 @@ fn spawn_named_animal(
 }
 
 fn capture(world: &mut World) -> Vec<AnimalSnapshotRecord> {
-    let mut state = SystemState::<AnimalSnapshotEntities>::new(world);
-    capture_animal_snapshot_records(&state.get(world).unwrap()).unwrap()
+    let mut state =
+        SystemState::<(AnimalSnapshotEntities, PendingTokenSnapshotEntities)>::new(world);
+    let (animals, tokens) = state.get(world).unwrap();
+    capture_animal_snapshot_records(&animals, &tokens).unwrap()
 }
 
 fn resolved_components(record: &AnimalSnapshotRecord) -> ResolvedAnimalSpawnComponents {
@@ -139,9 +143,23 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         mother: Some(mother),
         father: Some(father),
     });
-    source.entity_mut(mother).insert(Pregnancy {
-        father: Some(father),
-    });
+    source.entity_mut(mother).insert((
+        Pregnancy {
+            father: Some(father),
+        },
+        Mate(father),
+    ));
+    // The gestation token waits, unclaimed, for the Birth task.
+    source.spawn((
+        openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken {
+            name: AssetId::from_key("t_pregnant"),
+            available_at: 1_000,
+            expires_at: u64::MAX,
+            payload: None,
+            retain_on_failure: true,
+        },
+        ChildOf(mother),
+    ));
     source.entity_mut(mother).insert((
         EnvironmentHabitatAssessed,
         ReleaseRestricted,
@@ -242,6 +260,29 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     assert_eq!(
         destination.get::<Pregnancy>(restored[&51]).unwrap().father,
         Some(restored[&72])
+    );
+    assert_eq!(
+        destination.get::<Mate>(restored[&51]),
+        Some(&Mate(restored[&72]))
+    );
+    let tokens = destination
+        .query::<(
+            &openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken,
+            &ChildOf,
+        )>()
+        .iter(&destination)
+        .map(|(token, holder)| {
+            (
+                token.name,
+                token.available_at,
+                token.retain_on_failure,
+                holder.parent(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        tokens,
+        [(AssetId::from_key("t_pregnant"), 1_000, true, restored[&51])]
     );
     assert_eq!(
         destination.get::<Name>(restored_child).unwrap().as_str(),

@@ -71,7 +71,11 @@ pub(super) fn validate_animal_snapshot_records(
                         .needs
                         .iter()
                         .any(|value| !(0..=MAX_NEED_Q16).contains(value))
-                    || welfare.triggers >> 11 != 0
+                    || welfare
+                        .reproduction_need
+                        .is_some_and(|value| !(0..=MAX_NEED_Q16).contains(&value))
+                    // Eleven welfare needs and reproduction.
+                    || welfare.triggers >> 12 != 0
                     || welfare.welfare > 1000
                     || welfare.band > 4
                     || welfare
@@ -92,6 +96,7 @@ pub(super) fn validate_animal_snapshot_records(
             .into_iter()
             .flatten()
             .chain(record.pregnancy.map(|(father, _)| father))
+            .chain(record.mate)
         {
             if reference == record.persistent_identifier
                 || records

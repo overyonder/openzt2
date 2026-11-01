@@ -207,6 +207,7 @@ pub(in super::super) fn begin_saving_requested_live_world_snapshot_to_save_slot(
         let mut animal_snapshot_records =
             match super::animal_snapshot_capture::capture_animal_snapshot_records(
                 &world_snapshot_capture_queries.animals,
+                &world_snapshot_capture_queries.pending_tokens,
             ) {
                 Ok(records) => records,
                 Err(failure_reason) => {

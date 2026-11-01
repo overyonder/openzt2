@@ -23,6 +23,12 @@ pub(super) struct AnimalSnapshotRecord {
     /// A pregnancy whose father is not known.
     #[serde(default)]
     pub pregnant_without_father: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mate: Option<u64>,
+    /// Tokens waiting for a task, such as `t_Pregnant` during gestation.
+    /// Claimed tokens are saved with the task that claimed them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_tokens: Vec<AnimalPendingTokenSnapshotRecord>,
     pub crated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crate_identifier: Option<u64>,
@@ -38,6 +44,16 @@ pub(super) struct AnimalSnapshotRecord {
 pub(super) enum AnimalSnapshotDeath {
     Disease(AssetId, u64),
     Authored { program: AssetId, since_tick: u64 },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct AnimalPendingTokenSnapshotRecord {
+    pub name: AssetId,
+    pub available_at: u64,
+    pub expires_at: u64,
+    pub payload: Option<u64>,
+    pub retain_on_failure: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

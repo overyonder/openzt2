@@ -244,6 +244,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                     name,
                     available_at,
                     expires_at,
+                    retain_on_failure,
                 } => {
                     let recipient =
                         identities[&BehaviorSnapshotEntityReference::Persistent(*recipient)];
@@ -253,11 +254,9 @@ pub(super) fn restore_behavior_actor_snapshots(
                                 name: *name,
                                 available_at: *available_at,
                                 expires_at: *expires_at,
-                                // ponytail: the snapshot keeps only the claimed token's
-                                // name and times; save payloads and retention with #97's
-                                // persistence step.
+                                // The claiming task already holds its target.
                                 payload: None,
-                                retain_on_failure: false,
+                                retain_on_failure: *retain_on_failure,
                             },
                             ClaimedBehaviorSelfToken {
                                 execution_id: record.task.execution_id,
