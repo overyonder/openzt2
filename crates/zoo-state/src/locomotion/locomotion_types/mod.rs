@@ -578,3 +578,43 @@ pub const MAX_STEERING_NEIGHBORS: usize = 24;
 
 #[cfg(test)]
 mod tests;
+
+/// An actor's authored `b_CaffeineMode` or `b_DeCaffeineMode`, which speeds
+/// up or slows down its locomotion clips.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaffeineMode {
+    Caffeinated,
+    Decaffeinated,
+}
+
+impl CaffeineMode {
+    // ponytail: `people.xml` and `animal.xml` author both factors as 3.0;
+    // lower `f_CaffeineModeFactor` per binder if a mod changes them.
+    const AUTHORED_FACTOR: f32 = 3.0;
+
+    /// Writes the authored `b_CaffeineMode` (`Caffeinated`) or
+    /// `b_DeCaffeineMode` (`Decaffeinated`). Clearing one mode leaves the
+    /// other in place.
+    pub fn write_authored(
+        actor: &mut EntityCommands,
+        current: Option<&Self>,
+        mode: Self,
+        enabled: bool,
+    ) {
+        if enabled {
+            actor.insert(mode);
+        } else if current == Some(&mode) {
+            actor.remove::<Self>();
+        }
+    }
+
+    /// The playback-rate multiplier for locomotion clips.
+    #[must_use]
+    pub fn speed_factor(mode: Option<&Self>) -> f32 {
+        match mode {
+            None => 1.0,
+            Some(Self::Caffeinated) => Self::AUTHORED_FACTOR,
+            Some(Self::Decaffeinated) => 1.0 / Self::AUTHORED_FACTOR,
+        }
+    }
+}

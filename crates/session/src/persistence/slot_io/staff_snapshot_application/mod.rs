@@ -7,6 +7,7 @@ use openzt2_game_assets::{
     scene_prefab::ScenePrefabAsset,
     world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView,
 };
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
@@ -124,6 +125,13 @@ pub(super) fn apply_staff_snapshot_records(
                 hired_month_ordinal: record.hired_month_ordinal,
             },
         ));
+        if let Some(caffeinated) = record.caffeinated {
+            commands.entity(staff).insert(if caffeinated {
+                CaffeineMode::Caffeinated
+            } else {
+                CaffeineMode::Decaffeinated
+            });
+        }
         // Dress the drawn look now, as hiring does: identification waits for
         // the simulation, while the body's animations attach straight away.
         if let Some((variant, _)) = definitions.find_staff(record.role).and_then(|role| {

@@ -10,6 +10,7 @@ use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::behavior_task_execution_types::abandon_behavior_task_for_reconsideration;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -27,15 +28,16 @@ pub(super) struct SynchronizedBehaviorActors<'w, 's> {
             Without<PendingBehaviorTaskFailure>,
         ),
     >,
-    occupied_targets: Query<
+    synchronized_targets: Query<
         'w,
         's,
         (),
         Or<(
-            With<BehaviorTaskExecutionState>,
+            With<SynchronizedBehaviorOwner>,
             With<SynchronizedBehaviorParticipant>,
         )>,
     >,
+    busy_targets: Query<'w, 's, (), With<BehaviorTaskExecutionState>>,
     controllers: Query<
         'w,
         's,
@@ -67,7 +69,8 @@ pub(super) fn start_synchronized_behavior_sets(
         return;
     };
     for (actor, mut task) in &mut actors.tasks {
-        if task.next_action_tick > clock.tick {
+        // A partner claimed earlier this tick has lost its own task.
+        if task.next_action_tick > clock.tick || claims_this_tick.contains(&actor) {
             continue;
         }
         let Some(BehaviorAction::SynchronizedSets(action)) = sources
@@ -81,13 +84,12 @@ pub(super) fn start_synchronized_behavior_sets(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        if actors.occupied_targets.contains(target) || claims_this_tick.contains(&target) {
-            // Native non-interruptible/busy partners reject the synchronization.
-            // Replacing an existing task requires its authored interrupt policy.
-            warn!(
+        if actors.synchronized_targets.contains(target) || claims_this_tick.contains(&target) {
+            // A partner already synchronized with another actor stays with it.
+            debug!(
                 ?actor,
                 ?target,
-                "synchronized partner is busy; active-task interrupt policy is not implemented"
+                "synchronized partner is in another synchronization"
             );
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -141,6 +143,11 @@ pub(super) fn start_synchronized_behavior_sets(
             continue;
         }
         claims_this_tick.insert(target);
+        // The synchronization interrupts the partner's own task, as a keeper
+        // treats an animal whatever it was doing.
+        if actors.busy_targets.contains(target) {
+            abandon_behavior_task_for_reconsideration(target, &mut commands);
+        }
         let target_execution_id = execution_sequence.next();
         commands
             .entity(target)

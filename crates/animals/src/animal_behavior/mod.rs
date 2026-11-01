@@ -1,5 +1,6 @@
 //! Live execution of typed per-document behavior declarations.
 
+mod authored_disease_exposure;
 mod autonomous_task_selection;
 mod behavior_animation_clip_execution;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection;
@@ -69,6 +70,16 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_token_execution::register_token_execution(application);
         behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);
+        application.add_systems(
+            FixedUpdate,
+            authored_disease_exposure::expose_animals_to_authored_diseases
+                .in_set(FixedGameSet::Think)
+                .before(autonomous_task_selection::select_idle_animal_tasks)
+                .run_if(in_state(GamePhase::InGame))
+                .run_if(resource_exists::<ZooSeed>),
+        );
+        application
+            .add_observer(authored_disease_exposure::clear_authored_disease_tokens_when_cured);
         application.add_systems(
             FixedUpdate,
             (

@@ -64,6 +64,10 @@ pub enum BehaviorFact {
     Dead,
     Frozen,
     InGlacier,
+    /// `b_CaffeineMode`: moves faster, as after coffee or with SpeedySyndrome.
+    CaffeineMode,
+    /// `b_DeCaffeineMode`: moves slower, as with SlowingSyndrome.
+    DeCaffeineMode,
     NursingYoung,
     Dessert,
     Gift,

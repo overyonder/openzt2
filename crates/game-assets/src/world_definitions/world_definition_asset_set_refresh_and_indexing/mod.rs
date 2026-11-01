@@ -89,6 +89,7 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
         "config/traversability.xml"
             | "config/favorite.xml"
             | "config/adoption.xml"
+            | "config/diseasemgr.xml"
             | "config/timekeeper.xml"
             | "config/puzzlemgr.xml"
             | "config/showmixer.xml"
@@ -511,6 +512,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(TankSurface, tank_surface_policy);
     singleton!(TankDepth, tank_depth_policy);
     singleton!(TankEdit, tank_edit_policy);
+    singleton!(DiseaseExposure, disease_exposure);
     singleton!(FencePlacementMode, fence_placement_mode_policy);
     singleton!(ShowPresentation, show_presentation);
     singleton!(ShowScheduling, show_scheduling);

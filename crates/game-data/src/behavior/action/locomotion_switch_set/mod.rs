@@ -23,4 +23,7 @@ pub struct BehaviorAnimationSwitchSetAction {
     pub sets_by_animation_graph_node: Vec<(String, AssetId)>,
     /// The `default` row, for any other node.
     pub default_set: Option<AssetId>,
+    /// `loopFlag="true"` selects again each time the selected set ends.
+    #[serde(default)]
+    pub loops: bool,
 }

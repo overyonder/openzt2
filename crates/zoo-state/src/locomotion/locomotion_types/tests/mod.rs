@@ -60,3 +60,30 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
     );
     assert!(candidates.is_empty());
 }
+
+#[test]
+fn clearing_one_caffeine_mode_keeps_the_other() {
+    let mut world = World::new();
+    let actor = world.spawn_empty().id();
+    let mut write = |mode, enabled| {
+        let current = world.get::<CaffeineMode>(actor).copied();
+        let mut commands = world.commands();
+        CaffeineMode::write_authored(&mut commands.entity(actor), current.as_ref(), mode, enabled);
+        world.flush();
+        world.get::<CaffeineMode>(actor).copied()
+    };
+    assert_eq!(
+        write(CaffeineMode::Caffeinated, true),
+        Some(CaffeineMode::Caffeinated)
+    );
+    assert_eq!(
+        write(CaffeineMode::Decaffeinated, false),
+        Some(CaffeineMode::Caffeinated)
+    );
+    assert_eq!(write(CaffeineMode::Caffeinated, false), None);
+    assert_eq!(CaffeineMode::speed_factor(None), 1.0);
+    assert_eq!(
+        CaffeineMode::speed_factor(Some(&CaffeineMode::Decaffeinated)),
+        1.0 / 3.0
+    );
+}

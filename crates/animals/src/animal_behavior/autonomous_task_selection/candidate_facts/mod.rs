@@ -85,7 +85,7 @@ pub(crate) struct AnimalCandidateFacts {
     health: &'static HealthNeed,
     hygiene: &'static HygieneNeed,
     bathroom: &'static BathroomNeed,
-    pub(super) transform: &'static GlobalTransform,
+    pub(crate) transform: &'static GlobalTransform,
     pub(super) world: &'static WorldMember,
     mode: Option<&'static LocomotionMode>,
     water_contact:

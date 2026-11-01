@@ -66,7 +66,7 @@ use openzt2_world_state::animation_playback::{
     animation_joint_target_types::AnimationJointTarget,
     locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
 };
-use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineMode, NavAgent};
 
 pub(super) fn project_person_motion_to_walk_animation(
     mut commands: Commands,
@@ -101,6 +101,7 @@ pub(super) fn project_person_motion_to_walk_animation(
         Or<(With<Guest>, With<Staff>)>,
     >,
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
+    caffeine_modes: Query<&CaffeineMode>,
 ) {
     for (controller_entity, controller, enabled, mut consumed, mut gait) in &mut controllers {
         let Some(person) = parents
@@ -354,8 +355,14 @@ pub(super) fn project_person_motion_to_walk_animation(
                 if speed <= 0.0 {
                     return None;
                 }
+                // A gait row's rate also sets the agent's speed below, so
+                // scaling it speeds the person up or slows them down.
+                // ponytail: people without a gait row move at their
+                // NavAgent speed and keep it; scale that too if one appears.
                 let rate = if let Some(rate) = sampled_rate {
-                    rate
+                    (f32::from(rate) * CaffeineMode::speed_factor(caffeine_modes.get(person).ok()))
+                        .round()
+                        .clamp(1.0, f32::from(i16::MAX)) as i16
                 } else {
                     (agent.as_deref()?.max_speed_mps / speed * 1000.0)
                         .round()
