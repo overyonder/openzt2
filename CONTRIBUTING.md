@@ -345,6 +345,8 @@ not repeat the implementation. Lint rules aren't weakened to get a pass.
 
 Commit subjects are short, lowercase descriptions of the change. Local work
 is squashed before a public push; ask about the boundary if it isn't clear.
+Add a `Refs #N` line to the body for each issue a commit addresses, and keep
+those lines when squashing, so GitHub links the commit on the issue.
 
 ## AI use and submitted material
 
