@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+mod tests;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
