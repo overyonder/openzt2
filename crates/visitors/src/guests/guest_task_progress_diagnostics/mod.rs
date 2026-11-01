@@ -1,4 +1,5 @@
 //! Debug-level trace of what holds each guest between task selections.
+use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 
 use bevy::{ecs::entity::EntityHashMap, prelude::*};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -27,7 +28,7 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::TransportRider;
 use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTransport;
 
 use super::guest_simulation_types::{Guest, GuestDestination, GuestPhase, Viewing};
-use super::guest_task_need_facts::{GuestNeedTriggers, GuestTaskNeedFacts};
+use super::guest_task_need_facts::GuestTaskNeedFacts;
 
 /// Logs each guest's phase, current task frame, blocking components and
 /// hunger whenever any of them changes, so a guest that never returns to task

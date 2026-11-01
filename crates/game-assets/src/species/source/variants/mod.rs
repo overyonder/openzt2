@@ -11,11 +11,11 @@ use crate::source_document::resolved_source_record_index::BindError;
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::Sex;
 use openzt2_game_data::species::SpeciesVariant;
 use openzt2_game_data::species::SpeciesVariantFlags;
-use openzt2_game_data::AssetId;
 
 pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
     species: &RecordView<'_, '_>,
@@ -43,6 +43,7 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
                 (Some(animation_clip_asset_key), loops)
             });
     Ok(Some(SpeciesVariant {
+        placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(species)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(&format!(
             "{}_adult",
             species.key
@@ -171,6 +172,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
             .or_else(|| find_authored_base_species_variant_probability(&stage_record))
             .unwrap_or(100);
     Ok(Some(SpeciesVariant {
+        placement_surface_policy: crate::world_definitions::lower::authored_placement_footprint_lowering::authored_surface_policy(candidate)?,
         id: AssetId::from_key(&canonicalize_source_document_record_key(candidate.key)),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(candidate),
         navigation_collision_policy: lower_animal_navigation_collision_policy(candidate)?,

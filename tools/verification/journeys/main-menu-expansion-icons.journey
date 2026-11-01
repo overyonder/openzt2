@@ -1,0 +1,10 @@
+# Review installed expansion icons and the Exit control beneath their list.
+start main-menu
+until settled
+capture main-menu-expansion-icons
+move "Exit Game Button"
+wait 30
+capture main-menu-exit-hover
+click "Exit Game Button"
+wait 30
+capture main-menu-exit-confirmation

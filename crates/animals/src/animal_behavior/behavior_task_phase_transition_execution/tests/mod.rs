@@ -9,6 +9,8 @@ use openzt2_game_data::{
 fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
+        .init_resource::<Assets<WorldDefinitionAsset>>()
+        .init_resource::<WorldDefinitions>()
         .insert_resource(ZooClock {
             tick: 1,
             absolute_day: 0,

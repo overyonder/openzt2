@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::donations::donation_guest_decision_types::DonationProgress;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::economy::account_transaction_types::Account;
@@ -8,7 +9,6 @@ use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
 
 use super::{
-    donation_guest_decision_types::DonationProgress,
     donation_opportunity_types::{DirectDonationSettlement, DonationAcceptor, DonationOpportunity},
     donation_payment_types::{
         DonationPaymentRequested, DonationPaymentState, DonationRejected, DonationRejection,
@@ -103,7 +103,7 @@ pub(super) fn submit_validated_donation_requests_to_economy_transfers(
             Some(DonationRejection::RuleDenied)
         } else if acceptors.get(request.acceptor).is_err() {
             Some(DonationRejection::InvalidAcceptor)
-        } else if wallet.0 .0 < request.amount.0 {
+        } else if wallet.0.0 < request.amount.0 {
             Some(DonationRejection::InsufficientFunds)
         } else {
             None

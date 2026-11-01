@@ -263,9 +263,13 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
         scenario
             .map(|scenario| scenario.starting_cash_cents)
             .or_else(|| {
-                catalogue
-                    .start(AssetId(map.starting_zoo.0))
-                    .map(|start| start.cash_cents)
+                if selection.mode == Some(WorldSessionMode::Challenge) {
+                    Some(3_000_000)
+                } else {
+                    catalogue
+                        .start(AssetId(map.starting_zoo.0))
+                        .map(|start| start.cash_cents)
+                }
             })
             .map(|cash| {
                 format_whole_currency_from_cents(selection.starting_cash_cents.unwrap_or(cash))

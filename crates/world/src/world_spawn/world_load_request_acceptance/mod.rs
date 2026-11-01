@@ -198,8 +198,12 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     }
     commands.insert_resource(PersistentIdAllocator::new(root));
     info!(?root, scenario = ?request.scenario, "accepted world load and installed its persistent-id allocator");
+    let default_starting_cash = match request.mode {
+        openzt2_world_state::game_session_types::WorldSessionMode::Challenge => 3_000_000,
+        _ => cash_cents,
+    };
     commands.insert_resource(ZooCash(Money(
-        request.starting_cash_cents.unwrap_or(cash_cents),
+        request.starting_cash_cents.unwrap_or(default_starting_cash),
     )));
     let admission_cents = admission_cents
         .or_else(|| {

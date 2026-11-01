@@ -1,6 +1,6 @@
 use bevy::prelude::*;
-use openzt2_game_data::terrain::TerrainWaterDepth;
 use openzt2_game_data::AssetId;
+use openzt2_game_data::terrain::TerrainWaterDepth;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
@@ -95,6 +95,41 @@ pub fn sample_terrain(
         surface,
         normal,
     })
+}
+
+/// Lowest and highest vertices of the same triangle used by `sample_terrain`.
+pub fn sample_terrain_triangle_height_bounds(
+    chunk: &TerrainChunk,
+    asset: &TerrainAsset,
+    edited: Option<&EditedTerrainSamples>,
+    world: Vec2,
+) -> Option<[f32; 2]> {
+    let cell = terrain_cell_indices(chunk, world)?;
+    let local = (world - chunk.origin) / chunk.spacing_m - cell.as_vec2();
+    let x = cell.x as usize;
+    let z = cell.y as usize;
+    let height = |x, z| terrain_sample_height_metres(chunk, asset, edited, x, z);
+    let [a, b, c, d] = [
+        height(x, z)?,
+        height(x + 1, z)?,
+        height(x, z + 1)?,
+        height(x + 1, z + 1)?,
+    ];
+    let vertices = if terrain_cell_uses_alternate_triangle_diagonal(chunk, asset, cell)? {
+        if local.x + local.y <= 1.0 {
+            [a, b, c]
+        } else {
+            [d, c, b]
+        }
+    } else if local.x <= local.y {
+        [a, c, d]
+    } else {
+        [a, b, d]
+    };
+    Some([
+        vertices.into_iter().fold(f32::INFINITY, f32::min),
+        vertices.into_iter().fold(f32::NEG_INFINITY, f32::max),
+    ])
 }
 
 pub fn sample_authored_terrain(

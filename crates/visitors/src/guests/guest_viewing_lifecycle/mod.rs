@@ -12,8 +12,8 @@ use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 
@@ -42,14 +42,14 @@ pub(super) fn revoke_unowned_guest_observations(
             Option<&GuestViewingTarget>,
             Option<&GuestPhase>,
             Option<&WorldMember>,
-            Has<super::guest_view_animals_execution::ActiveGuestAnimalViewingMeter>,
+            Has<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>,
         ),
         (
             With<Guest>,
             Or<(
                 With<Viewing>,
                 With<GuestDestination>,
-                With<super::guest_view_animals_execution::ActiveGuestAnimalViewingMeter>,
+                With<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>,
             )>,
         ),
     >,
@@ -73,7 +73,7 @@ pub(super) fn revoke_unowned_guest_observations(
             if meter {
                 commands
                     .entity(guest)
-                    .remove::<super::guest_view_animals_execution::ActiveGuestAnimalViewingMeter>();
+                    .remove::<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>();
             }
             // Removing the subject removes the relationship through Bevy's hook.
             // Release only an arrived observation, never a replacement route.
@@ -123,7 +123,7 @@ pub(super) fn revoke_unowned_guest_observations(
         }
         commands.entity(guest).remove::<(
             Viewing,
-            super::guest_view_animals_execution::ActiveGuestAnimalViewingMeter,
+            openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter,
         )>();
         if owns_destination && !navigating {
             commands

@@ -1,4 +1,4 @@
-use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffJobKind};
 use openzt2_zoo_state::{
     animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg,
     behavior_task_execution_types::BehaviorTaskExecutionPhase,
@@ -177,6 +177,8 @@ pub(super) struct BehaviorActorSnapshot {
     pub random: Option<[u64; 2]>,
     pub synchronized: Option<BehaviorSynchronizedSnapshot>,
     pub membership: Option<BehaviorInteractionMembershipSnapshot>,
+    #[serde(default)]
+    pub transaction: Option<BehaviorTransactionSnapshot>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -188,4 +190,16 @@ pub(super) struct BehaviorSynchronizedSnapshot {
     pub origin: BehaviorFrameSnapshot,
     pub depth: usize,
     pub target_outcome: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BehaviorTransactionSnapshot {
+    pub execution_id: u64,
+    pub stack_depth: usize,
+    pub origin: BehaviorFrameSnapshot,
+    pub facility: BehaviorSnapshotEntityReference,
+    pub transaction: AssetId,
+    pub cost_override: Option<u32>,
+    pub next_transaction: Option<AssetId>,
 }

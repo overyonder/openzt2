@@ -1,16 +1,14 @@
+use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::{AssetId, world_definitions::guest_simulation_definitions::GuestMemoryKind};
+use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestReactionApplied};
 
-use super::guest_view_animals_execution::ActiveGuestAnimalViewingMeter;
-
-#[derive(Component)]
-pub(super) struct GuestSpeciesViewCounts(Vec<(AssetId, u32)>);
+use openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter;
 
 pub(super) fn initialize_guest_species_view_counts(
     species_assets: Res<Assets<SpeciesAsset>>,

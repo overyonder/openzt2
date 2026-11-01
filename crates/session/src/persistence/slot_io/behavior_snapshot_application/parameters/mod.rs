@@ -37,4 +37,5 @@ pub(super) struct PreparedBehaviorActor {
     pub(super) pursuit_origin: Option<BehaviorTaskReturnFrame>,
     pub(super) job_frame: Option<BehaviorTaskReturnFrame>,
     pub(super) synchronized_origin: Option<BehaviorTaskReturnFrame>,
+    pub(super) transaction_origin: Option<BehaviorTaskReturnFrame>,
 }

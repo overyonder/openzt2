@@ -98,6 +98,7 @@ fn document() -> WorldDefinitionDocument {
             destruction: None,
         }],
         placeables: vec![PlaceableDefinition {
+            surface_policy: Default::default(),
             id,
             weight: 1.0,
             footprint: vec![FootprintCell {

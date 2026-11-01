@@ -1,3 +1,5 @@
+use openzt2_zoo_state::donations::donation_guest_decision_types::GuestDonationMeters;
+use openzt2_zoo_state::donations::donation_guest_decision_types::{DonationObservation, DonationCandidate, DonationProgress};
 use std::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
@@ -10,11 +12,8 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_lifecycle::types::{Animal, SpeciesHandle, AnimalVariant};
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestPhase, GuestReactionApplied, Viewing};
-use super::{donation_guest_decision_types::{DonationObservation, DonationCandidate, DonationProgress}, donation_opportunity_types::DonationOpportunity};
+use super::{donation_opportunity_types::DonationOpportunity};
 use openzt2_zoo_state::donations::donation_payment_types::DonationPaymentRequested;
-
-#[derive(Component, Clone, Default)]
-pub(super) struct GuestDonationMeters(HashMap<AssetId, f32>);
 
 pub(super) fn hydrate_animal_donation_opportunities(
     mut commands: Commands,

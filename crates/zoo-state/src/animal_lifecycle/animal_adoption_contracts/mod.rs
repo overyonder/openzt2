@@ -1,7 +1,7 @@
 //! Animal adoption selection, placement, payment, and completion contracts.
 
 use bevy::prelude::*;
-use openzt2_game_data::{species::Sex, AssetId};
+use openzt2_game_data::{AssetId, species::Sex};
 
 use crate::economy::money_types::Money;
 
@@ -44,7 +44,8 @@ pub struct AdoptAnimal {
     pub variant: Option<AssetId>,
     pub sex: Option<Sex>,
     pub offer_slot_index: Option<u16>,
-    pub habitat: Entity,
+    pub world: Entity,
+    pub habitat: Option<Entity>,
     pub transform: Transform,
 }
 
@@ -54,7 +55,8 @@ pub struct PendingAdoption {
     pub variant: AssetId,
     pub sex: Sex,
     pub offer_slot_index: Option<u16>,
-    pub habitat: Entity,
+    pub world: Entity,
+    pub habitat: Option<Entity>,
     pub transform: Transform,
     pub cost: Money,
 }

@@ -1,13 +1,14 @@
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
-use openzt2_game_data::AssetId;
 
 pub(super) fn create_object_placeable_definition_test_fixture(
     constraints: PlacementConstraints,
 ) -> PlaceableDefinition {
     PlaceableDefinition {
+        surface_policy: Default::default(),
         id: AssetId([7; 16]),
         weight: 1.0,
         footprint: vec![FootprintCell {

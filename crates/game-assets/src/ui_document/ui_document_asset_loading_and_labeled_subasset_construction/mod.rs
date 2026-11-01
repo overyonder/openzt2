@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, io};
 
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use openzt2_game_data::ui_document::document::UiDocumentRole;
@@ -61,12 +61,14 @@ impl AssetLoader for UiDocumentAssetLoader {
         )
         .await?;
         for (label, rail_camera_document) in lowered_ui_assets.rail_cameras {
-            let rail_camera_asset =
-                crate::scene_prefab::create_scene_prefab_asset_and_load_dependencies(
-                    rail_camera_document,
-                    load_context,
-                );
-            load_context.add_labeled_asset(label, rail_camera_asset);
+            load_context.labeled_asset_scope(label, |label_context| {
+                Ok::<_, io::Error>(
+                    crate::scene_prefab::create_scene_prefab_asset_and_load_dependencies(
+                        rail_camera_document,
+                        label_context,
+                    ),
+                )
+            })?;
         }
         let mut canonical_ui_documents = lowered_ui_assets.documents.into_iter();
         let root_ui_document = canonical_ui_documents.next().ok_or_else(|| {

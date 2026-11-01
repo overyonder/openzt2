@@ -1,10 +1,9 @@
 //! Requested animal spawn identity, outcome, and failure contracts.
 
 use bevy::prelude::*;
-use openzt2_game_data::{species::Sex, AssetId};
+use openzt2_game_data::{AssetId, species::Sex};
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::MarinePlacementFailure;
 
 use super::types::Parents;
 
@@ -14,7 +13,8 @@ pub(super) struct SpawnAnimalRequest {
     pub(super) species: AssetId,
     pub(super) variant: Option<AssetId>,
     pub(super) sex: Option<Sex>,
-    pub(super) habitat: Entity,
+    pub(super) world: Entity,
+    pub(super) habitat: Option<Entity>,
     pub(super) transform: Transform,
     pub(super) parents: Parents,
 }
@@ -36,6 +36,5 @@ pub(super) enum AnimalSpawnFailure {
     InvalidVariant,
     InvalidSex,
     InvalidHabitat,
-    MarinePlacement(MarinePlacementFailure),
     PersistentId(PersistentIdError),
 }

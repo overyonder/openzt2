@@ -172,6 +172,20 @@ pub(super) fn validate_behavior_actor_snapshots(
                 return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
             }
         }
+        if let Some(pending) = &record.transaction {
+            if pending.execution_id != task.execution_id
+                || pending.stack_depth != task.stack.len()
+                || !valid_frame(&pending.origin)
+                || !matches_frame(&pending.origin, &task.current)
+                || !valid_reference(&pending.facility)
+                || task.target.as_ref() != Some(&pending.facility)
+                || pending
+                    .cost_override
+                    .is_some_and(|amount| !f32::from_bits(amount).is_finite())
+            {
+                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+            }
+        }
         let Some(nav) = &record.navigation else {
             continue;
         };
@@ -300,3 +314,6 @@ pub(super) fn validate_behavior_actor_snapshots(
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

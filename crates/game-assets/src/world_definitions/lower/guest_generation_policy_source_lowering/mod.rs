@@ -38,6 +38,14 @@ pub(super) fn bind_guest_policy(
         enabled: element_bool(&ai_policy, &["AI_On"], true)?,
         minimum_score,
         outside_range_need_value,
+        rejected_target_retry_interval: required_element_number(
+            &ai_policy,
+            &["BadEntityClearInterval"],
+        )?,
+        rejected_target_retry_interval_cap: required_element_number(
+            &ai_policy,
+            &["BadEntityClearIntervalCap"],
+        )?,
     });
     let need_adjustment_interval: u32 =
         required_element_number(&ai_policy, &["StateThinkerInterval"])?;

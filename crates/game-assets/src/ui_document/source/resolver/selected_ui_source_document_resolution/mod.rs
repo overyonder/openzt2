@@ -16,6 +16,10 @@ use super::{
         attach_embedded_biome_panels_to_authored_shell_composition_point,
         parse_embedded_biome_panel_from_source_document,
     },
+    authored_credits_composition::compose_authored_credits_fragments_into_timeline,
+    authored_expansion_icon_composition::{
+        attach_expansion_icons_to_authored_menu_list, parse_expansion_icon_from_source_document,
+    },
     authored_ui_source_skin_image_resolution::{
         apply_authored_selected_skin_replacements_to_source_documents,
         resolve_authored_file_and_directory_skin_image_selections,
@@ -125,6 +129,8 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
         .transpose()?;
     let mut parsed_ui_source_document_order = Vec::new();
     let mut authored_biome_panels = Vec::new();
+    let mut expansion_icons = Vec::new();
+    let mut small_expansion_icons = Vec::new();
     for (_, document) in selected_source_documents_in_resolution_order {
         let path = document.path.key();
         if interaction_mode_path.as_deref() == Some(path.as_str()) {
@@ -132,6 +138,21 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
         }
         if let Some(panel) = parse_embedded_biome_panel_from_source_document(document)? {
             authored_biome_panels.push(panel);
+        }
+        for (element, icons) in [
+            ("icon", &mut expansion_icons),
+            ("smallIcon", &mut small_expansion_icons),
+        ] {
+            if let Some((expansion_index, mut icon)) =
+                parse_expansion_icon_from_source_document(document, element)?
+            {
+                rewrite_ui_source_node_dependency_paths_to_selected_winners(
+                    &path,
+                    &mut icon,
+                    &resolution_profile.resolved_dependencies,
+                );
+                icons.push((expansion_index, icon));
+            }
         }
         if path != "ztapp4.xml" && !path.starts_with("ui/") {
             continue;
@@ -151,6 +172,19 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
             Err(gap) if gap.kind == UiSourceDocumentGapKind::WrongDocumentFamily => {}
             Err(gap) => return Err(gap),
         }
+    }
+    compose_authored_credits_fragments_into_timeline(&mut parsed_ui_source_documents_by_path);
+    if let Some(menu) = parsed_ui_source_documents_by_path.get_mut("ui/layout/mainmenu.xml") {
+        attach_expansion_icons_to_authored_menu_list(
+            &mut menu.root,
+            "Expansion Icons",
+            &mut expansion_icons,
+        )?;
+        attach_expansion_icons_to_authored_menu_list(
+            &mut menu.root,
+            "Small Expansion Icons",
+            &mut small_expansion_icons,
+        )?;
     }
     if !authored_biome_panels.is_empty() {
         let shell = parsed_ui_source_documents_by_path

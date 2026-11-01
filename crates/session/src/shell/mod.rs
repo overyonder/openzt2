@@ -68,6 +68,11 @@ impl Plugin for ShellPlugin {
                 boot_splash_lifecycle::create_boot_splash_screen_and_shell_cameras,
             )
             .add_systems(
+                Update,
+                boot_splash_lifecycle::reflect_game_phase_in_shared_menu_backdrop_visibility
+                    .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
+            )
+            .add_systems(
                 OnEnter(GamePhase::MainMenu),
                 main_menu_screen_lifecycle_and_presentation::
                     create_main_menu_screen_and_request_profile_index,

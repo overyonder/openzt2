@@ -30,6 +30,7 @@ use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::{
     BehaviorCandidateRanking,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
 use openzt2_zoo_state::behavior_task_execution_types::{
@@ -63,6 +64,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    target_retry_delays: Query<&BehaviorTargetRetryDelays>,
     surfaces: DrySurfaceEligibility,
     world_objects: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember)>,
     mut idle: Query<
@@ -118,6 +120,13 @@ pub(crate) fn start_authored_idle_staff_tasks(
             for target in idle_task_targets(task, staff, world, &world_objects, |object| {
                 catalogue.find_object(object)
             }) {
+                if target.is_some_and(|(target, _)| {
+                    target_retry_delays
+                        .get(staff)
+                        .is_ok_and(|delays| delays.rejects(target))
+                }) {
+                    continue;
+                }
                 let target_position = target.map_or(position, |(_, position)| position);
                 let satisfied = candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,

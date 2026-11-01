@@ -52,6 +52,7 @@ pub(super) fn lower_selected_ui_source_documents_to_canonical_result_documents(
         .filter(|document| {
             classify_source_document(document) == SourceDocumentKind::Ui
                 || document.root.name.eq_ignore_ascii_case("BFGBiome")
+                || document.root.name.eq_ignore_ascii_case("ZTExpansionInfo")
         })
         .collect::<Vec<_>>();
     resolution_profile.source_precedence = ui_and_embedded_biome_panel_source_documents

@@ -28,4 +28,5 @@ pub enum WorldSnapshotPersistenceFailure {
     DuplicatePersistentEntityIdentifier,
     BrokenPersistentEntityReference,
     CapacityExceeded,
+    SnapshotTransactionInFlight,
 }

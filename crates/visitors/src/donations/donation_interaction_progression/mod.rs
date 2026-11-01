@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::donations::donation_guest_decision_types::{
+    DonationCandidate, DonationProgress,
+};
 
 use openzt2_zoo_state::economy::facility_economy_types::Wallet;
 use openzt2_zoo_state::guests::guest_simulation_types::Guest;
@@ -9,7 +12,6 @@ use super::{
     donation_guest_decision_calculations::{
         begin_donation_progress_from_candidate, find_invalid_donation_relation_rejection,
     },
-    donation_guest_decision_types::{DonationCandidate, DonationProgress},
     donation_opportunity_types::{DonationAcceptor, DonationOpportunity},
     donation_payment_types::{
         DonationPaymentRequested, DonationRejected, DonationRejection, DonationRequest,
@@ -64,7 +66,7 @@ pub(super) fn advance_donation_interactions_and_request_completed_payments(
             opportunities.get(progress.subject).is_ok(),
         )
         .or_else(|| {
-            (wallet.0 .0 < progress.amount.0).then_some(DonationRejection::InsufficientFunds)
+            (wallet.0.0 < progress.amount.0).then_some(DonationRejection::InsufficientFunds)
         });
         if let Some(reason) = rejection {
             rejected_donations.write(DonationRejected {

@@ -11,7 +11,7 @@ pub(super) fn planned_behavior_topology_references(
     records: &[TopologySnapshot],
 ) -> Result<Vec<BehaviorSnapshotEntityReference>, WorldSnapshotPersistenceFailure> {
     use openzt2_navigation::habitat::habitat_region_derivation::{
-        derive_enclosed_habitat_regions_from_fence_segments, HabitatFenceSegment,
+        HabitatFenceSegment, derive_enclosed_habitat_regions_from_fence_segments,
     };
     let nodes = records
         .iter()
@@ -105,6 +105,7 @@ pub(in crate::persistence) struct BehaviorSnapshotEntityData {
     pub(super) pending_behavior_docking_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion>,
     pub(super) pending_behavior_move_completion: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion>,
     pub(super) pending_behavior_pursuit: Option<&'static openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit>,
+    pub(super) pending_behavior_transaction: Option<&'static openzt2_zoo_state::economy::behavior_transaction_state::PendingBehaviorTransaction>,
     pub(super) pending_behavior_task_failure: Option<&'static openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure>,
     pub(super) persistent_id: Option<&'static PersistentId>,
     pub(super) rigid_body: Option<&'static avian3d::prelude::RigidBody>,

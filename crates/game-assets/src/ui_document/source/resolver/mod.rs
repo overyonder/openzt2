@@ -1,6 +1,8 @@
 pub mod application_root_cursor_and_named_event_resolution;
 pub mod authored_biome_panel_composition;
 pub mod authored_buy_information_panel_source_normalization;
+mod authored_credits_composition;
+mod authored_expansion_icon_composition;
 pub mod authored_money_text_source_normalization;
 pub mod authored_profile_name_edit_watch_binding_normalization;
 pub mod authored_rail_camera_ui_surface_source_normalization;

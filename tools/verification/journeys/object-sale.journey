@@ -90,13 +90,26 @@ expect cash_cents_without_guest_income == @tree-sold
 expect object_sale_payments == @journey-before+1
 expect correct_object_sale_payments == @journey-before+1
 
-# Reverse the sale through normal input; restore the next journey's tree and budget.
-key CTRL+Z
+# The authored Undo control follows accepted history, including while paused.
+click "undo"
 until placed_objects == @entered-map
 until cash_cents_without_guest_income == @tree-selected
 expect fences == @entered-map
 expect paths == @entered-map
 capture tree-restored
+
+# Redo reuses the sale transaction and its exact refund; undo restores it again.
+key CTRL+Y
+until placed_objects == @tree-sold
+until cash_cents_without_guest_income == @tree-sold
+expect construction_commit_failures == @journey-before
+capture tree-sale-redone
+click "undo"
+until placed_objects == @entered-map
+until cash_cents_without_guest_income == @tree-selected
+expect fences == @entered-map
+expect paths == @entered-map
+capture tree-restored-after-redo
 
 key P
 until simulation_paused == 0

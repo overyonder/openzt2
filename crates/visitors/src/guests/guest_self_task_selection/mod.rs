@@ -1,4 +1,6 @@
 //! Bounded entry into the authored task executor for idle guests.
+use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
+use openzt2_zoo_state::guests::guest_simulation_types::GuestTaskCooldowns;
 
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
@@ -12,6 +14,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task;
@@ -39,38 +42,12 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     guest_target_eligibility::satisfies_guest_target_fact,
-    guest_task_need_facts::{GuestNeedTriggers, GuestTaskNeedFacts},
+    guest_task_need_facts::GuestTaskNeedFacts,
 };
 
 use super::guest_simulation_types::{
     Guest, GuestArchetype, GuestDestination, GuestPhase, GuestRng, Viewing,
 };
-
-/// Authored `TaskDelayMin`/`TaskDelayMax`: once a task ends, it stays
-/// unavailable to the same guest for a delay sampled when it was chosen.
-#[derive(Component, Default)]
-pub(super) struct GuestTaskCooldowns {
-    /// The chosen delayed task and its sampled delay, until the guest is idle again.
-    running: Option<(AssetId, u64)>,
-    /// Delayed tasks and the tick from which each may be chosen again.
-    ready_ticks: Vec<(AssetId, u64)>,
-}
-
-impl GuestTaskCooldowns {
-    /// Starts the cooldown of a delayed task that has ended and forgets expired ones.
-    fn observe_idle(&mut self, tick: u64) {
-        if let Some((task, delay_ticks)) = self.running.take() {
-            self.ready_ticks.retain(|(cooling, _)| *cooling != task);
-            self.ready_ticks
-                .push((task, tick.saturating_add(delay_ticks)));
-        }
-        self.ready_ticks.retain(|(_, ready)| *ready > tick);
-    }
-
-    fn is_cooling(&self, task: AssetId) -> bool {
-        self.ready_ticks.iter().any(|(cooling, _)| *cooling == task)
-    }
-}
 
 pub(super) fn select_idle_guest_tasks(
     documents: Res<LoadedBehaviorDocumentCollection>,
@@ -92,6 +69,7 @@ pub(super) fn select_idle_guest_tasks(
             &GlobalTransform,
             &WorldMember,
             Option<&mut GuestTaskCooldowns>,
+            Option<&BehaviorTargetRetryDelays>,
         ),
         (
             With<Guest>,
@@ -185,6 +163,7 @@ pub(super) fn select_idle_guest_tasks(
         transform,
         world,
         mut cooldowns,
+        target_retry_delays,
     ) in &mut guests
     {
         if let Some(cooldowns) = cooldowns.as_deref_mut() {
@@ -276,6 +255,9 @@ pub(super) fn select_idle_guest_tasks(
                  elevated_path: Option<bool>,
                  target_trash_level: Option<u16>,
                  target_position: Vec3| {
+                    if target_retry_delays.is_some_and(|delays| delays.rejects(target)) {
+                        return;
+                    }
                     let is_path = elevated_path.is_some();
                     let is_self = target == guest;
                     if !candidate_requirements_are_satisfied(
@@ -430,12 +412,11 @@ pub(super) fn select_idle_guest_tasks(
             let delay_ticks =
                 (f64::from(seconds) / fixed_time.timestep().as_secs_f64()).ceil() as u64;
             if let Some(cooldowns) = cooldowns.as_deref_mut() {
-                cooldowns.running = Some((task.id, delay_ticks));
+                cooldowns.start_running(task.id, delay_ticks);
             } else {
-                commands.entity(guest).insert(GuestTaskCooldowns {
-                    running: Some((task.id, delay_ticks)),
-                    ready_ticks: Vec::new(),
-                });
+                let mut cooldowns = GuestTaskCooldowns::default();
+                cooldowns.start_running(task.id, delay_ticks);
+                commands.entity(guest).insert(cooldowns);
             }
         }
         // An unsupported winning action does not promote a lower-ranked choice.

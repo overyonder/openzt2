@@ -183,6 +183,11 @@ pub(super) fn restore_behavior_actor_snapshots(
                 .map(|pending| resolve(&pending.origin))
                 .transpose()?,
             job_frame,
+            transaction_origin: record
+                .transaction
+                .as_ref()
+                .map(|pending| resolve(&pending.origin))
+                .transpose()?,
             synchronized_origin: record
                 .synchronized
                 .as_ref()

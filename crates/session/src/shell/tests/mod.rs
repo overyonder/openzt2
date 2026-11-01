@@ -113,6 +113,34 @@ fn selecting_mode_clears_stale_world_and_enters_map_selection() {
 }
 
 #[test]
+fn selecting_challenge_mode_defaults_starting_cash_to_thirty_thousand_dollars() {
+    let mut app = routing_app(
+        ShellSelection {
+            mode: Some(WorldSessionMode::Freeform),
+            scenario: Some(id(9)),
+            starting_cash_cents: None,
+        },
+        None,
+    );
+    app.add_message::<SelectWorldSessionMode>()
+        .add_systems(Update, select_requested_play_mode_and_enter_map_selection);
+    app.world_mut()
+        .resource_mut::<Messages<SelectWorldSessionMode>>()
+        .write(SelectWorldSessionMode(WorldSessionMode::Challenge));
+
+    app.update();
+
+    assert_eq!(
+        *app.world().resource::<ShellSelection>(),
+        ShellSelection {
+            mode: Some(WorldSessionMode::Challenge),
+            scenario: None,
+            starting_cash_cents: Some(3_000_000),
+        }
+    );
+}
+
+#[test]
 fn valid_start_emits_exactly_one_world_load() {
     let scenario = id(3);
     let mut app = routing_app(
@@ -183,17 +211,14 @@ fn failed_load_reuses_retained_map_selection() {
     .init_resource::<UiRoleRequests>()
     .init_resource::<NextState<GamePhase>>()
     .add_systems(Update, create_or_reuse_selected_mode_map_selection_screen);
-    let screen = app
-        .world_mut()
-        .spawn((
-            ShellScreen::Globe {
-                mode: WorldSessionMode::Freeform,
-            },
-            Visibility::Inherited,
-        ))
-        .id();
+    app.world_mut().spawn((
+        ShellScreen::Globe {
+            mode: WorldSessionMode::Freeform,
+        },
+        Visibility::Inherited,
+    ));
     app.world_mut()
-        .spawn((MainMenuBackdrop, Visibility::Inherited, ChildOf(screen)));
+        .spawn((MainMenuBackdrop, Visibility::Inherited));
 
     app.update();
 
@@ -214,23 +239,20 @@ fn failed_load_reuses_retained_map_selection() {
 }
 
 #[test]
-fn completed_load_removes_retained_map_selection() {
+fn completed_load_removes_map_selection_and_retains_shared_backdrop() {
     let mut app = App::new();
     app.add_systems(
         Update,
         despawn_retained_map_selection_screen_after_world_activation,
     );
-    let screen = app
-        .world_mut()
-        .spawn((
-            ShellScreen::Globe {
-                mode: WorldSessionMode::Freeform,
-            },
-            Visibility::Inherited,
-        ))
-        .id();
+    app.world_mut().spawn((
+        ShellScreen::Globe {
+            mode: WorldSessionMode::Freeform,
+        },
+        Visibility::Inherited,
+    ));
     app.world_mut()
-        .spawn((MainMenuBackdrop, Visibility::Inherited, ChildOf(screen)));
+        .spawn((MainMenuBackdrop, Visibility::Inherited));
 
     app.update();
 
@@ -246,7 +268,7 @@ fn completed_load_removes_retained_map_selection() {
             .iter_entities()
             .filter(|entity| entity.contains::<MainMenuBackdrop>())
             .count(),
-        0
+        1
     );
 }
 

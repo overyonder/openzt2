@@ -29,6 +29,9 @@ pub struct SpeciesVariantBinding {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Species {
     #[serde(default)]
+    pub placement_surface_policy:
+        crate::world_definitions::object_placement::PlacementSurfacePolicy,
+    #[serde(default)]
     pub donation: Option<AnimalDonationPolicy>,
     pub id: AssetId,
     /// Exact authored `s_Species`, preserving case and punctuation.
@@ -173,6 +176,9 @@ impl Default for AnimalNavigationCollisionPolicy {
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SpeciesVariant {
+    #[serde(default)]
+    pub placement_surface_policy:
+        crate::world_definitions::object_placement::PlacementSurfacePolicy,
     pub id: AssetId,
     /// Resolved authored type ancestry and enabled boolean classification facts.
     #[serde(default)]

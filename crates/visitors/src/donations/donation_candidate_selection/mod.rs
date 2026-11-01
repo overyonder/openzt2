@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::donations::donation_guest_decision_types::{
+    DonationCandidate, DonationObservation, DonationProgress,
+};
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
@@ -17,7 +20,6 @@ use super::{
     donation_guest_decision_calculations::{
         calculate_eligible_donation_amount, create_donation_candidate_from_observation,
     },
-    donation_guest_decision_types::{DonationCandidate, DonationObservation, DonationProgress},
     donation_opportunity_types::{DonationAcceptor, DonationOpportunity, DonationUsePoint},
     donation_payment_types::DonationPaymentRequested,
 };

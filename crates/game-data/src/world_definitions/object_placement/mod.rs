@@ -13,6 +13,36 @@ pub struct PlacementConstraints(u32);
 #[serde(transparent)]
 pub struct FootprintCellFlags(u16);
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "placement surfaces have independent authored permissions"
+)]
+pub struct PlacementSurfacePolicy {
+    pub land: bool,
+    pub water: bool,
+    pub tank: bool,
+    pub show_tank: bool,
+    /// The authored depth limits; -1 selects the default for each bound.
+    pub minimum_depth_metres: f32,
+    pub maximum_depth_metres: f32,
+    pub use_actual_depth_in_water_collision: bool,
+}
+
+impl Default for PlacementSurfacePolicy {
+    fn default() -> Self {
+        Self {
+            land: true,
+            water: false,
+            tank: false,
+            show_tank: false,
+            minimum_depth_metres: -1.0,
+            maximum_depth_metres: -1.0,
+            use_actual_depth_in_water_collision: false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 #[allow(
     clippy::struct_excessive_bools,
@@ -20,6 +50,8 @@ pub struct FootprintCellFlags(u16);
 )]
 pub struct PlaceableDefinition {
     pub id: AssetId,
+    #[serde(default)]
+    pub surface_policy: PlacementSurfacePolicy,
     /// Authored `ZTPlacementData.weight`. The placement cursor divides its
     /// base interpolation rate by positive values of this field.
     pub weight: f32,

@@ -1,11 +1,13 @@
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
     GuestMemoryKind, GuestVisitPurpose,
 };
-use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
-use openzt2_game_data::AssetId;
 
+use crate::animal_welfare::types::NeedTriggerState;
+use crate::behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame};
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
@@ -313,4 +315,86 @@ pub enum GuestArrivalFailure {
         prefab: AssetId,
     },
     PersistentId(PersistentIdError),
+}
+
+#[derive(Component)]
+pub struct GuestSpeciesViewCounts(pub Vec<(AssetId, u32)>);
+
+/// Trigger bits follow `GuestNeedKind` declaration order, then the signed
+/// viewing and happiness states; the hysteresis algorithm is shared.
+#[derive(Component, Default)]
+pub struct GuestNeedTriggers {
+    pub state: NeedTriggerState,
+    pub happiness_authored: bool,
+}
+
+/// Source instance attributes start at zero and accumulate authored purchase outcomes.
+#[derive(Component, Default)]
+pub struct GuestFoodPurchaseCounts {
+    pub favorite_q16: i32,
+    pub nonfavorite_q16: i32,
+}
+
+#[derive(Component)]
+pub struct ActiveGuestAnimalViewingMeter {
+    pub execution_id: u64,
+    pub origin: BehaviorTaskReturnFrame,
+    pub stack_depth: usize,
+    pub remaining: f32,
+    pub maximum: f32,
+}
+
+impl ActiveGuestAnimalViewingMeter {
+    pub fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
+        self.execution_id == task.execution_id
+            && task.is_at_or_nested_under(&self.origin, self.stack_depth)
+    }
+
+    pub fn apply_view_score(&mut self, score: f32) {
+        self.remaining = (self.remaining + score).min(self.maximum);
+    }
+}
+
+/// Authored `TaskDelayMin`/`TaskDelayMax`: once a task ends, it stays
+/// unavailable to the same guest for a delay sampled when it was chosen.
+#[derive(Component, Default)]
+pub struct GuestTaskCooldowns {
+    /// The chosen delayed task and its sampled delay, until the guest is idle again.
+    running: Option<(AssetId, u64)>,
+    /// Delayed tasks and the tick from which each may be chosen again.
+    ready_ticks: Vec<(AssetId, u64)>,
+}
+
+impl GuestTaskCooldowns {
+    pub fn start_running(&mut self, task: AssetId, delay_ticks: u64) {
+        self.running = Some((task, delay_ticks));
+    }
+
+    pub fn from_snapshot(
+        running: Option<(AssetId, u64)>,
+        ready_ticks: Vec<(AssetId, u64)>,
+    ) -> Self {
+        Self {
+            running,
+            ready_ticks,
+        }
+    }
+
+    pub fn snapshot_state(&self) -> (Option<(AssetId, u64)>, &[(AssetId, u64)]) {
+        (self.running, &self.ready_ticks)
+    }
+
+    /// Starts the cooldown of a delayed task that has ended and forgets expired ones.
+    pub fn observe_idle(&mut self, tick: u64) {
+        if let Some((task, delay_ticks)) = self.running.take() {
+            self.ready_ticks.retain(|(cooling, _)| *cooling != task);
+            self.ready_ticks
+                .push((task, tick.saturating_add(delay_ticks)));
+        }
+        self.ready_ticks.retain(|(_, ready)| *ready > tick);
+    }
+
+    pub fn is_cooling(&self, task: AssetId) -> bool {
+        self.ready_ticks.iter().any(|(cooling, _)| *cooling == task)
+    }
 }

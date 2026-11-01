@@ -13,10 +13,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use crate::source_document::ui::parser::source_scalar_and_attribute_reading::parse_source_bool;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     FootprintCell, FootprintCellFlags, PlaceableDefinition, PlacementConstraints,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -46,6 +47,42 @@ fn authored_headroom_policy(record: &RecordView<'_, '_>) -> Result<(f32, bool), 
             .transpose()?
             .unwrap_or(true);
     Ok((if height == -1.0 { 0.0 } else { height }, apply))
+}
+
+pub(crate) fn authored_surface_policy(
+    record: &RecordView<'_, '_>,
+) -> Result<openzt2_game_data::world_definitions::object_placement::PlacementSurfacePolicy, BindError>
+{
+    use openzt2_game_data::world_definitions::object_placement::PlacementSurfacePolicy;
+    let boolean = |name: &str, default: bool| {
+        authored_type_family_components(record, "ZTPlacementData")
+            .into_iter()
+            .filter_map(|component| component.attribute_named_any(&[name]))
+            .find(|value| !value.is_empty())
+            .map_or(default, |value| parse_source_bool(value).unwrap_or(false))
+    };
+    let depth = |name: &str| -> Result<f32, BindError> {
+        let value = authored_type_family_component_attribute(record, "ZTPlacementData", name)
+            .map(|value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .ok_or_else(|| BindError::record(record, format!("invalid {name}")))
+            })
+            .transpose()?
+            .unwrap_or(-1.0);
+        if !value.is_finite() {
+            return Err(BindError::record(record, format!("non-finite {name}")));
+        }
+        Ok(value)
+    };
+    Ok(PlacementSurfacePolicy {
+        land: boolean("landPlacement", true),
+        water: boolean("waterPlacement", false),
+        tank: boolean("tankPlacement", false),
+        show_tank: boolean("showTankPlacement", false),
+        minimum_depth_metres: depth("minimumDepth")?,
+        maximum_depth_metres: depth("maximumDepth")?,
+        use_actual_depth_in_water_collision: boolean("useActualDepthInCheckWaterCollision", false),
+    })
 }
 
 /// A ground path under the footprint is an object collision when the placed
@@ -196,6 +233,7 @@ pub(super) fn bind_authored_placeable(
     let (minimum_headroom_metres, apply_height_modifier) = authored_headroom_policy(record)?;
     output.document.placeables.push(PlaceableDefinition {
         id: id(record.key),
+        surface_policy: authored_surface_policy(record)?,
         weight: placement_data
             .map(|data| element_number(&data, &["weight"], 1.0))
             .transpose()?

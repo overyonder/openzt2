@@ -13,6 +13,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::SpatialGrid;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 
 use super::{
     staff_assignment_types::{
@@ -38,6 +39,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    target_retry_delays: Query<&BehaviorTargetRetryDelays>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     loaded_behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     spatial_grid: Res<SpatialGrid>,
@@ -147,6 +149,12 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         // Keep the whole nearest compatible ring. The former row-major search
         // stopped after the first compatible row, biasing that row's candidates.
         for &candidate_entity in available_staff.iter() {
+            if target_retry_delays
+                .get(candidate_entity)
+                .is_ok_and(|delays| delays.rejects(job.target))
+            {
+                continue;
+            }
             if unsuccessful.is_some_and(|candidates| candidates.contains(candidate_entity)) {
                 continue;
             }

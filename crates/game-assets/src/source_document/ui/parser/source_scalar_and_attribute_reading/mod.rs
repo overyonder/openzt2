@@ -33,7 +33,7 @@ pub(super) fn optional_nonempty_source_attribute(
         .map(str::to_owned)
 }
 
-pub(super) fn parse_source_bool(value: &str) -> Option<bool> {
+pub(crate) fn parse_source_bool(value: &str) -> Option<bool> {
     match value {
         "true" | "1" => Some(true),
         "false" | "0" => Some(false),

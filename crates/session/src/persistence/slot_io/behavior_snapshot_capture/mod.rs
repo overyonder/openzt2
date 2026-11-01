@@ -114,7 +114,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
     behavior_snapshot_entity_references::{
-        capture_behavior_entity_reference, BehaviorSnapshotEntities, BehaviorSnapshotEntity,
+        BehaviorSnapshotEntities, BehaviorSnapshotEntity, capture_behavior_entity_reference,
     },
     behavior_snapshot_types::{
         BehaviorActorSnapshot, BehaviorDockingSnapshot, BehaviorFrameSnapshot,
@@ -263,6 +263,23 @@ fn capture_behavior_actor_snapshots(
             .transpose()?;
         records.push(BehaviorActorSnapshot {
             persistent_identifier: id.0, task: task_snapshot, navigation, water_target, staff_job,
+            transaction: actor.pending_behavior_transaction.map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
+                if pending.payment.is_some() {
+                    return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
+                }
+                if !pending.owns(task) {
+                    return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+                }
+                Ok(super::behavior_snapshot_types::BehaviorTransactionSnapshot {
+                    execution_id: pending.execution_id,
+                    stack_depth: pending.stack_depth,
+                    origin: capture_behavior_frame(&pending.origin, documents)?,
+                    facility: reference(pending.facility)?,
+                    transaction: pending.transaction,
+                    cost_override: pending.cost_override.map(f32::to_bits),
+                    next_transaction: pending.next_transaction,
+                })
+            }).transpose()?,
             membership: occupancy.container_for_member(actor.entity).map(|(container, slot)| -> Result<_, WorldSnapshotPersistenceFailure> {
                 let definition = entities.get(container).ok()
                     .and_then(|container| container.definition_id.copied())

@@ -2,7 +2,6 @@
 
 mod donation_candidate_selection;
 mod donation_guest_decision_calculations;
-mod donation_guest_decision_types;
 mod donation_interaction_progression;
 mod donation_opportunity_observation;
 use openzt2_zoo_state::donations::donation_opportunity_types;
@@ -154,14 +153,14 @@ pub fn queue_arrived_box_donation_for_test(
     subject: Entity,
     amount: openzt2_zoo_state::economy::money_types::Money,
 ) {
-    world
-        .entity_mut(guest)
-        .insert(donation_guest_decision_types::DonationCandidate {
+    world.entity_mut(guest).insert(
+        openzt2_zoo_state::donations::donation_guest_decision_types::DonationCandidate {
             navigation_request_id: 1,
             acceptor,
             subject,
             amount,
-        });
+        },
+    );
     world.write_message(openzt2_zoo_state::locomotion::locomotion_types::Arrived {
         entity: guest,
         request_id: 1,

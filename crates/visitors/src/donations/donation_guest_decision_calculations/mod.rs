@@ -1,11 +1,11 @@
 use bevy::prelude::Entity;
+use openzt2_zoo_state::donations::donation_guest_decision_types::{
+    DonationCandidate, DonationObservation, DonationProgress,
+};
 
 use openzt2_zoo_state::economy::money_types::Money;
 
-use super::{
-    donation_guest_decision_types::{DonationCandidate, DonationObservation, DonationProgress},
-    donation_payment_types::DonationRejection,
-};
+use super::donation_payment_types::DonationRejection;
 
 pub(super) fn calculate_eligible_donation_amount(
     wallet: Money,

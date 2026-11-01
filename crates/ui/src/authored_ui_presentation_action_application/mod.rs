@@ -119,6 +119,7 @@ pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
         'w,
         's,
         (
+            Entity,
             &'static UiNodeId,
             &'static UiDocumentOwner,
             &'static mut UiAuthoredTimedActionSequencePlayback,
@@ -450,9 +451,29 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                             break;
                         }
                     }
-                    for (id, owner, mut sequence) in &mut authored_timed_action_sequence_playbacks {
+                    for (entity, id, owner, mut sequence) in
+                        &mut authored_timed_action_sequence_playbacks
+                    {
                         if owner.0 == target_owner && id.id == target_node {
                             sequence.set_active_and_restart(*active);
+                            if *active {
+                                if let Ok(members) = children.get(entity) {
+                                    for child in members.iter() {
+                                        let Ok((_, _, _, visibility, _, animation, _, _)) =
+                                            nodes.get_mut(child)
+                                        else {
+                                            continue;
+                                        };
+                                        if let Some(mut animation) = animation {
+                                            animation.start_authored_visibility_transition(false);
+                                            wind_animation(&mut animation);
+                                        }
+                                        if let Some(mut visibility) = visibility {
+                                            *visibility = Visibility::Hidden;
+                                        }
+                                    }
+                                }
+                            }
                             break;
                         }
                     }
