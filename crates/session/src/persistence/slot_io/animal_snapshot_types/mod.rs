@@ -18,7 +18,11 @@ pub(super) struct AnimalSnapshotRecord {
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
     pub parents: [Option<u64>; 2],
+    /// The father and an unused due tick, kept for older saves.
     pub pregnancy: Option<(u64, u64)>,
+    /// A pregnancy whose father is not known.
+    #[serde(default)]
+    pub pregnant_without_father: bool,
     pub crated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crate_identifier: Option<u64>,

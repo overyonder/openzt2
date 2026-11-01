@@ -88,10 +88,12 @@ impl Age {
     }
 }
 
+/// Authored `b_Pregnant`. The `Birth` task, on the `t_Pregnant` token the
+/// `Pregnant` task sends, spawns the litter; the father is the one known
+/// when the pregnancy began, or else the mother's `Mate` at birth.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pregnancy {
-    pub father: Entity,
-    pub due_tick: u64,
+    pub father: Option<Entity>,
 }
 
 /// The animal's `mate` relationship, set by `scripts/setmates.lua` after mating.

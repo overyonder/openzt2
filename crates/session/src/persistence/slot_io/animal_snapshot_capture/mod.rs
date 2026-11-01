@@ -90,11 +90,12 @@ pub(super) fn capture_animal_snapshot_records(
             ],
             pregnancy: animal
                 .get::<Pregnancy>()
-                .map(|pregnancy| {
-                    persistent_reference(pregnancy.father)
-                        .map(|father| (father, pregnancy.due_tick))
-                })
+                .and_then(|pregnancy| pregnancy.father)
+                .map(|father| persistent_reference(father).map(|father| (father, 0)))
                 .transpose()?,
+            pregnant_without_father: animal
+                .get::<Pregnancy>()
+                .is_some_and(|pregnancy| pregnancy.father.is_none()),
             crated: animal.contains::<WorldEntityIsCrated>(),
             crate_identifier: None,
             release_restricted: animal.contains::<ReleaseRestricted>(),

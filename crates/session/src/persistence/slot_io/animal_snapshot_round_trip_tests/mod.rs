@@ -140,8 +140,7 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
         father: Some(father),
     });
     source.entity_mut(mother).insert(Pregnancy {
-        father,
-        due_tick: 999,
+        father: Some(father),
     });
     source.entity_mut(mother).insert((
         EnvironmentHabitatAssessed,
@@ -242,7 +241,7 @@ fn populated_animal_ecs_survives_container_round_trip_into_a_different_world() {
     );
     assert_eq!(
         destination.get::<Pregnancy>(restored[&51]).unwrap().father,
-        restored[&72]
+        Some(restored[&72])
     );
     assert_eq!(
         destination.get::<Name>(restored_child).unwrap().as_str(),

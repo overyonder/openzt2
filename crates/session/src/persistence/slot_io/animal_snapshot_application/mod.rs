@@ -173,11 +173,12 @@ pub(super) fn apply_animal_snapshot_records(
             mother: record.parents[0].map(|id| entities[&id]),
             father: record.parents[1].map(|id| entities[&id]),
         });
-        if let Some((father, due_tick)) = record.pregnancy {
+        if let Some((father, _)) = record.pregnancy {
             animal.insert(Pregnancy {
-                father: entities[&father],
-                due_tick,
+                father: Some(entities[&father]),
             });
+        } else if record.pregnant_without_father {
+            animal.insert(Pregnancy { father: None });
         }
     }
     Ok(entities)
