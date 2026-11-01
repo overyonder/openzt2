@@ -21,12 +21,14 @@ pub(super) enum LooseWasteSnapshotKind {
     Litter,
 }
 
-/// Worn condition, bin contents, compost levels and animal waste-production deadlines,
+/// Bin contents, compost levels and animal waste-production deadlines,
 /// restored onto the entity with the same persistent identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct MaintainedObjectSnapshotRecord {
     pub persistent_identifier: u64,
+    /// Worn condition written by older saves; read and ignored.
+    #[serde(default, skip_serializing)]
     pub condition_permille: Option<u16>,
     /// Retained bin waste and the bin's capacity.
     pub contained_waste: Option<[u16; 2]>,

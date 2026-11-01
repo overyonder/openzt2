@@ -143,7 +143,6 @@ pub(super) fn staff_job_kind(v: &str) -> Result<StaffJobKind, BindError> {
             ("cleanhabitat", StaffJobKind::CleanHabitat),
             ("emptybin", StaffJobKind::EmptyBin),
             ("sweeplitter", StaffJobKind::SweepLitter),
-            ("repair", StaffJobKind::Repair),
             ("treat", StaffJobKind::Treat),
             ("educate", StaffJobKind::Educate),
             ("entertain", StaffJobKind::Entertain),

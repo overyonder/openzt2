@@ -14,8 +14,7 @@ use super::{
     },
     maintenance_types::{
         FacilityContainedWaste, IncrementalZooCleanlinessTotals,
-        LooseLitterSweepingStaffJobKindMarker, MaintenanceRepairStaffJobKindMarker,
-        WasteContainerEmptyingStaffJobKindMarker,
+        LooseLitterSweepingStaffJobKindMarker, WasteContainerEmptyingStaffJobKindMarker,
     },
 };
 
@@ -24,7 +23,6 @@ pub(super) fn advance_active_staff_waste_container_emptying_jobs(
         (Entity, &StaffJob, &JobClaim, &JobProgress),
         (
             With<WasteContainerEmptyingStaffJobKindMarker>,
-            Without<MaintenanceRepairStaffJobKindMarker>,
             Without<LooseLitterSweepingStaffJobKindMarker>,
         ),
     >,
