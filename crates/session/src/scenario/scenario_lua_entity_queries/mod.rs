@@ -39,6 +39,7 @@ struct EntityFacts {
     crated: bool,
     needs: [Option<i32>; 11],
     trash: Option<u16>,
+    relocating: bool,
 }
 
 fn entity_facts(
@@ -65,6 +66,7 @@ fn collect_entity_facts(
             crated: animal.crated,
             needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
             trash: animal.trash.map(|trash| trash.contained_waste_units),
+            relocating: animal.relocating,
         })
         .collect::<Vec<_>>();
     let pending = pending.borrow();
@@ -87,6 +89,7 @@ fn collect_entity_facts(
                     .map(|(_, value)| *value)
             }),
             trash: None,
+            relocating: false,
         });
     }
     for command in &pending.commands {
@@ -146,6 +149,32 @@ fn authored_entity_string_attribute(
         .ok_or_else(|| mlua::Error::runtime("entity has no authored species"))
 }
 
+fn same_entity(left: &Table, right: &Table) -> mlua::Result<bool> {
+    if let (Some(left), Some(right)) = (
+        left.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+        right.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+    ) {
+        return Ok(left == right);
+    }
+    Ok(left.get::<u64>(ENTITY_FIELD)? == right.get::<u64>(ENTITY_FIELD)?)
+}
+
+/// Each query builds a new table, and scripts compare them with `==` as they
+/// would the same object.
+fn entity_component_metatable(lua: &Lua) -> mlua::Result<Table> {
+    const KEY: &str = "__openzt2_entity_component_metatable";
+    if let Some(metatable) = lua.named_registry_value::<Option<Table>>(KEY)? {
+        return Ok(metatable);
+    }
+    let metatable = lua.create_table()?;
+    metatable.set(
+        "__eq",
+        lua.create_function(|_, (left, right): (Table, Table)| same_entity(&left, &right))?,
+    )?;
+    lua.set_named_registry_value(KEY, &metatable)?;
+    Ok(metatable)
+}
+
 fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool> {
     if let Some(id) = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)? {
         Ok(fact.persistent_id == Some(id))
@@ -154,7 +183,7 @@ fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool
     }
 }
 
-fn resolve_reference_entity(
+pub(super) fn resolve_reference_entity(
     reference: &Table,
     queries: ScenarioLuaQueryFacts<'_>,
     pending: &PendingEntityOperations,
@@ -218,13 +247,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
     lua.globals().set(
         "areCompsEqual",
         lua.create_function(|_, (left, right): (Table, Table)| {
-            if let (Some(left), Some(right)) = (
-                left.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
-                right.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
-            ) {
-                return Ok(left == right);
-            }
-            Ok(left.get::<u64>(ENTITY_FIELD)? == right.get::<u64>(ENTITY_FIELD)?)
+            same_entity(&left, &right)
         })?,
     )?;
     lua.globals().set(
@@ -259,7 +282,12 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
             let table = lua.create_table()?;
             for (index, fact) in entity_facts(queries, pending)
                 .into_iter()
-                .filter(|v| !(direct == Some(true) && v.crated) && matches_kind(v, &kind, queries))
+                .filter(|v| {
+                    // An object being carried has left the world, though it stays selected.
+                    !v.relocating
+                        && !(direct == Some(true) && v.crated)
+                        && matches_kind(v, &kind, queries)
+                })
                 .enumerate()
             {
                 let reference = lua.create_table()?;
@@ -340,6 +368,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
     let species_id = fact.species;
     let variant_id = fact.variant;
     let component = lua.create_table()?;
+    component.set_metatable(Some(entity_component_metatable(lua)?))?;
     component.set(ENTITY_FIELD, entity.to_bits())?;
     component.set(PERSISTENT_ENTITY_FIELD, fact.persistent_id)?;
     component.set("_this", component.clone())?;

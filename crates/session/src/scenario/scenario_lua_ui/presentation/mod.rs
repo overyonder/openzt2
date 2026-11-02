@@ -204,6 +204,17 @@ pub(super) fn apply_scenario_ui_commands(
                     }
                 });
             }
+            ScenarioUiCommand::Select(entity) => {
+                let entity = *entity;
+                commands.queue(move |world: &mut World| {
+                    world.write_message(
+                        openzt2_interface_state::information::entity_selection_types::SelectionRequest {
+                            entity,
+                            source: ActionSource::System,
+                        },
+                    );
+                });
+            }
             ScenarioUiCommand::Overhead => {
                 actions.write(ActionRequest {
                     action: GameAction::OverheadView,

@@ -43,6 +43,7 @@ pub(super) enum ScenarioUiCommand {
     NextScenario(Option<String>),
     Overhead,
     SelectionMode,
+    Select(Option<Entity>),
 }
 
 #[derive(Debug, Clone)]
@@ -191,6 +192,15 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                     // Starting Super Staff releases the mouse for walking, which
                     // this game's first-person controls don't capture to begin with.
                     "UI_RBUTTONDOWN" => {}
+                    "ZT_SET_SELECTED_ENTITY" => {
+                        let entity = match value {
+                            mlua::Value::Table(reference) => {
+                                Some(super::scenario_lua_entity_queries::resolve_reference_entity(&reference, queries, entities)?)
+                            }
+                            _ => None,
+                        };
+                        commands.borrow_mut().push(ScenarioUiCommand::Select(entity));
+                    }
                     "ZT_SETPLACEMENTOBJECT" => {
                         let mlua::Value::String(value) = value else {
                             return Err(mlua::Error::runtime("placement type must be a string"));
