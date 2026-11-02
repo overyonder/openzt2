@@ -32,6 +32,7 @@ fn initialize_world() -> (World, Entity, AssetId, [AssetId; 2]) {
                 success_text_key: definition,
                 failure_text_key: definition,
                 hidden: false,
+                update_when_paused: false,
                 prerequisite_objectives: if index == 0 { vec![] } else { vec![rules[0]] },
             })
             .collect(),

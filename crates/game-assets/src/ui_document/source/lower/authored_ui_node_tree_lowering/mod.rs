@@ -479,7 +479,9 @@ pub(super) fn lower_node(
             if format.starts_with("openzt2:money:") {
                 authored_ui_node_property_binding_resolution::resolve_authored_money_format_localization_key(format, "positive")
             } else {
-                canonical_source_value_resolution::lower_optional_authored_semantic_key_to_asset_id(Some(format))
+                // Localization identifiers are canonical record keys; authored
+                // spellings such as `Tutoriallabels:textformat` are not.
+                AssetId::from_key(&crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key(format))
             }
         }),
         help: canonical_source_value_resolution::lower_authored_ui_help_to_canonical_definition(effective.help.as_ref()),

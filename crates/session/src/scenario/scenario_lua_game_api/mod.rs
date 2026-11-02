@@ -184,6 +184,28 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         })?,
     )?;
     super::scenario_lua_ui::install_manager_commands(scope, &scenario_manager, ui)?;
+    let research_manager = lua.create_table()?;
+    research_manager.set(
+        "ZT_RESEARCH_UNLOCK_ENTITY_KIND",
+        scope.create_function(move |_, (_, definition): (Table, String)| {
+            ui.borrow_mut().push(super::scenario_lua_ui::ScenarioUiCommand::UnlockDefinition(
+                openzt2_game_data::AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&definition)),
+            ));
+            Ok(())
+        })?,
+    )?;
+    // Shortens a tutorial's research so the player needn't wait for it.
+    research_manager.set(
+        "ZT_SET_RESEARCH_TIME_TO_UNLOCK",
+        scope.create_function(move |_, (_, time): (Table, Table)| {
+            let definition: String = time.get("string")?;
+            ui.borrow_mut().push(super::scenario_lua_ui::ScenarioUiCommand::ResearchDuration {
+                definition: openzt2_game_data::AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&definition)),
+                seconds: time.get("float")?,
+            });
+            Ok(())
+        })?,
+    )?;
     let economy_manager = lua.create_table()?;
     let status = lua.create_table()?;
     status.set(
@@ -220,6 +242,12 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
             Ok(cents as f64 / 100.0)
         })?,
     )?;
+    // The shipped game raises this while a tutorial step is on screen. Nothing
+    // here reads it yet.
+    status.set(
+        "ZT_SET_TUTORIALRULE_ACTIVE",
+        scope.create_function(|_, _: MultiValue| Ok(()))?,
+    )?;
     economy_manager.set(
         "ZT_GET_INFO",
         scope.create_function(move |_, (_, request): (Table, Table)| {
@@ -245,7 +273,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     )?;
     let ui_root =
         super::challenge_lua_ui::create_challenge_ui_root(lua, scope, scenario, requested_panel)?;
-    let ui_root = super::scenario_lua_ui::extend_ui_root(lua, scope, ui_root, ui)?;
+    let ui_root = super::scenario_lua_ui::extend_ui_root(lua, scope, ui_root, ui, queries)?;
     let mode =
         super::scenario_lua_ui::create_mode_adapter(lua, scope, ui, queries, entity_operations)?;
     let photo_challenges =
@@ -261,6 +289,7 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
         queries,
         entity_operations,
     )?;
+    super::scenario_lua_ui::install_ui_reference_resolution(lua, scope)?;
     let world_manager = super::scenario_lua_entity_queries::create_world_manager(
         lua,
         scope,
@@ -270,8 +299,9 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
     globals.set(
         "queryObject",
         scope.create_function(move |_, name: String| match name.as_str() {
-            "BFScenarioMgr" => Ok(Value::Table(scenario_manager.clone())),
+            "BFScenarioMgr" | "ZTScenarioMgr" => Ok(Value::Table(scenario_manager.clone())),
             "ZTEconomyMgr" => Ok(Value::Table(economy_manager.clone())),
+            "ZTResearchMgr" => Ok(Value::Table(research_manager.clone())),
             "ZTStatus" => Ok(Value::Table(status.clone())),
             "BFGManager" => Ok(Value::Table(entity_manager.clone())),
             "ZTWorldMgr" => Ok(Value::Table(world_manager.clone())),

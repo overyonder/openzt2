@@ -59,6 +59,9 @@ use super::{
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct WorldDefinitionDocument {
+    /// Each object's record key as authored. Scripts compare binder types with it.
+    #[serde(default)]
+    pub object_record_keys: Vec<(crate::AssetId, String)>,
     pub objects: Vec<WorldObjectDefinition>,
     #[serde(default)]
     pub entity_naming: Vec<super::entity_naming::EntityNamingDefinition>,

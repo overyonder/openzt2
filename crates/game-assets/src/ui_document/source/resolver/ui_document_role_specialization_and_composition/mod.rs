@@ -93,6 +93,7 @@ pub(super) fn expose_authored_ui_surface_for_document_role(
             | UiDocumentRole::ScenarioWin
             | UiDocumentRole::ScenarioFailed
             | UiDocumentRole::GenericOk
+            | UiDocumentRole::TutorialComplete
     ) {
         // This source file owns separate branch, instant, offer and result
         // modals. Each offer role installs only its authored surface beneath

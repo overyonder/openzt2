@@ -72,6 +72,7 @@ fn retained_scenarios_and_campaign_aliases_resolve_without_catalogue_replacement
             failure_text_key: id,
             prerequisite_objectives: vec![],
             hidden: false,
+            update_when_paused: false,
         }],
         objective_groups: vec![],
         time_limit_ticks: 0,

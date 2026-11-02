@@ -35,7 +35,8 @@ pub struct EnvironmentPlugin;
 
 impl Plugin for EnvironmentPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample>()
+        app.init_resource::<openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight>()
+            .init_resource::<openzt2_zoo_state::environment::environment_state_types::WaterEnvironmentMapSample>()
             .add_message::<SetWeather>()
             .add_message::<WeatherRequestApplied>()
             .add_message::<WeatherRequestRejected>()

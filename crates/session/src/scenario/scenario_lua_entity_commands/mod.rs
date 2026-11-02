@@ -41,6 +41,10 @@ pub(super) enum ScenarioEntityCommand {
     Need(SetAnimalNeed),
     Crate(Entity),
     Name(Entity),
+    TrashLevel {
+        entity: Entity,
+        delta: i32,
+    },
 }
 
 #[derive(Default)]
@@ -273,6 +277,9 @@ fn apply_entity_commands(
     mut operations: MessageReader<ScenarioEntityCommand>,
     mut spawns: MessageWriter<ScriptedAnimalSpawnRequest>,
     mut needs: MessageWriter<SetAnimalNeed>,
+    mut trash: MessageWriter<
+        openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste,
+    >,
     animals: Query<(), (With<Animal>, With<WorldMember>)>,
     entities: Query<(&DefinitionId, &PersistentId, Option<&Name>), With<WorldMember>>,
     definitions: Res<WorldDefinitions>,
@@ -291,6 +298,13 @@ fn apply_entity_commands(
             }
             ScenarioEntityCommand::Need(request) if animals.contains(request.animal) => {
                 needs.write(*request);
+            }
+            ScenarioEntityCommand::TrashLevel { entity, delta } => {
+                trash.write(openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste {
+                    facility: *entity,
+                    operation: openzt2_game_data::behavior::action::modification::BehaviorFactModificationOperation::Add,
+                    delta_q16: delta * 65_536,
+                });
             }
             ScenarioEntityCommand::Crate(entity) if animals.contains(*entity) => {
                 commands.entity(*entity).insert(WorldEntityIsCrated);

@@ -5,10 +5,25 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
 use super::immersive_mode_policy_types::{HideHudWhileActive, ModeHiddenHud};
+use super::immersive_mode_state_types::{ActiveImmersiveMode, ImmersiveMode};
+
+/// Records a member of the composed HUD hidden for an immersive mode.
+#[derive(Component)]
+pub(super) struct ModeHiddenHudChild {
+    previous: Visibility,
+}
+
+const ALL_GAME_MODE_HUD_LAYOUTS: [&str; 3] = ["Camera Set", "Message bar layout", "pause layout"];
 
 /// Hides the HUD during immersive mode and restores its previous visibility on exit.
 pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_restore_visibility(
     controllers_requesting_hidden_hud: Query<(), With<HideHudWhileActive>>,
+    active_modes: Query<&ActiveImmersiveMode>,
+    children: Query<&Children>,
+    mut hud_children: Query<
+        (Entity, &Name, &mut Visibility, Option<&ModeHiddenHudChild>),
+        Without<UiDocumentRoot>,
+    >,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     mut ui_document_roots: Query<(
         Entity,
@@ -18,7 +33,13 @@ pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_resto
     )>,
     mut commands: Commands,
 ) {
-    let immersive_mode_requests_hidden_hud = !controllers_requesting_hidden_hud.is_empty();
+    let immersive_mode_requests_hidden_hud = !controllers_requesting_hidden_hud.is_empty()
+        || active_modes.iter().any(|active| {
+            matches!(
+                active.mode,
+                ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
+            )
+        });
     for (
         ui_document_root_entity,
         ui_document_root,
@@ -30,6 +51,39 @@ pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_resto
             continue;
         };
         let role = ui_document_asset.canonical_ui_document().role;
+        // Only `shell.xml` belongs to overhead mode. The camera buttons, messages
+        // and pause display composed into this document stay in every game mode.
+        if role == UiDocumentRole::InGameHud {
+            let members = children.get(ui_document_root_entity).into_iter().flatten();
+            for member in members.copied() {
+                let Ok((entity, name, mut visibility, hidden)) = hud_children.get_mut(member) else {
+                    continue;
+                };
+                if ALL_GAME_MODE_HUD_LAYOUTS
+                    .iter()
+                    .any(|layout| name.as_str().eq_ignore_ascii_case(layout))
+                {
+                    continue;
+                }
+                match (immersive_mode_requests_hidden_hud, hidden) {
+                    (true, None) => {
+                        commands
+                            .entity(entity)
+                            .insert(ModeHiddenHudChild { previous: *visibility });
+                        visibility.set_if_neq(Visibility::Hidden);
+                    }
+                    (true, Some(_)) => {
+                        visibility.set_if_neq(Visibility::Hidden);
+                    }
+                    (false, Some(hidden)) => {
+                        visibility.set_if_neq(hidden.previous);
+                        commands.entity(entity).remove::<ModeHiddenHudChild>();
+                    }
+                    (false, None) => {}
+                }
+            }
+            continue;
+        }
         if !matches!(
             role,
             UiDocumentRole::InGameHud

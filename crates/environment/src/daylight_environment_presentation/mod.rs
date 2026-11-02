@@ -6,6 +6,7 @@ use bevy::{
 use openzt2_game_data::world_definitions::environment::EnvironmentLightTarget;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentLight;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentSpecularLightColor;
+use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
 use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -204,7 +205,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                 ],
                 sample.interpolation_fraction,
             );
-            let color = Color::srgb(
+            let color = Color::linear_rgb(
                 interpolate_unsigned_normalized_u16(
                     left.color_unorm[0],
                     right.color_unorm[0],
@@ -308,7 +309,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                 light.color = color;
                 commands
                     .entity(child)
-                    .insert(EnvironmentSpecularLightColor(Color::srgb(
+                    .insert(EnvironmentSpecularLightColor(Color::linear_rgb(
                         interpolate_f32(
                             left_keyframe.specular[0],
                             right_keyframe.specular[0],
@@ -346,6 +347,14 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
             EnvironmentLightTarget::Object,
             fraction,
         );
+        commands.insert_resource(EnvironmentTerrainAmbientLight(Some(
+            sample_environment_ambient_light_at_daylight_fraction(
+                definitions,
+                definition,
+                EnvironmentLightTarget::Terrain,
+                fraction,
+            ) * light_multiplier,
+        )));
         if ambient.length_squared() > 0.0 {
             commands
                 .entity(entity)

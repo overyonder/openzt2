@@ -38,6 +38,7 @@ struct EntityFacts {
     pregnant: bool,
     crated: bool,
     needs: [Option<i32>; 11],
+    trash: Option<u16>,
 }
 
 fn entity_facts(
@@ -63,6 +64,7 @@ fn collect_entity_facts(
             pregnant: animal.pregnant,
             crated: animal.crated,
             needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
+            trash: animal.trash.map(|trash| trash.contained_waste_units),
         })
         .collect::<Vec<_>>();
     let pending = pending.borrow();
@@ -84,6 +86,7 @@ fn collect_entity_facts(
                     .find(|(need, _)| *need == kind)
                     .map(|(_, value)| *value)
             }),
+            trash: None,
         });
     }
     for command in &pending.commands {
@@ -226,7 +229,22 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
     )?;
     lua.globals().set(
         "isKindOf",
-        scope.create_function(move |_, (binder, kind): (Table, String)| {
+        scope.create_function(move |_, (binder, kind): (Value, String)| {
+            let binder = match binder {
+                Value::Table(binder) => binder,
+                Value::String(key) => {
+                    let key = openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&key.to_str()?);
+                    let requested = AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&kind));
+                    return Ok(AssetId::from_key(&key) == requested
+                        || queries
+                            .world_definitions
+                            .and_then(|definitions| definitions.find_object(AssetId::from_key(&key)))
+                            .is_some_and(|object| {
+                                object.behavior_type_identifiers.contains(&requested)
+                            }));
+                }
+                _ => return Err(mlua::Error::runtime("isKindOf requires an entity or binder")),
+            };
             for fact in entity_facts(queries, pending) {
                 if matches_reference(&fact, &binder)? {
                     return Ok(matches_kind(&fact, &kind, queries));
@@ -251,6 +269,33 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
                 )?;
                 table.set(index + 1, reference)?;
             }
+            let fence_kind = AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&kind));
+            let kind_name = kind.to_ascii_lowercase();
+            for (entity, edge, is_gate) in queries.fence_edges.iter() {
+                // Authored types place every gate under `gate` and every other run
+                // under `fence`, beside its own definition.
+                let matched = edge.definition == fence_kind
+                    || (kind_name == "gate" && is_gate)
+                    || (kind_name == "fence" && !is_gate);
+                if !matched {
+                    continue;
+                }
+                let component = lua.create_table()?;
+                component.set(ENTITY_FIELD, entity.to_bits())?;
+                let reference = lua.create_table()?;
+                reference.set("value", component)?;
+                table.raw_push(reference)?;
+            }
+            for (entity, tile) in queries.path_tiles.iter() {
+                if kind_name != "path" && tile.definition != fence_kind {
+                    continue;
+                }
+                let component = lua.create_table()?;
+                component.set(ENTITY_FIELD, entity.to_bits())?;
+                let reference = lua.create_table()?;
+                reference.set("value", component)?;
+                table.raw_push(reference)?;
+            }
             Ok(table)
         },
     )?;
@@ -260,6 +305,12 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
         scope.create_function(move |_, (manager, kind): (Table, String)| {
             get_entities.call::<Table>((manager, kind, true))
         })?,
+    )?;
+    // The one script that removes entities presses Undo in the same call, which
+    // already takes back what it would remove.
+    manager.set(
+        "BFG_REMOVE_ENTITY",
+        scope.create_function(|_, _: mlua::MultiValue| Ok(()))?,
     )?;
     manager.set(
         "BFG_GET_SELECTED_ENTITY",
@@ -298,7 +349,16 @@ fn create_entity_component<'scope, 'env: 'scope>(
     )?;
     component.set(
         "BFG_GET_BINDER_TYPE",
-        lua.create_function(|_, entity: Table| Ok(entity))?,
+        // Scripts both compare this with a record key and pass it to `isKindOf`.
+        scope.create_function(move |lua, entity: Table| {
+            let key = queries
+                .world_definitions
+                .and_then(|definitions| definitions.object_record_key(fact.definition));
+            Ok(match key {
+                Some(key) => Value::String(lua.create_string(key)?),
+                None => Value::Table(entity),
+            })
+        })?,
     )?;
     component.set(
         "BFG_GET_ATTR_BOOLEAN",
@@ -328,6 +388,14 @@ fn create_entity_component<'scope, 'env: 'scope>(
     component.set(
         "BFG_GET_ATTR_FLOAT",
         scope.create_function(move |_, (_, attribute): (Table, String)| {
+            if attribute == "f_TrashLevel" {
+                return entity_facts(queries, pending)
+                    .iter()
+                    .find(|v| v.entity == entity)
+                    .and_then(|v| v.trash)
+                    .map(f64::from)
+                    .ok_or_else(|| mlua::Error::runtime("entity holds no trash"));
+            }
             let index = NEEDS
                 .iter()
                 .position(|(name, _)| *name == attribute)
@@ -362,7 +430,26 @@ fn create_entity_component<'scope, 'env: 'scope>(
     )?;
     component.set(
         "BFG_SET_ATTR_FLOAT",
-        scope.create_function(move |_, (_, attribute): (Table, Table)| {
+        scope.create_function(move |_, (_, attribute, value): (Table, mlua::Value, Option<f64>)| {
+            // Scripts pass either a named attribute table or the name and value.
+            if let (mlua::Value::String(name), Some(level)) = (&attribute, value) {
+                if name.to_str()?.as_ref() != "f_TrashLevel" {
+                    return Err(mlua::Error::runtime("unsupported float attribute"));
+                }
+                let current = entity_facts(queries, pending)
+                    .iter()
+                    .find(|v| v.entity == entity)
+                    .and_then(|v| v.trash)
+                    .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
+                pending.borrow_mut().commands.push(ScenarioEntityCommand::TrashLevel {
+                    entity,
+                    delta: level as i32 - i32::from(current),
+                });
+                return Ok(());
+            }
+            let mlua::Value::Table(attribute) = attribute else {
+                return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
+            };
             if attribute.get::<String>("_type")? != "BFGFloatAttribute" {
                 return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
             }
@@ -421,6 +508,53 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
     pending: &'env PendingEntityOperations,
 ) -> mlua::Result<Table> {
     let manager = lua.create_table()?;
+    // Scripts compare this before and after painting. It covers edited chunks, the
+    // only ones whose samples can have changed.
+    manager.set(
+        "ZT_GET_BIOME_COUNT",
+        scope.create_function(move |_, (_, biome): (Table, String)| {
+            let mut count = 0_u64;
+            for (chunk, edited) in queries.edited_terrain.iter() {
+                let Some(asset) = queries.terrain_assets.get(&chunk.asset) else {
+                    continue;
+                };
+                let biomes = &asset.canonical_terrain_grid().biomes;
+                count += edited
+                    .blend_weights
+                    .chunks_exact(16)
+                    .filter(|weights| {
+                        weights
+                            .iter()
+                            .enumerate()
+                            .max_by_key(|(channel, weight)| (**weight, std::cmp::Reverse(*channel)))
+                            .and_then(|(channel, _)| biomes.get(channel))
+                            .is_some_and(|candidate| candidate.name.eq_ignore_ascii_case(&biome))
+                    })
+                    .count() as u64;
+            }
+            Ok(count)
+        })?,
+    )?;
+    manager.set(
+        "ZT_GET_REAL_TIME",
+        scope.create_function(move |_, _: Table| Ok(queries.real_seconds))?,
+    )?;
+    for (method, read) in [
+        (
+            "BFG_GET_CAMERA_X",
+            (|rig| rig.focus.x)
+                as fn(&openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig) -> f32,
+        ),
+        ("BFG_GET_CAMERA_Y", |rig| rig.focus.y),
+        ("BFG_GET_CAMERA_Z", |rig| rig.height_m),
+        ("BFG_GET_CAMERA_ZOOM", |rig| rig.distance),
+        ("BFG_GET_CAMERA_YAW", |rig| rig.yaw),
+    ] {
+        manager.set(
+            method,
+            scope.create_function(move |_, _: Table| Ok(queries.overhead_camera.map(read)))?,
+        )?;
+    }
     manager.set(
         "BFG_GET_ATTR_STRING",
         scope.create_function(move |_, (_, attribute): (Table, Table)| {

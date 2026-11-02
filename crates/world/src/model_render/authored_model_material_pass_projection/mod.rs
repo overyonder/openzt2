@@ -384,7 +384,9 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         color *= light.illuminance / light_consts::lux::DIRECT_SUNLIGHT;
         color.w = 1.0;
         light_rig[light_index] = color;
-        light_rig[light_index + 3] = Vec3::from(transform.back()).extend(1.0);
+        // The shipped `lightFromRig` lights by `dot(-direction, normal)`: this is the
+        // direction the light travels, unlike the fixed-function registers.
+        light_rig[light_index + 3] = Vec3::from(transform.forward()).extend(1.0);
     }
     light_rig[6] =
         Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;

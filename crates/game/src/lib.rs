@@ -5,10 +5,7 @@ mod launch;
 mod missing_game_content_screen;
 mod openzt2_game_plugin_group;
 
-use openzt2_verification::verification_launch_arguments::VerificationLaunchRequest;
-
 use bevy::{
-    app::ScheduleRunnerPlugin,
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
     picking::mesh_picking::MeshPickingSettings,
     prelude::*,
@@ -16,9 +13,7 @@ use bevy::{
         settings::{RenderCreation, WgpuFeatures, WgpuSettings},
         RenderPlugin,
     },
-    time::TimeUpdateStrategy,
     window::{ExitCondition, PresentMode, WindowResolution},
-    winit::WinitPlugin,
 };
 use launch::GameLaunchConfiguration;
 use openzt2_game_assets::application_lifecycle::GamePhase;
@@ -42,7 +37,6 @@ pub fn run_game_application_from_process_arguments() -> std::io::Result<()> {
 fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::io::Result<()> {
     let GameLaunchConfiguration {
         enabled_z2f_archive_paths,
-        verification_request,
     } = launch_configuration;
     let mut game_application = App::new();
 
@@ -50,9 +44,7 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         add_enabled_z2f_archives_as_default_asset_source(&mut game_application, paths)
     });
     if let Err(error) = content_result {
-        if verification_request.is_none() {
-            missing_game_content_screen::show_missing_game_content_screen(&error);
-        }
+        missing_game_content_screen::show_missing_game_content_screen(&error);
         return Err(error);
     }
     let original_saves =
@@ -66,16 +58,15 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
     );
     game_application.register_asset_source("saved-worlds", saved_worlds.asset_source());
     game_application.insert_resource(saved_worlds);
-    add_game_persistence_directories(&mut game_application, verification_request.as_ref())?;
-    add_default_bevy_platform_plugins(&mut game_application, verification_request.as_ref());
+    add_game_persistence_directories(&mut game_application)?;
+    add_default_bevy_platform_plugins(&mut game_application);
     add_openzt2_game_states_and_update_schedules(&mut game_application);
     game_application
         .add_plugins(bevy_hanabi::HanabiPlugin)
         .add_plugins(avian3d::prelude::PhysicsPlugins::default())
         .add_plugins(OpenZt2AssetLoadingPluginGroup)
         .add_plugins(OpenZt2GamePluginGroup);
-    add_developer_diagnostics_when_enabled(&mut game_application, verification_request.as_ref());
-    add_verification_when_requested(&mut game_application, verification_request);
+    add_developer_diagnostics_when_enabled(&mut game_application);
     execute_short_main_world_systems_without_per_system_task_dispatch(&mut game_application);
     execute_short_render_world_systems_without_per_system_task_dispatch(&mut game_application);
     if game_application.run().is_error() {
@@ -154,17 +145,10 @@ fn add_enabled_z2f_archives_as_default_asset_source(
     Ok(())
 }
 
-fn add_game_persistence_directories(
-    game_application: &mut App,
-    verification_request: Option<&VerificationLaunchRequest>,
-) -> std::io::Result<()> {
-    let data_directory = if verification_request.is_some() {
-        std::env::temp_dir().join("openzt2-capture")
-    } else {
-        dirs::data_dir()
-            .ok_or_else(|| std::io::Error::other("could not locate the user data directory"))?
-            .join("openzt2")
-    };
+fn add_game_persistence_directories(game_application: &mut App) -> std::io::Result<()> {
+    let data_directory = dirs::data_dir()
+        .ok_or_else(|| std::io::Error::other("could not locate the user data directory"))?
+        .join("openzt2");
     game_application.insert_resource(
         openzt2_session::persistence::persistence_filesystem_paths::PersistenceFilesystemPaths::new(
             data_directory,
@@ -175,7 +159,6 @@ fn add_game_persistence_directories(
 
 fn add_default_bevy_platform_plugins(
     game_application: &mut App,
-    verification_request: Option<&VerificationLaunchRequest>,
 ) {
     let default_plugins = DefaultPlugins
         .set(
@@ -230,31 +213,10 @@ fn add_default_bevy_platform_plugins(
                 present_mode: PresentMode::AutoNoVsync,
                 ..default()
             }),
-            exit_condition: if verification_request.is_some() {
-                ExitCondition::DontExit
-            } else {
-                ExitCondition::OnAllClosed
-            },
+            exit_condition: ExitCondition::OnAllClosed,
             ..default()
         });
-    if verification_request.is_some_and(|request| !request.renders_to_window()) {
-        // Disabling Winit guarantees headless runs never create a compositor window.
-        // Simulation and `Time<Real>` both advance 1/60 s per frame, so UI animation
-        // and pointer activation see the same steps unpaced; frames run back to back.
-        game_application
-            // Keep scripted Bevy input, but isolate it from host controllers.
-            .add_plugins(
-                default_plugins
-                    .disable::<WinitPlugin>()
-                    .disable::<bevy::gilrs::GilrsPlugin>(),
-            )
-            .insert_resource(TimeUpdateStrategy::ManualDuration(
-                std::time::Duration::from_secs_f64(1.0 / 60.0),
-            ))
-            .add_plugins(ScheduleRunnerPlugin::run_loop(std::time::Duration::ZERO));
-    } else {
-        game_application.add_plugins(default_plugins);
-    }
+    game_application.add_plugins(default_plugins);
     game_application.insert_resource(MeshPickingSettings {
         require_markers: true,
         ..default()
@@ -297,47 +259,9 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
         );
 }
 
-fn add_developer_diagnostics_when_enabled(
-    game_application: &mut App,
-    verification_request: Option<&VerificationLaunchRequest>,
-) {
+fn add_developer_diagnostics_when_enabled(game_application: &mut App) {
     #[cfg(feature = "dev-tools")]
-    if verification_request.is_none() {
-        game_application.add_plugins(diagnostics::OpenZt2DeveloperDiagnosticsPlugin);
-    }
+    game_application.add_plugins(diagnostics::OpenZt2DeveloperDiagnosticsPlugin);
     #[cfg(not(feature = "dev-tools"))]
-    let _ = (game_application, verification_request);
-}
-
-fn add_verification_when_requested(
-    game_application: &mut App,
-    verification_request: Option<VerificationLaunchRequest>,
-) {
-    match verification_request {
-        Some(VerificationLaunchRequest::Journeys {
-            journeys,
-            routes,
-            output_root,
-            windowed,
-            capture_mode,
-            budget,
-        }) => {
-            game_application.add_plugins(openzt2_verification::VerificationJourneyPlugin {
-                journeys,
-                routes,
-                output_root,
-                windowed,
-                capture_mode,
-                budget,
-            });
-        }
-        Some(VerificationLaunchRequest::MapLoad { map_index }) => {
-            game_application.add_plugins(
-                openzt2_verification::verification_map_load::VerificationMapLoadPlugin {
-                    map_index,
-                },
-            );
-        }
-        None => {}
-    }
+    let _ = game_application;
 }

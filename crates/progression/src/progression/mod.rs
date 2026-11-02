@@ -71,6 +71,17 @@ impl Plugin for ProgressionPlugin {
             .init_resource::<ProfileChallengeCompletionCounts>()
             .add_message::<ProgressionFactChanged>()
             .add_message::<StartResearchProjectRequest>()
+            .add_message::<openzt2_zoo_state::progression::research_types::SetResearchDuration>()
+            .init_resource::<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>()
+            .add_systems(
+                Update,
+                |mut requests: MessageReader<openzt2_zoo_state::progression::research_types::SetResearchDuration>,
+                 mut overrides: ResMut<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>| {
+                    for request in requests.read() {
+                        overrides.0.insert(request.definition, request.seconds);
+                    }
+                },
+            )
             .add_message::<ApplyCatalogueDefinitionUnlockRequest>()
             .add_message::<CatalogueDefinitionUnlockApplied>()
             .add_message::<CatalogueDefinitionUnlockRejected>()

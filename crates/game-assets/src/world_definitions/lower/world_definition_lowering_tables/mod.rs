@@ -61,6 +61,7 @@ impl WorldDefinitionLoweringTables {
         }
         append!(
             objects,
+            object_record_keys,
             entity_naming,
             placeables,
             facilities,

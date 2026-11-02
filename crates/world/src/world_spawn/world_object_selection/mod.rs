@@ -17,6 +17,9 @@ use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObjec
 
 pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    tool: Option<
+        Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
+    >,
     active_input: Res<ActiveInputDevice>,
     ui_pointer_capture: Res<UiPointerCapture>,
     world_pointer_ray: Res<WorldPointerRay>,
@@ -35,6 +38,13 @@ pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
     mut selection_requests: MessageWriter<SelectionRequest>,
 ) {
     if !primary_pointer.just_pressed || ui_pointer_capture.over_ui {
+        return;
+    }
+    // This click recycles what it hits.
+    if tool.is_some_and(|tool| {
+        *tool
+            == openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Delete
+    }) {
         return;
     }
     let Some(ray) = world_pointer_ray.0 else {

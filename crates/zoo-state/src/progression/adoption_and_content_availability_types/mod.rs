@@ -36,6 +36,10 @@ impl ScenarioContentAvailability {
             .is_ok()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.ids.is_empty()
+    }
+
     pub fn make_available(&mut self, id: AssetId) {
         match self
             .ids

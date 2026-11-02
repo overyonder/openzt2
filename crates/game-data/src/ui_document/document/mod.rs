@@ -76,4 +76,6 @@ pub enum UiDocumentRole {
     ScenarioWin,
     ScenarioFailed,
     GenericOk,
+    Tutorial,
+    TutorialComplete,
 }

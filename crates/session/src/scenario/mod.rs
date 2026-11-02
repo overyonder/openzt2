@@ -84,6 +84,9 @@ impl Plugin for ScenarioPlugin {
                     ScenarioFixedUpdateStage::ApplyTerminalScenarioResults,
                 )
                     .chain()
+                    // Outside the simulation sets, which stop while paused: authored
+                    // `updateWhenPaused` rules, such as the tutorials', keep running.
+                    .after(FixedGameSet::Cleanup)
                     // Challenge maps have no selected campaign document;
                     // their validation and accepted objectives still run.
                     .run_if(scenario_or_challenge_gameplay_is_active),
@@ -147,14 +150,12 @@ impl Plugin for ScenarioPlugin {
                 challenge_offer_lua_validation::
                     evaluate_challenge_manager_and_validate_one_picked_challenge
                     .in_set(FixedGameSet::Think)
-                    .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 scenario_objective_lua_execution::
                     evaluate_active_scenario_objective_lua_condition_scripts
-                    .in_set(FixedGameSet::Think)
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -167,7 +168,6 @@ impl Plugin for ScenarioPlugin {
                         fail_expired_objectives_and_remove_expired_challenge_offers,
                 )
                     .chain()
-                    .in_set(FixedGameSet::Think)
                     .in_set(ScenarioFixedUpdateStage::EvaluateObjectiveAndChallengeScripts)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -179,7 +179,6 @@ impl Plugin for ScenarioPlugin {
                     scenario_resolution::queue_completed_scenarios_for_terminal_resolution,
                 )
                     .chain()
-                    .in_set(FixedGameSet::Cleanup)
                     .in_set(ScenarioFixedUpdateStage::QueueTerminalScenarioResults)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -187,7 +186,6 @@ impl Plugin for ScenarioPlugin {
                 FixedUpdate,
                 scenario_resolution::
                     apply_terminal_scenario_results_and_remove_completed_challenges
-                    .in_set(FixedGameSet::Cleanup)
                     .in_set(ScenarioFixedUpdateStage::ApplyTerminalScenarioResults)
                     .run_if(in_state(GamePhase::InGame)),
             )

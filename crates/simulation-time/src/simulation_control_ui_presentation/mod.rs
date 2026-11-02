@@ -5,7 +5,6 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_ui::authored_ui_layout_participation::UiAuthoredLayoutDisplay;
 
 use super::simulation_control_types::SimulationControl;
@@ -23,12 +22,9 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
         &UiSimulationActions,
         &UiDocumentOwner,
         &mut UiSelected,
-        Option<&mut UiPreviousSelection>,
     )>,
 ) {
-    for (authored_action_range, document_owner, mut selected, previous) in
-        &mut simulation_action_nodes
-    {
+    for (authored_action_range, document_owner, mut selected) in &mut simulation_action_nodes {
         let Ok(document_root) = ui_document_roots.get(document_owner.0) else {
             continue;
         };
@@ -44,11 +40,10 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
                         | UiSimulationAction::ToggleSimulationPaused
                 )
             });
+        // The change still runs the toggle's authored `on`/`off`, which disable the
+        // guest and photo buttons while paused and set the state it already has.
         if is_pause_toggle && selected.0 != simulation_control.paused {
             selected.0 = simulation_control.paused;
-            if let Some(mut previous) = previous {
-                previous.synchronize_with_non_authored_selection_change(selected.0);
-            }
         }
     }
 }

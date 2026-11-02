@@ -38,6 +38,8 @@ impl UiDocumentRole {
             Self::ScenarioWin => "scenario-win",
             Self::ScenarioFailed => "scenario-failed",
             Self::GenericOk => "generic-ok",
+            Self::Tutorial => "tutorial",
+            Self::TutorialComplete => "tutorial-complete",
             Self::ChallengeOffer => "challenge-offer",
             Self::InstantChallengeOffer => "instant-challenge-offer",
             Self::PhotoAlbum => "photo-album",

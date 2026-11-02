@@ -76,10 +76,6 @@ level 3 with LTO disabled and retains limited debug information.
 | Debug information | Limited | Limited | None |
 | Stripping | None | None | Symbols |
 
-The verification runner defaults to `dev`; `--profiling`, `--perf` and
-`--tracy` select `profiling`. Reuse a matching binary with `--no-build` when only the
-journey changes.
-
 For the shipping binary, use `direnv exec . cargo build --locked --release
 -p openzt2_game --bin openzt2`. Release linking takes considerably longer.
 

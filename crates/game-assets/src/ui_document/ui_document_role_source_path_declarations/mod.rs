@@ -40,6 +40,8 @@ pub(in crate::ui_document) const UI_DOCUMENT_ROLE_AND_SOURCE_PATH_DECLARATIONS: 
     (UiDocumentRole::ScenarioWin, "ui/layout/challenge.xml"),
     (UiDocumentRole::ScenarioFailed, "ui/layout/challenge.xml"),
     (UiDocumentRole::GenericOk, "ui/layout/challenge.xml"),
+    (UiDocumentRole::Tutorial, "ui/layout/tutorial.xml"),
+    (UiDocumentRole::TutorialComplete, "ui/layout/challenge.xml"),
     (
         UiDocumentRole::InstantChallengeOffer,
         "ui/layout/challenge.xml",

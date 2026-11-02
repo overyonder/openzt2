@@ -54,13 +54,6 @@
       src = mojoshaderSource;
       cmakeFlags = (old.cmakeFlags or []) ++ ["-DCOMPILER_SUPPORT=ON"];
     });
-    verificationGamescope = pkgs.gamescope.overrideAttrs (old: {
-      patches =
-        (old.patches or [])
-        ++ [
-          ./patches/gamescope/0001-release-command-buffers-before-driver-exit.patch
-        ];
-    });
     runtimeLibraries = with pkgs; [
       alsa-lib
       fontconfig
@@ -99,7 +92,6 @@
         packages = [
           rustToolchain
           pkgs.clang
-          verificationGamescope
           pkgs.imagemagick
           pkgs.mold
           pkgs.pkg-config
