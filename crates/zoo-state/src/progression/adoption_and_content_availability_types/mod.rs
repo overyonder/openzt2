@@ -36,6 +36,10 @@ impl ScenarioContentAvailability {
             .is_ok()
     }
 
+    pub fn ids(&self) -> &[AssetId] {
+        &self.ids
+    }
+
     pub fn is_empty(&self) -> bool {
         self.ids.is_empty()
     }
