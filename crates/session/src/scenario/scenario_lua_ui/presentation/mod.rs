@@ -8,6 +8,7 @@ use openzt2_game_data::ui_document::{
     document::{UiDocument, UiDocumentRole},
     widget::UiWidgetRecord,
 };
+use openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions;
 use openzt2_interface_state::{
     input::input_types::{ActionRequest, ActionSource, GameAction},
     ui::{
@@ -15,9 +16,8 @@ use openzt2_interface_state::{
         ui_document_lifecycle_contracts::{InGameUiOwner, UiRoleRequests},
     },
 };
-use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
-use openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions;
 use openzt2_ui::animation::UiShowHideAnimation;
+use openzt2_ui::authored_ui_presentation_action_application::RequestUiPresentationAction;
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue;
 use std::collections::{BTreeMap, VecDeque};
 
@@ -42,7 +42,11 @@ pub(super) struct AnimationHeightFollowsText {
 }
 
 pub(super) fn fit_animation_heights_to_text(
-    mut panels: Query<(&AnimationHeightFollowsText, &mut UiShowHideAnimation, &mut Node)>,
+    mut panels: Query<(
+        &AnimationHeightFollowsText,
+        &mut UiShowHideAnimation,
+        &mut Node,
+    )>,
     texts: Query<&ComputedNode>,
 ) {
     for (fit, mut animation, mut node) in &mut panels {
@@ -78,9 +82,16 @@ pub(super) fn role_for(path: &[String]) -> Option<UiDocumentRole> {
         "generic ok layout" => Some(UiDocumentRole::GenericOk),
         "goals layout" | "goalpanel" | "goal panel" | "introduction tab" | "primary goals tab"
         | "show all goals" => Some(UiDocumentRole::Scenario),
-        "tutorial layout" | "tutorial block out" | "tutorial info" | "tutorial text"
-        | "tutorial heading text" | "tutorial image" | "tutorial ring" | "ring timer"
-        | "continue tutorial" | "edge arrow layout" => Some(UiDocumentRole::Tutorial),
+        "tutorial layout"
+        | "tutorial block out"
+        | "tutorial info"
+        | "tutorial text"
+        | "tutorial heading text"
+        | "tutorial image"
+        | "tutorial ring"
+        | "ring timer"
+        | "continue tutorial"
+        | "edge arrow layout" => Some(UiDocumentRole::Tutorial),
         _ => None,
     }
 }
@@ -116,7 +127,9 @@ pub(super) fn resolve_node(document: &UiDocument, path: &[String]) -> Option<Ass
         }
         parent = Some(index);
     }
-    parent.and_then(|index| document.nodes.get(index)).map(|node| node.id)
+    parent
+        .and_then(|index| document.nodes.get(index))
+        .map(|node| node.id)
 }
 
 fn ancestors(
@@ -145,10 +158,17 @@ pub(super) fn apply_scenario_ui_commands(
         MessageWriter<PlayAudioCue>,
         ResMut<ScenarioDisabledCatalogueDefinitions>,
         MessageWriter<openzt2_zoo_state::progression::research_types::SetResearchDuration>,
-        MessageWriter<openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest>,
+        MessageWriter<
+            openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest,
+        >,
     ),
     mut ring: ResMut<TutorialRingTimer>,
-    mut animations: Query<(Entity, &UiNodeId, &UiDocumentOwner, &mut UiShowHideAnimation)>,
+    mut animations: Query<(
+        Entity,
+        &UiNodeId,
+        &UiDocumentOwner,
+        &mut UiShowHideAnimation,
+    )>,
     all_nodes: Query<(Entity, &UiNodeId, &UiDocumentOwner)>,
     mut commands: Commands,
 ) {
@@ -167,11 +187,16 @@ pub(super) fn apply_scenario_ui_commands(
                 pending.shown.insert(name.to_ascii_lowercase(), *visible);
                 changed_shown.push(name.to_ascii_lowercase());
             }
-            ScenarioUiCommand::ResearchDuration { definition, seconds } => {
-                research_durations.write(openzt2_zoo_state::progression::research_types::SetResearchDuration {
-                    definition: *definition,
-                    seconds: *seconds,
-                });
+            ScenarioUiCommand::ResearchDuration {
+                definition,
+                seconds,
+            } => {
+                research_durations.write(
+                    openzt2_zoo_state::progression::research_types::SetResearchDuration {
+                        definition: *definition,
+                        seconds: *seconds,
+                    },
+                );
             }
             ScenarioUiCommand::UnlockDefinition(definition) => {
                 let operation = commands.spawn_empty().id();
@@ -256,13 +281,12 @@ pub(super) fn apply_scenario_ui_commands(
                         .iter()
                         .any(|(id, owner)| owner.0 == root_entity && id.id == node.id)
                 };
-                let restriction =
-                    std::iter::once(node)
-                        .chain(ancestors(document, index))
-                        .find_map(|restricted| {
-                            let key = restricted.name.to_ascii_lowercase();
-                            pending.enabled.get(&key).map(|enabled| (key, *enabled))
-                        });
+                let restriction = std::iter::once(node)
+                    .chain(ancestors(document, index))
+                    .find_map(|restricted| {
+                        let key = restricted.name.to_ascii_lowercase();
+                        pending.enabled.get(&key).map(|enabled| (key, *enabled))
+                    });
                 if let Some((restricted, enabled)) = restriction {
                     if changed_enabled.contains(&restricted) || added() {
                         presentation.write(RequestUiPresentationAction {
@@ -406,10 +430,12 @@ pub(super) fn apply_scenario_ui_commands(
                     target_node,
                 }
             }
-            NodeOperation::Position(position) => UiPresentationAction::SetTargetNodeLayoutPosition {
-                target_node,
-                position,
-            },
+            NodeOperation::Position(position) => {
+                UiPresentationAction::SetTargetNodeLayoutPosition {
+                    target_node,
+                    position,
+                }
+            }
             NodeOperation::Size(size) => {
                 UiPresentationAction::SetTargetNodeLayoutSize { target_node, size }
             }
@@ -466,8 +492,9 @@ pub(super) fn apply_scenario_ui_commands(
                 }
                 let text = fit_text
                     .and_then(|text| {
-                        let document =
-                            documents.get(&roots.get(root).ok()?.1.document)?.canonical_ui_document();
+                        let document = documents
+                            .get(&roots.get(root).ok()?.1.document)?
+                            .canonical_ui_document();
                         resolve_node(document, &text)
                     })
                     .and_then(|id| {
@@ -484,7 +511,9 @@ pub(super) fn apply_scenario_ui_commands(
                         });
                     }
                     None => {
-                        commands.entity(entity).remove::<AnimationHeightFollowsText>();
+                        commands
+                            .entity(entity)
+                            .remove::<AnimationHeightFollowsText>();
                     }
                 }
                 continue;

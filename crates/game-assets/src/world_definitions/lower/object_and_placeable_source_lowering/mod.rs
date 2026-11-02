@@ -13,7 +13,6 @@ use super::world_definition_source_value_reading_and_conversion::{
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     EntranceDefinition, FootprintCell, FootprintCellFlags, PlaceableDefinition,
     PlacementConstraints,
@@ -23,6 +22,7 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
+use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;

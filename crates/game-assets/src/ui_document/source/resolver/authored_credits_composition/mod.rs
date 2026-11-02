@@ -72,19 +72,19 @@ mod tests {
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     };
     use crate::ui_document::source::lower::authored_ui_document_lowering::{
-        AuthoredUiDocument, lower_ui_document,
+        lower_ui_document, AuthoredUiDocument,
     };
     use openzt2_game_data::{
-        AssetId,
         ui_document::{
             action::presentation::UiPresentationAction, document::UiDocumentRole,
             node::UiNodeFlags, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
         },
+        AssetId,
     };
 
     #[test]
-    fn credits_fragments_supply_the_canvas_and_cumulative_camera_and_card_events()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn credits_fragments_supply_the_canvas_and_cumulative_camera_and_card_events(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let shell_path = "ui/layout/credits.xml";
         let page_path = "ui/layout/credits/credits_4.xml";
         let repeat_path = "ui/layout/credits/credits_00.xml";

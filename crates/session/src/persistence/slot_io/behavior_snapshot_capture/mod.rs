@@ -114,7 +114,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
     behavior_snapshot_entity_references::{
-        BehaviorSnapshotEntities, BehaviorSnapshotEntity, capture_behavior_entity_reference,
+        capture_behavior_entity_reference, BehaviorSnapshotEntities, BehaviorSnapshotEntity,
     },
     behavior_snapshot_types::{
         BehaviorActorSnapshot, BehaviorDockingSnapshot, BehaviorFrameSnapshot,

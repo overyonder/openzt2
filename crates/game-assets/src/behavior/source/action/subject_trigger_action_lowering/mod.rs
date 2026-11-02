@@ -1,6 +1,6 @@
 use std::io;
 
-use openzt2_game_data::{AssetId, behavior::action_record::BehaviorAction};
+use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 
@@ -51,11 +51,8 @@ mod tests {
         let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
             panic!("sets expected");
         };
-        let [
-            BehaviorAction::SendSubjectTrigger(survey),
-            BehaviorAction::SendSubjectTrigger(fame),
-            BehaviorAction::Termination(kill),
-        ] = sets[0].actions.lowered_actions()
+        let [BehaviorAction::SendSubjectTrigger(survey), BehaviorAction::SendSubjectTrigger(fame), BehaviorAction::Termination(kill)] =
+            sets[0].actions.lowered_actions()
         else {
             panic!("trigger order must remain authored");
         };

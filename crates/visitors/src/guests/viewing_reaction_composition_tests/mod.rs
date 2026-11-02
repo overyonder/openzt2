@@ -8,10 +8,10 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, guest_simulation_definitions::*, world_objects::*,
     },
+    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;

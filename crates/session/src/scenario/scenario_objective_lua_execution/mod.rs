@@ -28,7 +28,9 @@ pub(super) fn evaluate_active_scenario_objective_lua_condition_scripts(
     scenarios: Res<WorldScenarios>,
     selected: Option<Res<SelectedScenarioDocument>>,
     time: Res<Time<Fixed>>,
-    simulation: Res<openzt2_world_state::simulation_time::simulation_control_types::SimulationControl>,
+    simulation: Res<
+        openzt2_world_state::simulation_time::simulation_control_types::SimulationControl,
+    >,
     mut sessions: Query<(Entity, &ActiveScenarioSession, &mut ScenarioScriptTiming)>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,

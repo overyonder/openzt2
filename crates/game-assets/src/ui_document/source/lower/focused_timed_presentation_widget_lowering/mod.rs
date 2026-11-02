@@ -5,13 +5,13 @@ use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUi
 use crate::ui_document::source::lower::authored_ui_event_action_lowering;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::timed_presentation::{
     UiLocalizedCountdownRecord, UiTimedEventRecord,
 };
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
+use openzt2_game_data::AssetId;
 use std::io;
 
 fn convert_authored_presentation_delay_seconds_to_milliseconds(
@@ -305,14 +305,8 @@ fn lower_authored_localized_countdown_to_canonical_record(
             .unwrap_or_default()
             .split_ascii_whitespace()
             .collect::<Vec<_>>();
-        let [
-            "global",
-            "scripts/uiutil.lua",
-            "setReplacementText",
-            node,
-            localization,
-            count,
-        ] = words.as_slice()
+        let ["global", "scripts/uiutil.lua", "setReplacementText", node, localization, count] =
+            words.as_slice()
         else {
             return Err(invalid_at(
                 input,

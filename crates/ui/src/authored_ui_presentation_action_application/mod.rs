@@ -438,7 +438,11 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                                 let source = activation.source;
                                 let node = *sibling;
                                 commands.queue(move |world: &mut World| {
-                                    world.write_message(UiNodeActivated { source, node, trigger });
+                                    world.write_message(UiNodeActivated {
+                                        source,
+                                        node,
+                                        trigger,
+                                    });
                                 });
                             }
                         }

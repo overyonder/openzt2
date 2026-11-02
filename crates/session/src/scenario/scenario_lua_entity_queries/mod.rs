@@ -246,9 +246,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
     )?;
     lua.globals().set(
         "areCompsEqual",
-        lua.create_function(|_, (left, right): (Table, Table)| {
-            same_entity(&left, &right)
-        })?,
+        lua.create_function(|_, (left, right): (Table, Table)| same_entity(&left, &right))?,
     )?;
     lua.globals().set(
         "isKindOf",
@@ -459,56 +457,61 @@ fn create_entity_component<'scope, 'env: 'scope>(
     )?;
     component.set(
         "BFG_SET_ATTR_FLOAT",
-        scope.create_function(move |_, (_, attribute, value): (Table, mlua::Value, Option<f64>)| {
-            // Scripts pass either a named attribute table or the name and value.
-            if let (mlua::Value::String(name), Some(level)) = (&attribute, value) {
-                if name.to_str()?.as_ref() != "f_TrashLevel" {
-                    return Err(mlua::Error::runtime("unsupported float attribute"));
+        scope.create_function(
+            move |_, (_, attribute, value): (Table, mlua::Value, Option<f64>)| {
+                // Scripts pass either a named attribute table or the name and value.
+                if let (mlua::Value::String(name), Some(level)) = (&attribute, value) {
+                    if name.to_str()?.as_ref() != "f_TrashLevel" {
+                        return Err(mlua::Error::runtime("unsupported float attribute"));
+                    }
+                    let current = entity_facts(queries, pending)
+                        .iter()
+                        .find(|v| v.entity == entity)
+                        .and_then(|v| v.trash)
+                        .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
+                    pending
+                        .borrow_mut()
+                        .commands
+                        .push(ScenarioEntityCommand::TrashLevel {
+                            entity,
+                            delta: level as i32 - i32::from(current),
+                        });
+                    return Ok(());
                 }
-                let current = entity_facts(queries, pending)
+                let mlua::Value::Table(attribute) = attribute else {
+                    return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
+                };
+                if attribute.get::<String>("_type")? != "BFGFloatAttribute" {
+                    return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
+                }
+                let name = attribute.get::<String>("name")?;
+                let need = NEEDS
                     .iter()
-                    .find(|v| v.entity == entity)
-                    .and_then(|v| v.trash)
-                    .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
-                pending.borrow_mut().commands.push(ScenarioEntityCommand::TrashLevel {
-                    entity,
-                    delta: level as i32 - i32::from(current),
-                });
-                return Ok(());
-            }
-            let mlua::Value::Table(attribute) = attribute else {
-                return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
-            };
-            if attribute.get::<String>("_type")? != "BFGFloatAttribute" {
-                return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
-            }
-            let name = attribute.get::<String>("name")?;
-            let need = NEEDS
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, kind)| *kind)
-                .ok_or_else(|| mlua::Error::runtime("unsupported animal need"))?;
-            let distress = attribute.get::<f64>("value")?;
-            if !distress.is_finite() || !(0.0..=100.0).contains(&distress) {
-                return Err(mlua::Error::runtime(
-                    "animal distress must be between zero and one hundred",
-                ));
-            }
-            let value_q16 = ((1000.0 - distress * 10.0) * f64::from(Q16_ONE)).round() as i32;
-            let mut pending = pending.borrow_mut();
-            if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {
-                spawn.initial_needs.push((need, value_q16));
-            } else {
-                pending
-                    .commands
-                    .push(ScenarioEntityCommand::Need(SetAnimalNeed {
-                        animal: entity,
-                        need,
-                        value_q16,
-                    }));
-            }
-            Ok(())
-        })?,
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, kind)| *kind)
+                    .ok_or_else(|| mlua::Error::runtime("unsupported animal need"))?;
+                let distress = attribute.get::<f64>("value")?;
+                if !distress.is_finite() || !(0.0..=100.0).contains(&distress) {
+                    return Err(mlua::Error::runtime(
+                        "animal distress must be between zero and one hundred",
+                    ));
+                }
+                let value_q16 = ((1000.0 - distress * 10.0) * f64::from(Q16_ONE)).round() as i32;
+                let mut pending = pending.borrow_mut();
+                if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {
+                    spawn.initial_needs.push((need, value_q16));
+                } else {
+                    pending
+                        .commands
+                        .push(ScenarioEntityCommand::Need(SetAnimalNeed {
+                            animal: entity,
+                            need,
+                            value_q16,
+                        }));
+                }
+                Ok(())
+            },
+        )?,
     )?;
     component.set(
         "BFG_SEND_SIGNAL_SHARED",
@@ -572,7 +575,9 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
         (
             "BFG_GET_CAMERA_X",
             (|rig| rig.focus.x)
-                as fn(&openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig) -> f32,
+                as fn(
+                    &openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig,
+                ) -> f32,
         ),
         ("BFG_GET_CAMERA_Y", |rig| rig.focus.y),
         ("BFG_GET_CAMERA_Z", |rig| rig.height_m),

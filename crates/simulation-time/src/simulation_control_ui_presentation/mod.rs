@@ -18,11 +18,7 @@ pub(super) fn project_simulation_pause_state_into_authored_pause_toggle_selectio
     simulation_control: Res<SimulationControl>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    mut simulation_action_nodes: Query<(
-        &UiSimulationActions,
-        &UiDocumentOwner,
-        &mut UiSelected,
-    )>,
+    mut simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner, &mut UiSelected)>,
 ) {
     for (authored_action_range, document_owner, mut selected) in &mut simulation_action_nodes {
         let Ok(document_root) = ui_document_roots.get(document_owner.0) else {

@@ -1,7 +1,7 @@
-use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
     GuestMemoryKind, MemoryReplacement,
 };
+use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use std::mem::size_of;
 
 use bevy::prelude::Entity;
@@ -51,18 +51,14 @@ fn memory_is_inline_bounded_and_replaces_by_evidence_policy() {
         MemoryReplacement::LowestAbsoluteValue,
     );
     assert_eq!(memories.entries.len(), 2);
-    assert!(
-        memories
-            .entries
-            .iter()
-            .any(|item| item.subject.to_bits() == 1)
-    );
-    assert!(
-        memories
-            .entries
-            .iter()
-            .any(|item| item.subject.to_bits() == 3)
-    );
+    assert!(memories
+        .entries
+        .iter()
+        .any(|item| item.subject.to_bits() == 1));
+    assert!(memories
+        .entries
+        .iter()
+        .any(|item| item.subject.to_bits() == 3));
     assert_eq!(memories.entries.capacity(), GUEST_MEMORY_CAPACITY);
     assert!(size_of::<GuestMemories>() >= GUEST_MEMORY_CAPACITY * size_of::<GuestMemoryEntry>());
 }

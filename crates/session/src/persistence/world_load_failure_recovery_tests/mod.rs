@@ -5,7 +5,7 @@ use std::{
 };
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_scenario::StartingZooRecord};
+use openzt2_game_data::{world_scenario::StartingZooRecord, AssetId};
 
 use openzt2_simulation_time::simulation_time_world_lifecycle::initialize_simulation_time_from_selected_world;
 use openzt2_world_state::application_schedule::GameSet;
@@ -20,9 +20,9 @@ use crate::persistence::{
     slot_io::{
         pending_snapshot_application_types::PendingSnapshotApplication,
         photo_baseline_snapshot_tests::{
-            PROFILE, SCENARIO, initialize_fixture_album_localization, loading_app,
-            photo_fixture_catalogue, prepare_photo_snapshot_application,
-            prepare_unvalidated_snapshot_application, saved_photo_container_for_scenario,
+            initialize_fixture_album_localization, loading_app, photo_fixture_catalogue,
+            prepare_photo_snapshot_application, prepare_unvalidated_snapshot_application,
+            saved_photo_container_for_scenario, PROFILE, SCENARIO,
         },
     },
 };
@@ -162,11 +162,10 @@ fn begin_normal_reentry(app: &mut App) -> Entity {
         .query_filtered::<Entity, With<WorldRoot>>()
         .single(app.world())
         .unwrap();
-    assert!(
-        app.world()
-            .resource::<PersistentIdAllocator>()
-            .owns_world(root)
-    );
+    assert!(app
+        .world()
+        .resource::<PersistentIdAllocator>()
+        .owns_world(root));
     assert!(app.world().get::<WorldHydration>(root).is_some());
     assert!(app.world().get::<WorldLoadOperationOwner>(root).is_none());
     assert!(app.world().contains_resource::<ZooClock>());
@@ -284,18 +283,16 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
     });
     app.update();
     app.update();
-    assert!(
-        app.world()
-            .resource::<Messages<WorldLoadFailed>>()
-            .is_empty()
-    );
-    assert!(
-        app.world_mut()
-            .query_filtered::<Entity, With<WorldRoot>>()
-            .iter(app.world())
-            .next()
-            .is_none()
-    );
+    assert!(app
+        .world()
+        .resource::<Messages<WorldLoadFailed>>()
+        .is_empty());
+    assert!(app
+        .world_mut()
+        .query_filtered::<Entity, With<WorldRoot>>()
+        .iter(app.world())
+        .next()
+        .is_none());
     app.world_mut()
         .resource_mut::<Assets<WorldScenarioDocumentAsset>>()
         .insert(handle.id(), fixture_start_document())
@@ -306,17 +303,15 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
         .query_filtered::<Entity, With<WorldRoot>>()
         .single(app.world())
         .unwrap();
-    assert!(
-        app.world()
-            .resource::<PersistentIdAllocator>()
-            .owns_world(replacement)
-    );
+    assert!(app
+        .world()
+        .resource::<PersistentIdAllocator>()
+        .owns_world(replacement));
     assert!(app.world().get::<WorldHydration>(replacement).is_some());
-    assert!(
-        app.world()
-            .resource::<Messages<WorldLoadFailed>>()
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<Messages<WorldLoadFailed>>()
+        .is_empty());
 }
 
 #[test]
@@ -386,22 +381,19 @@ fn stale_same_scenario_results_do_not_complete_or_fail_a_later_snapshot_operatio
         app.world().resource::<NextState<GamePhase>>(),
         NextState::Unchanged
     ));
-    assert!(
-        app.world_mut()
-            .query_filtered::<Entity, With<PendingSnapshotApplication>>()
-            .single(app.world())
-            .is_ok()
-    );
+    assert!(app
+        .world_mut()
+        .query_filtered::<Entity, With<PendingSnapshotApplication>>()
+        .single(app.world())
+        .is_ok());
     assert!(app.world().get_entity(root).is_ok());
-    assert!(
-        app.world()
-            .resource::<PersistentIdAllocator>()
-            .owns_world(root)
-    );
-    assert!(
-        app.world()
-            .resource::<Messages<WorldSnapshotPersistenceFailed>>()
-            .is_empty()
-    );
+    assert!(app
+        .world()
+        .resource::<PersistentIdAllocator>()
+        .owns_world(root));
+    assert!(app
+        .world()
+        .resource::<Messages<WorldSnapshotPersistenceFailed>>()
+        .is_empty());
     assert!(app.world().resource::<Messages<UnloadWorld>>().is_empty());
 }

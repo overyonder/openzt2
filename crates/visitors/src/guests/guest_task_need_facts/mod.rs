@@ -2,7 +2,6 @@
 
 use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     behavior::eligibility::{
         BehaviorCandidateEligibilityFact, BehaviorConditionEligibilityFact,
         BehaviorEligibilityFactComparison, BehaviorEligibilityFactInput,
@@ -10,6 +9,7 @@ use openzt2_game_data::{
         BehaviorWelfareEligibilityFact,
     },
     world_definitions::guest_simulation_definitions::GuestNeedKind,
+    AssetId,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;

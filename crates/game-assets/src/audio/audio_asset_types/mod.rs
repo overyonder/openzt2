@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use bevy::{audio::AudioSource, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     audio::{
         AudioAmbientPolicy, AudioCrowdPolicy, AudioCue, AudioDocument, AudioMixerPolicy,
         AudioSoundscapeAllowedEntities, AudioSoundscapeContent, AudioStage, AudioWaterPolicy,
     },
+    AssetId,
 };
 
 #[derive(Asset, TypePath, Debug)]

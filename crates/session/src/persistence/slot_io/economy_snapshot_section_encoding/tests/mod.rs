@@ -1,6 +1,6 @@
 use super::*;
 use openzt2_game_data::{
-    AssetId, world_definitions::facilities_and_maintenance::FacilityPaymentTrigger,
+    world_definitions::facilities_and_maintenance::FacilityPaymentTrigger, AssetId,
 };
 
 fn economy() -> EconomySnapshotRecords {

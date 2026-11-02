@@ -5,8 +5,8 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::entity_naming::{EntityNamingDefinition, GeneratedEntityNameDefinition},
+    AssetId,
 };
 
 use super::source_element_tree_search::authored_type_family_component_attribute;

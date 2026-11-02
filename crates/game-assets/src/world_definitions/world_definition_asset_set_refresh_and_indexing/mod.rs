@@ -6,13 +6,13 @@ use std::{
 };
 
 use bevy::{asset::AssetLoadFailedEvent, prelude::*};
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
 use crate::asset_source::AssetArchives;
 
 use super::{
     world_definition_asset_set_state_and_borrowing_queries::{
-        DefinitionKind, SingletonKind, WorldDefinitions, kind_range,
+        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,

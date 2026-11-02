@@ -1,13 +1,13 @@
 use openzt2_game_data::{
-    AssetId,
     world_definitions::guest_simulation_definitions::{
         GuestNeedSurveyPolicy, GuestNeedSurveySignals,
     },
+    AssetId,
 };
 use openzt2_zoo_state::guests::{
     guest_simulation_types::GuestFoodPurchaseCounts,
     guest_survey_types::{
-        GUEST_SURVEY_RATINGS, GuestCriticalNeedObservations, GuestSurveyExperience,
+        GuestCriticalNeedObservations, GuestSurveyExperience, GUEST_SURVEY_RATINGS,
     },
 };
 

@@ -41,10 +41,7 @@ pub(super) enum ScenarioEntityCommand {
     Need(SetAnimalNeed),
     Crate(Entity),
     Name(Entity),
-    TrashLevel {
-        entity: Entity,
-        delta: i32,
-    },
+    TrashLevel { entity: Entity, delta: i32 },
 }
 
 #[derive(Default)]

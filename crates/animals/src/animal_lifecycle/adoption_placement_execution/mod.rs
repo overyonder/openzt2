@@ -209,7 +209,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .0
                 .saturating_mul(i64::from(availability.multiplier_permille))
                 / 1000;
-            if unlimited_zoo_cash.is_none() && zoo_cash.0.0 < adoption_cost.0 {
+            if unlimited_zoo_cash.is_none() && zoo_cash.0 .0 < adoption_cost.0 {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
                 PlacementValidity::Valid {

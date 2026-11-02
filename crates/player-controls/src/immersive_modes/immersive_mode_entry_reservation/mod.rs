@@ -35,15 +35,11 @@ pub(super) fn reserve_one_pending_immersive_mode_entry_from_valid_controller_req
         !active_immersive_modes.is_empty() || !pending_immersive_entries.is_empty();
     let queued = (!entry_is_reserved).then(|| queued_switch.take()).flatten();
     for entry_request in queued.into_iter().chain(entry_requests.read().copied()) {
-        if let Some((controller, _)) = active_immersive_modes
-            .iter()
-            .next()
-            .filter(|(_, active)| {
-                entry_request.mode != active.mode
-                    && is_camera_button_view(active.mode)
-                    && is_camera_button_view(entry_request.mode)
-            })
-        {
+        if let Some((controller, _)) = active_immersive_modes.iter().next().filter(|(_, active)| {
+            entry_request.mode != active.mode
+                && is_camera_button_view(active.mode)
+                && is_camera_button_view(entry_request.mode)
+        }) {
             exit_requests.write(ExitImmersiveMode {
                 controller,
                 reason: ModeExitReason::Cancelled,

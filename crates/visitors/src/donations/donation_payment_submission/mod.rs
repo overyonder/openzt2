@@ -103,7 +103,7 @@ pub(super) fn submit_validated_donation_requests_to_economy_transfers(
             Some(DonationRejection::RuleDenied)
         } else if acceptors.get(request.acceptor).is_err() {
             Some(DonationRejection::InvalidAcceptor)
-        } else if wallet.0.0 < request.amount.0 {
+        } else if wallet.0 .0 < request.amount.0 {
             Some(DonationRejection::InsufficientFunds)
         } else {
             None

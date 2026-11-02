@@ -157,9 +157,7 @@ fn add_game_persistence_directories(game_application: &mut App) -> std::io::Resu
     Ok(())
 }
 
-fn add_default_bevy_platform_plugins(
-    game_application: &mut App,
-) {
+fn add_default_bevy_platform_plugins(game_application: &mut App) {
     let default_plugins = DefaultPlugins
         .set(
             bevy::gltf::GltfPlugin::default()

@@ -120,7 +120,9 @@ pub(super) fn start_paid_research_projects(
     pending: Query<(Entity, &PendingResearchProjectPayment, &WorldMember)>,
     mut ids: ResMut<PersistentIdAllocator>,
     seed: Res<ZooSeed>,
-    duration_overrides: Res<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>,
+    duration_overrides: Res<
+        openzt2_zoo_state::progression::research_types::ResearchDurationOverrides,
+    >,
     mut commands: Commands,
 ) {
     if completed.is_empty() {

@@ -194,8 +194,8 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
 mod tests {
     use super::*;
     use openzt2_game_data::{
-        AssetId as CueId,
         audio::{AudioSoundscapeContent, AudioSoundscapeCue},
+        AssetId as CueId,
     };
 
     #[test]

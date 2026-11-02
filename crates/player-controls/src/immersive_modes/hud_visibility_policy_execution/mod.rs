@@ -56,7 +56,8 @@ pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_resto
         if role == UiDocumentRole::InGameHud {
             let members = children.get(ui_document_root_entity).into_iter().flatten();
             for member in members.copied() {
-                let Ok((entity, name, mut visibility, hidden)) = hud_children.get_mut(member) else {
+                let Ok((entity, name, mut visibility, hidden)) = hud_children.get_mut(member)
+                else {
                     continue;
                 };
                 if ALL_GAME_MODE_HUD_LAYOUTS
@@ -67,9 +68,9 @@ pub(super) fn hide_ingame_hud_while_requested_immersive_mode_is_active_and_resto
                 }
                 match (immersive_mode_requests_hidden_hud, hidden) {
                     (true, None) => {
-                        commands
-                            .entity(entity)
-                            .insert(ModeHiddenHudChild { previous: *visibility });
+                        commands.entity(entity).insert(ModeHiddenHudChild {
+                            previous: *visibility,
+                        });
                         visibility.set_if_neq(Visibility::Hidden);
                     }
                     (true, Some(_)) => {
