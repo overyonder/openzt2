@@ -7,7 +7,6 @@ Third-party code retains its own licenses:
   see vendor/taffy/CHANGES.md and LICENSE.md.
 - patches/vkd3d patches: LGPL-2.1-or-later, like vkd3d.
 - patches/mojoshader patches: zlib, like MojoShader.
-- patches/gamescope patches: BSD-2-Clause, like Gamescope.
 - crates/ui/assets/fonts/ComicNeue-Regular.ttf: SIL Open Font License 1.1;
   see crates/ui/assets/fonts/ComicNeue-OFL.txt.
 
