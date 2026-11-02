@@ -280,3 +280,40 @@ pub(super) fn execute_loaded_scenario_lua_script_binding(
         scenario_lua_query_facts,
     )
 }
+
+/// Calls another entry point of the script a binding loaded, in the same VM.
+pub(super) fn execute_loaded_scenario_lua_script_entry(
+    scenario_lua_virtual_machine_contexts: &mut ScenarioLuaVirtualMachineContexts,
+    selected_scenario_document: &SelectedScenarioDocument,
+    scenario_document_assets: &Assets<WorldScenarioDocumentAsset>,
+    lua_script_assets: &Assets<LuaScriptAsset>,
+    lua_script_path_index: &LuaScriptArchivePathIndex,
+    scenario_script_binding: &ScenarioScriptBinding,
+    entry: &str,
+    scenario_lua_query_facts: ScenarioLuaQueryFacts<'_>,
+) -> mlua::Result<ScenarioLuaScriptResult> {
+    let scenario_document_asset = scenario_document_assets
+        .get(&selected_scenario_document.0)
+        .ok_or_else(|| mlua::Error::runtime("scenario document is not loaded"))?;
+    let (lua_script_source_path, lua_script_asset_handle) = scenario_document_asset
+        .script(scenario_script_binding)
+        .ok_or_else(|| {
+            mlua::Error::runtime(format!(
+                "script {} was not resolved",
+                scenario_script_binding.script
+            ))
+        })?;
+    scenario_lua_virtual_machine_contexts.execute_scenario_lua_script_binding(
+        scenario_script_binding.scenario,
+        selected_scenario_document.0.id(),
+        lua_script_source_path,
+        lua_script_asset_handle,
+        lua_script_assets,
+        lua_script_path_index,
+        &ScenarioScriptBinding {
+            entry: entry.to_owned(),
+            ..scenario_script_binding.clone()
+        },
+        scenario_lua_query_facts,
+    )
+}

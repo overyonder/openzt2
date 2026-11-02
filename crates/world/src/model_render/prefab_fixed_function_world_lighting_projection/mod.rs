@@ -11,6 +11,8 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3D9_MAX_ACTIV
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_BUFFER;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT;
 use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
+use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialSourceRenderLayers;
@@ -108,6 +110,7 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
 pub(super) fn update_fixed_function_world_light_buffer(
     graphics: Res<GraphicsSettings>,
     ambient_light: Res<GlobalAmbientLight>,
+    terrain_ambient: Res<EnvironmentTerrainAmbientLight>,
     camera_ambient_lights: Query<(&Camera, &AmbientLight, Option<&RenderLayers>), With<Camera3d>>,
     directional_lights: Query<(
         &DirectionalLight,
@@ -123,6 +126,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
         values: std::array::from_fn(|layer| {
             collect_fixed_function_world_light_registers_for_render_layers(
                 &ambient_light,
+                terrain_ambient.0,
                 &camera_ambient_lights,
                 &directional_lights,
                 &RenderLayers::layer(layer),
@@ -142,6 +146,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
 
 fn collect_fixed_function_world_light_registers_for_render_layers(
     ambient_light: &GlobalAmbientLight,
+    terrain_ambient: Option<Vec3>,
     camera_ambient_lights: &Query<(&Camera, &AmbientLight, Option<&RenderLayers>), With<Camera3d>>,
     directional_lights: &Query<(
         &DirectionalLight,
@@ -171,10 +176,14 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
         |ambient| (ambient.color, ambient.brightness),
     );
     // The legacy shader combines authored colour bytes before converting its
-    // final output to linear. Decode neither the textures nor these lights
-    // ahead of that calculation; Bevy's PBR lighting remains linear elsewhere.
-    registers.ambient_color_and_directional_light_count =
-        Vec4::from_array(ambient_color.to_srgba().to_f32_array()) * ambient_brightness;
+    // final output to linear. Environment lights hold those bytes as their linear
+    // channels, so reading them as sRGB would encode them a second time.
+    registers.ambient_color_and_directional_light_count = terrain_ambient
+        .filter(|_| render_layers.intersects(&RenderLayers::layer(TERRAIN_RENDER_LAYER)))
+        .map_or_else(
+            || Vec4::from_array(ambient_color.to_linear().to_f32_array()) * ambient_brightness,
+            |ambient| ambient.extend(0.0),
+        );
     let mut directional_light_count = 0;
     for (light, transform, light_layers, view_visibility, specular) in directional_lights {
         if !view_visibility.get()
@@ -186,11 +195,11 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
         registers.directional_light_directions[directional_light_count] =
             Vec3::from(transform.back()).extend(0.0);
         registers.directional_light_colors[directional_light_count] =
-            Vec4::from_array(light.color.to_srgba().to_f32_array()) * light.illuminance;
+            Vec4::from_array(light.color.to_linear().to_f32_array()) * light.illuminance;
         registers.directional_specular_colors[directional_light_count] = Vec4::from_array(
             specular
                 .map_or(light.color, |color| color.0)
-                .to_srgba()
+                .to_linear()
                 .to_f32_array(),
         ) * light.illuminance;
         directional_light_count += 1;

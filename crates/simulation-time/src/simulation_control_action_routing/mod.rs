@@ -64,7 +64,12 @@ pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_request
             }
             match &authored_action_record.action {
                 UiSimulationAction::SetSimulationPaused { paused } => {
-                    requested_pause_changes.write(SimulationPauseRequest::Set(*paused));
+                    // The pause toggle follows the simulation and reruns these
+                    // events. An echo during a temporary hold, such as the Zoopedia's,
+                    // would otherwise become the state that hold restores.
+                    if simulation_control.as_ref().map(|control| control.paused) != Some(*paused) {
+                        requested_pause_changes.write(SimulationPauseRequest::Set(*paused));
+                    }
                 }
                 UiSimulationAction::SetTemporarySimulationPauseHeld { held } => {
                     if simulation_control.is_none() {

@@ -293,6 +293,9 @@ pub struct ScenarioObjectiveRecord {
     pub failure_text_key: AssetId,
     pub prerequisite_objectives: Vec<AssetId>,
     pub hidden: bool,
+    /// Authored `updateWhenPaused`, here or on an enclosing group.
+    #[serde(default)]
+    pub update_when_paused: bool,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]

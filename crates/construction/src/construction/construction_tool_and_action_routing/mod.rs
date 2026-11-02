@@ -105,12 +105,23 @@ pub(super) fn route_construction_actions(
 pub(super) fn route_pointer_construction_action(
     primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
     ui_capture: Res<UiPointerCapture>,
-    tool: Res<ConstructionTool>,
+    mut tool: ResMut<ConstructionTool>,
     previews: Query<(Entity, &ConstructionPreview)>,
     delete_target: Query<&DeleteHoverTarget, With<ConstructionCursor>>,
     mut commits: MessageWriter<CommitConstruction>,
     mut deletions: MessageWriter<DeleteEntity>,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    mut cancel: MessageWriter<CancelConstruction>,
 ) {
+    // The right mouse button puts down whatever is on the cursor.
+    if mouse_buttons.just_pressed(MouseButton::Right)
+        && !ui_capture.over_ui
+        && *tool != ConstructionTool::Inspect
+    {
+        cancel.write(CancelConstruction);
+        *tool = ConstructionTool::Inspect;
+        return;
+    }
     if !primary_pointer.just_pressed || ui_capture.over_ui {
         return;
     }

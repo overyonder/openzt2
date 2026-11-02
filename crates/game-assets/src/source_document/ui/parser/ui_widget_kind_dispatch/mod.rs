@@ -146,7 +146,7 @@ pub(super) fn parse_authored_ui_widget_data(
             child("images")
                 .into_iter()
                 .flat_map(|images| images.element_children())
-                .filter(|node| node.name == "entry")
+                .filter(|node| matches!(node.name.as_ref(), "entry" | "image"))
                 .map(parse_image_entry)
                 .collect(),
         ),

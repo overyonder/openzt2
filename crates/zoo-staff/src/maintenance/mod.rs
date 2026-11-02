@@ -3,6 +3,7 @@ mod animal_habitat_waste_cleaning_staff_job_execution;
 mod animal_waste_production;
 mod authored_trash_level_application;
 mod cleanliness_aggregation_operations;
+mod first_person_waste_cleaning;
 mod loose_litter_sweeping_staff_job_execution;
 mod maintainable_object_condition_and_service_effects;
 mod maintenance_repair_staff_job_execution;
@@ -67,6 +68,12 @@ impl Plugin for MaintenancePlugin {
             .add_message::<openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste>()
             .init_resource::<IncrementalZooCleanlinessTotals>()
             .init_resource::<ZooCleanlinessPermille>();
+
+        game_application.add_systems(
+            Update,
+            first_person_waste_cleaning::clean_nearest_waste_from_first_person_use_action
+                .run_if(in_state(GamePhase::InGame)),
+        );
 
         game_application
             .world_mut()

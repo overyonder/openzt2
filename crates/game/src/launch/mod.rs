@@ -1,23 +1,17 @@
-use openzt2_verification::verification_launch_arguments::{
-    read_verification_launch_request_from_process_arguments, VerificationLaunchRequest,
-};
-
 /// Inputs which change how the process is assembled before Bevy starts.
 pub(crate) struct GameLaunchConfiguration {
     pub(crate) enabled_z2f_archive_paths: std::io::Result<Vec<std::path::PathBuf>>,
-    pub(crate) verification_request: Option<VerificationLaunchRequest>,
 }
 
 impl GameLaunchConfiguration {
-    /// Reads the executable's content and optional verification arguments.
+    /// Reads the executable's enabled content archives.
     ///
     /// # Errors
     ///
-    /// Returns an error when an argument or referenced script is invalid.
+    /// Returns an error when the content cannot be read.
     pub(crate) fn read_from_process_arguments() -> std::io::Result<Self> {
         Ok(Self {
             enabled_z2f_archive_paths: find_enabled_z2f_archives(),
-            verification_request: read_verification_launch_request_from_process_arguments()?,
         })
     }
 }

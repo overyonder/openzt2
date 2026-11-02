@@ -92,6 +92,19 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
         {
             Ok(UiWidgetRecord::EarthquakeRunner)
         }
+        // The scenario runtime drives `updateTutorialRing` while this is active.
+        "ring timer"
+            if events.len() == 2
+                && events[0].event.message == "ZT_RUN_SCRIPT"
+                && events[0]
+                    .event
+                    .string
+                    .as_deref()
+                    .is_some_and(|script| script.ends_with(" updateTutorialRing"))
+                && events[1].event.message == "UI_ACTIVATE_ON" =>
+        {
+            Ok(UiWidgetRecord::TimedSequence { events: Vec::new() })
+        }
         "count down" => {
             lower_authored_first_person_countdown_to_canonical_widget_record(events, role, input)
         }

@@ -343,6 +343,7 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         ),
         With<WorldRoot>,
     >,
+    visibilities: Query<&Visibility>,
     mut purchase_choices: MessageWriter<PurchaseChoice>,
     document_owners: Query<&UiDocumentOwner>,
     selected_genders: Query<&AnimalCatalogueGender>,
@@ -383,6 +384,15 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list(
         else {
             continue;
         };
+        // A tutorial selects construction tabs while the buy panel is closed.
+        // That prepares the panel; it doesn't pick anything up.
+        if std::iter::successors(Some(activation.node), |entity| {
+            parent_entities.get(*entity).ok().map(ChildOf::parent)
+        })
+        .any(|entity| visibilities.get(entity) == Ok(&Visibility::Hidden))
+        {
+            continue;
+        }
         let Some((_, catalogue_entry)) = choose_remembered_or_first_included_catalogue_entry(
             type_list_policy,
             type_list_filter.copied().unwrap_or_default(),

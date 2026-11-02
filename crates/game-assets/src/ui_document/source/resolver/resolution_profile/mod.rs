@@ -74,6 +74,8 @@ impl SelectedUiSourceResolutionProfile {
                 (UiDocumentRole::ScenarioWin, "Scenario Win  Layout".into()),
                 (UiDocumentRole::ScenarioFailed, "Scenario Failed Layout".into()),
                 (UiDocumentRole::GenericOk, "Generic OK Layout".into()),
+                (UiDocumentRole::Tutorial, "tutorial layout".into()),
+                (UiDocumentRole::TutorialComplete, "tutorial complete".into()),
                 (UiDocumentRole::ChallengeOffer, "challenge layout".into()),
                 (
                     UiDocumentRole::InstantChallengeOffer,
@@ -87,6 +89,8 @@ impl SelectedUiSourceResolutionProfile {
             // confirmations in confirm.xml. The recommendations panel's close
             // button releases the toggles that opened it.
             role_addressed_nodes: vec![
+                // The goal panel pauses the game while it's open.
+                (UiDocumentRole::InGameHud, "pause".into()),
                 (UiDocumentRole::Modal, "delete_object_confirmation".into()),
                 (UiDocumentRole::Modal, "fire_staff_confirmation".into()),
                 // The main menu's Exit button opens this confirmation.

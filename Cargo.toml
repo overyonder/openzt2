@@ -25,7 +25,6 @@ members = [
     "crates/terrain",
     "crates/transport",
     "crates/ui",
-    "crates/verification",
     "crates/visitors",
     "crates/world-state",
     "crates/world",
@@ -71,7 +70,6 @@ openzt2_staff_requests = { path = "crates/staff-requests" }
 openzt2_terrain = { path = "crates/terrain" }
 openzt2_transport = { path = "crates/transport" }
 openzt2_ui = { path = "crates/ui" }
-openzt2_verification = { path = "crates/verification" }
 openzt2_visitors = { path = "crates/visitors" }
 openzt2_world = { path = "crates/world" }
 openzt2_world_state = { path = "crates/world-state" }

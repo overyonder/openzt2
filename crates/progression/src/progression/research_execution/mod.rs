@@ -120,6 +120,7 @@ pub(super) fn start_paid_research_projects(
     pending: Query<(Entity, &PendingResearchProjectPayment, &WorldMember)>,
     mut ids: ResMut<PersistentIdAllocator>,
     seed: Res<ZooSeed>,
+    duration_overrides: Res<openzt2_zoo_state::progression::research_types::ResearchDurationOverrides>,
     mut commands: Commands,
 ) {
     if completed.is_empty() {
@@ -147,12 +148,20 @@ pub(super) fn start_paid_research_projects(
             ResearchProject {
                 definition: payment.definition,
                 elapsed_ticks: 0,
-                required_ticks: resolve_research_duration_to_simulation_ticks(
-                    definition.duration,
-                    definitions.timing().fixed_hz,
-                    *seed,
-                    id,
-                ),
+                required_ticks: duration_overrides
+                    .0
+                    .get(&payment.definition)
+                    .map(|seconds| {
+                        (*seconds * definitions.timing().fixed_hz as f32).max(1.0) as u64
+                    })
+                    .unwrap_or_else(|| {
+                        resolve_research_duration_to_simulation_ticks(
+                            definition.duration,
+                            definitions.timing().fixed_hz,
+                            *seed,
+                            id,
+                        )
+                    }),
             },
             *member,
             id,

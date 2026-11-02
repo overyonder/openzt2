@@ -27,6 +27,7 @@ pub(super) struct ScenarioLuaEntityFacts {
     pub(super) health: Option<&'static HealthNeed>,
     pub(super) hygiene: Option<&'static HygieneNeed>,
     pub(super) bathroom: Option<&'static BathroomNeed>,
+    pub(super) trash: Option<&'static openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste>,
 }
 
 impl ScenarioLuaEntityFactsItem<'_, '_> {

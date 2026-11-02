@@ -26,7 +26,8 @@ pub fn catalogue_entry_is_available(
 ) -> bool {
     let definition = AssetId(entry.definition.0);
     let freeform = mode == Some(WorldSessionMode::Freeform);
-    let scenario_available = scenario.is_some_and(|availability| availability.contains(definition));
+    let scenario_available =
+        scenario.is_some_and(|availability| scenario_lists_definition(catalog, definition, availability));
 
     let mut has_requirement = false;
     let mut always = false;
@@ -66,6 +67,21 @@ const fn availability_from_facts(
             && (freeform || scenario_available || !has_requirement || always))
 }
 
+/// Scripts add objects by definition or by an authored type such as `gate`.
+fn scenario_lists_definition(
+    catalog: WorldDefinitionsView<'_>,
+    definition: AssetId,
+    availability: &ScenarioContentAvailability,
+) -> bool {
+    availability.contains(definition)
+        || catalog.find_object(definition).is_some_and(|object| {
+            object
+                .behavior_type_identifiers
+                .iter()
+                .any(|kind| availability.contains(*kind))
+        })
+}
+
 pub fn catalogue_entry_is_visible(
     catalog: WorldDefinitionsView<'_>,
     index: usize,
@@ -74,6 +90,10 @@ pub fn catalogue_entry_is_visible(
     scenario: Option<&ScenarioContentAvailability>,
     unlocks: &UnlockedCatalogueDefinitionSet,
 ) -> bool {
+    // A tutorial narrows the buy panels to what it has added so far.
+    if let Some(listed) = scenario.filter(|availability| !availability.is_empty()) {
+        return scenario_lists_definition(catalog, AssetId(entry.definition.0), listed);
+    }
     catalogue_entry_is_available(catalog, index, entry, mode, scenario, unlocks)
         || !entry
             .filters

@@ -45,6 +45,21 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     scenario_document_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     current_photo_challenge_sets: ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's>,
     photo_challenges: ScenarioLuaPhotoChallengeQuery<'w, 's>,
+    fence_edges: super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'w, 's>,
+    path_tiles: super::scenario_lua_types::ScenarioLuaPathTileQuery<'w, 's>,
+    edited_terrain: super::scenario_lua_types::ScenarioLuaEditedTerrainQuery<'w, 's>,
+    terrain_assets: Res<'w, Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>>,
+    ui_nodes: super::scenario_lua_types::ScenarioLuaUiNodeQuery<'w, 's>,
+    ui_roots: super::scenario_lua_types::ScenarioLuaUiRootQuery<'w, 's>,
+    ui_documents: Res<'w, Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
+    windows: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+    real_time: Res<'w, Time<Real>>,
+    overhead_cameras: Query<
+        'w,
+        's,
+        &'static openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig,
+        With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
+    >,
 }
 
 impl ScenarioLuaQueryFactSources<'_, '_> {
@@ -57,6 +72,16 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
         let current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a> =
             &self.current_photo_challenge_sets;
         let photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a> = &self.photo_challenges;
+        let path_tiles: &'a super::scenario_lua_types::ScenarioLuaPathTileQuery<'a, 'a> =
+            &self.path_tiles;
+        let edited_terrain: &'a super::scenario_lua_types::ScenarioLuaEditedTerrainQuery<'a, 'a> =
+            &self.edited_terrain;
+        let fence_edges: &'a super::scenario_lua_types::ScenarioLuaFenceEdgeQuery<'a, 'a> =
+            &self.fence_edges;
+        let ui_nodes: &'a super::scenario_lua_types::ScenarioLuaUiNodeQuery<'a, 'a> =
+            &self.ui_nodes;
+        let ui_roots: &'a super::scenario_lua_types::ScenarioLuaUiRootQuery<'a, 'a> =
+            &self.ui_roots;
         ScenarioLuaQueryFacts {
             donation_totals: &self.donation_totals,
             localization: self
@@ -82,6 +107,19 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
                 .selected_entity
                 .as_deref()
                 .and_then(|selected| selected.0),
+            fence_edges,
+            path_tiles,
+            edited_terrain,
+            terrain_assets: &self.terrain_assets,
+            ui_nodes,
+            ui_roots,
+            ui_documents: &self.ui_documents,
+            ui_canvas_scale: self.windows.single().map_or(Vec2::ONE, |window| {
+                Vec2::new(window.physical_width() as f32, window.physical_height() as f32)
+                    / Vec2::new(1024.0, 768.0)
+            }),
+            real_seconds: self.real_time.elapsed_secs_f64(),
+            overhead_camera: self.overhead_cameras.iter().next(),
         }
     }
 

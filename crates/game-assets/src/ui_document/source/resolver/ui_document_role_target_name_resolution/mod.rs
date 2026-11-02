@@ -70,6 +70,10 @@ pub(super) fn collect_unique_authored_node_name_targets_by_ui_document_role(
         let source = specialize_authored_ui_source_document_for_role(source, *role)?;
         collect_names(&source.root, *role, &mut candidates);
     }
+    // A declared address holds even where other documents reuse the name.
+    for (role, name) in &profile.role_addressed_nodes {
+        candidates.insert(name.trim().to_ascii_lowercase(), Some(*role));
+    }
     Ok(candidates
         .into_iter()
         .filter_map(|(name, role)| role.map(|role| (name, role)))

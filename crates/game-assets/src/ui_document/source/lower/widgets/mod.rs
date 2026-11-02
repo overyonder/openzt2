@@ -236,7 +236,12 @@ pub(super) fn lower_source_ui_widget_to_canonical_widget_record(
                 } else {
                     UiNodeRegionDefinition::default()
                 };
-                let image = texture_dependency(entry.image.as_ref().map(|value| value.key()), output, input)?;
+                // The shipped tutorial layout names icons no archive holds.
+                // Selecting one of those shows nothing.
+                let image = texture_dependency(entry.image.as_ref().map(|value| value.key()), output, input).unwrap_or_else(|error| {
+                    bevy::log::warn!(document = input.source.path.as_str(), %error, "UI icon is unavailable; leaving this entry empty");
+                    AssetId::default()
+                });
                 image_entries.push(UiImageEntryRecord {
                     key: lower_optional_authored_semantic_key_to_asset_id(entry.key.as_deref()),
                     localization_key: lower_optional_authored_semantic_key_to_asset_id(entry.localization_id.as_deref()),

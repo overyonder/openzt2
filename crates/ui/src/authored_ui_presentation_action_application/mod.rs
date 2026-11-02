@@ -63,6 +63,7 @@ pub(super) struct UiExclusiveHoverPresentation;
 pub(super) struct UiPresentationActionApplicationQueries<'w, 's> {
     pointer_capture: Res<'w, openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     scopes: Query<'w, 's, &'static mut UiFocusScope>,
+    node_parents: Query<'w, 's, &'static ChildOf>,
     toggle_groups: Query<
         'w,
         's,
@@ -156,6 +157,7 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
     let UiPresentationActionApplicationQueries {
         pointer_capture,
         mut scopes,
+        node_parents,
         toggle_groups,
         mut scroll_positions,
         slider_bounds,
@@ -401,6 +403,46 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                         continue;
                     };
                     let target_node = openzt2_game_data::AssetId(target_node.0);
+                    // Turning on a member of a toggle set turns its selected sibling
+                    // off first: tabs share containers, and the loser hides them.
+                    if *active {
+                        let target = nodes.iter_mut().find_map(|(entity, id, owner, ..)| {
+                            (owner.0 == target_owner && id.id == target_node).then_some(entity)
+                        });
+                        let siblings = target
+                            .and_then(|target| node_parents.get(target).ok())
+                            .map(ChildOf::parent)
+                            .filter(|group| toggle_groups.contains(*group))
+                            .and_then(|group| children.get(group).ok());
+                        for sibling in siblings.into_iter().flatten() {
+                            if Some(*sibling) == target {
+                                continue;
+                            }
+                            let Ok((_, _, _, _, _, _, Some(mut selected), _)) =
+                                nodes.get_mut(*sibling)
+                            else {
+                                continue;
+                            };
+                            let Ok((mut previous, is_type_list)) =
+                                previous_selections.get_mut(*sibling)
+                            else {
+                                selected.0 = false;
+                                continue;
+                            };
+                            if let Some(trigger) = apply_explicit_authored_selection(
+                                &mut selected,
+                                &mut previous,
+                                false,
+                                is_type_list,
+                            ) {
+                                let source = activation.source;
+                                let node = *sibling;
+                                commands.queue(move |world: &mut World| {
+                                    world.write_message(UiNodeActivated { source, node, trigger });
+                                });
+                            }
+                        }
+                    }
                     let group_children = (!*active)
                         .then(|| {
                             nodes.iter().find_map(|(entity, id, owner, ..)| {

@@ -11,7 +11,6 @@ license.workspace = true
 default = []
 trace-tracy-gpu = ["bevy/trace", "bevy/trace_tracy", "bevy/debug"]
 trace-tracy-memory = ["bevy/trace", "bevy/trace_tracy_memory", "bevy/debug"]
-ui-verification-remote = ["bevy/bevy_remote", "bevy/sysinfo_plugin"]
 dev-tools = [
     "dep:bevy-inspector-egui",
     "bevy/bevy_dev_tools",
@@ -54,7 +53,6 @@ openzt2_staff_requests.workspace = true
 openzt2_terrain.workspace = true
 openzt2_transport.workspace = true
 openzt2_ui.workspace = true
-openzt2_verification.workspace = true
 openzt2_visitors.workspace = true
 openzt2_world.workspace = true
 openzt2_world_state.workspace = true

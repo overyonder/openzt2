@@ -58,3 +58,7 @@ pub struct PurchaseChoice {
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CatalogueTypeListRowProjection;
+
+/// Catalogue entries a scenario script has disabled.
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScenarioDisabledCatalogueDefinitions(pub std::collections::BTreeSet<AssetId>);

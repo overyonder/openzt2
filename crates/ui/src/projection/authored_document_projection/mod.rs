@@ -203,6 +203,14 @@ pub fn project_document(
         if index == 0 && data.role == UiDocumentRole::InGamePersistentStatus {
             commands.entity(entity).insert(GlobalZIndex(1));
         }
+        // Tutorial panels and rings point at every other surface, open ones included.
+        if index == 0 && data.role == UiDocumentRole::Tutorial {
+            commands.entity(entity).insert(GlobalZIndex(2));
+        }
+        // The tutorial's last step leaves its layout modal, beneath this dialog.
+        if index == 0 && data.role == UiDocumentRole::TutorialComplete {
+            commands.entity(entity).insert(GlobalZIndex(3));
+        }
         commands.entity(entity).insert(UiPreviousVisibility(false));
         if data.role == UiDocumentRole::MainMenu
             && record.animation.is_some()

@@ -15,3 +15,8 @@ pub struct EnvironmentLight {
 /// Current authored specular contribution, independent of diffuse light colour.
 #[derive(Component, Debug, Clone, Copy)]
 pub struct EnvironmentSpecularLightColor(pub Color);
+
+/// The authored terrain ambient term. Objects and terrain have separate light
+/// programs, and Bevy's ambient light carries the objects'.
+#[derive(Resource, Clone, Copy, Debug, Default, PartialEq)]
+pub struct EnvironmentTerrainAmbientLight(pub Option<Vec3>);

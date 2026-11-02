@@ -44,6 +44,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         ),
         With<WorldRoot>,
     >,
+    scenario_disabled: Res<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>,
     lists: Query<(Ref<UiTypeListPolicy>, Option<Ref<TypeListFilter>>)>,
     mut removed_filters: RemovedComponents<TypeListFilter>,
     selected_entry: Res<SelectedCatalogueEntry>,
@@ -134,7 +135,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
             *visibility = Visibility::Inherited;
         }
         if let Some(mut interaction_enabled) = interaction_enabled {
-            interaction_enabled.0 = catalogue_entry_can_be_researched(
+            interaction_enabled.0 = !scenario_disabled.0.contains(&AssetId(entry.definition.0)) && catalogue_entry_can_be_researched(
                 catalog,
                 entry,
                 research_availability

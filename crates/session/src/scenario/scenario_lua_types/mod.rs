@@ -58,7 +58,73 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) current_photo_challenge_sets: &'a ScenarioLuaCurrentPhotoChallengeSetQuery<'a, 'a>,
     pub(super) photo_challenges: &'a ScenarioLuaPhotoChallengeQuery<'a, 'a>,
     pub(super) selected_entity: Option<bevy::prelude::Entity>,
+    pub(super) fence_edges: &'a ScenarioLuaFenceEdgeQuery<'a, 'a>,
+    pub(super) path_tiles: &'a ScenarioLuaPathTileQuery<'a, 'a>,
+    pub(super) edited_terrain: &'a ScenarioLuaEditedTerrainQuery<'a, 'a>,
+    pub(super) terrain_assets: &'a bevy::prelude::Assets<openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset>,
+    pub(super) ui_nodes: &'a ScenarioLuaUiNodeQuery<'a, 'a>,
+    pub(super) ui_roots: &'a ScenarioLuaUiRootQuery<'a, 'a>,
+    pub(super) ui_documents: &'a bevy::prelude::Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>,
+    /// Physical pixels per unit of the authored 1024x768 canvas.
+    pub(super) ui_canvas_scale: bevy::prelude::Vec2,
+    pub(super) real_seconds: f64,
+    pub(super) overhead_camera: Option<&'a openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig>,
 }
+
+/// Fence runs, which scripts count by type like any other entity.
+pub(super) type ScenarioLuaFenceEdgeQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        bevy::prelude::Entity,
+        &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+        bevy::ecs::query::Has<openzt2_zoo_state::topology::gate_operation_types::Gate>,
+    ),
+>;
+
+pub(super) type ScenarioLuaPathTileQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        bevy::prelude::Entity,
+        &'static openzt2_zoo_state::topology::topology_graph_types::PathTile,
+    ),
+>;
+
+/// Terrain chunks the player has painted or sculpted.
+pub(super) type ScenarioLuaEditedTerrainQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
+        &'static openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples,
+    ),
+>;
+
+/// Projected authored UI nodes as scenario scripts read them back.
+pub(super) type ScenarioLuaUiNodeQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        &'static openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId,
+        &'static openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner,
+        &'static bevy::prelude::InheritedVisibility,
+        &'static bevy::prelude::ComputedNode,
+        &'static bevy::ui::UiGlobalTransform,
+        Option<&'static openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
+        Option<&'static openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled>,
+        Option<&'static bevy::prelude::Interaction>,
+    ),
+>;
+
+pub(super) type ScenarioLuaUiRootQuery<'w, 's> = bevy::prelude::Query<
+    'w,
+    's,
+    (
+        bevy::prelude::Entity,
+        &'static openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot,
+    ),
+>;
 
 pub(super) type ScenarioLuaDonationTotalsQuery<'w, 's> = bevy::prelude::Query<
     'w,

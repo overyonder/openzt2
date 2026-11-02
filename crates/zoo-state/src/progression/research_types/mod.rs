@@ -44,3 +44,14 @@ pub struct ResearchProjectCompletionReady {
     pub project: Entity,
     pub definition: AssetId,
 }
+
+/// Overrides how long one research project takes, from a scenario script.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct SetResearchDuration {
+    pub definition: AssetId,
+    pub seconds: f32,
+}
+
+/// Scenario-set research durations, in seconds of simulation time.
+#[derive(Resource, Debug, Clone, Default, PartialEq)]
+pub struct ResearchDurationOverrides(pub std::collections::BTreeMap<AssetId, f32>);

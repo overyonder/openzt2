@@ -444,6 +444,10 @@ pub(super) fn bind_authored_placement_object(
     {
         output.document.maintenance_definitions.push(maintenance);
     }
+    output.document.object_record_keys.push((
+        super::world_definition_source_value_reading_and_conversion::id(record.key),
+        record.key.to_string(),
+    ));
     output.document.objects.push(WorldObjectDefinition {
         audio_cue_prefixes: super::authored_audio_cue_prefixes(record),
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),

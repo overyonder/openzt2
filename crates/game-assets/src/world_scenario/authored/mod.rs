@@ -91,6 +91,7 @@ pub(in crate::world_scenario) fn lower_documents(
                     &roots,
                     None,
                     document.root.attribute("chain").is_some_and(truthy),
+                    document.root.attribute("updateWhenPaused").is_some_and(truthy),
                     &mut rules,
                 );
                 if !rules.is_empty() {
@@ -173,6 +174,7 @@ pub(in crate::world_scenario) fn lower_documents(
                                 .map(|value| vec![AssetId::from_key(value)])
                                 .unwrap_or_default(),
                             hidden: rule.node.attribute("hidden").is_some_and(truthy),
+                            update_when_paused: rule.update_when_paused,
                         });
                     }
                     let lower_path = path.to_ascii_lowercase();
@@ -351,6 +353,7 @@ fn lower_photo_challenges(
 struct RuleEntry<'a> {
     node: &'a OrderedSourceDocumentNode,
     prerequisite: Option<String>,
+    update_when_paused: bool,
 }
 
 fn collect_objective_groups(
@@ -396,6 +399,7 @@ fn collect_rules<'a>(
     nodes: &[&'a OrderedSourceDocumentNode],
     inherited: Option<String>,
     chain: bool,
+    update_when_paused: bool,
     output: &mut Vec<RuleEntry<'a>>,
 ) -> Option<String> {
     let mut previous = inherited;
@@ -406,6 +410,8 @@ fn collect_rules<'a>(
                 output.push(RuleEntry {
                     node,
                     prerequisite: chain.then(|| previous.clone()).flatten(),
+                    update_when_paused: update_when_paused
+                        || node.attribute("updateWhenPaused").is_some_and(truthy),
                 });
                 previous = Some(id);
             }
@@ -415,6 +421,7 @@ fn collect_rules<'a>(
                     &node.element_children().collect::<Vec<_>>(),
                     previous,
                     chain,
+                    update_when_paused,
                     output,
                 );
             }
@@ -426,6 +433,7 @@ fn collect_rules<'a>(
                     &children,
                     previous.clone(),
                     node.attribute("chain").is_some_and(truthy),
+                    update_when_paused || node.attribute("updateWhenPaused").is_some_and(truthy),
                     output,
                 );
                 if chain {

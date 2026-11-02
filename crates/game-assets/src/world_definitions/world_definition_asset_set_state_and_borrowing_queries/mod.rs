@@ -444,6 +444,15 @@ impl<'a> WorldDefinitionsView<'a> {
         ViewingOpportunityDefinition
     );
     finder!(find_fence, Fence, fences, FenceDefinition);
+    pub fn object_record_key(self, id: AssetId) -> Option<&'a str> {
+        self.assets
+            .get(self.records.get(&(DefinitionKind::Object, id))?)?
+            .document
+            .object_record_keys
+            .iter()
+            .find(|(candidate, _)| *candidate == id)
+            .map(|(_, key)| key.as_str())
+    }
     /// The definition whose models and gate policy a gated edge of `fence`
     /// uses: the fence's own gate variant (`chainlink` -> `chainlinkgate`),
     /// or the fence itself when it is a gate or has no loaded variant.

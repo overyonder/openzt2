@@ -1,5 +1,3 @@
-use avian3d::prelude::SpatialQuery;
-use avian3d::prelude::SpatialQueryFilter;
 use bevy::prelude::*;
 
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
@@ -14,7 +12,7 @@ pub(super) fn update_delete_hover_target(
     mut commands: Commands,
     tool: Res<ConstructionTool>,
     ray: Res<WorldPointerRay>,
-    spatial_query: SpatialQuery,
+    mut mesh_ray_cast: MeshRayCast,
     parents: Query<&ChildOf>,
     placeables: Query<(), With<PlacedObjectDefinitionReference>>,
     cursors: Query<(Entity, Option<&DeleteHoverTarget>), With<ConstructionCursor>>,
@@ -26,16 +24,14 @@ pub(super) fn update_delete_hover_target(
         .then_some(ray.0)
         .flatten()
         .and_then(|ray| {
-            spatial_query.cast_ray_predicate(
-                ray.origin,
-                ray.direction,
-                f32::MAX,
-                false,
-                &SpatialQueryFilter::DEFAULT,
-                &|entity| placeable_ancestor(entity, &parents, &placeables).is_some(),
-            )
+            // Against meshes, as selection is: trees and plants have no colliders.
+            let filter = |entity| placeable_ancestor(entity, &parents, &placeables).is_some();
+            mesh_ray_cast
+                .cast_ray(ray, &MeshRayCastSettings::default().with_filter(&filter))
+                .first()
+                .map(|(hit, _)| *hit)
         })
-        .and_then(|hit| placeable_ancestor(hit.entity, &parents, &placeables));
+        .and_then(|hit| placeable_ancestor(hit, &parents, &placeables));
     if previous.map(|target| target.0) == target {
         return;
     }
