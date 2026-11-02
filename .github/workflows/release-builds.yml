@@ -68,10 +68,6 @@ jobs:
       CARGO_BUILD_JOBS: ${{ matrix.id == 'darwin-arm64' && '2' || '4' }}
       CARGO_INCREMENTAL: '0'
       DOTNET_ROLL_FORWARD: Major
-      OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 || '' }}
-      OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD || '' }}
-      OPENZT2_MSIX_PUBLISHER: ${{ github.ref_type == 'tag' && vars.OPENZT2_MSIX_PUBLISHER || '' }}
-      OPENZT2_APK_SIGNING_KEY_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_APK_SIGNING_KEY_BASE64 || '' }}
     defaults:
       run:
         shell: bash
@@ -84,6 +80,11 @@ jobs:
         run: python3 tools/release/release_targets.py environment '${{ matrix.id }}'
       - name: Require signing credentials for tagged installers
         if: github.ref_type == 'tag'
+        env:
+          OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 || '' }}
+          OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD || '' }}
+          OPENZT2_MSIX_PUBLISHER: ${{ github.ref_type == 'tag' && vars.OPENZT2_MSIX_PUBLISHER || '' }}
+          OPENZT2_APK_SIGNING_KEY_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_APK_SIGNING_KEY_BASE64 || '' }}
         run: |
           if [[ '${{ matrix.id }}' == windows-amd64 ]]; then
             : "${OPENZT2_MSIX_CERTIFICATE_BASE64:?MSIX signing certificate is required}"
@@ -183,6 +184,10 @@ jobs:
           direnv exec . python3 tools/release/package.py package --target '${{ matrix.id }}'
       - name: Package Windows release
         if: matrix.platform == 'windows'
+        env:
+          OPENZT2_MSIX_CERTIFICATE_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_BASE64 || '' }}
+          OPENZT2_MSIX_CERTIFICATE_PASSWORD: ${{ github.ref_type == 'tag' && secrets.OPENZT2_MSIX_CERTIFICATE_PASSWORD || '' }}
+          OPENZT2_MSIX_PUBLISHER: ${{ github.ref_type == 'tag' && vars.OPENZT2_MSIX_PUBLISHER || '' }}
         shell: pwsh
         run: |
           $env:XDG_CONFIG_HOME = "$env:RUNNER_TEMP/direnv/config".Replace('\', '/')
@@ -214,6 +219,8 @@ jobs:
           exit $LASTEXITCODE
       - name: Package Alpine release
         if: matrix.libc == 'musl'
+        env:
+          OPENZT2_APK_SIGNING_KEY_BASE64: ${{ github.ref_type == 'tag' && secrets.OPENZT2_APK_SIGNING_KEY_BASE64 || '' }}
         run: |
           mkdir -p build/artifacts
           docker run --rm --volume "$PWD:/workspace" --volume "$RUNNER_TEMP:/ci-temp" --workdir /workspace \
