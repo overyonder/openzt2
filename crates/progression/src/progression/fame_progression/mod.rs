@@ -16,8 +16,8 @@ use super::{
     catalogue_definition_index_queries::find_catalogue_definition_index,
     catalogue_unlock_set_operations::mark_catalogue_definition_unlocked_at_index,
     fame_calculations::{
-        ZooFameCalculationInputs, calculate_authentic_zoo_fame,
-        select_fame_level_for_rating_and_guest_count, update_current_and_maximum_fame,
+        calculate_authentic_zoo_fame, select_fame_level_for_rating_and_guest_count,
+        update_current_and_maximum_fame, ZooFameCalculationInputs,
     },
     fame_types::Fame,
     profile_challenge_types::TotalAnimalsReleasedCount,
@@ -146,8 +146,8 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
+    use openzt2_game_data::AssetId;
 
     #[test]
     fn authentic_fame_progression_advances_fame_and_emits_change() {

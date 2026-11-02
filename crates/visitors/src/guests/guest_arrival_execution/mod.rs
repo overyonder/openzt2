@@ -241,7 +241,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         let probability = guest_spawn_probability(
             policy,
             fame.half_stars,
-            admission.0.0,
+            admission.0 .0,
             seen_species.len() as u32,
         );
         random_unit(&mut state.rng) < probability

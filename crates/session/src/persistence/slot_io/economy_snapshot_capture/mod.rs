@@ -53,8 +53,8 @@ pub(super) fn capture_economy_snapshot_records_from_live_world(
                 profit: profit.map(|profit| (profit.total.0, profit.transactions)),
                 price_index: price_index.map(|price| price.0),
                 maintenance_schedule_index: maintenance.map(|schedule| schedule.0),
-                wallet: wallet.map(|wallet| wallet.0.0),
-                price: price.map(|price| price.0.0),
+                wallet: wallet.map(|wallet| wallet.0 .0),
+                price: price.map(|price| price.0 .0),
                 service: service.map(|service| ServiceFacilitySnapshot {
                     definition: service.definition,
                     capacity: service.capacity,

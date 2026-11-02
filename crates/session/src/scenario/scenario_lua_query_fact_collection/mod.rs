@@ -115,8 +115,10 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             ui_roots,
             ui_documents: &self.ui_documents,
             ui_canvas_scale: self.windows.single().map_or(Vec2::ONE, |window| {
-                Vec2::new(window.physical_width() as f32, window.physical_height() as f32)
-                    / Vec2::new(1024.0, 768.0)
+                Vec2::new(
+                    window.physical_width() as f32,
+                    window.physical_height() as f32,
+                ) / Vec2::new(1024.0, 768.0)
             }),
             real_seconds: self.real_time.elapsed_secs_f64(),
             overhead_camera: self.overhead_cameras.iter().next(),

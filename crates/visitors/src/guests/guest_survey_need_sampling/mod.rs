@@ -16,8 +16,8 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
-        find_current_behavior_task_action,
+        find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        SynchronizedBehaviorParticipant,
     },
 };
 

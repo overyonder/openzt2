@@ -1,11 +1,11 @@
 use super::*;
 use openzt2_game_data::{
-    AssetId,
     localization::{LocalizationCatalog, LocalizationEntry},
     world_definitions::{
         document::WorldDefinitionDocument,
         entity_naming::{EntityNamingDefinition, GeneratedEntityNameDefinition},
     },
+    AssetId,
 };
 
 #[test]

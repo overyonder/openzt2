@@ -1,6 +1,6 @@
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, Sex, Species, SpeciesVariant},
+    AssetId,
 };
 
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
@@ -157,12 +157,8 @@ pub fn lower_species_and_variant_to_animal_spawn_components(
     ticks_per_day: u32,
     rng: &mut DeterministicRng,
 ) -> Option<ResolvedAnimalSpawnComponents> {
-    let [
-        juvenile_start_days,
-        young_start_days,
-        adult_start_days,
-        elder_start_days,
-    ] = species.stage_start_days;
+    let [juvenile_start_days, young_start_days, adult_start_days, elder_start_days] =
+        species.stage_start_days;
     let stage_start_ticks = [
         ticks_from_days(juvenile_start_days, ticks_per_day)?,
         ticks_from_days(young_start_days, ticks_per_day)?,

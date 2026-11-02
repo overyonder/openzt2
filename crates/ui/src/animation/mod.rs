@@ -94,7 +94,11 @@ pub(super) fn advance_ui_animations(
             (animation.elapsed_ms - step_ms).max(0.0)
         };
         let linear_amount = if animation.duration_ms == 0.0 {
-            if animation.forward { 1.0 } else { 0.0 }
+            if animation.forward {
+                1.0
+            } else {
+                0.0
+            }
         } else {
             animation.elapsed_ms / animation.duration_ms
         };

@@ -326,7 +326,9 @@ pub(super) fn iterate_environment_and_referenced_light_samples<'a>(
     catalogue: WorldDefinitionsView<'a>,
     definition: &'a EnvironmentDefinition,
 ) -> impl Clone
-+ Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentLightSample> {
+       + Iterator<
+    Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentLightSample,
+> {
     let light_program = definition.light_program.unwrap_or(definition.family);
     let family = (light_program != definition.id)
         .then(|| catalogue.find_environment(light_program))
@@ -339,7 +341,8 @@ fn iterate_environment_and_inherited_family_fog_samples<'a>(
     catalogue: WorldDefinitionsView<'a>,
     definition: &'a EnvironmentDefinition,
 ) -> impl Clone
-+ Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentFogSample> {
+       + Iterator<Item = &'a openzt2_game_data::world_definitions::environment::EnvironmentFogSample>
+{
     let family = (definition.family != definition.id)
         .then(|| catalogue.find_environment(definition.family))
         .flatten()

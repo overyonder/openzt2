@@ -56,7 +56,8 @@ pub(super) fn clean_nearest_waste_from_first_person_use_action(
             if container.is_none_or(|(_, distance)| litter_distance <= distance) =>
         {
             if let Ok((_, _, mut waste)) = litter.get_mut(entity) {
-                cleanliness_totals.replace_uncontained_waste_units(waste.uncontained_waste_units, 0);
+                cleanliness_totals
+                    .replace_uncontained_waste_units(waste.uncontained_waste_units, 0);
                 waste.uncontained_waste_units = 0;
                 commands.entity(entity).despawn();
             }

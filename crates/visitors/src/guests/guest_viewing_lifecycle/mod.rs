@@ -12,8 +12,8 @@ use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 

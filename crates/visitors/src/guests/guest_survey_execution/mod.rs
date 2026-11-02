@@ -169,12 +169,10 @@ mod tests {
         });
         app.update();
         let survey = app.world().resource::<GuestSurvey>();
-        assert!(
-            survey
-                .ratings
-                .iter()
-                .all(|history| history.daily_counts[0] == 1 && history.cumulative_count == 0)
-        );
+        assert!(survey
+            .ratings
+            .iter()
+            .all(|history| history.daily_counts[0] == 1 && history.cumulative_count == 0));
         assert_eq!(
             survey.ratings[GuestSurveyRating::Recommendation as usize].daily_ratings[0],
             100.0
@@ -186,12 +184,11 @@ mod tests {
         assert_eq!(survey.critical_need_countdown_seconds, 5.0);
         app.world_mut().entity_mut(guest).despawn();
         app.update();
-        assert!(
-            app.world()
-                .resource::<GuestSurvey>()
-                .ratings
-                .iter()
-                .all(|history| history.daily_counts[0] == 1)
-        );
+        assert!(app
+            .world()
+            .resource::<GuestSurvey>()
+            .ratings
+            .iter()
+            .all(|history| history.daily_counts[0] == 1));
     }
 }

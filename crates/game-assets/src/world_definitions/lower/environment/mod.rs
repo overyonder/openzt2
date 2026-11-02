@@ -19,7 +19,6 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::biomes_locations_and_details::WorldLocationDefinition;
 use openzt2_game_data::world_definitions::environment::{
     AmbientSpawnDefinition, EnvironmentFogKeyframe, EnvironmentFogQuality, EnvironmentFogSample,
@@ -27,6 +26,7 @@ use openzt2_game_data::world_definitions::environment::{
     EnvironmentMapSample, EnvironmentSkyKeyframe, EnvironmentVisualFlags, EnvironmentVisualKind,
     EnvironmentVisualSample, WeatherDefinition, WeatherTransitionRule,
 };
+use openzt2_game_data::AssetId;
 
 pub(super) fn bind_location_entries_document(
     document: &DataDocument,

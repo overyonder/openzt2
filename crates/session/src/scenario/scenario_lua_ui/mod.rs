@@ -400,8 +400,14 @@ fn read_point(point: &Table) -> mlua::Result<[i32; 2]> {
 /// its path, and finds this call's methods through the shared metatable.
 fn create_node(lua: &Lua, path: &[String]) -> mlua::Result<Table> {
     let node = lua.create_table()?;
-    node.set("__path", lua.create_sequence_from(path.iter().map(String::as_str))?)?;
-    let metatable = match lua.globals().get::<Option<Table>>("__openzt2_ui_node_metatable")? {
+    node.set(
+        "__path",
+        lua.create_sequence_from(path.iter().map(String::as_str))?,
+    )?;
+    let metatable = match lua
+        .globals()
+        .get::<Option<Table>>("__openzt2_ui_node_metatable")?
+    {
         Some(metatable) => metatable,
         None => {
             let metatable = lua.create_table()?;
@@ -413,7 +419,8 @@ fn create_node(lua: &Lua, path: &[String]) -> mlua::Result<Table> {
                         .get::<mlua::Value>(method)
                 })?,
             )?;
-            lua.globals().set("__openzt2_ui_node_metatable", metatable.clone())?;
+            lua.globals()
+                .set("__openzt2_ui_node_metatable", metatable.clone())?;
             metatable
         }
     };
@@ -432,7 +439,8 @@ fn install_node_methods<'scope, 'env: 'scope>(
     queries: ScenarioLuaQueryFacts<'env>,
 ) -> mlua::Result<()> {
     let node = lua.create_table()?;
-    lua.globals().set("__openzt2_ui_node_methods", node.clone())?;
+    lua.globals()
+        .set("__openzt2_ui_node_methods", node.clone())?;
     let push = move |path: Vec<String>, operation: NodeOperation| {
         commands
             .borrow_mut()
@@ -504,7 +512,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_GET_LINEAGE_VISIBLE",
         scope.create_function(move |_, node: Table| {
-            Ok(locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.lineage_visible))
+            Ok(
+                locate_ui_node(queries, &node_path(&node)?)
+                    .is_some_and(|node| node.lineage_visible),
+            )
         })?,
     )?;
     node.set(
@@ -527,15 +538,14 @@ fn install_node_methods<'scope, 'env: 'scope>(
                 .is_some_and(|node| node.lineage_visible && !node.selected))
         })?,
     )?;
-    for (method, selected) in [
-        ("UI_IS_ALTERNATE", true),
-        ("UI_IS_ACTIVATED", true),
-    ] {
+    for (method, selected) in [("UI_IS_ALTERNATE", true), ("UI_IS_ACTIVATED", true)] {
         node.set(
             method,
             scope.create_function(move |_, node: Table| {
-                Ok(locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.selected)
-                    == selected)
+                Ok(
+                    locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.selected)
+                        == selected,
+                )
             })?,
         )?;
     }
@@ -546,8 +556,16 @@ fn install_node_methods<'scope, 'env: 'scope>(
                 return Ok(None);
             };
             let authored = &node.document.nodes[node.index];
-            rectangle_table(lua, [authored.rect[0], authored.rect[1], node.size[0], node.size[1]])
-                .map(Some)
+            rectangle_table(
+                lua,
+                [
+                    authored.rect[0],
+                    authored.rect[1],
+                    node.size[0],
+                    node.size[1],
+                ],
+            )
+            .map(Some)
         })?,
     )?;
     node.set(
@@ -572,13 +590,17 @@ fn install_node_methods<'scope, 'env: 'scope>(
         "UI_GET_IMAGE_SRC_RECT",
         scope.create_function(move |lua, node: Table| {
             let image_path = node_path(&node)?;
-            let key = commands.borrow().iter().rev().find_map(|command| match command {
-                ScenarioUiCommand::Node {
-                    path,
-                    operation: NodeOperation::IconKey(key),
-                } if *path == image_path => Some(*key),
-                _ => None,
-            });
+            let key = commands
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|command| match command {
+                    ScenarioUiCommand::Node {
+                        path,
+                        operation: NodeOperation::IconKey(key),
+                    } if *path == image_path => Some(*key),
+                    _ => None,
+                });
             let located = locate_ui_node(queries, &image_path);
             let entry = located.as_ref().and_then(|node| {
                 let UiWidgetRecord::MultiIcon { entries } = &node.document.nodes[node.index].widget
@@ -639,7 +661,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     }
     // The tutorial document sits above the others and these raise only within it.
     for method in ["UI_RAISE", "UI_MOVE_TO_FRONT"] {
-        node.set(method, lua.create_function(|_, _: mlua::MultiValue| Ok(()))?)?;
+        node.set(
+            method,
+            lua.create_function(|_, _: mlua::MultiValue| Ok(()))?,
+        )?;
     }
     node.set(
         "UI_SET_MODAL",
@@ -651,7 +676,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_POS",
         scope.create_function(move |_, (node, point): (Table, Table)| {
-            push(node_path(&node)?, NodeOperation::Position(read_point(&point)?));
+            push(
+                node_path(&node)?,
+                NodeOperation::Position(read_point(&point)?),
+            );
             Ok(())
         })?,
     )?;
@@ -665,7 +693,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_VALUE",
         scope.create_function(move |_, (node, key): (Table, String)| {
-            push(node_path(&node)?, NodeOperation::IconKey(AssetId::from_key(&key)));
+            push(
+                node_path(&node)?,
+                NodeOperation::IconKey(AssetId::from_key(&key)),
+            );
             Ok(())
         })?,
     )?;
@@ -682,13 +713,17 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_ANIM_RECT_END",
         scope.create_function(move |_, (node, rectangle): (Table, Table)| {
-            let fit_text = commands.borrow().iter().rev().find_map(|command| match command {
-                ScenarioUiCommand::Node {
-                    path,
-                    operation: NodeOperation::MeasureText,
-                } => Some(path.clone()),
-                _ => None,
-            });
+            let fit_text = commands
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|command| match command {
+                    ScenarioUiCommand::Node {
+                        path,
+                        operation: NodeOperation::MeasureText,
+                    } => Some(path.clone()),
+                    _ => None,
+                });
             push(
                 node_path(&node)?,
                 NodeOperation::AnimationEnd {

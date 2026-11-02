@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, world_definitions::staff_management::StaffRoleKind};
+use openzt2_game_data::{world_definitions::staff_management::StaffRoleKind, AssetId};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -122,13 +122,13 @@ fn map_authored_staff_kind_to_supported_facility_operator(
 #[cfg(test)]
 mod authored_service_facility_hydration_tests {
     use super::*;
-    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::{
         document::WorldDefinitionDocument,
         facilities_and_maintenance::{
             FacilityDefinition, FacilityPaymentTrigger, FacilityServiceKind,
         },
     };
+    use openzt2_game_data::AssetId;
 
     fn cart_object() -> AssetId {
         AssetId::from_key("snackcart_fruitcup_df")
@@ -236,11 +236,9 @@ mod authored_service_facility_hydration_tests {
             Some(&facility)
         );
         assert_eq!(application.world().get::<Inventory>(cart), Some(&stock));
-        assert!(
-            application
-                .world()
-                .get::<ServiceFacilityFactsResolved>(cart)
-                .is_some()
-        );
+        assert!(application
+            .world()
+            .get::<ServiceFacilityFactsResolved>(cart)
+            .is_some());
     }
 }

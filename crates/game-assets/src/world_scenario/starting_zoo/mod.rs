@@ -7,8 +7,8 @@ pub mod entities;
 use std::{collections::BTreeMap, io};
 
 use openzt2_game_data::{
-    AssetId, world_definitions::simulation_time::SimulationTimingDefinition,
-    world_scenario::StartingZooRecord,
+    world_definitions::simulation_time::SimulationTimingDefinition,
+    world_scenario::StartingZooRecord, AssetId,
 };
 
 use crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates;

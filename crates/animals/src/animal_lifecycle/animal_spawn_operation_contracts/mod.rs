@@ -1,7 +1,7 @@
 //! Requested animal spawn identity, outcome, and failure contracts.
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, species::Sex};
+use openzt2_game_data::{species::Sex, AssetId};
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 

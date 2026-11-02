@@ -26,8 +26,8 @@ pub fn catalogue_entry_is_available(
 ) -> bool {
     let definition = AssetId(entry.definition.0);
     let freeform = mode == Some(WorldSessionMode::Freeform);
-    let scenario_available =
-        scenario.is_some_and(|availability| scenario_lists_definition(catalog, definition, availability));
+    let scenario_available = scenario
+        .is_some_and(|availability| scenario_lists_definition(catalog, definition, availability));
 
     let mut has_requirement = false;
     let mut always = false;

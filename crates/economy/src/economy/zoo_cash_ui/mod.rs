@@ -14,11 +14,11 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     localization::LocalizationFormatArgument,
     ui_document::{
         action::economy::UiEconomyAction, node_property_binding::UiTextPropertyBindingSource,
     },
+    AssetId,
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -74,7 +74,7 @@ pub(super) fn project_zoo_cash_balance_into_authored_ui_text(
             }
             selected_format = *positive_format;
         } else {
-            let dollars = cash.0.0 / 100;
+            let dollars = cash.0 .0 / 100;
             let _ = if dollars < 0 {
                 write!(text.0, "-${}", dollars.unsigned_abs())
             } else {

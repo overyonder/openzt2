@@ -17,8 +17,8 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_trigger_types::{BehaviorSubjectTrigger, BehaviorTriggerDelivery},
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
         advance_behavior_task_to_next_action, find_current_behavior_task_action,
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
     },
 };
 
@@ -143,11 +143,10 @@ mod tests {
                 .action,
             0
         );
-        assert!(
-            app.world()
-                .resource::<Messages<BehaviorSubjectTrigger>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<BehaviorSubjectTrigger>>()
+            .is_empty());
         app.world_mut().entity_mut(actor).remove::<Frozen>();
         app.update();
         let task = app
@@ -165,11 +164,10 @@ mod tests {
         assert_eq!(delivered[0].subject, actor);
         assert_eq!(delivered[0].trigger, AssetId::from_key("adjust_surveydata"));
         app.update();
-        assert!(
-            app.world()
-                .resource::<Messages<BehaviorSubjectTrigger>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<BehaviorSubjectTrigger>>()
+            .is_empty());
         app.world_mut().resource_mut::<ZooClock>().tick = 8;
         app.update();
         let delivered = app
