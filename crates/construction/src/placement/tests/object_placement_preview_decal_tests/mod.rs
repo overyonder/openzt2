@@ -45,6 +45,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             presentation_caustic_policies: Vec::new(),
             id: definition,
             kind: WorldObjectKind::Scenery,
+            water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),
             view_data: Vec::new(),

@@ -23,7 +23,7 @@ use super::source_element_tree_search::{
 use super::source_model_scene_path_normalization::normalize_scene_path;
 use super::world_definition_lowering_tables::WorldDefinitionLoweringTables;
 use super::world_definition_source_value_reading_and_conversion::{
-    element_bool, id, money_cents, parse_f32_triplet,
+    element_bool, element_number, id, money_cents, parse_f32_triplet,
 };
 use super::world_object_presentation_controller_source_lowering::lower_authored_world_object_presentation_controller_states;
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
@@ -33,7 +33,7 @@ use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
 use openzt2_game_data::world_definitions::world_objects::{
-    WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
+    WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
 use openzt2_game_data::AssetId;
@@ -455,6 +455,16 @@ pub(super) fn bind_authored_placement_object(
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(
             record,
         ),
+        water_filter: record
+            .descendant_named("ZTAIWaterFilterComponent")
+            .map(|filter| -> Result<_, BindError> {
+                Ok(WaterFilterPolicy {
+                    cleanup_interval_seconds: element_number(filter, &["cleanupInterval"], 0.0)?,
+                    cleanup_rate: element_number(filter, &["cleanupRate"], 0.0)?,
+                    maximum_dirt_capacity: element_number(filter, &["maximumDirtCapacity"], 0.0)?,
+                })
+            })
+            .transpose()?,
         supports_show_tricks: !super::source_element_tree_search::authored_type_family_components(
             record,
             "ZTAITrickComponent",

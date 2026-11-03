@@ -133,6 +133,7 @@ pub(super) fn install_definitions(
         presentation_caustic_policies: Vec::new(),
         id: AssetId::from_key(name),
         kind: WorldObjectKind::Food,
+        water_filter: None,
         supports_show_tricks: false,
         behavior_type_identifiers: Vec::new(),
         view_data: vec![],

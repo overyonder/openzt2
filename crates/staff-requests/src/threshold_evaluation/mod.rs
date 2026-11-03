@@ -262,6 +262,7 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&FoodContainer>,
         Option<&DrinkContainer>,
         Option<&FacilityContainedWaste>,
+        Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
     )>,
     animal_needs: Query<
         AnimalRequestFacts,
@@ -271,7 +272,7 @@ pub(super) fn evaluate_staff_request_rows(
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (entity, definition, mut binding, food, drink, waste) in &mut entities {
+    for (entity, definition, mut binding, food, drink, waste, filter) in &mut entities {
         let Some(rows) = canonical_rows(
             &active_world_definitions,
             &world_definition_assets,
@@ -296,6 +297,10 @@ pub(super) fn evaluate_staff_request_rows(
                     StaffRequestControllerSample::NumberQ16(
                         i32::from(waste.contained_waste_units) << 16,
                     )
+                })
+            } else if row.attribute_key == Some(AssetId::from_key("f_filterdirtylevel")) {
+                filter.map(|filter| {
+                    StaffRequestControllerSample::NumberQ16((filter.dirt_percent * 65536.0) as i32)
                 })
             } else if row.attribute_key.is_none() {
                 // A controller without an attribute raises on creation only.
@@ -479,6 +484,8 @@ fn job_kind(token: AssetId) -> Option<StaffJobKind> {
         Some(StaffJobKind::SweepLitter)
     } else if token == AssetId::from_key("t_rakepoo") {
         Some(StaffJobKind::CleanHabitat)
+    } else if token == AssetId::from_key("t_cleanwaterfilter") {
+        Some(StaffJobKind::MaintainTank)
     } else {
         None
     }

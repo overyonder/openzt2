@@ -133,6 +133,7 @@ pub(super) fn bind_authored_path(
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(
             record,
         ),
+        water_filter: None,
         supports_show_tricks: !super::source_element_tree_search::authored_type_family_components(
             record,
             "ZTAITrickComponent",

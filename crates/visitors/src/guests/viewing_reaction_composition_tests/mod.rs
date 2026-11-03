@@ -26,6 +26,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             presentation_caustic_policies: Vec::new(),
             id,
             kind: WorldObjectKind::Scenery,
+            water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),
             view_data: vec![WorldObjectViewData {

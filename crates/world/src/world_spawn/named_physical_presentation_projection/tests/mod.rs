@@ -39,6 +39,7 @@ fn marker_object(id: AssetId) -> WorldObjectDefinition {
         audio_cue_prefixes: Vec::new(),
         surface_effect_strength: None,
         presentation_caustic_policies: Vec::new(),
+        water_filter: None,
         supports_show_tricks: false,
         behavior_type_identifiers: Vec::new(),
         view_data: Vec::new(),
