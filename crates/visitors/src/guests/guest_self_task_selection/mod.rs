@@ -125,6 +125,7 @@ pub(super) fn select_idle_guest_tasks(
     // The original offers viewing tasks the paths its `viewanimals` sensor
     // finds: path tiles with an animal in its habitat within viewing range.
     let view_sensor = AssetId::from_key("viewanimals");
+    let path_sensor = AssetId::from_key("path");
     let viewing_paths = definitions
         .guest_viewing()
         .map(|viewing| {
@@ -368,12 +369,36 @@ pub(super) fn select_idle_guest_tasks(
             if task.targets[0] == "self" {
                 consider_target(guest, None, None, None, transform.translation());
             } else if task.targets[0] == "path" {
-                // Other path sensors, such as litter disposal, are not modelled.
                 if task.sensor_tag == Some(view_sensor) {
                     for &(path, position, root, elevated) in &viewing_paths {
                         if root == world.root {
                             consider_target(path, None, Some(elevated), None, position);
                         }
+                    }
+                } else if task.sensor_tag == Some(path_sensor) {
+                    // ponytail: the `path` sensor, such as Trash.tsk's
+                    // ThrowAwayTrashGround, offers the tile nearest the guest;
+                    // scan a sensor radius if the native sensor offers more.
+                    let here = transform.translation();
+                    if let Some((path, path_transform, _, tile)) = paths
+                        .iter()
+                        .filter(|(_, _, path_world, _)| path_world.root == world.root)
+                        .min_by(|(_, a, _, _), (_, b, _, _)| {
+                            a.translation()
+                                .distance_squared(here)
+                                .total_cmp(&b.translation().distance_squared(here))
+                        })
+                    {
+                        let elevated = definitions
+                            .find_path(tile.definition)
+                            .is_some_and(|definition| definition.elevated);
+                        consider_target(
+                            path,
+                            None,
+                            Some(elevated),
+                            None,
+                            path_transform.translation(),
+                        );
                     }
                 }
             } else {

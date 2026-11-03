@@ -111,6 +111,20 @@ impl WorldDefinitionAsset {
         }
     }
 
+    /// Lets a fixture demand-load scene `id` from `path`.
+    #[cfg(any(test, feature = "testing"))]
+    #[must_use]
+    pub fn with_test_scene(mut self, id: AssetId, path: &str) -> Self {
+        let mut scenes = self.scenes.into_vec();
+        scenes.push(DemandLoadedDependencyPath {
+            id,
+            path: path.into(),
+        });
+        scenes.sort_by_key(|scene| scene.id);
+        self.scenes = scenes.into_boxed_slice();
+        self
+    }
+
     fn load<T: Asset>(
         server: &AssetServer,
         paths: &[DemandLoadedDependencyPath],

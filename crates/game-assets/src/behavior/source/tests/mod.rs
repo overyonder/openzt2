@@ -189,6 +189,27 @@ fn spawn_set_preserves_authored_entity_joint_and_clip() {
 }
 
 #[test]
+fn guest_ground_trash_spawns_beside_the_actor() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // Trash.tsk ThrowAwayTrashGround.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("spawn.beh"),
+        br#"<BehaviorSets><DropTrash><behaviors><BFBehSpawn spawnEntity="TrashGround" randomPosOffset="0.5" randomRotOffset="180"/></behaviors></DropTrash></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::SpawnObjectAtActor { entity, pose }] = sets[0].actions.lowered_actions()
+    else {
+        panic!("spawn beside the actor expected");
+    };
+    assert_eq!(*entity, AssetId::from_key("trashground"));
+    assert_eq!(pose.random_position_offset_m, 0.5);
+    assert_eq!(pose.random_rotation_offset_radians, 180.0);
+}
+
+#[test]
 fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
     use openzt2_game_data::behavior::{
         action::{
