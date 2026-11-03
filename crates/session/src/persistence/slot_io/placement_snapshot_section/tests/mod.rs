@@ -65,6 +65,7 @@ fn document() -> WorldDefinitionDocument {
             presentation_caustic_policies: Vec::new(),
             id,
             kind: WorldObjectKind::DonationBox,
+            water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: vec![],
             view_data: vec![],

@@ -23,6 +23,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
             audio_cue_prefixes: Vec::new(),
             surface_effect_strength: None,
             presentation_caustic_policies: Vec::new(),
+            water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),
             view_data: Vec::new(),
