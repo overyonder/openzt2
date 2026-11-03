@@ -72,11 +72,12 @@ depend = fontconfig
 xdata = pkgtype=pkg
 EOF
 bsdtar -C "$arch_root" --uid 0 --gid 0 --format=mtree \
-    --options='!all,use-set,type,uid,gid,mode,time,size,sha256,link' -cf - . \
+    --options='!all,use-set,type,uid,gid,mode,time,size,sha256,link' -cf - .PKGINFO usr \
     | gzip -n > "$work/arch.MTREE"
 mv "$work/arch.MTREE" "$arch_root/.MTREE"
-bsdtar -C "$arch_root" --uid 0 --gid 0 --zstd -cf "$output/$name.pkg.tar.zst" .
-bsdtar -xOf "$output/$name.pkg.tar.zst" ./.PKGINFO
+# pacman matches metadata by exact name, so members can't carry a ./ prefix.
+bsdtar -C "$arch_root" --uid 0 --gid 0 --zstd -cf "$output/$name.pkg.tar.zst" .PKGINFO .MTREE usr
+bsdtar -xOf "$output/$name.pkg.tar.zst" .PKGINFO
 
 appdir="$work/OpenZT2.AppDir"
 mkdir -p "$appdir"
