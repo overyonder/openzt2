@@ -112,8 +112,7 @@ fn pregnant_and_non_adult_animals_are_not_released() {
             Animal,
             AnimalLifeStage(LifeStage::Adult),
             Pregnancy {
-                father: juvenile,
-                due_tick: 10,
+                father: Some(juvenile),
             },
         ))
         .id();

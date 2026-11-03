@@ -18,7 +18,17 @@ pub(super) struct AnimalSnapshotRecord {
     pub rotation: [f32; 4],
     pub scale: [f32; 3],
     pub parents: [Option<u64>; 2],
+    /// The father and an unused due tick, kept for older saves.
     pub pregnancy: Option<(u64, u64)>,
+    /// A pregnancy whose father is not known.
+    #[serde(default)]
+    pub pregnant_without_father: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mate: Option<u64>,
+    /// Tokens waiting for a task, such as `t_Pregnant` during gestation.
+    /// Claimed tokens are saved with the task that claimed them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pending_tokens: Vec<AnimalPendingTokenSnapshotRecord>,
     pub crated: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub crate_identifier: Option<u64>,
@@ -38,8 +48,21 @@ pub(super) enum AnimalSnapshotDeath {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub(super) struct AnimalPendingTokenSnapshotRecord {
+    pub name: AssetId,
+    pub available_at: u64,
+    pub expires_at: u64,
+    pub payload: Option<u64>,
+    pub retain_on_failure: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct AnimalWelfareSnapshotRecord {
     pub needs: [i32; 11],
+    /// Absent in older saves; such animals start the need afresh.
+    #[serde(default)]
+    pub reproduction_need: Option<i32>,
     #[serde(default)]
     pub need_adjustment_timer: Option<(u64, [u64; 2])>,
     pub triggers: u16,

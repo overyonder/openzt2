@@ -2,12 +2,16 @@ use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
     animal_snapshot_section_encoding::validate_animal_snapshot_records,
     animal_snapshot_types::{
-        AnimalSnapshotDeath, AnimalSnapshotRecord, AnimalWelfareSnapshotRecord,
+        AnimalPendingTokenSnapshotRecord, AnimalSnapshotDeath, AnimalSnapshotRecord,
+        AnimalWelfareSnapshotRecord,
     },
 };
 use bevy::{ecs::resource::IsResource, prelude::*};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+};
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
@@ -18,8 +22,17 @@ use openzt2_zoo_state::animal_welfare::types::*;
 pub(in crate::persistence) type AnimalSnapshotEntities<'w, 's> =
     Query<'w, 's, EntityRef<'static>, (With<Animal>, Without<IsResource>)>;
 
+/// Tokens no running task has claimed yet.
+pub(in crate::persistence) type PendingTokenSnapshotEntities<'w, 's> = Query<
+    'w,
+    's,
+    (&'static BehaviorSelfToken, &'static ChildOf),
+    Without<ClaimedBehaviorSelfToken>,
+>;
+
 pub(super) fn capture_animal_snapshot_records(
     animals: &AnimalSnapshotEntities,
+    tokens: &PendingTokenSnapshotEntities,
 ) -> Result<Vec<AnimalSnapshotRecord>, WorldSnapshotPersistenceFailure> {
     let persistent_reference = |entity| {
         animals
@@ -50,6 +63,7 @@ pub(super) fn capture_animal_snapshot_records(
                     required_animal_component::<HygieneNeed>(animal)?.0,
                     required_animal_component::<BathroomNeed>(animal)?.0,
                 ],
+                reproduction_need: animal.get::<ReproductionNeed>().map(|need| need.0),
                 triggers: required_animal_component::<NeedTriggerState>(animal)?.0,
                 cumulative_points: {
                     let points = required_animal_component::<CumulativeNeedPoints>(animal)?;
@@ -89,11 +103,36 @@ pub(super) fn capture_animal_snapshot_records(
             ],
             pregnancy: animal
                 .get::<Pregnancy>()
-                .map(|pregnancy| {
-                    persistent_reference(pregnancy.father)
-                        .map(|father| (father, pregnancy.due_tick))
-                })
+                .and_then(|pregnancy| pregnancy.father)
+                .map(|father| persistent_reference(father).map(|father| (father, 0)))
                 .transpose()?,
+            pregnant_without_father: animal
+                .get::<Pregnancy>()
+                .is_some_and(|pregnancy| pregnancy.father.is_none()),
+            mate: animal
+                .get::<Mate>()
+                .map(|mate| persistent_reference(mate.0))
+                .transpose()?,
+            pending_tokens: {
+                let mut pending = Vec::new();
+                for (token, holder) in tokens {
+                    if holder.parent() != animal.id() {
+                        continue;
+                    }
+                    pending.push(AnimalPendingTokenSnapshotRecord {
+                        name: token.name,
+                        available_at: token.available_at,
+                        expires_at: token.expires_at,
+                        // A payload that left the zoo no longer names anyone.
+                        payload: token
+                            .payload
+                            .and_then(|payload| persistent_reference(payload).ok()),
+                        retain_on_failure: token.retain_on_failure,
+                    });
+                }
+                pending.sort_unstable_by_key(|token| (token.available_at, token.name.0));
+                pending
+            },
             crated: animal.contains::<WorldEntityIsCrated>(),
             crate_identifier: None,
             release_restricted: animal.contains::<ReleaseRestricted>(),

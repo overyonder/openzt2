@@ -40,3 +40,46 @@ fn inherited_biome_sensitivities_preserve_sign_and_override_by_biome() {
         );
     }
 }
+
+#[test]
+fn reproduction_is_lowered_when_authored_and_optional_otherwise() {
+    let states = [
+        "hunger",
+        "thirst",
+        "rest",
+        "privacy",
+        "social",
+        "exercise",
+        "stimulation",
+        "environment",
+        "health",
+        "hygiene",
+        "bathroom",
+    ]
+    .map(|name| format!(r#"<BFAIStateVar Name="{name}" Value="10"/>"#))
+    .concat();
+    let lower = |extra: &str| {
+        let source = format!(
+            r#"<BFTypedBinder binderType="Animal"><shared>{states}{extra}</shared></BFTypedBinder>"#
+        );
+        let document = parse_blue_fang_source_document(
+            AssetPath::new("entities/animal.xml"),
+            source.as_bytes(),
+        )
+        .unwrap();
+        let index = SourceIndex::build([&document]).unwrap();
+        lower_effective_authored_species_need_facts(&index.find("Animal").unwrap()).unwrap()
+    };
+    let without = lower("");
+    assert_eq!(without.len(), 11);
+    let with = lower(
+        r#"<BFAIStateVar Name="reproduction" ValueMin="10" ValueMax="20" TriggerThreshold="50"/><BFAINeedAdjusts reproduction="0.25"/>"#,
+    );
+    let reproduction = with
+        .iter()
+        .find(|need| need.kind == NeedKind::Reproduction)
+        .expect("reproduction need");
+    assert_eq!(reproduction.initial_wellness_permille_range, [800, 900]);
+    assert_eq!(reproduction.trigger_wellness_threshold, Some(500));
+    assert!(reproduction.wellness_adjustment_per_update_q16 < 0);
+}
