@@ -12,6 +12,7 @@ use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 
 /// Whole animal entities. Resources are entities too, so exclude them to keep
 /// this read access disjoint from resource writes in the same system.
@@ -97,6 +98,9 @@ pub(super) fn capture_animal_snapshot_records(
             crated: animal.contains::<WorldEntityIsCrated>(),
             crate_identifier: None,
             release_restricted: animal.contains::<ReleaseRestricted>(),
+            caffeinated: animal
+                .get::<CaffeineMode>()
+                .map(|mode| *mode == CaffeineMode::Caffeinated),
             crating_restricted: animal.contains::<CratingRestricted>(),
             death: animal.get::<Dead>().map(|dead| match dead.cause {
                 DeathCause::Disease(disease) => {

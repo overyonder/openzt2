@@ -31,7 +31,7 @@ use std::{
 
 mod world_access;
 pub(super) use world_access::remove_settled_behavior_script_transactions;
-use world_access::{BehaviorScriptWorldAccess, BehaviorScriptWorldChanges};
+use world_access::{BehaviorScriptWorldAccess, BehaviorScriptWorldChanges, DiseaseAttribute};
 
 #[derive(Default)]
 pub(super) struct BehaviorScriptContexts {
@@ -315,6 +315,44 @@ pub(super) fn execute_authored_behavior_script_actions(
                             });
                             Ok(())
                         })?,
+                    )?;
+                    // `disease.lua`'s `makeAnimalSick` and `cureAnimal` set
+                    // these two attributes and nothing else.
+                    table.set(
+                        "BFG_SET_ATTR_BOOLEAN",
+                        scope.create_function(
+                            move |_, (subject, name, value): (Table, String, bool)| {
+                                let entity = subject_entity(&subject)?;
+                                if name != "b_Disease" {
+                                    return Err(mlua::Error::runtime(format!(
+                                        "unmapped behavior boolean attribute {name}"
+                                    )));
+                                }
+                                changes
+                                    .borrow_mut()
+                                    .diseases
+                                    .push((entity, DiseaseAttribute::Diseased(value)));
+                                Ok(())
+                            },
+                        )?,
+                    )?;
+                    table.set(
+                        "BFG_SET_ATTR_STRING",
+                        scope.create_function(
+                            move |_, (subject, name, value): (Table, String, String)| {
+                                let entity = subject_entity(&subject)?;
+                                if name != "s_DiseaseName" {
+                                    return Err(mlua::Error::runtime(format!(
+                                        "unmapped behavior string attribute {name}"
+                                    )));
+                                }
+                                changes
+                                    .borrow_mut()
+                                    .diseases
+                                    .push((entity, DiseaseAttribute::Name(value)));
+                                Ok(())
+                            },
+                        )?,
                     )?;
                     // `CrateAnimal.lua` crates a darted escaped animal.
                     table.set(

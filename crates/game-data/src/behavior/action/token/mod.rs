@@ -18,6 +18,22 @@ pub struct BehaviorSelfTokenDelivery {
     /// the token's task can take over without the old task's failure branch.
     #[serde(default)]
     pub reconsider: bool,
+    /// `GiveTo` naming an entity type, with `Radius`: replaces `recipient`.
+    #[serde(default)]
+    pub nearby: Option<BehaviorNearbyTokenRecipients>,
+    /// `OnlyOne`: nothing is delivered while the recipient holds this token.
+    #[serde(default)]
+    pub only_one: bool,
+}
+
+/// Every live animal of `entity_type` within `radius_m` of the subject, each
+/// receiving the token with `chance_percent` (`ChanceInRadius`), as a disease
+/// spreads to nearby animals.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct BehaviorNearbyTokenRecipients {
+    pub entity_type: AssetId,
+    pub radius_m: f32,
+    pub chance_percent: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
