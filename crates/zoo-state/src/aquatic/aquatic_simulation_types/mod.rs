@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::world_objects::WaterFilterPolicy;
 use openzt2_game_data::AssetId;
 
 use crate::habitat::habitat_types::HabitatRegion;
@@ -135,11 +136,6 @@ pub struct AquaticSuitability {
 }
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TankFiltration {
-    pub litres_per_zoo_day: u32,
-}
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TankPopulation(pub u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,4 +145,19 @@ pub enum MarinePlacementFailure {
     InsufficientSpace,
     IncompatibleWater,
     InvalidGeometry,
+}
+
+/// A placed tank filter: the time to its next cleanup and how full it is, 0 to 100.
+#[derive(Component, Debug, Clone, Copy, PartialEq)]
+pub struct WaterFilter {
+    pub policy: WaterFilterPolicy,
+    pub seconds_until_cleanup: f32,
+    pub dirt_percent: f32,
+}
+
+/// An aquatic animal dirtied its home tank's water.
+#[derive(Message, Debug, Clone, Copy, PartialEq)]
+pub struct AddAquaticWaterDirt {
+    pub animal: Entity,
+    pub amount: f32,
 }

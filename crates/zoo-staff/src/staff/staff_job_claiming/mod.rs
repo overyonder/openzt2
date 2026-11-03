@@ -74,6 +74,7 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
         Option<&DrinkContainer>,
     )>,
     waste: Query<&FacilityContainedWaste>,
+    filters: Query<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
     request_sites: Query<(), With<TankCleaningRequestSite>>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
@@ -141,6 +142,10 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                 .get(job.target)
                 .ok()
                 .map(|waste| i32::from(waste.contained_waste_units) << 16),
+            target_filter_dirtiness_q16: filters
+                .get(job.target)
+                .ok()
+                .map(|filter| (filter.dirt_percent * 65536.0) as i32),
             target_is_request_site: request_sites.contains(job.target),
         };
 
@@ -286,6 +291,10 @@ pub(crate) fn claim_highest_ranked_compatible_jobs_for_available_staff(
                         .get(job.target)
                         .ok()
                         .map(|waste| i32::from(waste.contained_waste_units) << 16),
+                    target_filter_dirtiness_q16: filters
+                        .get(job.target)
+                        .ok()
+                        .map(|filter| (filter.dirt_percent * 65536.0) as i32),
                     target_is_request_site: request_sites.contains(job.target),
                 },
             )

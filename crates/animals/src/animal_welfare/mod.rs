@@ -25,6 +25,7 @@ impl Plugin for AnimalWelfarePlugin {
             .add_message::<AdjustEnvironment>()
             .add_message::<AdjustHealthNeed>()
             .add_message::<AdjustHygiene>()
+            .add_message::<openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt>()
             .add_message::<AdjustBathroom>()
             .add_message::<SetAnimalNeed>()
             .add_message::<NeedChanged>()

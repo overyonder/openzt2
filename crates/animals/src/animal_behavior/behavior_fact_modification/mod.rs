@@ -51,6 +51,10 @@ pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     hygiene: MessageWriter<'w, AdjustHygiene>,
     freeze_animal: MessageWriter<'w, FreezeAnimal>,
     thaw_animal: MessageWriter<'w, ThawAnimal>,
+    water_dirt: MessageWriter<
+        'w,
+        openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt,
+    >,
 }
 
 pub(super) fn apply_supported_current_behavior_fact_modifications(
@@ -167,6 +171,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         animal,
                         delta_q16: wellness_delta_q16,
                     });
+                }
+                BehaviorFact::WaterDirtiness => {
+                    modification_messages.water_dirt.write(
+                        openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt {
+                            animal,
+                            amount: value_q16 as f32 / 65536.0,
+                        },
+                    );
                 }
                 BehaviorFact::Hunger => {
                     modification_messages.hunger.write(AdjustHunger {
@@ -318,6 +330,7 @@ fn behavior_fact_modification_has_runtime_owner(
             | BehaviorFact::Health
             | BehaviorFact::Hygiene
             | BehaviorFact::Frozen
+            | BehaviorFact::WaterDirtiness
     )
 }
 

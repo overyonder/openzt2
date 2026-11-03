@@ -260,6 +260,15 @@ pub struct WorldObjectPresentationCausticPolicy {
     pub is_decal: bool,
 }
 
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WaterFilterPolicy {
+    pub cleanup_interval_seconds: f32,
+    /// Dirt removed from the tank's water at each cleanup.
+    pub cleanup_rate: f32,
+    /// Dirt the filter holds before a worker has to clean it.
+    pub maximum_dirt_capacity: f32,
+}
+
 #[allow(
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
@@ -271,6 +280,9 @@ pub struct WorldObjectDefinition {
     #[serde(default)]
     pub audio_cue_prefixes: Vec<String>,
     pub kind: WorldObjectKind,
+    /// `ZTAIWaterFilterComponent`, when this object filters tank water.
+    #[serde(default)]
+    pub water_filter: Option<WaterFilterPolicy>,
     /// The resolved source family contains a `ZTAITrickComponent`. Native
     /// isInShow is false without this capability, regardless of proximity.
     pub supports_show_tricks: bool,
