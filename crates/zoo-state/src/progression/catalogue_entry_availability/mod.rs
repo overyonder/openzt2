@@ -1,5 +1,5 @@
 use openzt2_game_data::world_definitions::catalogue_and_progression::{
-    catalogue_definition_types::{CatalogueEntry, CatalogueFilterFlags},
+    catalogue_definition_types::{CatalogueCategory, CatalogueEntry, CatalogueFilterFlags},
     research_and_unlock_definition_types::UnlockRequirement,
 };
 use openzt2_game_data::AssetId;
@@ -90,9 +90,18 @@ pub fn catalogue_entry_is_visible(
     scenario: Option<&ScenarioContentAvailability>,
     unlocks: &UnlockedCatalogueDefinitionSet,
 ) -> bool {
-    // A tutorial narrows the buy panels to what it has added so far.
+    // A tutorial narrows the buy panels to what it has added so far. It adds
+    // concrete animals, which the panel offers under their species.
     if let Some(listed) = scenario.filter(|availability| !availability.is_empty()) {
-        return scenario_lists_definition(catalog, AssetId(entry.definition.0), listed);
+        return scenario_lists_definition(catalog, AssetId(entry.definition.0), listed)
+            || (entry.category == CatalogueCategory::Animals
+                && listed.ids().iter().any(|id| {
+                    catalog.find_object(*id).is_some_and(|object| {
+                        object
+                            .behavior_type_identifiers
+                            .contains(&AssetId(entry.definition.0))
+                    })
+                }));
     }
     catalogue_entry_is_available(catalog, index, entry, mode, scenario, unlocks)
         || !entry
