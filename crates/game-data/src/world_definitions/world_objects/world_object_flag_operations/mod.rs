@@ -15,6 +15,8 @@ impl WorldObjectPropertyFlags {
     pub const SAVE_RELEVANT: Self = Self(1 << 11);
     pub const WATER_BOUNDARY: Self = Self(1 << 12);
     pub const ANIMAL_WASTE: Self = Self(1 << 13);
+    /// Litter a guest drops, such as `TrashGround`, which a worker sweeps.
+    pub const LOOSE_LITTER: Self = Self(1 << 14);
 
     const ALL_BITS: u64 = 1 << 0
         | 1 << 1
@@ -29,7 +31,8 @@ impl WorldObjectPropertyFlags {
         | 1 << 10
         | 1 << 11
         | 1 << 12
-        | 1 << 13;
+        | 1 << 13
+        | 1 << 14;
 
     #[must_use]
     pub const fn raw_flag_bits(self) -> u64 {
