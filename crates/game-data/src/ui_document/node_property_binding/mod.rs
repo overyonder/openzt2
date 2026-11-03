@@ -304,7 +304,6 @@ pub enum UiIntegerPropertyBindingSource {
     FacilityPriceCents,
     FacilityCapacityUsed,
     FacilityCapacityTotal,
-    FacilityConditionPermille,
     FacilityWasteUnits,
     FacilityWasteCapacity,
     FacilityTrashLevel,

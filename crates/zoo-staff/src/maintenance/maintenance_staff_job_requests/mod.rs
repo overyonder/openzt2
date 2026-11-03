@@ -14,53 +14,8 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::maintenance_types::{
     AnimalHabitatWaste, FacilityContainedWaste, LooseLitterSweepingStaffJobKindMarker,
-    LooseLitterWaste, MaintainableObjectConditionPermille, MaintenanceRepairStaffJobKindMarker,
-    WasteContainerEmptyingStaffJobKindMarker,
+    LooseLitterWaste, WasteContainerEmptyingStaffJobKindMarker,
 };
-
-pub(super) fn request_staff_repairs_for_damaged_maintainable_objects(
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    active_world_definitions: Res<WorldDefinitions>,
-    maintainable_objects: Query<(
-        Entity,
-        &DefinitionId,
-        Ref<MaintainableObjectConditionPermille>,
-    )>,
-    mut staff_job_requests: MessageWriter<StaffJobRequest>,
-) {
-    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
-        return;
-    };
-    if world_definitions.has_pending_assets() {
-        return;
-    }
-    let policy_changed =
-        world_definition_assets.is_changed() || active_world_definitions.is_changed();
-    for (maintainable_object_entity, definition_id, maintainable_object_condition) in
-        &maintainable_objects
-    {
-        if !policy_changed && !maintainable_object_condition.is_changed() {
-            continue;
-        }
-        let Some(maintenance_definition) =
-            world_definitions.find_maintenance_by_object(definition_id.0)
-        else {
-            continue;
-        };
-        if maintainable_object_condition.0 < maintenance_definition.repair_below_permille {
-            // No authored staff task or request token exists for repair work;
-            // the token stays unset until lowering evidence supplies one.
-            staff_job_requests.write(StaffJobRequest {
-                kind: StaffJobKind::Repair,
-                target: maintainable_object_entity,
-                urgency: authored_staff_request_urgency(
-                    openzt2_game_data::world_definitions::staff_management::StaffRequestData::CONSTRUCTED_DEFAULT.priority,
-                ).expect("the default staff priority is positive"),
-                token: None,
-            });
-        }
-    }
-}
 
 /// The authored urgency of `token` on the target's own staff-request
 /// controller. Staff serve every request in the order of its authored
@@ -180,7 +135,6 @@ pub(super) fn requeue_cancelled_maintenance_staff_work_when_still_required(
     waste_containers: Query<&FacilityContainedWaste>,
     loose_litter_waste: Query<&LooseLitterWaste>,
     habitat_waste: Query<&AnimalHabitatWaste>,
-    conditions: Query<&MaintainableObjectConditionPermille>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     mut staff_job_requests: MessageWriter<StaffJobRequest>,
@@ -189,23 +143,6 @@ pub(super) fn requeue_cancelled_maintenance_staff_work_when_still_required(
         return;
     };
     for cancelled_staff_job in cancelled_staff_jobs.read() {
-        if cancelled_staff_job.kind == StaffJobKind::Repair {
-            let required = definitions
-                .get(cancelled_staff_job.target)
-                .ok()
-                .and_then(|definition| world_definitions.find_maintenance_by_object(definition.0))
-                .zip(conditions.get(cancelled_staff_job.target).ok())
-                .is_some_and(|(policy, condition)| condition.0 < policy.repair_below_permille);
-            if required {
-                staff_job_requests.write(StaffJobRequest {
-                    kind: StaffJobKind::Repair, target: cancelled_staff_job.target,
-                    urgency: authored_staff_request_urgency(
-                        openzt2_game_data::world_definitions::staff_management::StaffRequestData::CONSTRUCTED_DEFAULT.priority,
-                    ).expect("the default staff priority is positive"), token: None,
-                });
-            }
-            continue;
-        }
         let Some(token) = cancelled_staff_job.token else {
             continue;
         };
@@ -264,9 +201,6 @@ pub(super) fn classify_spawned_staff_jobs_by_maintenance_work_kind(
 ) {
     for (staff_job_entity, staff_job) in &spawned_staff_jobs {
         match staff_job.kind {
-            StaffJobKind::Repair => commands
-                .entity(staff_job_entity)
-                .insert(MaintenanceRepairStaffJobKindMarker),
             StaffJobKind::EmptyBin => commands
                 .entity(staff_job_entity)
                 .insert(WasteContainerEmptyingStaffJobKindMarker),

@@ -893,7 +893,6 @@ pub(super) fn bind_authored_staff_catalogue(
             StaffRoleKind::Maintenance,
             StaffJobCapabilityFlags::EMPTY_BIN
                 .with_additional_capabilities(StaffJobCapabilityFlags::SWEEP_LITTER)
-                .with_additional_capabilities(StaffJobCapabilityFlags::REPAIR)
                 .with_additional_capabilities(StaffJobCapabilityFlags::MAINTAIN_TANK),
         )
     } else if key == "educator" {
