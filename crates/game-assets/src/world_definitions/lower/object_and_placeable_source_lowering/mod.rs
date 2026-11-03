@@ -125,6 +125,7 @@ pub(super) fn bind_object(
         behavior_type_identifiers: crate::source_document::authored_behavior_type_identifiers::authored_behavior_type_identifiers(record),
         selected_ui_broadcasts: super::object_selected_ui_broadcast_source_lowering::lower_object_selected_ui_broadcasts(record),
         detach_actions: super::object_detach_action_source_lowering::lower_object_detach_actions(record),
+        water_filter: None,
         supports_show_tricks: !super::source_element_tree_search::authored_type_family_components(
             record,
             "ZTAITrickComponent",

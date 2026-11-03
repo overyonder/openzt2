@@ -64,6 +64,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             presentation_caustic_policies: Vec::new(),
             id: definition,
             kind: WorldObjectKind::Scenery,
+            water_filter: None,
             supports_show_tricks: false,
             behavior_type_identifiers: Vec::new(),
             view_data: Vec::new(),

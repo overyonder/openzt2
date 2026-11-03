@@ -16,8 +16,7 @@ mod tank_height_bounds;
 mod tank_normalized_fact_clamping;
 mod tank_presentation;
 mod tank_wall_enclosure_promotion;
-mod tank_water_quality_decay_calculation;
-mod tank_water_quality_decay_execution;
+mod water_filter_operation;
 
 use bevy::prelude::*;
 
@@ -39,17 +38,23 @@ use aquatic_home_invalidation::{
 };
 use aquatic_suitability_projection::project_changed_tank_facts_into_live_aquatic_animal_suitability;
 use show_tank_eligibility_projection::project_changed_tank_depth_into_show_eligibility;
-use tank_capacity_accounting::update_tank_capacity_from_changed_aquatic_animal_containment;
-use tank_fact_hydration::hydrate_tank_capacity_population_and_filtration_facts;
+use tank_capacity_accounting::{
+    recompute_tank_capacity_from_aquatic_homes, update_aquatic_homes_from_changed_containment,
+};
+use tank_fact_hydration::hydrate_tank_capacity_and_population_facts;
 use tank_geometry_projection::project_changed_habitat_and_terrain_geometry_into_tanks;
 use tank_normalized_fact_clamping::clamp_changed_normalized_tank_facts_to_permille_range;
-use tank_water_quality_decay_execution::decay_tank_water_quality_after_advanced_zoo_days;
+use water_filter_operation::{
+    add_animal_dirt_to_home_tank_water, clean_tank_water_through_filters,
+    hydrate_water_filters_from_object_definitions,
+};
 
 pub struct AquaticPlugin;
 
 impl Plugin for AquaticPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<CommitTankGeometryEdit>()
+        app.add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
+            .add_message::<CommitTankGeometryEdit>()
             .add_message::<TankGeometryEditAcknowledged>()
             .add_message::<TankGeometryEditPrepared>()
             .add_message::<TankGeometryEditPreparationRejected>()
@@ -86,10 +91,13 @@ impl Plugin for AquaticPlugin {
                 FixedUpdate,
                 (
                     tank_fact_hydration::initialize_legacy_tank_water_limits,
-                    hydrate_tank_capacity_population_and_filtration_facts,
-                    update_tank_capacity_from_changed_aquatic_animal_containment,
+                    hydrate_tank_capacity_and_population_facts,
+                    update_aquatic_homes_from_changed_containment,
+                    recompute_tank_capacity_from_aquatic_homes,
                     clamp_changed_normalized_tank_facts_to_permille_range,
-                    decay_tank_water_quality_after_advanced_zoo_days,
+                    hydrate_water_filters_from_object_definitions,
+                    add_animal_dirt_to_home_tank_water,
+                    clean_tank_water_through_filters,
                     project_changed_tank_facts_into_live_aquatic_animal_suitability,
                     project_changed_tank_depth_into_show_eligibility,
                 )
@@ -122,9 +130,6 @@ impl Plugin for AquaticPlugin {
 
 #[cfg(test)]
 mod aquatic_suitability_and_placement_calculation_tests;
-
-#[cfg(test)]
-mod tank_water_quality_decay_calculation_tests;
 
 #[cfg(test)]
 mod tank_geometry_edit_tests;

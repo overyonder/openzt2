@@ -1,3 +1,4 @@
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
@@ -7,64 +8,63 @@ use super::aquatic_simulation_types::{
     AquaticAnimal, AquaticHome, Tank, TankCapacity, TankPopulation,
 };
 
-pub(super) fn update_tank_capacity_from_changed_aquatic_animal_containment(
+pub(super) fn update_aquatic_homes_from_changed_containment(
     mut containment_changes: MessageReader<ContainmentChanged>,
-    mut aquatic_animals: Query<(&AquaticAnimal, Option<&mut AquaticHome>), With<Animal>>,
-    mut tanks: Query<(&mut TankCapacity, &mut TankPopulation), With<Tank>>,
+    mut aquatic_animals: Query<Option<&mut AquaticHome>, (With<AquaticAnimal>, With<Animal>)>,
+    tanks: Query<(), With<Tank>>,
     mut commands: Commands,
 ) {
     for containment_change in containment_changes.read() {
-        let Ok((aquatic_animal, current_home)) =
-            aquatic_animals.get_mut(containment_change.affected_entity)
-        else {
+        let Ok(current_home) = aquatic_animals.get_mut(containment_change.affected_entity) else {
             continue;
         };
-        let previous_tank = current_home.as_ref().map(|home| home.0);
         let requested_tank = containment_change
             .is_contained
             .then_some(containment_change.habitat_entity)
-            .flatten();
-        if previous_tank == requested_tank {
-            continue;
-        }
-        if let Some(previous_tank) = previous_tank {
-            if let Ok((mut capacity, mut population)) = tanks.get_mut(previous_tank) {
-                let removed_space = if population.0 <= 1 {
-                    aquatic_animal.initial_space
-                } else {
-                    aquatic_animal.additional_space
-                };
-                population.0 = population.0.saturating_sub(1);
-                capacity.used = (capacity.used - removed_space.max(0.0)).max(0.0);
-                capacity.required = capacity.used;
+            .flatten()
+            .filter(|tank| tanks.contains(*tank));
+        match (requested_tank, current_home) {
+            (Some(tank), Some(mut home)) => home.0 = tank,
+            (Some(tank), None) => {
+                commands
+                    .entity(containment_change.affected_entity)
+                    .insert(AquaticHome(tank));
             }
+            (None, Some(_)) => {
+                commands
+                    .entity(containment_change.affected_entity)
+                    .remove::<AquaticHome>();
+            }
+            (None, None) => {}
         }
-        let Some(requested_tank) = requested_tank else {
-            commands
-                .entity(containment_change.affected_entity)
-                .remove::<AquaticHome>();
-            continue;
-        };
-        let Ok((mut capacity, mut population)) = tanks.get_mut(requested_tank) else {
-            commands
-                .entity(containment_change.affected_entity)
-                .remove::<AquaticHome>();
-            continue;
-        };
-        let added_space = if population.0 == 0 {
+    }
+}
+
+/// Homes own the count, so an animal leaving by any route, such as release or
+/// a tank's demotion, can't leave its space behind.
+pub(super) fn recompute_tank_capacity_from_aquatic_homes(
+    aquatic_animals: Query<(Entity, &AquaticAnimal, &AquaticHome), With<Animal>>,
+    mut tanks: Query<(Entity, &mut TankCapacity, &mut TankPopulation), With<Tank>>,
+) {
+    let mut residents: Vec<_> = aquatic_animals.iter().collect();
+    residents.sort_unstable_by_key(|(entity, ..)| *entity);
+    let mut occupancy = HashMap::<Entity, (u32, f32)>::default();
+    for (_, aquatic_animal, home) in residents {
+        let (population, used) = occupancy.entry(home.0).or_default();
+        let space = if *population == 0 {
             aquatic_animal.initial_space
         } else {
             aquatic_animal.additional_space
         };
-        population.0 = population.0.saturating_add(1);
-        capacity.used += added_space.max(0.0);
-        capacity.required = capacity.used;
-        if let Some(mut current_home) = current_home {
-            current_home.0 = requested_tank;
-        } else {
-            commands
-                .entity(containment_change.affected_entity)
-                .insert(AquaticHome(requested_tank));
-        }
+        *population += 1;
+        *used += space.max(0.0);
+    }
+    for (tank, mut capacity, mut population) in &mut tanks {
+        let (occupants, used) = occupancy.get(&tank).copied().unwrap_or_default();
+        population.set_if_neq(TankPopulation(occupants));
+        capacity.set_if_neq(TankCapacity {
+            used,
+            required: used,
+        });
     }
 }

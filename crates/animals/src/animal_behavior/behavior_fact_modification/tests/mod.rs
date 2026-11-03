@@ -46,6 +46,7 @@ fn install_action_app() -> (App, Entity, Entity) {
             absolute_day: 0,
             tick_in_day: 0,
         })
+        .add_message::<openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt>()
         .add_message::<AdjustHunger>()
         .add_message::<AdjustBathroom>()
         .add_message::<AdjustThirst>()

@@ -26,6 +26,7 @@ pub(crate) fn apply_completed_tank_maintenance_work(
     jobs: Query<(Entity, &StaffJob, &JobClaim, &StaffJobBehaviorTask), With<JobProgress>>,
     sites: Query<&TankCleaningRequestSite>,
     mut tank_water_quality: Query<&mut WaterQuality>,
+    mut filters: Query<&mut openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
     mut completed_jobs: MessageWriter<StaffJobCompleted>,
     mut cancellations: ParamSet<(
         MessageReader<CancelStaffJobRequest>,
@@ -38,6 +39,17 @@ pub(crate) fn apply_completed_tank_maintenance_work(
     for (job_entity, job, claim, behavior_task) in &jobs {
         // Cancellation is settled in Cleanup, after this terminal effect in Act.
         if job.kind != StaffJobKind::MaintainTank || cancelled_jobs.contains(&job_entity) {
+            continue;
+        }
+        // The worker's own task empties a filter (`f_FilterDirtyLevel="-100"`).
+        if let Ok(mut filter) = filters.get_mut(job.target) {
+            filter.dirt_percent = 0.0;
+            completed_jobs.write(StaffJobCompleted {
+                staff: claim.staff,
+                job: job_entity,
+                kind: job.kind,
+                target: job.target,
+            });
             continue;
         }
         let Some(operation) = documents

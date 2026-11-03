@@ -37,6 +37,7 @@ pub(super) struct StaffCandidateEligibilityFacts {
     pub(super) target_in_show: Option<bool>,
     pub(super) target_food_level_q16: Option<i32>,
     pub(super) target_trash_level_q16: Option<i32>,
+    pub(super) target_filter_dirtiness_q16: Option<i32>,
     /// The job targets a manager request site, which a task authored to
     /// target its own subject (`self`) moves to, as keeper tank cleaning does.
     pub(super) target_is_request_site: bool,
@@ -205,6 +206,12 @@ fn evaluate_candidate_eligibility_fact(
             BehaviorCandidateRole::Target,
             BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::TrashLevel),
         ) => candidate_facts.target_trash_level_q16,
+        (
+            BehaviorCandidateRole::Target,
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::FilterDirtiness,
+            ),
+        ) => candidate_facts.target_filter_dirtiness_q16,
         _ => return None,
     }?;
     let BehaviorEligibilityFactValue::Q16(expected) = fact.expected_value else {
