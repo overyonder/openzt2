@@ -563,9 +563,11 @@ pub(super) fn execute_staff_tank_gate_journeys(
             };
             let Some(parent) = joints.iter().find_map(|(binding, parent)| {
                 (binding.animation_playback_controller_entity == controller_entity
-                    && binding.joint_asset_key == root.joint_asset_key)
-                    .then(|| transforms.get(parent.parent()).ok())
-                    .flatten()
+                    && binding
+                        .joint_asset_key
+                        .eq_ignore_ascii_case(&root.joint_asset_key))
+                .then(|| transforms.get(parent.parent()).ok())
+                .flatten()
             }) else {
                 journey.failed = true;
                 break;
