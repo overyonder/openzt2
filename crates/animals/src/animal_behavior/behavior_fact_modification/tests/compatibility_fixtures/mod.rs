@@ -70,6 +70,7 @@ pub(super) fn install_definitions(
                 ground_navigation_clip_asset_key: None,
                 medium_ground_navigation_clip_asset_key: None,
                 fast_ground_navigation_clip_asset_key: None,
+                named_ground_navigation_clip_asset_keys: Vec::new(),
                 surface_water_locomotion: None,
                 sex: Sex::Female,
                 life_stage: LifeStage::Adult,

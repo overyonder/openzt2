@@ -202,6 +202,8 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     >,
     topology: Res<TopologyIndex>,
     headroom: ObjectPlacementHeadroomQueries,
+    surfaces: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
+    sites: openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -214,6 +216,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         &ObjectPlacementPrefabSource,
         Option<&PlacedObjectRelocationSource>,
         Option<&WorldMember>,
+        Option<&openzt2_zoo_state::habitat::habitat_types::HabitatMember>,
     )>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
@@ -224,7 +227,9 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         .map_or((None, None), |(selection, availability)| {
             (Some(selection.mode), availability.map(Ref::into_inner))
         });
-    for (entity, preview, mut permission, prefab_source, relocation, member) in &mut previews {
+    for (entity, preview, mut permission, prefab_source, relocation, member, habitat) in
+        &mut previews
+    {
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -352,6 +357,28 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                 blocking_ray,
             });
         }
+        // An object that must face water stands wherever it does, its own
+        // site rules deciding the rest; natural water admits it as well.
+        let faces_water = surfaces
+            .water_surface_height(
+                preview.transform.translation.xz()
+                    + preview.transform.forward().xz().normalize_or_zero()
+                        * openzt2_game_data::world_definitions::object_placement::ADJACENT_WATER_REACH_METRES,
+            )
+            .is_some();
+        let surface_valid = (!definition.adjacent_to_water || faces_water)
+            && member.is_none_or(|member| {
+                let mut policy = definition.surface_policy;
+                policy.water |= definition.adjacent_to_water;
+                sites
+                    .validate(
+                        policy,
+                        member.root,
+                        habitat.map(|habitat| habitat.habitat_entity),
+                        preview.transform.translation,
+                    )
+                    .is_ok()
+            });
         let next = ObjectPlacementPreviewPermissionFacts {
             unlocked: object_placeable_definition_is_unlocked(
                 catalogue,
@@ -366,6 +393,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                 || cash.0 .0 >= definition.price_cents,
             topology_valid,
             headroom_valid,
+            surface_valid,
             prefab_ready: prefabs.get(&prefab_source.0).is_some_and(|prefab| {
                 first_missing_prefab_collider_model_asset_id(prefab, &models).is_none()
             }),

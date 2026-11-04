@@ -12,7 +12,6 @@ mod outgoing_animal_adoption_execution;
 use openzt2_zoo_state::animal_lifecycle::animal_birth_and_release_contracts;
 mod animal_birth_execution;
 pub mod animal_entity_spawning;
-mod animal_habitat_placement_validation;
 mod animal_lineage_reference_cleanup;
 pub mod animal_presentation_attachment;
 mod animal_release_execution;

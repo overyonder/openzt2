@@ -75,6 +75,10 @@ pub struct PlaceableDefinition {
     /// entity type collide with ground path tiles under their footprint.
     #[serde(default)]
     pub ground_paths_block_placement: bool,
+    /// Authored `adjacentToWater`: the object must face water within
+    /// `ADJACENT_WATER_REACH_METRES` of its origin.
+    #[serde(default)]
+    pub adjacent_to_water: bool,
     /// The arrow `zt.exe` draws at an entrance while the object is placed,
     /// for a `ZTPlacementData dockArrowStyle` of `special`; `standard` and
     /// `none` draw none.
@@ -87,6 +91,9 @@ pub struct DockArrow {
     /// `dockArrowSize`.
     pub size_metres: f32,
 }
+
+/// How far in front of an `adjacentToWater` object its water is looked for.
+pub const ADJACENT_WATER_REACH_METRES: f32 = 3.0;
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub struct FootprintCell {

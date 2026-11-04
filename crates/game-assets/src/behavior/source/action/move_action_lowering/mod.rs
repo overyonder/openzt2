@@ -1,7 +1,7 @@
 use std::io;
 
 use openzt2_game_data::behavior::{
-    action::movement::{BehaviorMoveAction, BehaviorMoveLocomotionSpeed, BehaviorPursuitAction},
+    action::movement::{BehaviorMoveAction, BehaviorPursuitAction},
     action::wander::BehaviorGroundLocomotionSpeed,
     action_record::BehaviorAction,
 };
@@ -53,7 +53,7 @@ mod tests {
         // numeric speed because live speed is owned by NavAgent.
         assert_eq!(
             move_action.locomotion_speed,
-            Some(BehaviorMoveLocomotionSpeed::Fast)
+            Some(BehaviorGroundLocomotionSpeed::Fast)
         );
         assert_eq!(move_action.move_radius_cm, 200);
     }
@@ -108,30 +108,8 @@ pub(super) fn lower_move_action_source_node(
     validate_supported_bfbehmove_default_policies(move_action_source_node)?;
     let locomotion_speed =
         read_optional_trimmed_string_attribute(move_action_source_node, "locoSpeed")
-            .map(
-                |authored_speed| match authored_speed.to_ascii_lowercase().as_str() {
-                    "variable" => Ok(None),
-                    // The winning Keeper `fast` action resolves through the
-                    // native empty/default locomotion fallback when the active
-                    // land table has no `fast` child. The live executor therefore
-                    // uses the actor's canonical NavAgent speed, without a
-                    // guessed multiplier.
-                    "fast" => Ok(Some(BehaviorMoveLocomotionSpeed::Fast)),
-                    // Like `fast`, these pick the gait row (on land or in
-                    // water, such as a polar bear's medium `Swim`) while the
-                    // route keeps the actor's NavAgent speed.
-                    "slow" => Ok(Some(BehaviorMoveLocomotionSpeed::Slow)),
-                    "medium" => Ok(Some(BehaviorMoveLocomotionSpeed::Medium)),
-                    "sonar" => Err(invalid_behavior_source_data(
-                        "BFBehMove locoSpeed has no live NavAgent mode mapping",
-                    )),
-                    _ => Err(invalid_behavior_source_data(
-                        "BFBehMove has unsupported locoSpeed",
-                    )),
-                },
-            )
-            .transpose()?
-            .flatten();
+            .filter(|speed| !speed.eq_ignore_ascii_case("variable"))
+            .map(|speed| BehaviorGroundLocomotionSpeed::from_authored(&speed));
     Ok(Some(BehaviorAction::Move(BehaviorMoveAction {
         locomotion_speed,
         target_node_name: read_optional_trimmed_string_attribute(
@@ -172,17 +150,10 @@ pub(super) fn lower_pursuit_action_source_node(
         ));
     }
     // An absent speed means `slow`.
-    let locomotion_speed =
-        match read_optional_trimmed_string_attribute(source_node, "locoSpeed").as_deref() {
-            None | Some("slow") => BehaviorGroundLocomotionSpeed::Slow,
-            Some("medium") => BehaviorGroundLocomotionSpeed::Medium,
-            Some("fast") => BehaviorGroundLocomotionSpeed::Fast,
-            Some(_) => {
-                return Err(invalid_behavior_source_data(
-                    "BFBehPursuit locoSpeed has no live locomotion mapping",
-                ));
-            }
-        };
+    let locomotion_speed = read_optional_trimmed_string_attribute(source_node, "locoSpeed")
+        .map_or(BehaviorGroundLocomotionSpeed::Slow, |speed| {
+            BehaviorGroundLocomotionSpeed::from_authored(&speed)
+        });
     let poll_interval_seconds =
         read_optional_float_attribute(source_node, "pollFreq")?.unwrap_or(1.0);
     if !poll_interval_seconds.is_finite() {

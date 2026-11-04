@@ -24,6 +24,7 @@ pub struct ObjectPlacementPreviewPermissionFacts {
     pub affordable: bool,
     pub topology_valid: bool,
     pub headroom_valid: bool,
+    pub surface_valid: bool,
     pub prefab_ready: bool,
 }
 

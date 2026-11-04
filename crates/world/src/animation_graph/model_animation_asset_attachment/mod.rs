@@ -96,6 +96,20 @@ pub(crate) fn attach_loaded_animation_set_assets_to_animation_subject_entities(
             .clone()
             .and_then(|key| {
                 resolve_animation_clip_or_graph_node_asset_key(initial_animation_set_asset, &key)
+                    .or_else(|| {
+                        initial_animation_set_asset
+                            .animation_clips
+                            .iter()
+                            .map(|clip| &clip.animation_clip_asset_key)
+                            .chain(
+                                initial_animation_set_asset
+                                    .animation_clip_source_references
+                                    .iter()
+                                    .map(|reference| &reference.animation_clip_asset_key),
+                            )
+                            .find(|clip| clip.eq_ignore_ascii_case(&key))
+                            .cloned()
+                    })
             })
             .map_or_else(
                 || select_initial_animation_clip_asset_key(initial_animation_set_asset),

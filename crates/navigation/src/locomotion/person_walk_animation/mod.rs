@@ -154,19 +154,22 @@ pub(super) fn project_person_motion_to_walk_animation(
             .and_then(|(index, definitions)| index.get(definitions));
         let role_definition =
             role.and_then(|role| catalogue.and_then(|catalogue| catalogue.find_staff(role.0)));
-        let speed = task.and_then(|task| assets.documents.as_ref()?.get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task)))
+        let speed = task
+            .and_then(|task| {
+                assets
+                    .documents
+                    .as_ref()?
+                    .get(&task.document)
+                    .and_then(|document| find_current_behavior_task_action(document, task))
+            })
             .and_then(|action| match action {
                 BehaviorAction::Wander(action) => Some(action.locomotion_speed),
                 BehaviorAction::Evasion(action) => Some(action.locomotion_speed),
                 BehaviorAction::Pursuit(action) => Some(action.locomotion_speed),
-                BehaviorAction::Move(action) => Some(match action.locomotion_speed {
-                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Medium) => BehaviorGroundLocomotionSpeed::Medium,
-                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Fast) => BehaviorGroundLocomotionSpeed::Fast,
-                    _ => BehaviorGroundLocomotionSpeed::Slow,
-                }),
+                BehaviorAction::Move(action) => Some(action.locomotion_speed.unwrap_or_default()),
                 _ => None,
-            }).unwrap_or_default();
+            })
+            .unwrap_or_default();
         let binder = if mode == Some(&LocomotionMode::Swim) {
             if layer == Some(&SwimLayer::Submerged) {
                 "underwater"
@@ -188,17 +191,11 @@ pub(super) fn project_person_motion_to_walk_animation(
                         .find(|table| table.binder == AssetId::from_key("ground"))
                 })
         });
-        let speed_key = AssetId::from_key(if !moving {
-            "stop"
+        let speed_key = if moving {
+            speed.row_key()
         } else {
-            match speed {
-                BehaviorGroundLocomotionSpeed::Slow => "slow",
-                BehaviorGroundLocomotionSpeed::Medium => "medium",
-                BehaviorGroundLocomotionSpeed::Fast => "fast",
-                BehaviorGroundLocomotionSpeed::Glide => "glide",
-                BehaviorGroundLocomotionSpeed::Clean => "clean",
-            }
-        });
+            BehaviorGroundLocomotionSpeed::Stop.row_key()
+        };
         let row = table.and_then(|table| {
             table
                 .rows

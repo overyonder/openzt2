@@ -59,6 +59,8 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
         fast_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
             species, "fast",
         ),
+        named_ground_navigation_clip_asset_keys:
+            super::locomotion::lower_animal_named_ground_navigation_clips(species),
         sex: Sex::Any,
         life_stage: LifeStage::Adult,
         model,
@@ -188,6 +190,8 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         fast_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
             candidate, "fast",
         ),
+        named_ground_navigation_clip_asset_keys:
+            super::locomotion::lower_animal_named_ground_navigation_clips(candidate),
         sex,
         life_stage,
         model,

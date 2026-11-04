@@ -15,53 +15,23 @@ use super::{
     source_value_reading::{read_boolean_attribute_or_false, read_optional_float_attribute},
 };
 
+fn lower_locomotion_speed(node: &OrderedSourceDocumentNode) -> BehaviorGroundLocomotionSpeed {
+    node.attribute_named_any(&["locoSpeed"])
+        .map_or(BehaviorGroundLocomotionSpeed::Slow, |speed| {
+            BehaviorGroundLocomotionSpeed::from_authored(speed)
+        })
+}
+
 pub(super) fn lower_wander_action(
     node: &OrderedSourceDocumentNode,
 ) -> io::Result<Option<BehaviorAction>> {
     if node.name != "BFBehWander" {
         return Ok(None);
     }
-    if node.attributes.iter().any(|attribute| {
-        !matches!(
-            attribute.name(),
-            "playTime"
-                | "minPlayTime"
-                | "maxPlayTime"
-                | "locoSpeed"
-                | "avoidWater"
-                | "avoidLand"
-                | "minDepth"
-                | "maxDepth"
-                | "avoidEntityRadius"
-        )
-    }) || node
+    let locomotion_speed = lower_locomotion_speed(node);
+    let type_list = node
         .element_children()
-        .any(|child| child.name != "avoidEntityTypes")
-    {
-        return Err(invalid_behavior_source_data(
-            "BFBehWander has unmapped policy",
-        ));
-    }
-    let locomotion_speed = match node.attribute("locoSpeed") {
-        None | Some("slow") => BehaviorGroundLocomotionSpeed::Slow,
-        Some("medium") => BehaviorGroundLocomotionSpeed::Medium,
-        Some("fast") => BehaviorGroundLocomotionSpeed::Fast,
-        Some("clean") => BehaviorGroundLocomotionSpeed::Clean,
-        Some("glide") => BehaviorGroundLocomotionSpeed::Glide,
-        _ => {
-            return Err(invalid_behavior_source_data(
-                "BFBehWander has unsupported locomotion speed",
-            ))
-        }
-    };
-    let fixed = read_optional_float_attribute(node, "playTime")?;
-    let mut type_lists = node.element_children();
-    let type_list = type_lists.next();
-    if type_lists.next().is_some() {
-        return Err(invalid_behavior_source_data(
-            "duplicate wander avoidance types",
-        ));
-    }
+        .find(|child| child.name == "avoidEntityTypes");
     // The native radius defaults to zero, which avoids nothing; listed types
     // without a radius are therefore inert, and a radius without types too.
     let radius_m = read_optional_float_attribute(node, "avoidEntityRadius")?.unwrap_or(0.0);
@@ -100,22 +70,16 @@ pub(super) fn lower_wander_action(
         }
         Ok(depth)
     };
-    let (minimum_depth_m, maximum_depth_m) = (depth("minDepth")?, depth("maxDepth")?);
-    if maximum_depth_m < minimum_depth_m {
-        return Err(invalid_behavior_source_data(
-            "BFBehWander maxDepth is below minDepth",
-        ));
-    }
-    let minimum = read_optional_float_attribute(node, "minPlayTime")?;
-    let maximum = read_optional_float_attribute(node, "maxPlayTime")?;
-    let (minimum, maximum) = match (fixed, minimum, maximum) {
-        (Some(duration), None, None) => (duration, duration),
-        (None, Some(minimum), Some(maximum)) => (minimum, maximum),
-        _ => {
-            return Err(invalid_behavior_source_data(
-                "BFBehWander requires one duration policy",
-            ))
-        }
+    let minimum_depth_m = depth("minDepth")?;
+    let maximum_depth_m = depth("maxDepth")?.max(minimum_depth_m);
+    // A nonzero `playTime` wins; otherwise the time is drawn from the range, and
+    // all three default to zero, which ends once the actor reaches its speed.
+    let (minimum, maximum) = match read_optional_float_attribute(node, "playTime")? {
+        Some(fixed) if fixed != 0.0 => (fixed, fixed),
+        _ => (
+            read_optional_float_attribute(node, "minPlayTime")?.unwrap_or(0.0),
+            read_optional_float_attribute(node, "maxPlayTime")?.unwrap_or(0.0),
+        ),
     };
     let duration = |seconds: f32| {
         Duration::try_from_secs_f64(f64::from(seconds)).map_err(|_| {
@@ -184,16 +148,7 @@ pub(super) fn lower_evasion_action(
             "unsupported evasion avoidance type policy",
         ));
     }
-    let locomotion_speed = match node.attribute("locoSpeed") {
-        None | Some("slow") => BehaviorGroundLocomotionSpeed::Slow,
-        Some("medium") => BehaviorGroundLocomotionSpeed::Medium,
-        Some("fast") => BehaviorGroundLocomotionSpeed::Fast,
-        _ => {
-            return Err(invalid_behavior_source_data(
-                "BFBehEvasion has unsupported locomotion speed",
-            ))
-        }
-    };
+    let locomotion_speed = lower_locomotion_speed(node);
     let radius_m = read_optional_float_attribute(node, "evasionRadius")?
         .unwrap_or(DEFAULT_EVASION_RADIUS_METRES);
     if !radius_m.is_finite() || radius_m < 0.0 {

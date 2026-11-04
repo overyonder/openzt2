@@ -22,6 +22,9 @@ use super::{
 
 #[derive(Message, Debug, Clone)]
 pub(super) enum ScenarioUiCommand {
+    Tool(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool),
+    /// Selects the placement, fence or path tool for an authored type.
+    PlacementObject(AssetId),
     Node {
         path: Vec<String>,
         operation: NodeOperation,
@@ -42,12 +45,13 @@ pub(super) enum ScenarioUiCommand {
     },
     NextScenario(Option<String>),
     Overhead,
-    SelectionMode,
     Select(Option<Entity>),
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum NodeOperation {
+    /// Returns to the selection tool once earlier node calls have settled.
+    SelectionMode,
     Visible(bool),
     Selected(bool),
     Press,
@@ -153,6 +157,21 @@ pub(super) fn install_manager_commands<'scope, 'env: 'scope>(
     Ok(())
 }
 
+/// A message nothing handles does nothing, as for any other receiver, so the
+/// rest of the script still runs. Each distinct one is reported once.
+pub(super) fn warn_unhandled_scenario_message(message: &str) {
+    thread_local! {
+        static REPORTED: RefCell<std::collections::HashSet<String>> = RefCell::default();
+    }
+    if REPORTED.with_borrow_mut(|reported| reported.insert(message.to_owned())) {
+        bevy::log::warn!(message, "scenario script sent a message nothing handles");
+    }
+}
+
+fn authored_type_id(name: &str) -> AssetId {
+    AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name))
+}
+
 pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
@@ -168,11 +187,24 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
             Ok(())
         }
         "mode_selection" => {
-            commands.borrow_mut().push(ScenarioUiCommand::SelectionMode);
+            commands.borrow_mut().push(ScenarioUiCommand::Node {
+                path: Vec::new(),
+                operation: NodeOperation::SelectionMode,
+            });
             Ok(())
         }
-        "mode_placement" => Ok(()),
-        _ => Err(mlua::Error::runtime("unsupported scenario placement mode")),
+        // The tool follows from the object or fence named next.
+        "mode_placement" | "mode_fence_placement" => Ok(()),
+        "mode_biome" => {
+            commands.borrow_mut().push(ScenarioUiCommand::Tool(
+                openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Biome,
+            ));
+            Ok(())
+        }
+        unhandled => {
+            warn_unhandled_scenario_message(&format!("ZT_SETMODE {unhandled}"));
+            Ok(())
+        }
     };
     mode.set(
         "ZT_SETMODE",
@@ -206,7 +238,39 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                             return Err(mlua::Error::runtime("placement type must be a string"));
                         };
                         placement.borrow_mut().0 = (value.to_str()?.as_ref() != "-")
-                            .then(|| AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&value.to_string_lossy())));
+                            .then(|| authored_type_id(&value.to_string_lossy()));
+                        if let Some(definition) = placement.borrow().0 {
+                            commands
+                                .borrow_mut()
+                                .push(ScenarioUiCommand::PlacementObject(definition));
+                        }
+                    }
+                    "ZT_SETPLACEMENTFENCE" => {
+                        let mlua::Value::String(value) = value else {
+                            return Err(mlua::Error::runtime("fence type must be a string"));
+                        };
+                        commands.borrow_mut().push(ScenarioUiCommand::PlacementObject(
+                            authored_type_id(&value.to_string_lossy()),
+                        ));
+                    }
+                    // A gate is its own fence type, so the type named next decides.
+                    "ZT_SETFENCEPLACEMENTMODE" => {}
+                    "ZT_IS_TYPE_ON_CURSOR" => {
+                        let mlua::Value::String(value) = value else {
+                            return Err(mlua::Error::runtime("cursor type must be a string"));
+                        };
+                        let wanted = authored_type_id(&value.to_string_lossy());
+                        return Ok(mlua::Value::Boolean(queries.construction_tool.is_some_and(
+                            |tool| {
+                                matches!(
+                                    tool,
+                                    openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Place(definition)
+                                    | openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Fence(definition)
+                                    | openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Path(definition)
+                                    if definition == wanted
+                                )
+                            },
+                        )));
                     }
                     "ZT_OBJECT_ROTATE" => {
                         let mlua::Value::String(value) = value else {
@@ -230,6 +294,10 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                         let spawn = queries
                             .spawn_animal
                             .ok_or_else(|| mlua::Error::runtime("animal placement unavailable"))?;
+                        // Spawning directly leaves the player's tool alone.
+                        commands.borrow_mut().retain(|command| {
+                            !matches!(command, ScenarioUiCommand::PlacementObject(definition) if *definition == kind)
+                        });
                         let request = spawn(
                             kind,
                             [point.get("x")?, point.get("y")?, point.get("z")?],
@@ -238,13 +306,9 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                         )?;
                         entities.borrow_mut().spawns.push(request);
                     }
-                    _ => {
-                        return Err(mlua::Error::runtime(format!(
-                            "unmapped scenario mode message {message}"
-                        )))
-                    }
+                    unhandled => warn_unhandled_scenario_message(unhandled),
                 }
-                Ok(())
+                Ok(mlua::Value::Nil)
             },
         )?,
     )?;

@@ -517,9 +517,8 @@ fn create_entity_component<'scope, 'env: 'scope>(
         "BFG_SEND_SIGNAL_SHARED",
         scope.create_function(move |_, (_, signal): (Table, String)| {
             if signal != "ZT_CRATE_ENTITY" {
-                return Err(mlua::Error::runtime(format!(
-                    "unsupported entity signal {signal}"
-                )));
+                super::scenario_lua_ui::warn_unhandled_scenario_message(&signal);
+                return Ok(());
             }
             let mut pending = pending.borrow_mut();
             if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {

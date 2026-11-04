@@ -179,6 +179,7 @@ pub(super) fn evaluate_requested_object_placement_previews(
                 affordable: permission.affordable,
                 topology_valid: permission.topology_valid,
                 headroom_valid: permission.headroom_valid,
+                surface_valid: permission.surface_valid,
             },
         );
         // A relocation keeps the purchase it was paid with; its preview costs nothing.

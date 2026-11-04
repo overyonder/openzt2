@@ -116,6 +116,7 @@ fn document() -> WorldDefinitionDocument {
             constraints: Default::default(),
             max_slope_permille: 250,
             minimum_headroom_metres: 2.0,
+            adjacent_to_water: false,
             apply_height_modifier: true,
             price_cents: 1250,
             unlock: id,

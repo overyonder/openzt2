@@ -187,42 +187,38 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 BehaviorAction::Wander(wander) => Some(wander.locomotion_speed),
                 BehaviorAction::Pursuit(pursuit) => Some(pursuit.locomotion_speed),
                 BehaviorAction::Evasion(evasion) => Some(evasion.locomotion_speed),
-                BehaviorAction::Move(movement) => Some(match movement.locomotion_speed {
-                    None | Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Slow) => BehaviorGroundLocomotionSpeed::Slow,
-                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Medium) => BehaviorGroundLocomotionSpeed::Medium,
-                    Some(openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed::Fast) => BehaviorGroundLocomotionSpeed::Fast,
-                }),
+                BehaviorAction::Move(movement) => {
+                    Some(movement.locomotion_speed.unwrap_or_default())
+                }
                 _ => None,
-            });
+            })
+            .filter(|speed| *speed != BehaviorGroundLocomotionSpeed::Stop);
         let water = variant
             .surface_water_locomotion
             .as_ref()
             .filter(|_| mode == Some(&LocomotionMode::Swim));
-        let water_row = water.map(|water| match movement.unwrap_or_default() {
-            BehaviorGroundLocomotionSpeed::Slow
-            | BehaviorGroundLocomotionSpeed::Glide
-            | BehaviorGroundLocomotionSpeed::Clean => &water.slow,
-            BehaviorGroundLocomotionSpeed::Medium => &water.medium,
-            BehaviorGroundLocomotionSpeed::Fast => &water.fast,
-        });
+        let water_row = water.map(|water| water.row(movement.unwrap_or_default()));
         let locomotion_key = if let Some(row) = water_row {
             Some(&row.node)
         } else if mode == Some(&LocomotionMode::Swim) {
             None
         } else {
+            // A table without the row moves at its `slow` clip.
+            let slow = variant.ground_navigation_clip_asset_key.as_ref();
             match movement.unwrap_or_default() {
-                BehaviorGroundLocomotionSpeed::Slow
-                | BehaviorGroundLocomotionSpeed::Glide
-                | BehaviorGroundLocomotionSpeed::Clean => {
-                    variant.ground_navigation_clip_asset_key.as_ref()
-                }
                 BehaviorGroundLocomotionSpeed::Medium => {
                     variant.medium_ground_navigation_clip_asset_key.as_ref()
                 }
                 BehaviorGroundLocomotionSpeed::Fast => {
                     variant.fast_ground_navigation_clip_asset_key.as_ref()
                 }
+                speed => variant
+                    .named_ground_navigation_clip_asset_keys
+                    .iter()
+                    .find(|(key, _)| *key == speed.row_key())
+                    .map(|(_, clip)| clip),
             }
+            .or(slow)
         };
         if movement.is_some() && locomotion_key.is_none() {
             openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal_entity, &mut commands);

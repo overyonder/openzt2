@@ -11,6 +11,38 @@ pub enum BehaviorGroundLocomotionSpeed {
     /// The locomotion row authored as `clean`, such as a keeper swimming
     /// along a tank while cleaning it.
     Clean,
+    Stop,
+    /// Any other row of the actor's locomotion table, such as `sprint` or `fly`.
+    Named(crate::AssetId),
+}
+
+impl BehaviorGroundLocomotionSpeed {
+    #[must_use]
+    pub fn from_authored(name: &str) -> Self {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "slow" => Self::Slow,
+            "medium" => Self::Medium,
+            "fast" => Self::Fast,
+            "glide" => Self::Glide,
+            "clean" => Self::Clean,
+            "stop" => Self::Stop,
+            other => Self::Named(crate::AssetId::from_key(other)),
+        }
+    }
+
+    /// The key of this speed's row in a locomotion table.
+    #[must_use]
+    pub fn row_key(self) -> crate::AssetId {
+        crate::AssetId::from_key(match self {
+            Self::Slow => "slow",
+            Self::Medium => "medium",
+            Self::Fast => "fast",
+            Self::Glide => "glide",
+            Self::Clean => "clean",
+            Self::Stop => "stop",
+            Self::Named(key) => return key,
+        })
+    }
 }
 
 /// Timed wandering with the actor's authored ground locomotion.

@@ -2,6 +2,7 @@ use openzt2_game_data::{
     species::{LifeStage, Sex, Species, SpeciesVariant},
     AssetId,
 };
+use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 
 use openzt2_game_assets::species::species_asset_types::SpeciesView;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -13,7 +14,6 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
-    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnFailure, SpawnAnimalRequest},
     animal_spawn_resolution_types::ResolvedAnimalSpawnComponents,
     types::{
@@ -28,7 +28,7 @@ pub(super) fn resolve_animal_spawn_request_to_identifiers_and_components(
     species_index: SpeciesView<'_>,
     definitions: WorldDefinitionsView<'_>,
     allocator: &mut PersistentIdAllocator,
-    placement_sites: &AnimalPlacementSiteQueries<'_, '_>,
+    placement_sites: &PlacementSiteQueries<'_, '_>,
 ) -> Result<(PersistentId, WorldMember, ResolvedAnimalSpawnComponents), AnimalSpawnFailure> {
     let species = species_index
         .find(request.species)

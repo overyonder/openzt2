@@ -73,6 +73,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) ui_canvas_scale: bevy::prelude::Vec2,
     pub(super) real_seconds: f64,
     pub(super) overhead_camera: Option<&'a openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig>,
+    pub(super) construction_tool: Option<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
 }
 
 /// Fence runs, which scripts count by type like any other entity.

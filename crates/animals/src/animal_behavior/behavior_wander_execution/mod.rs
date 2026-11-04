@@ -7,7 +7,10 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_game_data::behavior::{
+    action::wander::{BehaviorGroundLocomotionSpeed, BehaviorWanderAction},
+    action_record::BehaviorAction,
+};
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
 use openzt2_world_state::{
@@ -184,9 +187,30 @@ fn execute_current_wander_actions(
             advance_behavior_task_to_next_action(task, clock.tick);
             continue;
         }
-        let (Some(agent), Some(graph), Some(definitions)) =
-            (agent, graph.as_deref(), definitions.get(&definition_assets))
-        else {
+        let Some(definitions) = definitions.get(&definition_assets) else {
+            continue;
+        };
+        // A wander that cannot move, at the `stop` speed or without a navigation
+        // agent, still ends when its time runs out.
+        let (Some(agent), Some(graph)) = (
+            agent.filter(|_| action.locomotion_speed != BehaviorGroundLocomotionSpeed::Stop),
+            graph.as_deref(),
+        ) else {
+            if wandering.is_none() {
+                let until_tick = draw_wander_until_tick(
+                    action,
+                    &mut random,
+                    definitions.timing().fixed_hz,
+                    clock.tick,
+                );
+                commands.entity(actor).insert(BehaviorWanderNavigation {
+                    execution_id: task.execution_id,
+                    origin: task.create_return_frame_after_action(task.action),
+                    depth: task.stack.len(),
+                    until_tick,
+                    request_id: None,
+                });
+            }
             continue;
         };
         // Staff walk without a locomotion mode of their own.
@@ -346,24 +370,37 @@ fn execute_current_wander_actions(
         if let Some(wandering) = wandering.as_deref_mut() {
             wandering.request_id = Some(request_id);
         } else {
-            let duration = action.minimum_duration
-                + (action.maximum_duration - action.minimum_duration)
-                    .mul_f64(f64::from(random.0.unit_f32()));
-            let ticks = duration
-                .as_nanos()
-                .saturating_mul(u128::from(definitions.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
+            let until_tick = draw_wander_until_tick(
+                action,
+                &mut random,
+                definitions.timing().fixed_hz,
+                clock.tick,
+            );
             commands.entity(actor).insert(BehaviorWanderNavigation {
                 execution_id: task.execution_id,
                 origin: task.create_return_frame_after_action(task.action),
                 depth: task.stack.len(),
-                until_tick: clock
-                    .tick
-                    .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+                until_tick,
                 request_id: Some(request_id),
             });
         }
     }
+}
+
+fn draw_wander_until_tick(
+    action: &BehaviorWanderAction,
+    random: &mut BehaviorRandomStream,
+    fixed_hz: u16,
+    now: u64,
+) -> u64 {
+    let duration = action.minimum_duration
+        + (action.maximum_duration - action.minimum_duration)
+            .mul_f64(f64::from(random.0.unit_f32()));
+    let ticks = duration
+        .as_nanos()
+        .saturating_mul(u128::from(fixed_hz))
+        .div_ceil(1_000_000_000);
+    now.saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]

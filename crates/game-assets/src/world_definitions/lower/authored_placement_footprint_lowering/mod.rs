@@ -231,7 +231,16 @@ pub(super) fn bind_authored_placeable(
             .transpose()?
             .unwrap_or(false);
     let (minimum_headroom_metres, apply_height_modifier) = authored_headroom_policy(record)?;
+    let adjacent_to_water =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "adjacentToWater")
+            .is_some_and(|value| {
+                matches!(
+                    canonicalize_source_document_record_key(value).as_str(),
+                    "true" | "yes" | "1"
+                )
+            });
     output.document.placeables.push(PlaceableDefinition {
+        adjacent_to_water,
         id: id(record.key),
         surface_policy: authored_surface_policy(record)?,
         weight: placement_data

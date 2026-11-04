@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::species::{LifeStage, SpeciesFlags};
+use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
@@ -22,7 +23,6 @@ use super::{
     adoption_offer_inventory_types::AnimalAdoptionOfferInventory,
     animal_adoption_contracts::{AdoptAnimal, AnimalAdopted, PendingAdoption},
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
-    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
     animal_spawn_resolution::resolve_species_and_variant_to_animal_spawn_components,
     types::Parents,
@@ -47,7 +47,7 @@ pub(super) fn request_animal_adoption_payment_or_unpaid_spawn(
     worlds: Query<Entity, With<WorldRoot>>,
     adoption_policy: Query<&AnimalAdoptionAvailabilityPolicy, With<WorldRoot>>,
     adoption_offer_inventories: Query<&AnimalAdoptionOfferInventory, With<WorldRoot>>,
-    placement_sites: AnimalPlacementSiteQueries,
+    placement_sites: PlacementSiteQueries,
     mut transaction_requests: MessageWriter<TransactionRequest>,
     mut spawn_requests: MessageWriter<SpawnAnimalRequest>,
 ) {

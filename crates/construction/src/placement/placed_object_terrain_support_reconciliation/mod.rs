@@ -149,6 +149,7 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
                     affordable: true,
                     topology_valid: true,
                     headroom_valid: true,
+                    surface_valid: true,
                 },
             );
             let outcome = match validity {

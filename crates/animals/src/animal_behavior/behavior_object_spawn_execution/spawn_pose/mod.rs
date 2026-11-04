@@ -140,6 +140,7 @@ impl SpawnPoseValidation<'_, '_> {
                     openzt2_game_data::world_definitions::object_placement::PlacementConstraints::REQUIRE_PATH
                         .with_additional_flags(openzt2_game_data::world_definitions::object_placement::PlacementConstraints::REQUIRE_WALL)),
                 headroom_valid: placeable.minimum_headroom_metres <= 0.0,
+                surface_valid: true,
             }), PlacementValidity::Valid { .. })
     }
 }

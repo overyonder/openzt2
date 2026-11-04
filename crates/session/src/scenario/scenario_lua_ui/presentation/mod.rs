@@ -221,11 +221,32 @@ pub(super) fn apply_scenario_ui_commands(
                     .filter(|name| !name.is_empty())
                     .map(AssetId::from_key)
             }
-            ScenarioUiCommand::SelectionMode => {
-                commands.queue(|world: &mut World| {
-                    world.write_message(openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction);
-                    if let Some(mut tool) = world.get_resource_mut::<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>() {
-                        *tool = openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Inspect;
+            ScenarioUiCommand::Tool(tool) => {
+                let tool = *tool;
+                commands.queue(move |world: &mut World| {
+                    world.write_message(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool(tool));
+                });
+            }
+            ScenarioUiCommand::PlacementObject(definition) => {
+                let definition = *definition;
+                commands.queue(move |world: &mut World| {
+                    let definitions = world.resource::<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>();
+                    let assets = world.resource::<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>();
+                    let tool = definitions.get(assets).and_then(|catalogue| {
+                        if catalogue.find_fence(definition).is_some() {
+                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Fence(definition))
+                        } else if catalogue.find_path(definition).is_some() {
+                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Path(definition))
+                        } else if catalogue.find_placeable(definition).is_some() {
+                            Some(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Place(definition))
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(tool) = tool {
+                        world.write_message(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::SelectConstructionTool(tool));
+                    } else {
+                        warn!(?definition, "scenario selected a placement type absent from definitions");
                     }
                 });
             }
@@ -287,13 +308,24 @@ pub(super) fn apply_scenario_ui_commands(
                         let key = restricted.name.to_ascii_lowercase();
                         pending.enabled.get(&key).map(|enabled| (key, *enabled))
                     });
+                // A buy-panel row enabled by name is no node of the document, so the
+                // list that holds it stays usable inside a disabled group.
+                let holds_enabled_row = pending.enabled.iter().any(|(name, enabled)| {
+                    *enabled
+                        && !document
+                            .nodes
+                            .iter()
+                            .any(|node| node.name.eq_ignore_ascii_case(name))
+                }) && std::iter::once(node)
+                    .chain(ancestors(document, index))
+                    .any(|node| node.name.eq_ignore_ascii_case("buy area"));
                 if let Some((restricted, enabled)) = restriction {
                     if changed_enabled.contains(&restricted) || added() {
                         presentation.write(RequestUiPresentationAction {
                             document_root: root_entity,
                             action: UiPresentationAction::SetTargetNodeInteractionEnabled {
                                 target_node: node.id,
-                                enabled,
+                                enabled: enabled || holds_enabled_row,
                             },
                         });
                     }
@@ -301,7 +333,9 @@ pub(super) fn apply_scenario_ui_commands(
                 // Pointer input stops at a disabled ancestor, and a child enabled
                 // on its own has to work inside its disabled group. Its siblings
                 // stay disabled through their own flags.
-                if pending.enabled.get(&key) == Some(&true) && changed_enabled.contains(&key) {
+                if holds_enabled_row
+                    || pending.enabled.get(&key) == Some(&true) && changed_enabled.contains(&key)
+                {
                     for ancestor in ancestors(document, index) {
                         presentation.write(RequestUiPresentationAction {
                             document_root: root_entity,
@@ -344,6 +378,16 @@ pub(super) fn apply_scenario_ui_commands(
         let Some((path, operation)) = pending.nodes.pop_front() else {
             break;
         };
+        if matches!(operation, NodeOperation::SelectionMode) {
+            use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::{
+                ConstructionTool, SelectConstructionTool,
+            };
+            commands.queue(|world: &mut World| {
+                world.write_message(openzt2_zoo_state::construction::construction_interaction_types::CancelConstruction);
+                world.write_message(SelectConstructionTool(ConstructionTool::Inspect));
+            });
+            continue;
+        }
         if matches!(operation, NodeOperation::MeasureText) {
             continue;
         }
@@ -420,7 +464,7 @@ pub(super) fn apply_scenario_ui_commands(
                 UiPresentationAction::SetTargetNodeTextLiteral { target_node, text }
             }
             // Goal rows are already projected from the canonical objective collection.
-            NodeOperation::RefreshGoals => continue,
+            NodeOperation::RefreshGoals | NodeOperation::SelectionMode => continue,
             NodeOperation::MeasureText => continue,
             NodeOperation::Modal(modal) => {
                 UiPresentationAction::SetTargetNodeModal { target_node, modal }

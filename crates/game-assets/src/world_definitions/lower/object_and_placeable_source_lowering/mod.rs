@@ -362,6 +362,7 @@ pub(super) fn bind_placeable(
             0,
         )?) * 0.01,
         apply_height_modifier: true,
+        adjacent_to_water: false,
         price_cents: money_cents_i64_or(record, &["priceCents"], &["cost"])?,
         unlock: asset(record, &["unlock", "unlockRequirement"]),
         entrances,

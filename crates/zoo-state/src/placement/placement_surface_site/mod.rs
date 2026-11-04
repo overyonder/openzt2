@@ -1,22 +1,22 @@
+use crate::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
+use crate::construction::construction_interaction_types::PlacementFailure;
+use crate::habitat::habitat_types::{Habitat, HabitatRegion};
+use crate::shows::show_stage_types::ShowStage;
+use crate::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex};
+use crate::terrain::terrain_world_sampling::{
+    sample_terrain, sample_terrain_triangle_height_bounds, terrain_chunk_at,
+};
+use crate::topology::topology_graph_types::TopologyGrid;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::world_definitions::object_placement::PlacementSurfacePolicy;
 use openzt2_world_state::world_spawn::world_membership_types::{WorldMember, WorldRoot};
-use openzt2_zoo_state::aquatic::aquatic_simulation_types::{Tank, TankGeometry};
-use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
-use openzt2_zoo_state::habitat::habitat_types::{Habitat, HabitatRegion};
-use openzt2_zoo_state::shows::show_stage_types::ShowStage;
-use openzt2_zoo_state::terrain::terrain_chunk_types::{
-    EditedTerrainSamples, TerrainChunk, TerrainIndex,
-};
-use openzt2_zoo_state::terrain::terrain_world_sampling::{
-    sample_terrain, sample_terrain_triangle_height_bounds, terrain_chunk_at,
-};
-use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 #[derive(SystemParam)]
-pub(super) struct AnimalPlacementSiteQueries<'w, 's> {
+/// Whether an actor or object may stand at a site, by its authored land, water,
+/// tank and show tank placement rules and its depth limits.
+pub struct PlacementSiteQueries<'w, 's> {
     terrain_index: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
@@ -27,8 +27,8 @@ pub(super) struct AnimalPlacementSiteQueries<'w, 's> {
     grid: Res<'w, TopologyGrid>,
 }
 
-impl AnimalPlacementSiteQueries<'_, '_> {
-    pub(super) fn validate(
+impl PlacementSiteQueries<'_, '_> {
+    pub fn validate(
         &self,
         policy: PlacementSurfacePolicy,
         world: Entity,

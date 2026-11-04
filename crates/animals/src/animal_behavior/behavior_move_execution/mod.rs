@@ -335,7 +335,7 @@ fn move_start_has_navigation_agent(navigation_agent: Option<&NavAgent>) -> bool 
 
 fn staff_mode_has_authored_locomotion(
     locomotion_speed: Option<
-        openzt2_game_data::behavior::action::movement::BehaviorMoveLocomotionSpeed,
+        openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed,
     >,
     staff_role: Option<&StaffRole>,
     definitions: Option<WorldDefinitionsView<'_>>,

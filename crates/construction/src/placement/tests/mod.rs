@@ -25,6 +25,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
         constraints,
         max_slope_permille: 250,
         minimum_headroom_metres: 2.0,
+        adjacent_to_water: false,
         apply_height_modifier: true,
         price_cents: 1_250,
         unlock: AssetId([9; 16]),

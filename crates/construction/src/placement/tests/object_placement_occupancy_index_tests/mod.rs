@@ -36,6 +36,7 @@ fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
             affordable: true,
             topology_valid: true,
             headroom_valid: true,
+            surface_valid: true,
             prefab_ready: true,
         },
     ));

@@ -60,6 +60,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     ui_documents: Res<'w, Assets<openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset>>,
     windows: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
     real_time: Res<'w, Time<Real>>,
+    construction_tool: Option<Res<'w, openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>>,
     overhead_cameras: Query<
         'w,
         's,
@@ -129,6 +130,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             }),
             real_seconds: self.real_time.elapsed_secs_f64(),
             overhead_camera: self.overhead_cameras.iter().next(),
+            construction_tool: self.construction_tool.as_deref().copied(),
         }
     }
 

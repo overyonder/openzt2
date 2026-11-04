@@ -25,6 +25,7 @@ pub struct ObjectPlacementAuthoritativeFacts {
     pub affordable: bool,
     pub topology_valid: bool,
     pub headroom_valid: bool,
+    pub surface_valid: bool,
 }
 
 pub fn object_placement_cell_is_blocked_by_existing_object(
@@ -140,6 +141,9 @@ pub fn validate_object_placement_over_terrain_samples(
     }
     if !facts.headroom_valid && definition.minimum_headroom_metres > 0.0 {
         return PlacementValidity::Invalid(PlacementFailure::NoHeadroom);
+    }
+    if !facts.surface_valid {
+        return PlacementValidity::Invalid(PlacementFailure::InvalidHabitat);
     }
     if constraints.contains_all(PlacementConstraints::REQUIRE_HABITAT) && facts.habitat.is_none() {
         return PlacementValidity::Invalid(PlacementFailure::InvalidHabitat);
