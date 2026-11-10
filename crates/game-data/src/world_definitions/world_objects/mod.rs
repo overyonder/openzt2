@@ -340,6 +340,9 @@ pub struct WorldObjectDefinition {
     pub preview_offset_cm: [i16; 3],
     pub preview_scale: f32,
     pub terrain_fitted: bool,
+    /// Authored ground-fit `heightOffset` above the sampled terrain.
+    #[serde(default)]
+    pub terrain_fit_height_offset_m: f32,
     #[serde(default)]
     pub real_physics_water_impact: Option<WorldObjectRealPhysicsWaterImpactDefinition>,
     pub price_cents: i64,

@@ -318,14 +318,24 @@ pub(super) fn bind_authored_placement_object(
         actor_scene_paths,
         entity_scene_paths,
     )?;
-    let terrain_fitted = record.descendant_named("BFGroundFitComponent").is_some()
-        || record
-            .descendant_named("BFMultiGroundFitComponent")
-            .is_some()
-        || prop_record.as_ref().is_some_and(|prop| {
-            prop.descendant_named("BFGroundFitComponent").is_some()
-                || prop.descendant_named("BFMultiGroundFitComponent").is_some()
+    let ground_fit = record
+        .descendant_named("BFGroundFitComponent")
+        .or_else(|| record.descendant_named("BFMultiGroundFitComponent"))
+        .or_else(|| {
+            prop_record.as_ref().and_then(|prop| {
+                prop.descendant_named("BFGroundFitComponent")
+                    .or_else(|| prop.descendant_named("BFMultiGroundFitComponent"))
+            })
         });
+    let terrain_fitted = ground_fit.is_some();
+    let terrain_fit_height_offset_m = ground_fit
+        .and_then(|fit| fit.attribute_named_any(&["heightOffset"]))
+        .map(|value| {
+            parse_blue_fang_source_numeric_lexeme(value)
+                .ok_or_else(|| BindError::record(record, "invalid heightOffset"))
+        })
+        .transpose()?
+        .unwrap_or(0.0);
     let real_physics_water_impact = record
         .descendant_named("BFRealPhysicsComponent")
         .or_else(|| {
@@ -499,6 +509,7 @@ pub(super) fn bind_authored_placement_object(
         preview_offset_cm,
         preview_scale,
         terrain_fitted,
+        terrain_fit_height_offset_m,
         real_physics_water_impact,
         price_cents,
         upkeep_cents_per_month,
@@ -541,3 +552,6 @@ fn authored_placement_binder_is_abstract(record: &RecordView<'_, '_>) -> bool {
             )
         })
 }
+
+#[cfg(test)]
+mod tests;
