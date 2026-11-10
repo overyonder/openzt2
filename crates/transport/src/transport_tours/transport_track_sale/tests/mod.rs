@@ -107,6 +107,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
             real_physics_water_impact: None,
             price_cents: 10_000,
             upkeep_cents_per_month: 0,

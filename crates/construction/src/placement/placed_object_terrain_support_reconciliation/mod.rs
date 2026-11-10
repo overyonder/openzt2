@@ -119,7 +119,10 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
                 });
                 continue;
             }
-            let support_height = support_sum / support_count;
+            let support_height = support_sum / support_count
+                + catalogue
+                    .find_object(placeable.definition)
+                    .map_or(0.0, |object| object.terrain_fit_height_offset_m);
             if !support_height.is_finite() {
                 evaluated.write(PlacedObjectTerrainSupportEvaluated {
                     entity,

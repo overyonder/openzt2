@@ -145,6 +145,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
         preview_offset_cm: [0; 3],
         preview_scale: 1.0,
         terrain_fitted: false,
+        terrain_fit_height_offset_m: 0.0,
         real_physics_water_impact: None,
         price_cents: 1_250,
         upkeep_cents_per_month: 0,

@@ -105,7 +105,8 @@ pub(super) fn create_active_object_placement_preview(
     let relocation = relocating
         .iter()
         .find(|(_, placeable, _, _)| placeable.definition == definition);
-    let mut transform = Transform::from_translation(cursor.world);
+    let mut transform =
+        Transform::from_translation(cursor.world + Vec3::Y * object.terrain_fit_height_offset_m);
     if let Some((_, _, source, rotation)) = relocation {
         transform.rotation = source.rotation;
         if let Some(rotation) = rotation {
@@ -351,7 +352,11 @@ pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
         }
         let mut requested_transform = preview.transform;
         if cursor.is_changed() || preview.is_added() {
-            requested_transform.translation = cursor.world;
+            requested_transform.translation = cursor.world
+                + Vec3::Y
+                    * catalogue
+                        .find_object(preview.definition)
+                        .map_or(0.0, |object| object.terrain_fit_height_offset_m);
         }
         let snapped = if let Some(definition) =
             resolve_object_placeable_definition(catalogue, preview.definition)

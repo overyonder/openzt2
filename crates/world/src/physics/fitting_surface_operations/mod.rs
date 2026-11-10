@@ -83,7 +83,7 @@ pub(super) fn fit_eligible_static_objects_to_changed_terrain_surfaces(
             continue;
         };
         if fitting_surface_accepts_sampled_normal(&surface, point.normal) {
-            transform.translation.y = point.height_m;
+            transform.translation.y = point.height_m + surface.height_offset_m;
         }
     }
 }

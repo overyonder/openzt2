@@ -166,6 +166,7 @@ pub(super) fn bind_object(
             .and_then(parse_blue_fang_source_numeric_lexeme)
             .unwrap_or(1.0),
         terrain_fitted: bool_or(record, &["terrainFitted", "groundFit"], false)?,
+        terrain_fit_height_offset_m: 0.0,
         real_physics_water_impact,
         price_cents: money_cents_i64_or(record, &["priceCents"], &["purchasePrice", "cost"])?,
         upkeep_cents_per_month: number_or(

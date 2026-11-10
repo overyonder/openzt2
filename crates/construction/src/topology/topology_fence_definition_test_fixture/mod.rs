@@ -51,6 +51,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
             real_physics_water_impact: None,
             price_cents: 100,
             upkeep_cents_per_month: 0,
