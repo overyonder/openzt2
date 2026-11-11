@@ -153,3 +153,46 @@ fn slope_conversion_is_stable_at_boundaries() {
         u32::MAX
     );
 }
+
+#[test]
+fn terrain_water_follows_the_authored_water_placement_and_maximum_depth() {
+    use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
+    use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
+    use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_over_terrain_samples;
+    use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
+    use openzt2_zoo_state::terrain::terrain_world_sampling_types::TerrainPoint;
+
+    // Shipped evergreen oak: waterPlacement="false"; cypress: waterPlacement
+    // "true" with maximumDepth="1".
+    let oak = create_object_placeable_definition_test_fixture(PlacementConstraints::EMPTY);
+    let mut cypress = oak.clone();
+    cypress.surface_policy.water = true;
+    cypress.surface_policy.maximum_depth_metres = 1.0;
+    let validity = |definition, water_depth: Option<f32>| {
+        validate_object_placement_over_terrain_samples(
+            definition,
+            std::iter::once(IVec2::ZERO),
+            |_| {
+                Some(TerrainPoint {
+                    height_m: 0.0,
+                    water_height_m: water_depth,
+                    surface: 0,
+                    normal: Vec3::Y,
+                })
+            },
+            |_| false,
+            ObjectPlacementAuthoritativeFacts {
+                habitat: None,
+                unlocked: true,
+                affordable: true,
+                topology_valid: true,
+                headroom_valid: true,
+            },
+        )
+    };
+    let refused = PlacementValidity::Invalid(PlacementFailure::InvalidHabitat);
+    assert_ne!(validity(&oak, None), refused);
+    assert_eq!(validity(&oak, Some(0.5)), refused);
+    assert_ne!(validity(&cypress, Some(0.5)), refused);
+    assert_eq!(validity(&cypress, Some(3.0)), refused);
+}
