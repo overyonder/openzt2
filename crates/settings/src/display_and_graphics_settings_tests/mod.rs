@@ -155,3 +155,36 @@ fn the_startup_default_waits_for_the_profile_display_settings() {
         Some(bevy::window::WindowMode::BorderlessFullscreen(_))
     ));
 }
+
+#[test]
+fn video_setting_field_shows_the_drafted_resolution() {
+    use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
+    use openzt2_interface_state::settings::options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft;
+    use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
+
+    let mut app = App::new();
+    app.init_resource::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>()
+        .add_systems(
+            Update,
+            super::display_resolution_ui_presentation::project_drafted_display_resolution_into_authored_text,
+        );
+    let field = app
+        .world_mut()
+        .spawn((
+            Text::new(""),
+            UiTextBinding(UiTextPropertyBindingSource::DraftDisplayResolution),
+        ))
+        .id();
+    {
+        let mut draft = app
+            .world_mut()
+            .resource_mut::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>();
+        draft.display.width = 1920;
+        draft.display.height = 1080;
+    }
+    app.update();
+    assert_eq!(
+        app.world().get::<Text>(field).map(|text| text.0.as_str()),
+        Some("1920 x 1080")
+    );
+}
