@@ -24,6 +24,33 @@ pub(super) struct PathSupportHydrated;
 #[derive(Component)]
 pub(super) struct PathSupportPrefab(pub(super) AssetId);
 
+/// A base that authors `fitLowest` reaches the lowest ground within its
+/// `fitRadius`; with no radius every sample is the centre.
+// ponytail: centre plus eight ring samples, not every vertex in the radius.
+const FIT_LOWEST_SAMPLE_DIRECTIONS: [Vec2; 9] = [
+    Vec2::ZERO,
+    Vec2::X,
+    Vec2::NEG_X,
+    Vec2::Y,
+    Vec2::NEG_Y,
+    Vec2::new(
+        std::f32::consts::FRAC_1_SQRT_2,
+        std::f32::consts::FRAC_1_SQRT_2,
+    ),
+    Vec2::new(
+        std::f32::consts::FRAC_1_SQRT_2,
+        -std::f32::consts::FRAC_1_SQRT_2,
+    ),
+    Vec2::new(
+        -std::f32::consts::FRAC_1_SQRT_2,
+        std::f32::consts::FRAC_1_SQRT_2,
+    ),
+    Vec2::new(
+        -std::f32::consts::FRAC_1_SQRT_2,
+        -std::f32::consts::FRAC_1_SQRT_2,
+    ),
+];
+
 /// Adds a support beneath each elevated tile, anchored at the terrain height.
 pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
     mut commands: Commands,
@@ -85,20 +112,13 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
         }
         let path_world_position = topology_grid.cell_translation(path.cell);
         let path_world_horizontal_position = path_world_position.xz();
-        let Some(ground_height_metres) =
-            terrain_chunk_at(&terrain_index, path_world_horizontal_position)
-                .and_then(|chunk_entity| terrain_chunks.get(chunk_entity).ok())
-                .and_then(|(chunk, edited_samples)| {
-                    let terrain_asset = terrain_assets.get(&chunk.asset)?;
-                    sample_terrain(
-                        chunk,
-                        terrain_asset,
-                        edited_samples,
-                        path_world_horizontal_position,
-                    )
-                    .map(|sample| sample.height_m)
-                })
-        else {
+        let Some(ground_height_metres) = lowest_ground_height_within_fit_radius(
+            path_world_horizontal_position,
+            column.map_or(0.0, |column| column.fit_lowest_radius_metres),
+            &terrain_index,
+            &terrain_chunks,
+            &terrain_assets,
+        ) else {
             continue;
         };
         let support_entity = commands
@@ -134,6 +154,31 @@ pub(super) fn hydrate_authored_path_supports_at_sampled_terrain_height(
         }
         commands.entity(path_entity).insert(PathSupportHydrated);
     }
+}
+
+fn lowest_ground_height_within_fit_radius(
+    centre: Vec2,
+    fit_radius_metres: f32,
+    terrain_index: &TerrainIndex,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain_assets: &Assets<TerrainAsset>,
+) -> Option<f32> {
+    FIT_LOWEST_SAMPLE_DIRECTIONS
+        .iter()
+        .filter_map(|direction| {
+            let world = centre + *direction * fit_radius_metres;
+            let (chunk, edited_samples) = terrain_chunks
+                .get(terrain_chunk_at(terrain_index, world)?)
+                .ok()?;
+            sample_terrain(
+                chunk,
+                terrain_assets.get(&chunk.asset)?,
+                edited_samples,
+                world,
+            )
+            .map(|sample| sample.height_m)
+        })
+        .reduce(f32::min)
 }
 
 pub(super) fn remove_path_supports_after_their_owning_path_is_removed(
