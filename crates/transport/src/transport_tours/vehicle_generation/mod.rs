@@ -107,6 +107,12 @@ pub(super) fn record_transport_vehicle_purchase_results(
     }
 }
 
+/// Holds the vehicle prefab load while a paid purchase waits for it.
+#[derive(Component)]
+pub(super) struct PendingTransportVehiclePrefab(
+    #[allow(dead_code, reason = "keeps the load alive")] Handle<ScenePrefabAsset>,
+);
+
 /// Materializes paid vehicle purchases through the ordinary scene-prefab path.
 ///
 /// A purchase remains live while its prefab or models load, so payment cannot
@@ -139,6 +145,11 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
             continue;
         };
         let Some(prefab) = prefabs.get(&prefab_handle) else {
+            // The definition set hands out a fresh load handle; keep it on the
+            // purchase, or the load is dropped before the prefab arrives.
+            commands
+                .entity(purchase_operation)
+                .insert(PendingTransportVehiclePrefab(prefab_handle));
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
