@@ -13,12 +13,14 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_health::types::FreezeAnimal;
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::animal_lifecycle::types::{Mate, Pregnancy};
 use openzt2_zoo_state::animal_welfare::types::AdjustBathroom;
 use openzt2_zoo_state::animal_welfare::types::AdjustExercise;
 use openzt2_zoo_state::animal_welfare::types::AdjustHealthNeed;
 use openzt2_zoo_state::animal_welfare::types::AdjustHunger;
 use openzt2_zoo_state::animal_welfare::types::AdjustHygiene;
 use openzt2_zoo_state::animal_welfare::types::AdjustPrivacy;
+use openzt2_zoo_state::animal_welfare::types::AdjustReproduction;
 use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
@@ -41,6 +43,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 #[derive(SystemParam)]
 pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     bathroom: MessageWriter<'w, AdjustBathroom>,
+    reproduction: MessageWriter<'w, AdjustReproduction>,
     hunger: MessageWriter<'w, AdjustHunger>,
     thirst: MessageWriter<'w, AdjustThirst>,
     rest: MessageWriter<'w, AdjustRest>,
@@ -74,6 +77,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut food_containers: Query<(Entity, &mut FoodContainer)>,
     mut drink_containers: Query<(Entity, &mut DrinkContainer)>,
     animals: Query<(), With<Animal>>,
+    pregnancies: Query<(), With<Pregnancy>>,
+    mates: Query<&Mate>,
     caffeine_modes: Query<&CaffeineMode>,
     jobs: Query<&StaffJob>,
     compatibility: consumable_compatibility::AnimalConsumableCompatibility,
@@ -182,6 +187,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         },
                     );
                 }
+                BehaviorFact::Reproduction => {
+                    modification_messages
+                        .reproduction
+                        .write(AdjustReproduction {
+                            animal,
+                            delta_q16: wellness_delta_q16,
+                        });
+                }
                 BehaviorFact::Hunger => {
                     modification_messages.hunger.write(AdjustHunger {
                         animal,
@@ -235,6 +248,18 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         animal,
                         delta_q16: wellness_delta_q16,
                     });
+                }
+                BehaviorFact::Pregnancy => {
+                    if modification.modification_operation
+                        == BehaviorFactModificationOperation::Clear
+                        || value_q16 == 0
+                    {
+                        commands.entity(animal).remove::<Pregnancy>();
+                    } else if !pregnancies.contains(animal) {
+                        commands.entity(animal).insert(Pregnancy {
+                            father: mates.get(animal).ok().map(|mate| mate.0),
+                        });
+                    }
                 }
                 BehaviorFact::Frozen => {
                     if modification.modification_operation
@@ -344,6 +369,8 @@ fn behavior_fact_modification_has_runtime_owner(
         modification.modified_fact,
         BehaviorFact::Hunger
             | BehaviorFact::Bathroom
+            | BehaviorFact::Reproduction
+            | BehaviorFact::Pregnancy
             | BehaviorFact::Thirst
             | BehaviorFact::Rest
             | BehaviorFact::Privacy

@@ -3,10 +3,9 @@ use bevy::prelude::*;
 use super::types::{Animal, Parents, Pregnancy};
 
 pub(super) fn clear_lineage_references_to_deleted_animal_entities(
-    mut commands: Commands,
     mut removed_animals: RemovedComponents<Animal>,
     mut children: Query<&mut Parents>,
-    pregnancies: Query<(Entity, &Pregnancy)>,
+    mut pregnancies: Query<&mut Pregnancy>,
 ) {
     for removed_animal_entity in removed_animals.read() {
         for mut parents in &mut children {
@@ -17,9 +16,9 @@ pub(super) fn clear_lineage_references_to_deleted_animal_entities(
                 parents.father = None;
             }
         }
-        for (mother_entity, pregnancy) in &pregnancies {
-            if pregnancy.father == removed_animal_entity {
-                commands.entity(mother_entity).remove::<Pregnancy>();
+        for mut pregnancy in &mut pregnancies {
+            if pregnancy.father == Some(removed_animal_entity) {
+                pregnancy.father = None;
             }
         }
     }

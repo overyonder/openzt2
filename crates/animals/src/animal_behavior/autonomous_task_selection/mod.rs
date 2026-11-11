@@ -1,5 +1,6 @@
 //! Starts authored animal tasks through the existing behavior executor.
 
+mod animal_targets;
 pub(super) mod candidate_facts;
 mod scoring;
 pub(super) mod task_cooldowns;
@@ -78,6 +79,7 @@ pub(super) fn select_idle_animal_tasks(
     shores: super::natural_water_targets::NaturalWaterTargets,
     mut shore_candidates: Local<Vec<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
+    animal_targets: animal_targets::AnimalTargetSources,
     mut commands: Commands,
 ) {
     world_objects.note_object_changes();
@@ -191,9 +193,116 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 continue;
             }
-            // Token payloads and concrete object participants need their own
-            // target producer; this path only considers an object-free target.
-            if !task.objects.is_empty() {
+            // Other animals, by type or as a held token's payload (`fromToken`),
+            // each with every held token the task's `Objects` names.
+            // ponytail: scans every animal per task, O(tasks x animals) per idle
+            // animal; index animals by type if large zoos make selection slow.
+            let from_token =
+                task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
+            let held_tokens = || {
+                tokens.iter().filter(|(_, token, recipient)| {
+                    recipient.parent() == animal
+                        && clock.tick >= token.available_at
+                        && clock.tick < token.expires_at
+                })
+            };
+            let animal_candidates = animal_targets
+                .animals
+                .iter()
+                .filter(|(target, target_facts)| {
+                    *target != animal && target_facts.world.root == facts.world.root
+                })
+                .flat_map(|(target, _)| {
+                    let objects: Vec<Option<(Entity, &BehaviorSelfToken)>> = if task
+                        .objects
+                        .is_empty()
+                    {
+                        vec![None]
+                    } else {
+                        held_tokens()
+                            .filter(|(_, token, _)| !from_token || token.payload == Some(target))
+                            .map(|(entity, token, _)| Some((entity, token)))
+                            .collect()
+                    };
+                    objects.into_iter().map(move |object| (target, object))
+                })
+                .collect::<Vec<_>>();
+            for (target, object) in animal_candidates {
+                let Ok((_, target_facts)) = animal_targets.animals.get(target) else {
+                    continue;
+                };
+                let Some((_, target_variant)) =
+                    species.find_variant_with_species(target_facts.variant_id())
+                else {
+                    continue;
+                };
+                let target_types = &target_variant.behavior_subject_type_identifiers;
+                if from_token && object.is_none() {
+                    continue;
+                }
+                if !candidate_requirements_are_satisfied(
+                    &task.candidate_eligibility_requirements,
+                    |role, required| match role {
+                        BehaviorCandidateRole::Subject => {
+                            facts.matches_type(required, authored_types)
+                        }
+                        BehaviorCandidateRole::Target => {
+                            if from_token {
+                                required == AssetId::from_key("fromtoken")
+                            } else {
+                                target_facts.matches_type(required, target_types)
+                            }
+                        }
+                        BehaviorCandidateRole::Object => {
+                            object.is_some_and(|(_, token)| token.name == required)
+                        }
+                    },
+                    |role, fact| match role {
+                        BehaviorCandidateRole::Subject => facts.satisfies(fact),
+                        BehaviorCandidateRole::Target => animal_targets.target_satisfies(
+                            animal,
+                            &facts,
+                            target,
+                            &target_facts,
+                            fact,
+                        ),
+                        BehaviorCandidateRole::Object => false,
+                    },
+                ) {
+                    continue;
+                }
+                let distance = facts
+                    .transform
+                    .translation()
+                    .distance(target_facts.transform.translation());
+                let Some(score) = scoring::score_animal_task(
+                    task,
+                    &facts,
+                    policy.outside_range_need_value,
+                    distance,
+                    &mut random,
+                ) else {
+                    continue;
+                };
+                considered_candidates += 1;
+                debug!(?animal, task = %task.name, ?target, score, distance,
+                    "animal task animal target scored");
+                ranking.consider(
+                    (
+                        document,
+                        declaration,
+                        task,
+                        target,
+                        object.map(|(entity, _)| entity),
+                        None,
+                    ),
+                    task.priority.unwrap_or_default(),
+                    score,
+                    |upper| random.range_u32(upper),
+                );
+            }
+            // World-object targets carry no token participants.
+            if !task.objects.is_empty() || from_token {
                 continue;
             }
             if task.targets.len() == 1

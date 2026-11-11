@@ -13,8 +13,8 @@ use openzt2_zoo_state::animal_health::types::Rampaging;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalSex;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
-use openzt2_zoo_state::animal_lifecycle::types::Pregnancy;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
+use openzt2_zoo_state::animal_lifecycle::types::{Mate, Pregnancy};
 use openzt2_zoo_state::animal_welfare::types::BathroomNeed;
 use openzt2_zoo_state::animal_welfare::types::EnvironmentNeed;
 use openzt2_zoo_state::animal_welfare::types::ExerciseNeed;
@@ -29,6 +29,7 @@ use openzt2_zoo_state::animal_welfare::types::StimulationNeed;
 use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
+use openzt2_zoo_state::animal_welfare::types::{ReproductionNeed, REPRODUCTION_TRIGGER_INDEX};
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
@@ -97,11 +98,21 @@ pub(crate) struct AnimalCandidateFacts {
     frozen: Has<Frozen>,
     velocity: Option<&'static Velocity>,
     habitat: Option<&'static HabitatMember>,
+    mate: Has<Mate>,
+    reproduction: Option<&'static ReproductionNeed>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
     pub(crate) fn variant_id(&self) -> AssetId {
         self.variant.0
+    }
+
+    pub(super) fn is_adult(&self) -> bool {
+        self.life_stage.0 == LifeStage::Adult
+    }
+
+    pub(super) fn habitat_entity(&self) -> Option<Entity> {
+        self.habitat.map(|member| member.habitat_entity)
     }
 
     pub(crate) fn matches_type(&self, required: AssetId, authored_types: &[AssetId]) -> bool {
@@ -129,6 +140,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
             BehaviorEntityStateEligibilityFact::Moving => self.velocity?.0.length_squared() > 0.0,
             BehaviorEntityStateEligibilityFact::Swimming => *self.mode? == LocomotionMode::Swim,
             BehaviorEntityStateEligibilityFact::InHabitat => self.habitat.is_some(),
+            BehaviorEntityStateEligibilityFact::HasMate => self.mate,
             _ => return None,
         })
     }
@@ -148,9 +160,18 @@ impl AnimalCandidateFactsItem<'_, '_> {
             self.hygiene.0,
             self.bathroom.0,
         ];
+        let deprivation = |wellness: i32| (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10;
+        if name == AssetId::from_key("reproduction") {
+            return self.reproduction.map(|need| {
+                (
+                    deprivation(need.0),
+                    self.triggers.0 & (1 << REPRODUCTION_TRIGGER_INDEX) != 0,
+                )
+            });
+        }
         NEED_NAMES.iter().enumerate().find_map(|(index, key)| {
             (*key == name).then_some((
-                (MAX_NEED_Q16 - needs[index].clamp(0, MAX_NEED_Q16)) / 10,
+                deprivation(needs[index]),
                 self.triggers.0 & (1 << index) != 0,
             ))
         })
@@ -206,6 +227,12 @@ impl AnimalCandidateFactsItem<'_, '_> {
                     BehaviorWelfareEligibilityFact::Stimulation => self.stimulation.0,
                     BehaviorWelfareEligibilityFact::Health => self.health.0,
                     BehaviorWelfareEligibilityFact::Hygiene => self.hygiene.0,
+                    BehaviorWelfareEligibilityFact::Reproduction => {
+                        let Some(need) = self.reproduction else {
+                            return false;
+                        };
+                        need.0
+                    }
                     _ => return false,
                 };
                 (MAX_NEED_Q16 - wellness.clamp(0, MAX_NEED_Q16)) / 10

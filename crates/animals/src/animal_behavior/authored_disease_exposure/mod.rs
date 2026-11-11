@@ -105,6 +105,8 @@ pub(super) fn expose_animals_to_authored_diseases(
                 name: disease.token,
                 available_at: clock.tick,
                 expires_at: u64::MAX,
+                payload: None,
+                retain_on_failure: false,
             },
             ChildOf(candidates[index as usize]),
         ));

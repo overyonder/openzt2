@@ -26,6 +26,13 @@ pub enum BehaviorAction {
         #[serde(default)]
         pose: action::spawn::BehaviorSpawnPosePolicy,
     },
+    /// `BFBehSpawn spawnRelation="child"`: a young animal of the `entity`
+    /// variant beside the subject, which becomes its mother.
+    SpawnChild {
+        entity: crate::AssetId,
+        #[serde(default)]
+        pose: action::spawn::BehaviorSpawnPosePolicy,
+    },
     /// `BFBehSpawn` without a node or clip, such as the `TrashGround` a guest
     /// drops on a path: the object appears at once beside the actor.
     SpawnObjectAtActor {

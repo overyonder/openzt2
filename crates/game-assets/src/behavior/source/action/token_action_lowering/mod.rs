@@ -69,6 +69,8 @@ pub(super) fn lower_self_token_delivery(
                         | "Radius"
                         | "ChanceInRadius"
                         | "OnlyOne"
+                        | "Payload"
+                        | "RetainOnFailure"
                 )
             })
             || token.element_children().next().is_some()
@@ -122,6 +124,17 @@ pub(super) fn lower_self_token_delivery(
         };
         let reconsider = flag("Reconsider")?;
         let only_one = flag("OnlyOne")?;
+        let retain_on_failure = flag("RetainOnFailure")?;
+        let payload = match token.attribute("Payload") {
+            None => None,
+            Some("subject") => Some(BehaviorTokenRecipient::Subject),
+            Some("target") => Some(BehaviorTokenRecipient::Target),
+            Some(_) => {
+                return Err(invalid_behavior_source_data(
+                    "token Payload must be subject or target",
+                ))
+            }
+        };
         let name = read_optional_trimmed_string_attribute(token, "Name")
             .ok_or_else(|| invalid_behavior_source_data("token delivery requires Name"))?;
         let lifetime = match read_optional_float_attribute(token, "Timeout")? {
@@ -150,6 +163,8 @@ pub(super) fn lower_self_token_delivery(
             reconsider,
             nearby,
             only_one,
+            payload,
+            retain_on_failure,
         });
     }
     Ok(Some(BehaviorAction::SendSelfTokens(deliveries)))
