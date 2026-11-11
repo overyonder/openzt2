@@ -67,28 +67,58 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         &TransportTrackConstructionPreview,
     )>,
     mut commits: MessageWriter<CommitConstruction>,
+    mut continue_from: Local<Option<Vec3>>,
 ) {
+    let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
+        *continue_from = None;
+        return;
+    };
+    let (Ok((cursor, world_member)), Some(definitions)) =
+        (cursors.single(), active_definitions.get(&definitions))
+    else {
+        return;
+    };
+    // As in the original, placing a piece that doesn't end at a station keeps
+    // building from its end. The end junction is spawned by the commit, so
+    // wait for it before starting the next preview.
+    if previews.is_empty() {
+        if let Some(end) = *continue_from {
+            if let Some(junction) = find_nearest_compatible_transport_track_junction(
+                end,
+                kind,
+                world_member.root,
+                None,
+                &junctions,
+                &segments,
+            ) {
+                *continue_from = None;
+                spawn_transport_track_construction_preview(
+                    &mut commands,
+                    definition,
+                    junction,
+                    *world_member,
+                );
+            }
+            return;
+        }
+    }
     if !primary_pointer.just_pressed || ui_capture.over_ui {
         return;
     }
-    let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
-        return;
-    };
-    if let Ok((preview_entity, preview, _)) = previews.single() {
+    if let Ok((preview_entity, preview, track_preview)) = previews.single() {
         if preview.definition == definition
             && matches!(preview.validity, PlacementValidity::Valid { .. })
         {
             commits.write(CommitConstruction {
                 preview: preview_entity,
             });
+            *continue_from = track_preview
+                .to_station
+                .is_none()
+                .then_some(track_preview.to_position);
         }
         return;
     }
-    let (Ok((cursor, world_member)), Some(definitions)) =
-        (cursors.single(), active_definitions.get(&definitions))
-    else {
-        return;
-    };
     let station_endpoint = find_nearest_compatible_transport_station_endpoint(
         cursor.world,
         kind,
@@ -108,15 +138,22 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         &junctions,
         &segments,
     );
-    let Some((from_endpoint, circuit, from_endpoint_index, from_position)) =
-        nearer_transport_track_construction_endpoint(
-            cursor.world,
-            station_endpoint,
-            junction_endpoint,
-        )
-    else {
+    let Some(endpoint) = nearer_transport_track_construction_endpoint(
+        cursor.world,
+        station_endpoint,
+        junction_endpoint,
+    ) else {
         return;
     };
+    spawn_transport_track_construction_preview(&mut commands, definition, endpoint, *world_member);
+}
+
+fn spawn_transport_track_construction_preview(
+    commands: &mut Commands,
+    definition: AssetId,
+    (from_endpoint, circuit, from_endpoint_index, from_position): (Entity, Entity, u8, Vec3),
+    world_member: WorldMember,
+) {
     commands.spawn((
         ConstructionPreview {
             definition,
@@ -135,7 +172,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         },
         Transform::from_translation(from_position),
         Visibility::Inherited,
-        *world_member,
+        world_member,
     ));
 }
 
