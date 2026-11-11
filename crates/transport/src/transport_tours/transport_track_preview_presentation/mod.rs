@@ -98,6 +98,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         let Some(template) = terrain_decal_pass.as_ref() else {
             continue;
         };
+        let tint = invalid_track_preview_tint(preview.validity);
         for (piece_index, points) in track_preview.path_points.windows(2).enumerate() {
             let world_transform =
                 crate::transport_tours::transport_track_construction_transaction::transport_track_piece_transform(
@@ -147,7 +148,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     Transform::from_rotation(preview.transform.rotation.inverse()),
                     Visibility::Inherited,
                     ChildOf(preview_entity),
-                    Mesh3d(meshes.add(mesh)),
+                    Mesh3d(meshes.add(tint_track_preview_mesh(mesh, tint))),
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     TransportTrackConstructionPreviewAuthoredPrefab {
                         owner: preview_entity,
@@ -179,7 +180,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 .with_rotation(preview.transform.rotation.inverse()),
                 Visibility::Inherited,
                 ChildOf(preview_entity),
-                Mesh3d(meshes.add(mesh)),
+                Mesh3d(meshes.add(tint_track_preview_mesh(mesh, tint))),
                 MeshMaterial3d(effect_pass_materials.add(material)),
                 TransportTrackConstructionPreviewAuthoredPrefab {
                     owner: preview_entity,
@@ -187,4 +188,32 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             ));
         }
     }
+}
+
+/// `ZTGroundTrackMode` in `UI/modes/modes.xml` colours a road that can't be
+/// placed `place_no` (200, 20, 10, 90) and one that is too steep `too_steep`
+/// (255, 255, 0, 255). The decal's diffuse comes from the vertex colour, so
+/// the colour multiplies the road texture.
+// ponytail: the two colours are copied from modes.xml, not lowered from it.
+fn invalid_track_preview_tint(
+    validity: openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
+) -> Option<[f32; 4]> {
+    use openzt2_zoo_state::construction::construction_interaction_types::{
+        PlacementFailure, PlacementValidity,
+    };
+    match validity {
+        PlacementValidity::Valid { .. } | PlacementValidity::Pending => None,
+        PlacementValidity::Invalid(PlacementFailure::TooSteep) => Some([1.0, 1.0, 0.0, 1.0]),
+        PlacementValidity::Invalid(_) => {
+            Some([200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0, 90.0 / 255.0])
+        }
+    }
+}
+
+fn tint_track_preview_mesh(mut mesh: Mesh, tint: Option<[f32; 4]>) -> Mesh {
+    if let Some(tint) = tint {
+        let vertices = mesh.count_vertices();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint; vertices]);
+    }
+    mesh
 }
