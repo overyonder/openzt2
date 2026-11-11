@@ -114,9 +114,21 @@ pub fn validate_object_placement_over_terrain_samples(
         if !flattens_terrain && calculate_terrain_slope_permille(point.normal) > maximum_slope {
             return PlacementValidity::Invalid(PlacementFailure::TooSteep);
         }
-        let in_water = point
+        let water_depth = point
             .water_height_m
-            .is_some_and(|water| water > point.height_m + POSITION_EPSILON_M);
+            .map(|water| water - point.height_m)
+            .filter(|depth| *depth > POSITION_EPSILON_M);
+        let in_water = water_depth.is_some();
+        // The source refuses objects without `waterPlacement` in water ("You
+        // cannot place %s in water") and water deeper than an authored
+        // `maximumDepth` ("The water there is too deep for %s").
+        let surface = definition.surface_policy;
+        if water_depth.is_some_and(|depth| {
+            !surface.water
+                || surface.maximum_depth_metres > 0.0 && depth > surface.maximum_depth_metres
+        }) {
+            return PlacementValidity::Invalid(PlacementFailure::InvalidHabitat);
+        }
         if constraints.contains_all(PlacementConstraints::REQUIRE_WATER) && !in_water
             || constraints.contains_all(PlacementConstraints::REQUIRE_LAND) && in_water
         {
