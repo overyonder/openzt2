@@ -131,6 +131,8 @@ pub struct WorldDefinitionDocument {
     pub tank_depth_policy: Option<TankDepthPolicy>,
     pub tank_edit_policy: Option<TankEditPolicy>,
     #[serde(default)]
+    pub disease_exposure: Option<super::animal_health::DiseaseExposurePolicy>,
+    #[serde(default)]
     pub fence_placement_mode_policy: Option<FencePlacementModePolicy>,
     pub show_presentation: Option<ShowPresentationPolicy>,
     pub show_scheduling: Option<ShowSchedulingPolicy>,

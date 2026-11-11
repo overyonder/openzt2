@@ -135,6 +135,7 @@ pub(super) enum SingletonKind {
     TankSurface,
     TankDepth,
     TankEdit,
+    DiseaseExposure,
     FencePlacementMode,
     ShowPresentation,
     ShowScheduling,
@@ -970,6 +971,12 @@ impl<'a> WorldDefinitionsView<'a> {
         TankDepthPolicy
     );
     singleton!(tank_edit_policy, TankEdit, tank_edit_policy, TankEditPolicy);
+    singleton!(
+        disease_exposure,
+        DiseaseExposure,
+        disease_exposure,
+        openzt2_game_data::world_definitions::animal_health::DiseaseExposurePolicy
+    );
     singleton!(
         fence_placement_mode_policy,
         FencePlacementMode,
