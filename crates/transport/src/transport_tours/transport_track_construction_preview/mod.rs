@@ -158,6 +158,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         &mut TransportTrackConstructionPreview,
         &mut Transform,
     )>,
+    terrain: TrackTerrain,
 ) {
     let Some((selected_definition, selected_kind)) = selected_transport_track_definition(*tool)
     else {
@@ -229,7 +230,10 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         preview.transform.rotation = Quat::from_rotation_y(direction.x.atan2(direction.z));
     }
     *transform = preview.transform;
-    preview.validity = if let Some((path_points, cost)) = path_points_and_cost {
+    preview.validity = if let Some((mut path_points, cost)) = path_points_and_cost {
+        if selected_kind == TransportationTrackKind::Ground {
+            drape_ground_level_track_points_on_terrain(&mut path_points, &terrain);
+        }
         track_preview.path_points = path_points;
         PlacementValidity::Valid { cost }
     } else {
@@ -238,4 +242,87 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         track_preview.path_points.push(to_position);
         PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
     };
+}
+
+type TrackTerrain<'w, 's> = (
+    Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    Res<
+        'w,
+        Assets<
+            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+        >,
+    >,
+    Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
+            Option<&'static openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
+        ),
+    >,
+);
+
+/// A ground road whose ends both sit on the terrain follows the ground
+/// between them, as the original paints it into the terrain. Interpolating a
+/// straight line instead lifted every piece over a dip above the terrain, so
+/// it was drawn as an elevated strip.
+fn drape_ground_level_track_points_on_terrain(
+    path_points: &mut [Vec3],
+    (index, assets, chunks): &TrackTerrain,
+) {
+    use openzt2_zoo_state::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
+    let ground = |point: Vec3| {
+        let (chunk, edited) = chunks.get(terrain_chunk_at(index, point.xz())?).ok()?;
+        Some(sample_terrain(chunk, assets.get(&chunk.asset)?, edited, point.xz())?.height_m)
+    };
+    drape_points_between_grounded_ends(path_points, &ground);
+}
+
+fn drape_points_between_grounded_ends(
+    path_points: &mut [Vec3],
+    ground: &impl Fn(Vec3) -> Option<f32>,
+) {
+    const GROUNDED_TOLERANCE_METRES: f32 = 0.05;
+    let grounded = |point: Vec3| {
+        ground(point).is_some_and(|height| (point.y - height).abs() <= GROUNDED_TOLERANCE_METRES)
+    };
+    let (Some(&first), Some(&last)) = (path_points.first(), path_points.last()) else {
+        return;
+    };
+    if path_points.len() < 3 || !grounded(first) || !grounded(last) {
+        return;
+    }
+    let inner = path_points.len() - 1;
+    for point in &mut path_points[1..inner] {
+        if let Some(height) = ground(*point) {
+            point.y = height;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::drape_points_between_grounded_ends;
+    use bevy::prelude::*;
+
+    #[test]
+    fn a_grounded_road_follows_a_dip_but_a_raised_one_keeps_its_line() {
+        // Ground at 8 m with a 2 m dip in the middle.
+        let ground = |point: Vec3| Some(if point.x.abs() < 1.0 { 6.0 } else { 8.0 });
+        let line = |end_y: f32| {
+            [-3.0, 0.0, 3.0].map(|x| Vec3::new(x, 8.0 + (end_y - 8.0) * (x + 3.0) / 6.0, 0.0))
+        };
+        let mut grounded = line(8.0);
+        drape_points_between_grounded_ends(&mut grounded, &ground);
+        assert!(grounded
+            .iter()
+            .zip([8.0, 6.0, 8.0])
+            .all(|(point, y)| (point.y - y).abs() < 1e-5));
+        let mut raised = line(11.0);
+        drape_points_between_grounded_ends(&mut raised, &ground);
+        assert!(raised
+            .iter()
+            .zip([8.0, 9.5, 11.0])
+            .all(|(point, y)| (point.y - y).abs() < 1e-5));
+    }
 }

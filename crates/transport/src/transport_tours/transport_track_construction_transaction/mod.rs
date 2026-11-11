@@ -268,6 +268,9 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                             },
                             transport_track_piece_transform(points[0], points[1]),
                             GlobalTransform::IDENTITY,
+                            // The piece's projected meshes are its children;
+                            // without visibility here they never become visible.
+                            Visibility::Inherited,
                             *world_member,
                         ))
                         .id()
@@ -303,6 +306,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                     openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction,
                     Transform::from_translation(destination_position),
                     GlobalTransform::from_translation(destination_position),
+                    Visibility::Inherited,
                     *world_member,
                 ))
                 .id()
