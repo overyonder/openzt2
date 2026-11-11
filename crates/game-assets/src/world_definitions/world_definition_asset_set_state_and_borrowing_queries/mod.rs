@@ -239,6 +239,22 @@ impl WorldDefinitions {
         self.handles.push(handle);
     }
 
+    /// Lets fixtures demand-load the scenes added with
+    /// `WorldDefinitionAsset::with_test_scene` through `server`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn index_test_scenes(
+        &mut self,
+        server: AssetServer,
+        handle: &Handle<WorldDefinitionAsset>,
+        asset: &WorldDefinitionAsset,
+    ) {
+        for scene in &asset.scenes {
+            self.records
+                .insert((DefinitionKind::SceneDependency, scene.id), handle.clone());
+        }
+        self.server = Some(server);
+    }
+
     pub fn get<'a>(
         &'a self,
         assets: &'a Assets<WorldDefinitionAsset>,
