@@ -293,25 +293,17 @@ fn drape_ground_level_track_points_on_terrain(
             }
         }
     }
-    drape_points_between_grounded_ends(path_points, &ground);
+    drape_points_between_ends(path_points, &ground);
 }
 
-fn drape_points_between_grounded_ends(
+fn drape_points_between_ends(
     path_points: &mut [Vec3],
     ground: &impl Fn(Vec3) -> Option<f32>,
 ) {
-    const GROUNDED_TOLERANCE_METRES: f32 = 0.05;
-    let grounded = |point: Vec3| {
-        ground(point).is_some_and(|height| (point.y - height).abs() <= GROUNDED_TOLERANCE_METRES)
-    };
-    let (Some(&first), Some(&last)) = (path_points.first(), path_points.last()) else {
-        return;
-    };
-    if path_points.len() < 3 || !grounded(first) || !grounded(last) {
-        return;
-    }
-    let inner = path_points.len() - 1;
-    for point in &mut path_points[1..inner] {
+    // The original's road tool has no height control: a ground road is always
+    // painted onto the terrain between its two ends.
+    let inner = path_points.len().saturating_sub(1);
+    for point in path_points.iter_mut().take(inner).skip(1) {
         if let Some(height) = ground(*point) {
             point.y = height;
         }
@@ -320,27 +312,19 @@ fn drape_points_between_grounded_ends(
 
 #[cfg(test)]
 mod tests {
-    use super::drape_points_between_grounded_ends;
+    use super::drape_points_between_ends;
     use bevy::prelude::*;
 
     #[test]
-    fn a_grounded_road_follows_a_dip_but_a_raised_one_keeps_its_line() {
-        // Ground at 8 m with a 2 m dip in the middle.
+    fn a_road_follows_the_ground_between_its_ends() {
+        // Ground at 8 m with a 2 m dip; the station end sits 1 m higher.
         let ground = |point: Vec3| Some(if point.x.abs() < 1.0 { 6.0 } else { 8.0 });
-        let line = |end_y: f32| {
-            [-3.0, 0.0, 3.0].map(|x| Vec3::new(x, 8.0 + (end_y - 8.0) * (x + 3.0) / 6.0, 0.0))
-        };
-        let mut grounded = line(8.0);
-        drape_points_between_grounded_ends(&mut grounded, &ground);
-        assert!(grounded
+        let mut points = [-3.0, 0.0, 3.0, 6.0].map(|x| Vec3::new(x, 9.0, 0.0));
+        drape_points_between_ends(&mut points, &ground);
+        let heights = points.map(|point| point.y);
+        assert!(heights
             .iter()
-            .zip([8.0, 6.0, 8.0])
-            .all(|(point, y)| (point.y - y).abs() < 1e-5));
-        let mut raised = line(11.0);
-        drape_points_between_grounded_ends(&mut raised, &ground);
-        assert!(raised
-            .iter()
-            .zip([8.0, 9.5, 11.0])
-            .all(|(point, y)| (point.y - y).abs() < 1e-5));
+            .zip([9.0, 6.0, 8.0, 9.0])
+            .all(|(y, want)| (y - want).abs() < 1e-5));
     }
 }
