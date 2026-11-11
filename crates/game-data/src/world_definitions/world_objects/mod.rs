@@ -344,6 +344,10 @@ pub struct WorldObjectDefinition {
     /// Authored ground-fit `heightOffset` above the sampled terrain.
     #[serde(default)]
     pub terrain_fit_height_offset_m: f32,
+    /// Authored `waterOffset` from the water surface when the ground fit
+    /// authors `floatOnWater`; `None` sinks to the ground under water.
+    #[serde(default)]
+    pub terrain_fit_water_offset_m: Option<f32>,
     #[serde(default)]
     pub real_physics_water_impact: Option<WorldObjectRealPhysicsWaterImpactDefinition>,
     pub price_cents: i64,

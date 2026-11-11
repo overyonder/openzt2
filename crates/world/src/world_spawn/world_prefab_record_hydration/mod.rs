@@ -327,6 +327,7 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
             commands.entity(entity).insert(TerrainFittingSurface {
                 normal_tolerance: 0.0,
                 height_offset_m: definition.terrain_fit_height_offset_m,
+                water_offset_m: definition.terrain_fit_water_offset_m,
             });
         }
         if is_zoo_entrance(active_catalogue, definition_id) {
