@@ -78,9 +78,6 @@ pub(super) fn lower_authored_trash_container_maintenance(
     Ok(Some(MaintenanceDefinition {
         id: object,
         object,
-        initial_condition_permille: 1000,
-        deterioration_per_zoo_day_permille: 0,
-        repair_below_permille: 0,
         waste_capacity_units: TRASH_LEVEL_CAPACITY,
         initial_waste_units: level.round() as u16,
         empty_at_units: 0,

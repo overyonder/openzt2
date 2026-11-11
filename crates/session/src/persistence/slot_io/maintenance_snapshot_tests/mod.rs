@@ -189,25 +189,32 @@ fn object_condition_and_bin_contents_round_trip_beside_legacy_waste_arrays() {
     };
     let snapshot = MaintenanceSnapshot {
         waste: vec![waste.clone()],
-        objects: vec![
-            MaintainedObjectSnapshotRecord {
-                persistent_identifier: 7,
-                condition_permille: Some(640),
-                contained_waste: None,
-                next_waste_production_tick: None,
-                compost_poo_level: None,
-            },
-            MaintainedObjectSnapshotRecord {
-                persistent_identifier: 9,
-                condition_permille: Some(1_000),
-                contained_waste: Some([3, 10]),
-                next_waste_production_tick: None,
-                compost_poo_level: Some(35.0),
-            },
-        ],
+        objects: vec![MaintainedObjectSnapshotRecord {
+            persistent_identifier: 9,
+            condition_permille: None,
+            contained_waste: Some([3, 10]),
+            next_waste_production_tick: None,
+            compost_poo_level: Some(35.0),
+        }],
     };
     assert_eq!(
-        decode_section(&encode_maintenance_snapshot(&snapshot).unwrap(), 3),
+        decode_section(&encode_maintenance_snapshot(&snapshot).unwrap(), 2),
+        snapshot
+    );
+    // Saves written before worn condition was removed keep it on every
+    // object, and alone on objects without other state.
+    let mut worn = serde_json::to_value(&snapshot).unwrap();
+    worn["objects"][0]["condition_permille"] = 1_000.into();
+    worn["objects"].as_array_mut().unwrap().insert(
+        0,
+        serde_json::json!({
+            "persistent_identifier": 7,
+            "condition_permille": 640,
+            "contained_waste": null,
+        }),
+    );
+    assert_eq!(
+        decode_section(&serde_json::to_vec(&worn).unwrap(), 3),
         snapshot
     );
     // Saves written before object state hold a bare waste array.
@@ -261,13 +268,11 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
     };
     use openzt2_zoo_state::maintenance::maintenance_types::{
         AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
-        MaintainableObjectConditionPermille,
     };
 
     let (mut source, _) = fixture();
     source.world_mut().spawn((
         PersistentId(7),
-        MaintainableObjectConditionPermille(640),
         FacilityContainedWaste {
             contained_waste_units: 3,
             contained_waste_capacity_units: 10,
@@ -302,7 +307,6 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
         .world_mut()
         .spawn((
             PersistentId(7),
-            MaintainableObjectConditionPermille(1_000),
             FacilityContainedWaste {
                 contained_waste_units: 0,
                 contained_waste_capacity_units: 10,
@@ -327,8 +331,6 @@ fn maintained_object_state_compost_and_animal_waste_deadlines_survive_entity_rem
     let totals = destination
         .world()
         .resource::<IncrementalZooCleanlinessTotals>();
-    assert_eq!(totals.maintainable_object_count, 1);
-    assert_eq!(totals.maintainable_condition_permille_sum, 640);
     assert_eq!(totals.contained_waste_units, 3);
     assert_eq!(totals.contained_waste_capacity_units, 10);
 }
@@ -348,8 +350,8 @@ fn maintenance_encoder_rejects_a_combined_record_count_the_decoder_cannot_read()
         objects: (0..super::maintenance_snapshot_section_encoding::MAXIMUM_WASTE_RECORDS)
             .map(|index| MaintainedObjectSnapshotRecord {
                 persistent_identifier: index as u64 + 2,
-                condition_permille: Some(1_000),
-                contained_waste: None,
+                condition_permille: None,
+                contained_waste: Some([0, 1]),
                 next_waste_production_tick: None,
                 compost_poo_level: None,
             })

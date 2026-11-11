@@ -1,12 +1,11 @@
 use openzt2_zoo_state::maintenance::ZooCleanlinessProjection;
 mod animal_habitat_waste_cleaning_staff_job_execution;
 mod animal_waste_production;
+mod authored_maintenance_facts_and_service_effects;
 mod authored_trash_level_application;
 mod cleanliness_aggregation_operations;
 mod first_person_waste_cleaning;
 mod loose_litter_sweeping_staff_job_execution;
-mod maintainable_object_condition_and_service_effects;
-mod maintenance_repair_staff_job_execution;
 mod maintenance_staff_job_claim_effect_progress_and_completion;
 mod maintenance_staff_job_requests;
 use openzt2_zoo_state::maintenance::maintenance_types;
@@ -28,33 +27,28 @@ use self::{
     animal_waste_production::{
         initialize_animal_waste_production_schedule, produce_due_animal_habitat_waste,
     },
+    authored_maintenance_facts_and_service_effects::{
+        apply_completed_service_maintenance_effects_to_facilities,
+        initialize_authored_maintenance_facts_for_world_objects,
+    },
     cleanliness_aggregation_operations::{
         add_animal_habitat_waste_to_cleanliness_totals,
         add_facility_waste_container_to_cleanliness_totals, add_loose_litter_to_cleanliness_totals,
-        add_maintainable_object_condition_to_cleanliness_totals,
         remove_animal_habitat_waste_from_cleanliness_totals,
         remove_facility_waste_container_from_cleanliness_totals,
         remove_loose_litter_from_cleanliness_totals,
-        remove_maintainable_object_condition_from_cleanliness_totals,
     },
     loose_litter_sweeping_staff_job_execution::advance_active_staff_litter_sweeping_jobs,
-    maintainable_object_condition_and_service_effects::{
-        apply_completed_service_maintenance_effects_to_facilities,
-        deteriorate_maintainable_world_objects_after_zoo_days_advance,
-        initialize_authored_maintenance_facts_for_world_objects,
-    },
-    maintenance_repair_staff_job_execution::advance_active_staff_repair_jobs,
     maintenance_staff_job_requests::{
         classify_spawned_staff_jobs_by_maintenance_work_kind,
         request_staff_cleaning_for_spawned_habitat_waste,
         request_staff_emptying_for_full_waste_containers,
-        request_staff_repairs_for_damaged_maintainable_objects,
         request_staff_sweeping_for_spawned_litter,
         requeue_cancelled_maintenance_staff_work_when_still_required,
     },
     maintenance_types::{
         AnimalHabitatWaste, FacilityContainedWaste, IncrementalZooCleanlinessTotals,
-        LooseLitterWaste, MaintainableObjectConditionPermille, ZooCleanlinessPermille,
+        LooseLitterWaste, ZooCleanlinessPermille,
     },
     waste_container_emptying_staff_job_execution::advance_active_staff_waste_container_emptying_jobs,
     zoo_cleanliness_projection::project_changed_maintenance_totals_into_zoo_cleanliness,
@@ -75,11 +69,6 @@ impl Plugin for MaintenancePlugin {
                 .run_if(in_state(GamePhase::InGame)),
         );
 
-        game_application
-            .world_mut()
-            .register_component_hooks::<MaintainableObjectConditionPermille>()
-            .on_add(add_maintainable_object_condition_to_cleanliness_totals)
-            .on_remove(remove_maintainable_object_condition_from_cleanliness_totals);
         game_application
             .world_mut()
             .register_component_hooks::<FacilityContainedWaste>()
@@ -106,19 +95,13 @@ impl Plugin for MaintenancePlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (
-                    initialize_authored_maintenance_facts_for_world_objects,
-                    deteriorate_maintainable_world_objects_after_zoo_days_advance,
-                )
-                    .chain()
+                initialize_authored_maintenance_facts_for_world_objects
                     .in_set(FixedGameSet::Think)
-                    .before(request_staff_repairs_for_damaged_maintainable_objects)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
                 (
-                    request_staff_repairs_for_damaged_maintainable_objects,
                     request_staff_emptying_for_full_waste_containers,
                     request_staff_sweeping_for_spawned_litter,
                     request_staff_cleaning_for_spawned_habitat_waste,
@@ -150,7 +133,6 @@ impl Plugin for MaintenancePlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    advance_active_staff_repair_jobs,
                     advance_active_staff_waste_container_emptying_jobs,
                     advance_active_staff_litter_sweeping_jobs,
                 )

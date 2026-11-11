@@ -3,7 +3,6 @@ use openzt2_game_data::world_definitions::facilities_and_maintenance::Cleanlines
 
 use super::maintenance_types::{
     AnimalHabitatWaste, FacilityContainedWaste, IncrementalZooCleanlinessTotals, LooseLitterWaste,
-    MaintainableObjectConditionPermille,
 };
 
 macro_rules! define_cleanliness_total_component_lifecycle_hooks {
@@ -46,16 +45,6 @@ macro_rules! define_cleanliness_total_component_lifecycle_hooks {
 }
 
 define_cleanliness_total_component_lifecycle_hooks!(
-    add_maintainable_object_condition_to_cleanliness_totals,
-    remove_maintainable_object_condition_from_cleanliness_totals,
-    MaintainableObjectConditionPermille,
-    add_maintainable_object_condition,
-    remove_maintainable_object_condition,
-    |maintainable_object_condition: MaintainableObjectConditionPermille| {
-        maintainable_object_condition
-    }
-);
-define_cleanliness_total_component_lifecycle_hooks!(
     add_facility_waste_container_to_cleanliness_totals,
     remove_facility_waste_container_from_cleanliness_totals,
     FacilityContainedWaste,
@@ -97,7 +86,6 @@ pub(crate) fn calculate_weighted_zoo_cleanliness_permille(
 ) -> u16 {
     calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(
         cleanliness_totals,
-        cleanliness_policy.condition_weight,
         cleanliness_policy.waste_weight,
         cleanliness_policy.litter_weight,
         cleanliness_policy.litter_reference_units,
@@ -106,21 +94,10 @@ pub(crate) fn calculate_weighted_zoo_cleanliness_permille(
 
 pub(crate) fn calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(
     cleanliness_totals: IncrementalZooCleanlinessTotals,
-    maintainable_condition_weight: u16,
     contained_waste_weight: u16,
     uncontained_waste_weight: u16,
     uncontained_waste_reference_units: u32,
 ) -> u16 {
-    let maintainable_condition_cleanliness_permille =
-        if cleanliness_totals.maintainable_object_count == 0 {
-            1_000
-        } else {
-            divide_unsigned_ratio_with_half_up_rounding(
-                cleanliness_totals.maintainable_condition_permille_sum,
-                u64::from(cleanliness_totals.maintainable_object_count),
-            )
-            .min(1_000)
-        };
     let contained_waste_cleanliness_permille =
         if cleanliness_totals.contained_waste_capacity_units == 0 {
             1_000
@@ -144,18 +121,12 @@ pub(crate) fn calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(
         )
         .min(1_000),
     );
-    let maintainable_condition_weight = u64::from(maintainable_condition_weight);
     let contained_waste_weight = u64::from(contained_waste_weight);
     let uncontained_waste_weight = u64::from(uncontained_waste_weight);
-    let total_cleanliness_weight = maintainable_condition_weight
-        .saturating_add(contained_waste_weight)
-        .saturating_add(uncontained_waste_weight);
+    let total_cleanliness_weight = contained_waste_weight.saturating_add(uncontained_waste_weight);
     divide_unsigned_ratio_with_half_up_rounding(
-        maintainable_condition_cleanliness_permille
-            .saturating_mul(maintainable_condition_weight)
-            .saturating_add(
-                contained_waste_cleanliness_permille.saturating_mul(contained_waste_weight),
-            )
+        contained_waste_cleanliness_permille
+            .saturating_mul(contained_waste_weight)
             .saturating_add(
                 uncontained_waste_cleanliness_permille.saturating_mul(uncontained_waste_weight),
             ),
