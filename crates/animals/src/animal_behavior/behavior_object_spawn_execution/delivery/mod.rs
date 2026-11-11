@@ -77,7 +77,7 @@ pub(super) fn deliver_behavior_object_spawns(
                 .iter()
                 .find(|(joint, _)| {
                     joint.animation_playback_controller_entity == event.controller
-                        && joint.joint_asset_key == *subject_node
+                        && joint.joint_asset_key.eq_ignore_ascii_case(subject_node)
                 })
                 .map(|(_, transform)| transform.compute_transform())
                 .or_else(|| {
