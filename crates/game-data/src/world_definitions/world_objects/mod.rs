@@ -244,6 +244,7 @@ pub struct WorldObjectFadeRange {
 }
 
 impl WorldObjectFadeRange {
+    #[must_use]
     pub fn contains(&self, value: f32) -> bool {
         (self.minimum..self.maximum).contains(&value)
     }
