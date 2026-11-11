@@ -135,7 +135,14 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
 pub(super) fn update_subject_relative_first_person_camera_transform(
     active_modes: Query<&ActiveImmersiveMode>,
     view_angles: Query<&FirstPersonViewAngles>,
-    controlled_subjects: Query<&GlobalTransform, With<ControlledEntity>>,
+    // A ridden vehicle drives itself, so it has no `ControlledEntity`.
+    controlled_subjects: Query<
+        &GlobalTransform,
+        Or<(
+            With<ControlledEntity>,
+            With<openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle>,
+        )>,
+    >,
     mut zoo_cameras: Query<(&mut Transform, &CameraMode), With<ZooCamera>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
