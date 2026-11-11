@@ -144,6 +144,25 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             }
             continue;
         };
+        // The original draws no 3D preview for a transport track: the buy
+        // panel's `Entity Image Display` shows the source rectangle 3,5,57,48
+        // of its icon, the normal-state cell.
+        if definitions.find_track(definition).is_some() {
+            let icon = definitions.texture_image(object.icon).unwrap_or_default();
+            let rect = Some(Rect::new(3.0, 5.0, 60.0, 53.0));
+            if let Some(image_node) = image_node.as_deref_mut() {
+                image_node.image = icon;
+                image_node.rect = rect;
+                image_node.image_mode = NodeImageMode::Stretch;
+            } else {
+                commands.entity(node).insert(ImageNode {
+                    rect,
+                    image_mode: NodeImageMode::Stretch,
+                    ..ImageNode::new(icon)
+                });
+            }
+            continue;
+        }
         let prefab = object.catalogue_preview_prefab.or_else(|| {
             (object.prefab != AssetId::default())
                 .then_some(object.prefab)
