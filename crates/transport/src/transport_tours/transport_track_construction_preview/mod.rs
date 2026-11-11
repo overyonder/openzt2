@@ -232,7 +232,14 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     *transform = preview.transform;
     preview.validity = if let Some((mut path_points, cost)) = path_points_and_cost {
         if selected_kind == TransportationTrackKind::Ground {
-            drape_ground_level_track_points_on_terrain(&mut path_points, &terrain);
+            drape_ground_level_track_points_on_terrain(
+                &mut path_points,
+                to_station.is_none(),
+                &terrain,
+            );
+            if let Some(&last) = path_points.last() {
+                track_preview.to_position = last;
+            }
         }
         track_preview.path_points = path_points;
         PlacementValidity::Valid { cost }
@@ -268,6 +275,7 @@ type TrackTerrain<'w, 's> = (
 /// it was drawn as an elevated strip.
 fn drape_ground_level_track_points_on_terrain(
     path_points: &mut [Vec3],
+    free_end: bool,
     (index, assets, chunks): &TrackTerrain,
 ) {
     use openzt2_zoo_state::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
@@ -275,6 +283,16 @@ fn drape_ground_level_track_points_on_terrain(
         let (chunk, edited) = chunks.get(terrain_chunk_at(index, point.xz())?).ok()?;
         Some(sample_terrain(chunk, assets.get(&chunk.asset)?, edited, point.xz())?.height_m)
     };
+    // An end that isn't snapped to a station is the pointer projected onto
+    // the road's axis, so it carries the pointer's height rather than the
+    // ground's at its own position.
+    if free_end {
+        if let Some(height) = path_points.last().and_then(|last| ground(*last)) {
+            if let Some(last) = path_points.last_mut() {
+                last.y = height;
+            }
+        }
+    }
     drape_points_between_grounded_ends(path_points, &ground);
 }
 
