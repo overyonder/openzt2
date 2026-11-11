@@ -6,6 +6,8 @@ use openzt2_game_assets::lua_script::lua_value_conversion::convert_integral_lua_
 
 use super::scenario_lua_types::ScenarioLuaQueryFacts;
 
+use openzt2_world_state::game_session_types::WorldSessionMode;
+
 pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
@@ -241,6 +243,29 @@ pub(super) fn install_scenario_game_query_and_command_functions<'scope, 'env: 's
                 .ok_or_else(|| mlua::Error::runtime("donation total exceeds currency range"))?;
             Ok(cents as f64 / 100.0)
         })?,
+    )?;
+    // The shipped `awards` and `isFreeform` helpers ask these of ZTStatus.
+    for (method, mode) in [
+        ("ZT_GET_IS_CAMPAIGN", WorldSessionMode::Campaign),
+        ("ZT_GET_IS_FREEFORM", WorldSessionMode::Freeform),
+    ] {
+        status.set(
+            method,
+            scope.create_function(move |_, _: MultiValue| {
+                Ok(queries.world_session_mode == Some(mode))
+            })?,
+        )?;
+    }
+    // Whole dollars, as `howMuchCash` and `getAdmissionPrice` read them.
+    status.set(
+        "ZT_GET_ADMISSION_PRICE",
+        scope.create_function(move |_, _: MultiValue| {
+            Ok(queries.guest_admission_price.0 .0 / 100)
+        })?,
+    )?;
+    economy_manager.set(
+        "ZT_GET_ZOO_CASH",
+        scope.create_function(move |_, _: MultiValue| Ok(queries.zoo_cash.0 .0 / 100))?,
     )?;
     // The shipped game raises this while a tutorial step is on screen. Nothing
     // here reads it yet.
