@@ -210,9 +210,12 @@ fn interaction_cursor_id(
         ConstructionTool::FencePlacement | ConstructionTool::Fence(_) => policy.fence_default.0,
         ConstructionTool::PathPlacement
         | ConstructionTool::Path(_)
-        | ConstructionTool::ElevatedCurbPlacement
-        | ConstructionTool::SkyTrackPlacement(_)
-        | ConstructionTool::GroundTrackPlacement(_) => policy.path.0,
+        | ConstructionTool::ElevatedCurbPlacement => policy.path.0,
+        // `ZTGroundTrackMode` and `ZTSkyTrackMode` author no cursor, so the
+        // overhead pointer stays; the path mode's is the blank `blank.cur`.
+        ConstructionTool::SkyTrackPlacement(_) | ConstructionTool::GroundTrackPlacement(_) => {
+            policy.overhead.0
+        }
         ConstructionTool::ElevatedPathPlacement => policy.elevated_path.0,
         ConstructionTool::Place(_) => {
             relocating
