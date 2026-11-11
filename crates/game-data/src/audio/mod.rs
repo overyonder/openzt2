@@ -57,7 +57,7 @@ pub struct AudioWaterPolicy {
     pub lapping_minimum_area: f32,
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Eq, Serialize)]
 pub struct AudioCrowdPolicy {
     pub thresholds: [i32; 8],
     pub cues: [Option<AssetId>; 5],
