@@ -241,8 +241,20 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
                 track_preview.to_position = last;
             }
         }
+        // Laying the road on the terrain can make a piece steeper than the
+        // track allows; the connection would then be rejected after the
+        // click and the piece would vanish, so refuse it here, as the
+        // original's `too_steep` placement colour does.
+        let valid = crate::transport_tours::transport_fact_validation::authored_transport_track_piece_chain_is_valid(
+            track_definition,
+            &path_points,
+        );
         track_preview.path_points = path_points;
-        PlacementValidity::Valid { cost }
+        if valid {
+            PlacementValidity::Valid { cost }
+        } else {
+            PlacementValidity::Invalid(PlacementFailure::TooSteep)
+        }
     } else {
         track_preview.path_points.clear();
         track_preview.path_points.push(from_position);
@@ -296,10 +308,7 @@ fn drape_ground_level_track_points_on_terrain(
     drape_points_between_ends(path_points, &ground);
 }
 
-fn drape_points_between_ends(
-    path_points: &mut [Vec3],
-    ground: &impl Fn(Vec3) -> Option<f32>,
-) {
+fn drape_points_between_ends(path_points: &mut [Vec3], ground: &impl Fn(Vec3) -> Option<f32>) {
     // The original's road tool has no height control: a ground road is always
     // painted onto the terrain between its two ends.
     let inner = path_points.len().saturating_sub(1);
