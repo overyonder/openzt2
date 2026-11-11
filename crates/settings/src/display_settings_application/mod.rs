@@ -52,6 +52,13 @@ pub(super) fn apply_accepted_display_settings_to_primary_window(
     settings: Res<DisplaySettings>,
     mut primary_window: Query<&mut Window, With<PrimaryWindow>>,
 ) {
+    // The startup default (borderless fullscreen) is only a placeholder until
+    // the selected profile's settings arrive. Applying it first moves the
+    // window to its own fullscreen space on macOS, and leaving that space for
+    // the profile's windowed mode can leave the window stuck at monitor size.
+    if settings.added() == settings.last_changed() {
+        return;
+    }
     let Ok(mut window) = primary_window.single_mut() else {
         return;
     };
