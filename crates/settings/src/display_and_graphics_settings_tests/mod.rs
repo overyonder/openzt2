@@ -130,3 +130,28 @@ fn accepted_values_map_to_actual_bevy_components() {
         4096
     );
 }
+
+#[test]
+fn the_startup_default_waits_for_the_profile_display_settings() {
+    let mut app = App::new();
+    app.init_resource::<DisplaySettings>().add_systems(
+        Update,
+        super::display_settings_application::apply_accepted_display_settings_to_primary_window,
+    );
+    let window = app
+        .world_mut()
+        .spawn((Window::default(), PrimaryWindow))
+        .id();
+    app.update();
+    assert!(matches!(
+        app.world().get::<Window>(window).map(|window| window.mode),
+        Some(bevy::window::WindowMode::Windowed)
+    ));
+
+    *app.world_mut().resource_mut::<DisplaySettings>() = DisplaySettings::default();
+    app.update();
+    assert!(matches!(
+        app.world().get::<Window>(window).map(|window| window.mode),
+        Some(bevy::window::WindowMode::BorderlessFullscreen(_))
+    ));
+}
