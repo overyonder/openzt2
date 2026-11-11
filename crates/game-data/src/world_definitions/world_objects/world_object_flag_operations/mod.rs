@@ -15,7 +15,8 @@ impl WorldObjectPropertyFlags {
     pub const SAVE_RELEVANT: Self = Self(1 << 11);
     pub const WATER_BOUNDARY: Self = Self(1 << 12);
     pub const ANIMAL_WASTE: Self = Self(1 << 13);
-    /// Litter a guest drops, such as `TrashGround`, which a worker sweeps.
+    /// Litter a guest drops, `TrashGround` or `RecyclableGround`, which a
+    /// worker sweeps.
     pub const LOOSE_LITTER: Self = Self(1 << 14);
 
     const ALL_BITS: u64 = 1 << 0

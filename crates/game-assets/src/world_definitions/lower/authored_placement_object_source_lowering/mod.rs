@@ -430,7 +430,7 @@ pub(super) fn bind_authored_placement_object(
             } else {
                 0
             }
-            | if record.has_type_token("TrashGround") {
+            | if record.has_type_token("TrashGround") || record.has_type_token("RecyclableGround") {
                 WorldObjectPropertyFlags::LOOSE_LITTER.raw_flag_bits()
             } else {
                 0
