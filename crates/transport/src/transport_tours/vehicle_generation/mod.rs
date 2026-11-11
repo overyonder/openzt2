@@ -19,6 +19,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitVehicleDefinition;
 use openzt2_zoo_state::transport_tours::transport_circuit_types::TransportCircuit;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTransportVehicleForCircuitRequest;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::PendingTransportVehiclePurchase;
 
@@ -107,6 +108,12 @@ pub(super) fn record_transport_vehicle_purchase_results(
     }
 }
 
+/// Holds the vehicle prefab load while a paid purchase waits for it.
+#[derive(Component)]
+pub(super) struct PendingTransportVehiclePrefab(
+    #[allow(dead_code, reason = "keeps the load alive")] Handle<ScenePrefabAsset>,
+);
+
 /// Materializes paid vehicle purchases through the ordinary scene-prefab path.
 ///
 /// A purchase remains live while its prefab or models load, so payment cannot
@@ -118,6 +125,7 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
     prefabs: Res<Assets<ScenePrefabAsset>>,
     models: Res<Assets<Gltf>>,
     mut persistent_id_allocator: ResMut<PersistentIdAllocator>,
+    stations: Query<(&GlobalTransform, &CircuitMember), With<TransportStation>>,
     mut commands: Commands,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -139,6 +147,11 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
             continue;
         };
         let Some(prefab) = prefabs.get(&prefab_handle) else {
+            // The definition set hands out a fresh load handle; keep it on the
+            // purchase, or the load is dropped before the prefab arrives.
+            commands
+                .entity(purchase_operation)
+                .insert(PendingTransportVehiclePrefab(prefab_handle));
             continue;
         };
         if first_missing_prefab_collider_model_asset_id(prefab, &models).is_some() {
@@ -154,7 +167,14 @@ pub(super) fn spawn_paid_transport_vehicle_prefab_instances(
             world_member.root,
             object_definition,
             persistent_id,
-            Transform::IDENTITY,
+            // "Buy selected vehicle ... which is created at the station". A
+            // circuit with track moves it onto its first edge right after.
+            stations
+                .iter()
+                .find(|(_, member)| member.0 == pending_purchase.circuit)
+                .map_or(Transform::IDENTITY, |(station, _)| {
+                    station.compute_transform()
+                }),
             true,
             None,
             RigidBody::Dynamic,

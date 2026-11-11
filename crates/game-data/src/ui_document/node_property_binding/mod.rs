@@ -74,6 +74,11 @@ pub enum UiBooleanPropertyBindingSource {
     /// The most recent first-person training trace was rejected.
     TrainingAttemptRejected,
     TransportCircuitClosed,
+    /// The selected station runs the given kind of track: the station panel
+    /// shows only the matching vehicles-sold list.
+    TransportStationRunsSkyTrack {
+        sky: bool,
+    },
     TransportWaiting,
     TransportRiding,
     ScenarioRunning,

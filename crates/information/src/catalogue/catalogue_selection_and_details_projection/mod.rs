@@ -105,10 +105,20 @@ pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
     mut show_ui_role_requests: MessageWriter<ShowUiRole>,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
 ) {
+    let world_definitions = active_world_definitions.get(&world_definition_assets);
     let selected_definition = purchase_choices
         .read()
         .map(|choice| choice.definition)
+        // A vehicle chosen in the station panel's vehicles-sold list is the
+        // circuit's vehicle type, not something to place: the station stays
+        // selected and no purchase panel opens.
+        .filter(|definition| {
+            world_definitions
+                .is_none_or(|definitions| definitions.find_vehicle(*definition).is_none())
+        })
         .chain(
             adoption_placement_requests
                 .read()
