@@ -300,7 +300,10 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
             .and_then(|(chunk, edited)| {
                 sample_terrain(chunk, terrain_assets.get(&chunk.asset)?, edited, point.xz())
             })
-            .is_some_and(|terrain| point.y > terrain.height_m + 0.05)
+            // A road end at a station on a slope sits a little off the
+            // ground; only a real gap gets the elevated strip.
+            // ponytail: fixed 1 m; read a clearance from the track if one exists.
+            .is_some_and(|terrain| point.y > terrain.height_m + 1.0)
     })
 }
 
