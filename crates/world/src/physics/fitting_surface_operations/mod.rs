@@ -5,6 +5,7 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -35,6 +36,7 @@ pub(super) fn fit_eligible_static_objects_to_changed_terrain_surfaces(
     terrain_assets: Option<Res<Assets<TerrainAsset>>>,
     mut terrain_changed: MessageReader<TerrainChanged>,
     terrain_chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
+    water: Option<DrySurfaceEligibility>,
     mut objects: Query<
         (
             Ref<TerrainFittingSurface>,
@@ -83,7 +85,21 @@ pub(super) fn fit_eligible_static_objects_to_changed_terrain_surfaces(
             continue;
         };
         if fitting_surface_accepts_sampled_normal(&surface, point.normal) {
-            transform.translation.y = point.height_m + surface.height_offset_m;
+            let ground_height = point.height_m + surface.height_offset_m;
+            // A `floatOnWater` fit rests at its offset from the water surface,
+            // but never below the ground.
+            // ponytail: refits on transform and terrain changes only, not when
+            // a tank's water level changes.
+            transform.translation.y = surface
+                .water_offset_m
+                .zip(
+                    water
+                        .as_ref()
+                        .and_then(|water| water.water_surface_height(world_xz)),
+                )
+                .map_or(ground_height, |(offset, water_height)| {
+                    ground_height.max(water_height + offset)
+                });
         }
     }
 }

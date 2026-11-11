@@ -336,6 +336,17 @@ pub(super) fn bind_authored_placement_object(
         })
         .transpose()?
         .unwrap_or(0.0);
+    let terrain_fit_water_offset_m = ground_fit
+        .filter(|fit| {
+            fit.attribute_named_any(&["floatOnWater"])
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+        })
+        .map(|fit| {
+            fit.attribute_named_any(&["waterOffset"])
+                .map_or(Some(0.0), parse_blue_fang_source_numeric_lexeme)
+                .ok_or_else(|| BindError::record(record, "invalid waterOffset"))
+        })
+        .transpose()?;
     let real_physics_water_impact = record
         .descendant_named("BFRealPhysicsComponent")
         .or_else(|| {
@@ -515,6 +526,7 @@ pub(super) fn bind_authored_placement_object(
         preview_scale,
         terrain_fitted,
         terrain_fit_height_offset_m,
+        terrain_fit_water_offset_m,
         real_physics_water_impact,
         price_cents,
         upkeep_cents_per_month,

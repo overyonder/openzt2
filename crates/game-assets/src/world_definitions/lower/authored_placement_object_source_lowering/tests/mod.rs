@@ -12,13 +12,15 @@ fn ground_fit_height_offset_comes_from_the_authored_fit_component(
     let documents = [
         ("entities/ball.xml", r#"<BFTypedBinder binderType="Ball"><types><entity><toy/></entity></types><shared><BFPhysObj><BFGroundFitComponent heightOffset="0.75" floatOnWater="true"/></BFPhysObj></shared></BFTypedBinder>"#),
         ("entities/rock.xml", r#"<BFTypedBinder binderType="Rock"><types><entity><scenery/></entity></types><shared><BFPhysObj><BFGroundFitComponent/></BFPhysObj></shared></BFTypedBinder>"#),
+        // Shipped wetland trees author floatOnWater with waterOffset -1.75.
+        ("entities/tree.xml", r#"<BFTypedBinder binderType="Tree"><types><entity><scenery/></entity></types><shared><BFPhysObj><BFGroundFitComponent floatOnWater="true" waterOffset="-1.75" /></BFPhysObj></shared></BFTypedBinder>"#),
         ("entities/sign.xml", r#"<BFTypedBinder binderType="Sign"><types><entity><scenery/></entity></types><shared><BFPhysObj/></shared></BFTypedBinder>"#),
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
     .into_iter()
     .collect::<Result<Vec<_>, _>>()?;
     let index = SourceIndex::build(&documents)?;
     let mut tables = WorldDefinitionLoweringTables::default();
-    for key in ["Ball", "Rock", "Sign"] {
+    for key in ["Ball", "Rock", "Tree", "Sign"] {
         let record = index.find(key).ok_or(key)?;
         bind_authored_placement_object(
             &record,
@@ -32,8 +34,22 @@ fn ground_fit_height_offset_comes_from_the_authored_fit_component(
         .document
         .objects
         .iter()
-        .map(|object| (object.terrain_fitted, object.terrain_fit_height_offset_m))
+        .map(|object| {
+            (
+                object.terrain_fitted,
+                object.terrain_fit_height_offset_m,
+                object.terrain_fit_water_offset_m,
+            )
+        })
         .collect::<Vec<_>>();
-    assert_eq!(fit, [(true, 0.75), (true, 0.0), (false, 0.0)]);
+    assert_eq!(
+        fit,
+        [
+            (true, 0.75, Some(0.0)),
+            (true, 0.0, None),
+            (true, 0.0, Some(-1.75)),
+            (false, 0.0, None)
+        ]
+    );
     Ok(())
 }

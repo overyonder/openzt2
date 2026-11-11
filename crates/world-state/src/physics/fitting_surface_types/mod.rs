@@ -6,6 +6,8 @@ use bevy::prelude::*;
 pub struct TerrainFittingSurface {
     pub normal_tolerance: f32,
     pub height_offset_m: f32,
+    /// Offset from the water surface for an authored `floatOnWater` fit.
+    pub water_offset_m: Option<f32>,
 }
 
 /// Presentation-only crossing history for an authored real-physics body.

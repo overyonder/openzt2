@@ -92,6 +92,7 @@ fn document() -> WorldDefinitionDocument {
             preview_scale: 1.0,
             terrain_fitted: false,
             terrain_fit_height_offset_m: 0.0,
+            terrain_fit_water_offset_m: None,
             real_physics_water_impact: None,
             price_cents: 1250,
             upkeep_cents_per_month: 0,
