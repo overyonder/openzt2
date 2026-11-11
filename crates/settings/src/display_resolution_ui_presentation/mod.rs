@@ -3,6 +3,7 @@ use bevy::{
     window::{Monitor, PrimaryMonitor},
 };
 use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
@@ -17,6 +18,7 @@ use super::{
     options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
 };
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 pub(super) fn synchronize_supported_display_resolutions_from_primary_monitor(
     changed: Query<(), Or<(Added<Monitor>, Changed<Monitor>)>>,
@@ -148,6 +150,23 @@ pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
             if entity_is_descendant_of_or_equal_to(entity, row, &parents) && selected.0 != next {
                 selected.0 = next;
             }
+        }
+    }
+}
+
+/// Shows the drafted mode in the options screen's `Video Setting` field, as
+/// the source options mode does above its resolution list.
+pub(super) fn project_drafted_display_resolution_into_authored_text(
+    draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    mut texts: Query<(Ref<UiTextBinding>, &mut Text)>,
+) {
+    let label = format!("{} x {}", draft.display.width, draft.display.height);
+    for (binding, mut text) in &mut texts {
+        if binding.0 == UiTextPropertyBindingSource::DraftDisplayResolution
+            && (draft.is_changed() || binding.is_added())
+            && text.0 != label
+        {
+            text.0.clone_from(&label);
         }
     }
 }

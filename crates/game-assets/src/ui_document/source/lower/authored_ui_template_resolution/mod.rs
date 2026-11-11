@@ -348,6 +348,53 @@ mod slider_template_tests {
         };
         assert_eq!(cleared.filter_fields, Some(Vec::new()));
     }
+
+    #[test]
+    fn a_framed_tooltip_keeps_its_text_inset() {
+        use crate::source_document::blue_fang_source_document_parsing::parse_blue_fang_source_document;
+        use crate::ui_document::source::lower::authored_ui_template_resolution::collapse_nine_slice;
+        let part = |name: &str, x: u32, y: u32, w: u32, h: u32| {
+            format!(
+                r#"<UIStatic name="{name}"><UIAspect><default image="ui/template/backs/tooltips.dds"><BFRect x="{x}" y="{y}" w="{w}" h="{h}"/></default></UIAspect></UIStatic>"#
+            )
+        };
+        let parts = [
+            part("TopLeft", 0, 0, 8, 8),
+            part("TopMiddle", 8, 0, 16, 8),
+            part("TopRight", 24, 0, 8, 8),
+            part("MidLeft", 0, 8, 8, 16),
+            part("Center", 8, 8, 16, 16),
+            part("MidRight", 24, 8, 8, 16),
+            part("BottomLeft", 0, 24, 8, 8),
+            part("BottomMiddle", 8, 24, 16, 8),
+            part("BottomRight", 24, 24, 8, 8),
+        ]
+        .concat();
+        let source = format!(
+            r#"<UIRoot><children><UITooltip name="MainTooltip" type="long"><UIAspect padx="5" pady="5"><default image=""/></UIAspect><children>{parts}</children></UITooltip></children></UIRoot>"#
+        );
+        let parsed =
+            parse_blue_fang_source_document(AssetPath::new("ztapp4.xml"), source.as_bytes())
+                .expect("valid UI source");
+        let source = SourceUiDocument::parse(&parsed);
+        let input = AuthoredUiDocument {
+            virtual_path: "ztapp4.xml".into(),
+            id: AssetId::default(),
+            role: UiDocumentRole::ApplicationRoot,
+            source,
+            templates: BTreeMap::new(),
+            image_selections: Vec::new(),
+            interaction_cursors: None,
+            placement_preview: None,
+            role_targets: BTreeMap::new(),
+            resolved_dependencies: Default::default(),
+        };
+        let mut tooltip = input.source.root.children[0].clone();
+        let border = collapse_nine_slice(&mut tooltip, &input).expect("contiguous skin");
+        assert_eq!(border, Some([8.0, 8.0, 8.0, 8.0]));
+        let aspect = tooltip.aspect.expect("collapsed skin aspect");
+        assert_eq!((aspect.pad_x, aspect.pad_y), (Some(5), Some(5)));
+    }
 }
 
 /// Blue Fang authored scalable panels as a convenience template containing
@@ -535,6 +582,9 @@ pub(super) fn collapse_nine_slice(
     if let Some(owner) = node.aspect.as_ref() {
         aspect.localization_id = owner.localization_id.clone();
         aspect.authored_string = owner.authored_string.clone();
+        // The owner's text inset (`MainTooltip` authors padx="5" pady="5").
+        aspect.pad_x = owner.pad_x;
+        aspect.pad_y = owner.pad_y;
         if let (Some(skin), Some(owner)) = (aspect.default.as_mut(), owner.default.as_ref()) {
             skin.font = owner.font.clone();
             skin.text_alignment = owner.text_alignment.clone();

@@ -390,6 +390,16 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
                 .push(UiNodePropertyBinding::TextContent(source));
         }
     }
+    // The source options mode writes the picked mode into this field; the
+    // layout leaves it empty.
+    if role == UiDocumentRole::Options
+        && normalized_name == "videosetting"
+        && matches!(&node.widget, SourceUiWidgetData::Text(_))
+    {
+        output.bindings.push(UiNodePropertyBinding::TextContent(
+            UiTextPropertyBindingSource::DraftDisplayResolution,
+        ));
+    }
     if role == UiDocumentRole::ZooStatus {
         if normalized_name == "openzooselection"
             && matches!(&node.widget, SourceUiWidgetData::Text(_))

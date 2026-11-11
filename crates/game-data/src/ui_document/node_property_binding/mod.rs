@@ -117,6 +117,8 @@ pub enum UiTextPropertyBindingSource {
     SelectedEntityName,
     GraphicsDetailSettingLabel,
     GraphicsDetailSettingLevel,
+    /// Resolution picked in the open options screen, before it is accepted.
+    DraftDisplayResolution,
     ZooName,
     SelectedEntityDefinitionName,
     SelectedEntitySaleConfirmation,
