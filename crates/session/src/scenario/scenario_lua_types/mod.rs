@@ -42,6 +42,10 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
     pub(super) profile_variables: &'a openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     pub(super) zoo_cash: &'a ZooCash,
+    /// The rule set of the loaded world, which `ZT_GET_IS_CAMPAIGN` and
+    /// `ZT_GET_IS_FREEFORM` report.
+    pub(super) world_session_mode:
+        Option<openzt2_world_state::game_session_types::WorldSessionMode>,
     pub(super) guest_admission_price: &'a AdmissionPrice,
     pub(super) finance_history:
         &'a openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory,
