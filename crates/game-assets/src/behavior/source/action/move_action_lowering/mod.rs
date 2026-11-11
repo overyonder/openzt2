@@ -117,7 +117,12 @@ pub(super) fn lower_move_action_source_node(
                     // uses the actor's canonical NavAgent speed, without a
                     // guessed multiplier.
                     "fast" => Ok(Some(BehaviorMoveLocomotionSpeed::Fast)),
-                    "slow" | "medium" | "sonar" => Err(invalid_behavior_source_data(
+                    // Like `fast`, these pick the gait row (on land or in
+                    // water, such as a polar bear's medium `Swim`) while the
+                    // route keeps the actor's NavAgent speed.
+                    "slow" => Ok(Some(BehaviorMoveLocomotionSpeed::Slow)),
+                    "medium" => Ok(Some(BehaviorMoveLocomotionSpeed::Medium)),
+                    "sonar" => Err(invalid_behavior_source_data(
                         "BFBehMove locoSpeed has no live NavAgent mode mapping",
                     )),
                     _ => Err(invalid_behavior_source_data(
