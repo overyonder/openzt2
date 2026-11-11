@@ -171,6 +171,11 @@ pub fn project_document(
                 // Reusable rows retain their authored extent. Overflow belongs
                 // to the owning list's scroll area, not flex compression.
                 node.flex_shrink = 0.0;
+                // The list advances rows vertically; the row's authored x stays
+                // its inset (`ResolutionEntry` authors x="10").
+                if let Val::Px(inset) = node.left {
+                    node.margin.left = px(inset);
+                }
                 node.left = Val::Auto;
                 node.right = Val::Auto;
                 node.top = Val::Auto;
