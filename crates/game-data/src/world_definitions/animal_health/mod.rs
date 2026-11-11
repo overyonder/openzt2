@@ -75,3 +75,108 @@ pub struct RampageRule {
     pub minimum_ticks: u32,
     pub behavior: AssetId,
 }
+
+/// The shipped `ZTDiseaseMgr`: when the zoo exposes animals to each authored
+/// disease. Durations are seconds of game time.
+// This schema record may contain floating-point members and therefore cannot derive `Eq`.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct DiseaseExposurePolicy {
+    pub check_interval_seconds: f32,
+    /// Kept while its role in the manager is unknown.
+    pub update_interval_seconds: f32,
+    /// Kept while its role in the manager is unknown.
+    pub cure_timeout_seconds: f32,
+    /// Kept while its role in the manager is unknown.
+    pub half_star_minimum: u8,
+    pub diseases: Vec<AuthoredDisease>,
+}
+
+/// One `ZTDisease`. Scripts and tasks run its stages; the manager only gives
+/// a qualifying animal its `token`.
+// This schema record may contain floating-point members and therefore cannot derive `Eq`.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct AuthoredDisease {
+    pub name: AssetId,
+    pub token: AssetId,
+    pub cure_token: AssetId,
+    pub clear_tokens: Vec<AssetId>,
+    pub target_types: Vec<AssetId>,
+    pub chance_percent: f32,
+    /// A type whose zoo count scales `chance_percent`, such as `TrashGround`.
+    pub chance_multiplier: Option<AssetId>,
+    /// Kept while its role in the manager is unknown.
+    pub single_qualifier: bool,
+    /// `false` when the disease is only given through its cause object's tasks.
+    pub search_for_targets: bool,
+    /// Only a script gives this disease, as for `TutorialLove`.
+    pub force_only: bool,
+    pub zoo_tests: Vec<DiseaseZooTest>,
+    pub animal_filters: Vec<DiseaseAnimalFilter>,
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub enum DiseaseComparison {
+    Less,
+    LessOrEqual,
+    Equal,
+    GreaterOrEqual,
+    Greater,
+}
+
+impl DiseaseComparison {
+    #[must_use]
+    pub fn holds(self, value: u32, reference: u32) -> bool {
+        match self {
+            Self::Less => value < reference,
+            Self::LessOrEqual => value <= reference,
+            Self::Equal => value == reference,
+            Self::GreaterOrEqual => value >= reference,
+            Self::Greater => value > reference,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
+pub enum DiseaseZooTest {
+    /// `ZTEntityTypePredicate`: how many entities of a type, optionally with
+    /// a boolean attribute, the zoo holds.
+    EntityCount {
+        entity_type: AssetId,
+        attribute: Option<(AssetId, bool)>,
+        quantity: u32,
+        comparison: DiseaseComparison,
+        /// Kept while its role in the predicate is unknown.
+        different: bool,
+    },
+    /// `ZTZooFamePredicate`.
+    Fame {
+        half_stars: u32,
+        comparison: DiseaseComparison,
+    },
+}
+
+// This schema record may contain floating-point members and therefore cannot derive `Eq`.
+#[allow(
+    clippy::derive_partial_eq_without_eq,
+    reason = "schema records may contain floats"
+)]
+#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub enum DiseaseAnimalFilter {
+    /// `ZTAnimalAttributeFilter`.
+    Attribute { attribute: AssetId, value: bool },
+    /// `ZTAnimalProximityFilter`: an entity of the type within (`closer`) or
+    /// beyond the distance.
+    Proximity {
+        entity_type: AssetId,
+        distance_m: f32,
+        closer: bool,
+    },
+}

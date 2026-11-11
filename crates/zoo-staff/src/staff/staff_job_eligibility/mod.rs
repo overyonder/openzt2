@@ -296,7 +296,6 @@ fn authored_staff_behavior_task_unique_identifiers(
         StaffJobKind::CleanHabitat => &["worker:rakepoo"],
         StaffJobKind::EmptyBin => &["worker:emptytrash", "worker:emptyrecycling"],
         StaffJobKind::SweepLitter => &["worker:sweeptrash"],
-        StaffJobKind::Repair => &[],
         StaffJobKind::Treat => &[
             "keeper:healanimal_land",
             "keeper:healanimal_water",

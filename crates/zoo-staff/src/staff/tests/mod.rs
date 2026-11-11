@@ -171,7 +171,7 @@ fn missing_staff_releases_assignment_and_preserves_live_request() {
         .world_mut()
         .spawn((
             StaffJob {
-                kind: StaffJobKind::Repair,
+                kind: StaffJobKind::EmptyBin,
                 target,
                 urgency: 1,
                 token: None,

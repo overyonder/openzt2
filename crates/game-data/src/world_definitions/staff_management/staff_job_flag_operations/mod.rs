@@ -6,7 +6,6 @@ impl StaffJobCapabilityFlags {
     pub const CLEAN_HABITAT: Self = Self(1 << 2);
     pub const EMPTY_BIN: Self = Self(1 << 3);
     pub const SWEEP_LITTER: Self = Self(1 << 4);
-    pub const REPAIR: Self = Self(1 << 5);
     pub const TREAT: Self = Self(1 << 6);
     pub const EDUCATE: Self = Self(1 << 7);
     pub const ENTERTAIN: Self = Self(1 << 8);
@@ -20,7 +19,6 @@ impl StaffJobCapabilityFlags {
         | 1 << 2
         | 1 << 3
         | 1 << 4
-        | 1 << 5
         | 1 << 6
         | 1 << 7
         | 1 << 8
@@ -61,7 +59,6 @@ impl StaffJobCapabilityFlags {
             StaffJobKind::CleanHabitat => Self::CLEAN_HABITAT,
             StaffJobKind::EmptyBin => Self::EMPTY_BIN,
             StaffJobKind::SweepLitter => Self::SWEEP_LITTER,
-            StaffJobKind::Repair => Self::REPAIR,
             StaffJobKind::Treat => Self::TREAT,
             StaffJobKind::Educate => Self::EDUCATE,
             StaffJobKind::Entertain => Self::ENTERTAIN,

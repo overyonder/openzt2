@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 
 use super::{
     super::persistence_failure_types::WorldSnapshotPersistenceFailure,
@@ -19,6 +20,7 @@ pub(in crate::persistence) type StaffSnapshotEntities<'w, 's> = Query<
         &'static Transform,
         &'static Employment,
         &'static StaffRole,
+        Option<&'static CaffeineMode>,
     ),
 >;
 
@@ -28,7 +30,7 @@ pub(super) fn capture_staff_snapshot_records(
     let mut records = staff
         .iter()
         .map(
-            |(persistent_identifier, definition, transform, employment, role)| {
+            |(persistent_identifier, definition, transform, employment, role, caffeine)| {
                 Ok(StaffSnapshotRecord {
                     persistent_identifier: persistent_identifier
                         .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?
@@ -43,6 +45,7 @@ pub(super) fn capture_staff_snapshot_records(
                     wage_cents_per_month: employment.wage.0,
                     hired_tick: employment.hired_tick,
                     hired_month_ordinal: employment.hired_month_ordinal,
+                    caffeinated: caffeine.map(|mode| *mode == CaffeineMode::Caffeinated),
                 })
             },
         )

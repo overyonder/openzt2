@@ -32,7 +32,6 @@ pub fn derive_zoo_seed_from_scenario_and_profile(
 pub enum RngDomain {
     Reproduction = 0,
     Behavior = 1,
-    #[cfg(test)]
     Disease = 2,
     Guest = 3,
     Donation = 4,

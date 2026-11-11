@@ -23,6 +23,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::{
     find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::DirectLocomotion;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
@@ -45,6 +46,7 @@ pub(super) struct AnimalLocomotionRuntime<'w, 's> {
     random_streams: Query<'w, 's, &'static mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
     unprojected_reasons: Local<'s, HashMap<Entity, &'static str>>,
     unprojected_clip_states: Local<'s, HashMap<Entity, String>>,
+    caffeine_modes: Query<'w, 's, &'static CaffeineMode>,
 }
 
 pub(super) fn project_animal_animation_motion_to_navigation(
@@ -96,6 +98,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
         mut random_streams,
         mut unprojected_reasons,
         mut unprojected_clip_states,
+        caffeine_modes,
     } = runtime;
     // Logs why an animal has no navigation agent yet, once per change of reason.
     let mut wait = |animal: Entity, has_agent: bool, reason: &'static str| {
@@ -383,9 +386,11 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             .find_map(|entity| {
                 let (binding, parent) = joints.get(entity).ok()?;
                 (binding.animation_playback_controller_entity == controller_entity
-                    && binding.joint_asset_key == root.joint_asset_key)
-                    .then(|| transforms.get(parent.parent()).ok())
-                    .flatten()
+                    && binding
+                        .joint_asset_key
+                        .eq_ignore_ascii_case(&root.joint_asset_key))
+                .then(|| transforms.get(parent.parent()).ok())
+                .flatten()
             });
         let Some(parent) = parent else {
             wait(
@@ -456,14 +461,19 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             ownership.rate_source = rate_source;
         }
         let moving = navigating || direct;
+        // Movement follows the clip's root motion, so scaling its rate speeds
+        // the animal up or slows it down.
+        let rate = (f32::from(ownership.playback_speed_permille)
+            * CaffeineMode::speed_factor(caffeine_modes.get(animal_entity).ok()))
+        .round()
+        .clamp(1.0, f32::from(i16::MAX)) as i16;
         if !task_animation
             && ownership.move_request_id.is_some()
             && ((controller.playback_generation != ownership.requested_generation
                 && controller.explicit_clip_request_id != ownership.move_request_id)
                 || (controller.explicit_clip_request_id == ownership.move_request_id
                     && (controller.animation_clip_asset_key != clip_key
-                        || controller.playback_speed_permille
-                            != ownership.playback_speed_permille)))
+                        || controller.playback_speed_permille != rate)))
         {
             ownership.move_request_id = None;
         }
@@ -472,7 +482,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
                 animation_subject_entity: controller_entity,
                 animation_clip_asset_key: clip_key.clone(),
                 blend_duration_milliseconds: 0,
-                playback_speed_permille: ownership.playback_speed_permille,
+                playback_speed_permille: rate,
                 playback_repetition_policy: AnimationPlaybackRepetitionPolicy::Loop,
             });
             ownership.move_request_id = Some(request.id);

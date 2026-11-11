@@ -29,6 +29,19 @@ pub struct BehaviorSelfTokenDelivery {
     /// for the next attempt, as a due birth's `t_Pregnant` does.
     #[serde(default)]
     pub retain_on_failure: bool,
+    /// `GiveTo` naming an entity type, with `Radius`: replaces `recipient`.
+    #[serde(default)]
+    pub nearby: Option<BehaviorNearbyTokenRecipients>,
+}
+
+/// Every live animal of `entity_type` within `radius_m` of the subject, each
+/// receiving the token with `chance_percent` (`ChanceInRadius`), as a disease
+/// spreads to nearby animals.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct BehaviorNearbyTokenRecipients {
+    pub entity_type: AssetId,
+    pub radius_m: f32,
+    pub chance_percent: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

@@ -320,12 +320,13 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
                     }
                 }),
         );
-        if active_catalogue
+        if let Some(definition) = active_catalogue
             .find_object(definition_id)
-            .is_some_and(|definition| definition.terrain_fitted)
+            .filter(|definition| definition.terrain_fitted)
         {
             commands.entity(entity).insert(TerrainFittingSurface {
                 normal_tolerance: 0.0,
+                height_offset_m: definition.terrain_fit_height_offset_m,
             });
         }
         if is_zoo_entrance(active_catalogue, definition_id) {

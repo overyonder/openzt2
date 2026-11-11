@@ -5,6 +5,7 @@ use bevy::prelude::*;
 #[derive(Component, Debug, Clone, Copy, PartialEq)]
 pub struct TerrainFittingSurface {
     pub normal_tolerance: f32,
+    pub height_offset_m: f32,
 }
 
 /// Presentation-only crossing history for an authored real-physics body.

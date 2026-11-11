@@ -135,6 +135,7 @@ pub(super) enum SingletonKind {
     TankSurface,
     TankDepth,
     TankEdit,
+    DiseaseExposure,
     FencePlacementMode,
     ShowPresentation,
     ShowScheduling,
@@ -237,6 +238,22 @@ impl WorldDefinitions {
             .min()
             .unwrap_or_default();
         self.handles.push(handle);
+    }
+
+    /// Lets fixtures demand-load the scenes added with
+    /// `WorldDefinitionAsset::with_test_scene` through `server`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn index_test_scenes(
+        &mut self,
+        server: AssetServer,
+        handle: &Handle<WorldDefinitionAsset>,
+        asset: &WorldDefinitionAsset,
+    ) {
+        for scene in &asset.scenes {
+            self.records
+                .insert((DefinitionKind::SceneDependency, scene.id), handle.clone());
+        }
+        self.server = Some(server);
     }
 
     pub fn get<'a>(
@@ -954,6 +971,12 @@ impl<'a> WorldDefinitionsView<'a> {
         TankDepthPolicy
     );
     singleton!(tank_edit_policy, TankEdit, tank_edit_policy, TankEditPolicy);
+    singleton!(
+        disease_exposure,
+        DiseaseExposure,
+        disease_exposure,
+        openzt2_game_data::world_definitions::animal_health::DiseaseExposurePolicy
+    );
     singleton!(
         fence_placement_mode_policy,
         FencePlacementMode,

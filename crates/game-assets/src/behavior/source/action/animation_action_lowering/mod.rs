@@ -65,10 +65,16 @@ pub(super) fn lower_animation_action_source_node(
                     | "maxAnimSpeed"
             )
         })
+        // ponytail: the diseases' inline `diseaseon`/`diseaseoff` text keys
+        // only start and stop a particle effect, which is not drawn yet.
         || animation_action_source_node
             .element_children()
-            .next()
-            .is_some()
+            .any(|child| {
+                child.name != "textkeys"
+                    || child.element_children().any(|key| {
+                        !matches!(key.name.as_str(), "diseaseon" | "diseaseoff")
+                    })
+            })
     {
         return Err(invalid_behavior_source_data(
             "BFBehAnimate playback policy is not yet mapped",

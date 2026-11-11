@@ -17,6 +17,7 @@ use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAss
 use openzt2_zoo_state::animal_lifecycle::types::{
     AnimalLifeStage, AnimalSex, Mate, Parents, SpeciesHandle,
 };
+use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::maintenance::maintenance_types::CompostPooLevel;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
@@ -31,6 +32,15 @@ pub(super) struct BehaviorScriptWorldChanges {
     pub(super) incomes: Vec<f64>,
     /// `BFAI_CLEAR_RELATIONSHIP` / `BFAI_ADD_RELATIONSHIP` for `mate`.
     pub(super) mates: Vec<(Entity, Option<Entity>)>,
+    pub(super) diseases: Vec<(Entity, DiseaseAttribute)>,
+}
+
+/// An authored disease attribute a script wrote.
+pub(super) enum DiseaseAttribute {
+    /// `b_Disease`.
+    Diseased(bool),
+    /// `s_DiseaseName`; `cureAnimal` writes "None".
+    Name(String),
 }
 
 #[derive(SystemParam)]
@@ -222,6 +232,34 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                     Some(mate) => entity.insert(Mate(mate)),
                     None => entity.remove::<Mate>(),
                 };
+            }
+        }
+        for (entity, attribute) in changes.diseases {
+            let Ok(mut entity) = commands.get_entity(entity) else {
+                continue;
+            };
+            match attribute {
+                DiseaseAttribute::Diseased(true) => {
+                    entity.insert_if_new(Disease {
+                        definition: AssetId::default(),
+                        elapsed_ticks: 0,
+                        severity_permille: 0,
+                        hint_level: 0,
+                    });
+                }
+                DiseaseAttribute::Diseased(false) => {
+                    entity.remove::<Disease>();
+                }
+                // The name is the shipped `ZTDisease name`, such as "ExtinctFlu".
+                DiseaseAttribute::Name(name) => {
+                    entity.entry::<Disease>().and_modify(move |mut disease| {
+                        disease.definition = if name == "None" {
+                            AssetId::default()
+                        } else {
+                            AssetId::from_key(&canonicalize_source_document_record_key(&name))
+                        };
+                    });
+                }
             }
         }
         for (entity, level) in changes.poo_levels {
