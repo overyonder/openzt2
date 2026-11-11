@@ -78,6 +78,7 @@ pub(super) fn present_cursor(
     sources: CursorPresentation,
     window: Single<(Entity, &Window, Option<&CursorIcon>), With<PrimaryWindow>>,
     mut commands: Commands,
+    mut scaling: CursorScaling,
 ) {
     let scale_factor = window.1.scale_factor();
     let next = if wait.0
@@ -148,6 +149,7 @@ pub(super) fn present_cursor(
             })
             .unwrap_or(CursorIcon::System(SystemCursorIcon::Default))
     };
+    let next = scaling.scale_with_ui_canvas(next, window.1);
     let (window, _, current) = *window;
     if current != Some(&next) {
         commands.entity(window).insert(next);
@@ -334,6 +336,87 @@ fn cursor_from_document(
         })
         .into(),
     )
+}
+
+type ScaledCursorCache = std::collections::HashMap<
+    (bevy::asset::AssetId<Image>, URect, u32),
+    (Handle<Image>, (u16, u16)),
+>;
+
+/// Scales authored cursors with the UI canvas, so a 32-pixel cursor keeps
+/// the proportion to the interface it had on the original 1024x768 screen.
+#[derive(SystemParam)]
+pub(super) struct CursorScaling<'w, 's> {
+    images: ResMut<'w, Assets<Image>>,
+    settings: Res<'w, openzt2_interface_state::settings::display_settings_types::DisplaySettings>,
+    scaled: Local<'s, ScaledCursorCache>,
+}
+
+impl CursorScaling<'_, '_> {
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        clippy::cast_precision_loss,
+        reason = "cursor sizes are a few dozen positive pixels"
+    )]
+    fn scale_with_ui_canvas(&mut self, cursor: CursorIcon, window: &Window) -> CursorIcon {
+        let CursorIcon::Custom(CustomCursor::Image(source)) = &cursor else {
+            return cursor;
+        };
+        let Some(rect) = source.rect else {
+            return cursor;
+        };
+        // winit makes a macOS cursor image one point per pixel; elsewhere the
+        // image is in physical pixels.
+        let pixels_per_point = if cfg!(target_os = "macos") {
+            1.0
+        } else {
+            window.scale_factor()
+        };
+        let scale = window.height() / 768.0 * f32::from(self.settings.ui_scale_permille) / 1000.0
+            * pixels_per_point;
+        if !scale.is_finite() || scale <= 0.0 || (scale - 1.0).abs() < 0.01 {
+            return cursor;
+        }
+        let side = (rect.width().max(1) as f32 * scale).round().max(1.0) as u32;
+        let key = (source.handle.id(), rect, side);
+        if !self.scaled.contains_key(&key) {
+            let Some(dynamic) = self
+                .images
+                .get(&source.handle)
+                .and_then(|image| image.clone().try_into_dynamic().ok())
+            else {
+                return cursor;
+            };
+            let cropped = dynamic.crop_imm(rect.min.x, rect.min.y, rect.width(), rect.height());
+            let height = (rect.height().max(1) as f32 * scale).round().max(1.0) as u32;
+            let resized = cropped.resize_exact(side, height, image::imageops::FilterType::Triangle);
+            let hotspot = (
+                (f32::from(source.hotspot.0) * scale)
+                    .round()
+                    .min(f32::from(u16::MAX)) as u16,
+                (f32::from(source.hotspot.1) * scale)
+                    .round()
+                    .min(f32::from(u16::MAX)) as u16,
+            );
+            let handle = self.images.add(Image::from_dynamic(
+                resized,
+                true,
+                bevy::asset::RenderAssetUsages::all(),
+            ));
+            self.scaled.insert(key, (handle, hotspot));
+        }
+        let Some((handle, hotspot)) = self.scaled.get(&key) else {
+            return cursor;
+        };
+        CustomCursor::Image(CustomCursorImage {
+            handle: handle.clone(),
+            rect: None,
+            hotspot: *hotspot,
+            ..source.clone()
+        })
+        .into()
+    }
 }
 
 pub(super) fn initialize(app: &mut App) {
