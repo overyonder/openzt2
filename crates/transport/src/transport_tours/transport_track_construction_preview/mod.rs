@@ -232,10 +232,29 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     *transform = preview.transform;
     preview.validity = if let Some((mut path_points, cost)) = path_points_and_cost {
         if selected_kind == TransportationTrackKind::Ground {
-            drape_ground_level_track_points_on_terrain(&mut path_points, &terrain);
+            drape_ground_level_track_points_on_terrain(
+                &mut path_points,
+                to_station.is_none(),
+                &terrain,
+            );
+            if let Some(&last) = path_points.last() {
+                track_preview.to_position = last;
+            }
         }
+        // Laying the road on the terrain can make a piece steeper than the
+        // track allows; the connection would then be rejected after the
+        // click and the piece would vanish, so refuse it here, as the
+        // original's `too_steep` placement colour does.
+        let valid = crate::transport_tours::transport_fact_validation::authored_transport_track_piece_chain_is_valid(
+            track_definition,
+            &path_points,
+        );
         track_preview.path_points = path_points;
-        PlacementValidity::Valid { cost }
+        if valid {
+            PlacementValidity::Valid { cost }
+        } else {
+            PlacementValidity::Invalid(PlacementFailure::TooSteep)
+        }
     } else {
         track_preview.path_points.clear();
         track_preview.path_points.push(from_position);
@@ -268,6 +287,7 @@ type TrackTerrain<'w, 's> = (
 /// it was drawn as an elevated strip.
 fn drape_ground_level_track_points_on_terrain(
     path_points: &mut [Vec3],
+    free_end: bool,
     (index, assets, chunks): &TrackTerrain,
 ) {
     use openzt2_zoo_state::terrain::terrain_world_sampling::{sample_terrain, terrain_chunk_at};
@@ -275,25 +295,24 @@ fn drape_ground_level_track_points_on_terrain(
         let (chunk, edited) = chunks.get(terrain_chunk_at(index, point.xz())?).ok()?;
         Some(sample_terrain(chunk, assets.get(&chunk.asset)?, edited, point.xz())?.height_m)
     };
-    drape_points_between_grounded_ends(path_points, &ground);
+    // An end that isn't snapped to a station is the pointer projected onto
+    // the road's axis, so it carries the pointer's height rather than the
+    // ground's at its own position.
+    if free_end {
+        if let Some(height) = path_points.last().and_then(|last| ground(*last)) {
+            if let Some(last) = path_points.last_mut() {
+                last.y = height;
+            }
+        }
+    }
+    drape_points_between_ends(path_points, &ground);
 }
 
-fn drape_points_between_grounded_ends(
-    path_points: &mut [Vec3],
-    ground: &impl Fn(Vec3) -> Option<f32>,
-) {
-    const GROUNDED_TOLERANCE_METRES: f32 = 0.05;
-    let grounded = |point: Vec3| {
-        ground(point).is_some_and(|height| (point.y - height).abs() <= GROUNDED_TOLERANCE_METRES)
-    };
-    let (Some(&first), Some(&last)) = (path_points.first(), path_points.last()) else {
-        return;
-    };
-    if path_points.len() < 3 || !grounded(first) || !grounded(last) {
-        return;
-    }
-    let inner = path_points.len() - 1;
-    for point in &mut path_points[1..inner] {
+fn drape_points_between_ends(path_points: &mut [Vec3], ground: &impl Fn(Vec3) -> Option<f32>) {
+    // The original's road tool has no height control: a ground road is always
+    // painted onto the terrain between its two ends.
+    let inner = path_points.len().saturating_sub(1);
+    for point in path_points.iter_mut().take(inner).skip(1) {
         if let Some(height) = ground(*point) {
             point.y = height;
         }
@@ -302,27 +321,19 @@ fn drape_points_between_grounded_ends(
 
 #[cfg(test)]
 mod tests {
-    use super::drape_points_between_grounded_ends;
+    use super::drape_points_between_ends;
     use bevy::prelude::*;
 
     #[test]
-    fn a_grounded_road_follows_a_dip_but_a_raised_one_keeps_its_line() {
-        // Ground at 8 m with a 2 m dip in the middle.
+    fn a_road_follows_the_ground_between_its_ends() {
+        // Ground at 8 m with a 2 m dip; the station end sits 1 m higher.
         let ground = |point: Vec3| Some(if point.x.abs() < 1.0 { 6.0 } else { 8.0 });
-        let line = |end_y: f32| {
-            [-3.0, 0.0, 3.0].map(|x| Vec3::new(x, 8.0 + (end_y - 8.0) * (x + 3.0) / 6.0, 0.0))
-        };
-        let mut grounded = line(8.0);
-        drape_points_between_grounded_ends(&mut grounded, &ground);
-        assert!(grounded
+        let mut points = [-3.0, 0.0, 3.0, 6.0].map(|x| Vec3::new(x, 9.0, 0.0));
+        drape_points_between_ends(&mut points, &ground);
+        let heights = points.map(|point| point.y);
+        assert!(heights
             .iter()
-            .zip([8.0, 6.0, 8.0])
-            .all(|(point, y)| (point.y - y).abs() < 1e-5));
-        let mut raised = line(11.0);
-        drape_points_between_grounded_ends(&mut raised, &ground);
-        assert!(raised
-            .iter()
-            .zip([8.0, 9.5, 11.0])
-            .all(|(point, y)| (point.y - y).abs() < 1e-5));
+            .zip([9.0, 6.0, 8.0, 9.0])
+            .all(|(y, want)| (y - want).abs() < 1e-5));
     }
 }
