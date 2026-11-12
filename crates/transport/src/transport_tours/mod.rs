@@ -84,6 +84,7 @@ impl Plugin for TransportToursPlugin {
                 (
                     crate::transport_tours::transport_track_construction_preview::update_transport_track_construction_preview_from_pointer_and_station_endpoints,
                     crate::transport_tours::transport_track_construction_preview::begin_or_commit_transport_track_construction_from_primary_pointer_action,
+                    crate::transport_tours::transport_track_construction_preview::highlight_transport_track_connection_stations,
                 )
                     .chain()
                     .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet)
