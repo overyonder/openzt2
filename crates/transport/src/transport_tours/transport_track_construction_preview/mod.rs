@@ -374,7 +374,15 @@ pub(super) fn highlight_transport_track_connection_stations(
     let mut wanted = HashMap::new();
     let on = (time.elapsed_secs() / COLOR_ANIMATION_CYCLE_SECONDS).rem_euclid(2.0) < 1.0;
     if let (ConstructionTool::Delete, Ok((_, _, Some(hovered)))) = (*tool, cursors.single()) {
-        light_deleted_track_leg(hovered.0, on, &pieces, &children, &decals, &mut wanted);
+        light_deleted_track_leg(
+            hovered.0,
+            on,
+            &pieces,
+            &children,
+            &decals,
+            &ropes,
+            &mut wanted,
+        );
     }
     if let (Some((_, kind)), Ok((cursor, world_member, _)), Some(definitions)) = (
         selected_transport_track_definition(*tool),
@@ -506,15 +514,25 @@ fn light_deleted_track_leg(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
     )>,
+    ropes: &Query<
+        (),
+        With<crate::transport_tours::transport_track_piece_presentation::SkyTrackRope>,
+    >,
     wanted: &mut HashMap<Entity, Color>,
 ) {
-    let Ok((_, hovered)) = pieces.get(hovered) else {
-        return;
-    };
     let color = if on {
         Color::srgb(1.0, 0.0, 0.0)
     } else {
         Color::srgb(1.0, 128.0 / 255.0, 0.0)
+    };
+    // A sky tower: its own parts, not its ropes.
+    let Ok((_, hovered)) = pieces.get(hovered) else {
+        for part in children.iter_descendants(hovered) {
+            if decals.contains(part) && !ropes.contains(part) {
+                wanted.insert(part, color);
+            }
+        }
+        return;
     };
     for (piece_entity, piece) in pieces {
         if piece.route_segment == hovered.route_segment {

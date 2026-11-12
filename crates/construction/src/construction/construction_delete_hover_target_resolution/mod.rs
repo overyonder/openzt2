@@ -1,9 +1,12 @@
 use bevy::prelude::*;
 
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
-use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::transport_tours::transport_topology_types::{
+    TrackProfile, TrackSegment, TransportTrackJunction,
+};
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 use openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries;
 
@@ -37,7 +40,11 @@ pub(super) fn update_delete_hover_target(
     grid: Res<TopologyGrid>,
     track_pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     routes: Query<&TrackSegment>,
-    sales: TransportTrackSaleQueries,
+    (sales, sky_towers): (
+        TransportTrackSaleQueries,
+        Query<(Entity, &GlobalTransform), With<TransportTrackJunction>>,
+    ),
+    sky_routes: Query<(&TrackSegment, &TrackProfile)>,
 ) {
     let Ok((cursor_entity, cursor, previous)) = cursors.single() else {
         return;
@@ -58,6 +65,12 @@ pub(super) fn update_delete_hover_target(
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
                 .then(|| nearest_fence(cursor.world.xz(), &fences, &nodes, *grid))
                 .flatten()
+        })
+        .or_else(|| {
+            (*tool == ConstructionTool::Delete)
+                .then_some(ray.0)
+                .flatten()
+                .and_then(|ray| nearest_sky_tower(ray, &sky_towers, &sky_routes, &sales))
         })
         .or_else(|| {
             (*tool == ConstructionTool::Delete && cursor.over_terrain)
@@ -94,6 +107,37 @@ fn nearest_fence(
             let along = (point - a).dot(b - a) / (b - a).length_squared().max(f32::EPSILON);
             let distance = point.distance(a + (b - a) * along.clamp(0.0, 1.0));
             (distance <= FENCE_DELETE_PICK_RADIUS_M).then_some((entity, distance))
+        })
+        .min_by(|(_, left), (_, right)| left.total_cmp(right))
+        .map(|(entity, _)| entity)
+}
+
+/// The sky tower the pointer ray passes within 2 m of, along its height,
+/// whose span the sale can remove.
+fn nearest_sky_tower(
+    ray: Ray3d,
+    towers: &Query<(Entity, &GlobalTransform), With<TransportTrackJunction>>,
+    routes: &Query<(&TrackSegment, &TrackProfile)>,
+    sales: &TransportTrackSaleQueries,
+) -> Option<Entity> {
+    // ponytail: a fixed 12 m pick height, read the tower's height if tall towers miss.
+    towers
+        .iter()
+        .filter(|(entity, _)| {
+            routes.iter().any(|(route, profile)| {
+                route.to == *entity && profile.kind == TransportationTrackKind::Sky
+            }) && sales.terminal_route_edit(*entity).is_some()
+        })
+        .filter_map(|(entity, transform)| {
+            let base = transform.translation();
+            let distance = (0..=24)
+                .map(|step| base + Vec3::Y * (12.0 * step as f32 / 24.0))
+                .map(|point| {
+                    let along = (point - ray.origin).dot(*ray.direction).max(0.0);
+                    point.distance(ray.origin + *ray.direction * along)
+                })
+                .fold(f32::INFINITY, f32::min);
+            (distance <= 2.0).then_some((entity, distance))
         })
         .min_by(|(_, left), (_, right)| left.total_cmp(right))
         .map(|(entity, _)| entity)
