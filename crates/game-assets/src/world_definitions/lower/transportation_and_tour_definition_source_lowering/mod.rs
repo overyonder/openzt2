@@ -303,22 +303,27 @@ pub(super) fn bind_station(
         ));
     }
     let kind = authored_transportation_track_kind(record)?;
-    let cardinal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryCardinal")?,
-                authored_transportation_offset_metres(record, "p_ExitCardinal")?,
-            ])
-        })
-        .transpose()?;
-    let diagonal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
-                authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
-            ])
-        })
-        .transpose()?;
+    // A sky station's ropes leave from its two seed points, whichever way
+    // the station faces.
+    let (cardinal_endpoint_offsets_metres, diagonal_endpoint_offsets_metres) =
+        if kind == TransportationTrackKind::Ground {
+            (
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryCardinal")?,
+                    authored_transportation_offset_metres(record, "p_ExitCardinal")?,
+                ]),
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
+                    authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
+                ]),
+            )
+        } else {
+            let seeds = [
+                authored_transportation_offset_metres(record, "p_SeedA")?,
+                authored_transportation_offset_metres(record, "p_SeedB")?,
+            ];
+            (Some(seeds), Some(seeds))
+        };
     output
         .document
         .stations
