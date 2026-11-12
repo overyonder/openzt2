@@ -8,6 +8,7 @@ use bevy::render::storage::ShaderBuffer;
 use openzt2_game_data::world_definitions::transportation_and_tours::GroundTransportTrackPiecePresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::SkyTowerTrackPresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -25,6 +26,7 @@ use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::constr
 
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 
@@ -612,3 +614,137 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
 
 #[cfg(test)]
 mod tests;
+
+/// Shows a road's construction marker only where the road stops at a
+/// junction no road leaves, as the original marks an unfinished road
+/// ("Click to place road"); every other piece keeps its markers hidden.
+pub(super) fn show_construction_markers_at_unconnected_road_ends(
+    pieces: Query<
+        (&TransportTrackConstructionPiece, &Transform, &Children),
+        Without<PrefabAuthoredAttachmentIdentifier>,
+    >,
+    routes: Query<&TrackSegment>,
+    junctions: Query<(), With<TransportTrackJunction>>,
+    mut markers: Query<
+        (
+            &PrefabAuthoredAttachmentIdentifier,
+            &mut Visibility,
+            &mut Transform,
+        ),
+        Without<TransportTrackConstructionPiece>,
+    >,
+) {
+    let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
+    let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
+    for (piece, piece_transform, children) in &pieces {
+        let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
+            (usize::from(piece.piece_index) + 2 == route.path_points.len()
+                && junctions.contains(route.to)
+                && !routes.iter().any(|other| other.from == route.to))
+            .then_some(route.to_position)
+        });
+        for child in children {
+            let Ok((name, mut visibility, mut transform)) = markers.get_mut(*child) else {
+                continue;
+            };
+            let shown = if name.0 == marker {
+                open_end
+                    .inspect(|end| {
+                        let local = piece_transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(*end);
+                        if transform.translation != local {
+                            transform.translation = local;
+                        }
+                    })
+                    .is_some()
+            } else if name.0 == hidden_marker {
+                false
+            } else {
+                continue;
+            };
+            let next = if shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
+
+/// A station shows the marker of each end no road is connected to yet, where
+/// the original marks the place a road can start ("Click to place road").
+#[allow(clippy::type_complexity)]
+pub(super) fn show_construction_markers_at_unconnected_station_ends(
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    stations: Query<(Entity, &TransportStation, &GlobalTransform)>,
+    routes: Query<&TrackSegment>,
+    children: Query<&Children>,
+    parents: Query<&GlobalTransform>,
+    mut markers: Query<(
+        &PrefabAuthoredAttachmentIdentifier,
+        &ChildOf,
+        &mut Visibility,
+        &mut Transform,
+    )>,
+) {
+    let Some(definitions) = active_definitions.get(&definition_assets) else {
+        return;
+    };
+    let names =
+        ["constructionmarker1", "constructionmarker2"].map(openzt2_game_data::AssetId::from_key);
+    for (station_entity, station, station_transform) in &stations {
+        for descendant in children.iter_descendants(station_entity) {
+            let Ok((name, parent, mut visibility, mut transform)) = markers.get_mut(descendant)
+            else {
+                continue;
+            };
+            let Some(endpoint) = (0_u8..)
+                .zip(names)
+                .find_map(|(endpoint, marker)| (marker == name.0).then_some(endpoint))
+            else {
+                continue;
+            };
+            let connected = routes.iter().any(|route| {
+                (route.from == station_entity && route.from_endpoint_index == endpoint)
+                    || (route.to == station_entity && route.to_endpoint_index == endpoint)
+            });
+            let open_end = (!connected)
+                .then(|| {
+                    crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(
+                        definitions,
+                        station,
+                        station_transform,
+                        endpoint,
+                    )
+                })
+                .flatten();
+            if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
+                // ponytail: fixed 1.5 m step out of the building, tune if a station hides it
+                let outward = (end - station_transform.translation())
+                    .with_y(0.0)
+                    .normalize_or_zero();
+                let local = parent_transform
+                    .affine()
+                    .inverse()
+                    .transform_point3(end + outward * 1.5);
+                if transform.translation != local {
+                    transform.translation = local;
+                }
+            }
+            let next = if open_end.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
