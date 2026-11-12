@@ -448,12 +448,14 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     continue;
                 };
                 let tower_world_transform = tower_global_transform.compute_transform();
-                let (Some(texture), Some(template)) = (
-                    definitions.texture_image(presentation.rope_texture),
-                    terrain_decal_pass.as_ref(),
-                ) else {
+                let Some(template) = terrain_decal_pass.as_ref() else {
                     continue;
                 };
+                // The shipped rope names elevpathtest.tga, which no archive
+                // contains; the original draws the rope untextured then.
+                let texture = definitions
+                    .texture_image(presentation.rope_texture)
+                    .unwrap_or_default();
                 let mut line_material = template.clone();
                 if !line_material.configure_for_authored_blue_fang_line(texture) {
                     error!("sky track could not bind the authored BFLine fixed-function state");
