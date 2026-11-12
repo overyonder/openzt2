@@ -371,6 +371,24 @@ impl EffectPassMaterial {
         true
     }
 
+    /// A copy drawn as its texture times `colour`, whatever the lights: the
+    /// material lights itself with only an emissive `colour` (a highlighted
+    /// road), so it needs no vertex colours.
+    pub fn clone_tinted(&self, colour: Vec4, buffers: &mut Assets<ShaderBuffer>) -> Option<Self> {
+        let mut tinted =
+            self.clone_with_fixed_function_world_lighting_context(Some(true), false, 0, buffers)?;
+        tinted.fixed_function.values[0].x = 4.0; // D3DTOP_MODULATE
+        tinted.fixed_function.values[0].y = 2.0; // D3DTA_TEXTURE
+        tinted.fixed_function.values[0].z = 1.0; // D3DTA_CURRENT (lit diffuse)
+        tinted.fixed_function.values[40] = Vec4::new(0.0, 0.0, 0.0, colour.w); // diffuse
+        tinted.fixed_function.values[41] = Vec4::ZERO; // ambient
+        tinted.fixed_function.values[43] = colour; // emissive
+        tinted.fixed_function.values[46] = Vec4::new(1.0, 0.0, 0.0, 0.0); // all from material
+        tinted.uniform_buffer_assets.fixed_function =
+            buffers.add(shader_buffer_from_uniform_value(&tinted.fixed_function));
+        Some(tinted)
+    }
+
     pub fn clone_with_fixed_function_world_lighting_context(
         &self,
         lighting_override: Option<bool>,
