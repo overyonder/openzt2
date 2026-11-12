@@ -251,6 +251,7 @@ fn visit_netimmerse_scene_block(
             entity,
             PrefabBillboard {
                 mode: node.billboard_mode,
+                faces_positive_z: false,
             },
         ),
         NetImmerseNifBlockPayload::NiLODNode(node) => {

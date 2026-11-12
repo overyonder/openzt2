@@ -70,14 +70,21 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
         let local_from_world = authored_world.inverse();
         let view_normal = -camera.forward().as_vec3();
         let center_direction = camera.translation() - Vec3::from(authored_world.translation);
-        // A billboard turns its face to the camera about its up axis. Our
-        // prefabs are in Bevy axes, where the face is local +Z and up +Y.
-        let rotation = if mode.mode == 1 {
+        // A NIF billboard turns its local +Y to the camera about its local +Z,
+        // in source axes. A BFB billboard's content is lowered to Bevy axes,
+        // where its face is local +Z and its up local +Y.
+        let rotation = if mode.mode == 1 && mode.faces_positive_z {
             let direction = local_from_world.transform_vector3(center_direction).xz();
             if direction.length_squared() <= f32::EPSILON {
                 continue;
             }
             mode.authored_local_rotation * Quat::from_rotation_y(direction.x.atan2(direction.y))
+        } else if mode.mode == 1 {
+            let direction = local_from_world.transform_vector3(center_direction).xy();
+            if direction.length_squared() <= f32::EPSILON {
+                continue;
+            }
+            mode.authored_local_rotation * Quat::from_rotation_z((-direction.x).atan2(direction.y))
         } else if matches!(mode.mode, 0 | 2 | 3 | 4) {
             let world_direction = if matches!(mode.mode, 3 | 4) {
                 if center_direction.length_squared() < 0.001 {
@@ -99,7 +106,11 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
                 local_from_world.transform_vector3(camera_up)
             } else {
                 // Non-rigid facing retains the authored up axis's projection.
-                Vec3::Y
+                if mode.faces_positive_z {
+                    Vec3::Y
+                } else {
+                    Vec3::Z
+                }
             };
             let up = up.reject_from_normalized(direction);
             let right = if up.length_squared() > f32::EPSILON {
@@ -110,7 +121,12 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
                     .normalize()
             };
             let up = right.cross(direction).normalize();
-            mode.authored_local_rotation * Quat::from_mat3(&Mat3::from_cols(-right, up, direction))
+            let axes = if mode.faces_positive_z {
+                Mat3::from_cols(-right, up, direction)
+            } else {
+                Mat3::from_cols(right, direction, up)
+            };
+            mode.authored_local_rotation * Quat::from_mat3(&axes)
         } else {
             mode.authored_local_rotation
         };

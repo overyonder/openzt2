@@ -214,6 +214,9 @@ pub struct PrefabLod {
 pub struct PrefabBillboard {
     /// The source-authored billboard mode after format-default resolution.
     pub mode: u32,
+    /// Whether the content faces local +Z with +Y up (lowered from BFB).
+    #[serde(default)]
+    pub faces_positive_z: bool,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq)]

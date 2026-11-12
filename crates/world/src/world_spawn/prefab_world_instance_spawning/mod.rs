@@ -141,7 +141,8 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
                 PrefabAuthoredBillboardOrientationMode::from_authored_mode_and_local_rotation(
                     billboard.mode,
                     transform.rotation,
-                ),
+                )
+                .facing_positive_z(billboard.faces_positive_z),
             );
         }
         if let Some(light) = row.lights.first() {
