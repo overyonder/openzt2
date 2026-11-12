@@ -63,7 +63,8 @@ pub fn spawn_prefab_render_tree(
                     PrefabAuthoredBillboardOrientationMode::from_authored_mode_and_local_rotation(
                         billboard.mode,
                         transform.rotation,
-                    ),
+                    )
+                    .facing_positive_z(billboard.faces_positive_z),
                 );
             }
             entity.id()
