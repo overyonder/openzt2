@@ -76,12 +76,16 @@ pub(super) fn lower_named_physical_presentations(
             prefab: scene.map_or_else(AssetId::default, |scene| AssetId::from_virtual_path(scene)),
             scale,
             required,
-            // The original engine names this binder: event markers show
-            // `unfinishedEventObj` until their event completes.
-            initially_visible: !source_document_names_are_semantically_equal(
-                name,
+            // The original engine names these binders: event markers show
+            // `unfinishedEventObj` until their event completes, and a road
+            // shows a construction marker only at an unconnected end.
+            initially_visible: ![
                 "finishedEventObj",
-            ),
+                "constructionMarker1",
+                "constructionMarker2",
+            ]
+            .iter()
+            .any(|hidden| source_document_names_are_semantically_equal(name, hidden)),
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,
@@ -179,7 +183,53 @@ pub(super) fn lower_parented_named_physical_presentations(
             fade: None,
         });
     }
+    lower_station_construction_markers(&binders, scene_paths, &mut seen, &mut presentations);
     Ok(presentations)
+}
+
+/// A station marks each free end with its construction markers, which no
+/// `parentObj` hangs on the model; they start hidden at the station.
+fn lower_station_construction_markers(
+    binders: &[&OrderedSourceDocumentNode],
+    scene_paths: &BTreeMap<String, String>,
+    seen: &mut BTreeSet<String>,
+    presentations: &mut Vec<WorldObjectNamedPhysicalPresentationDefinition>,
+) {
+    for binder in binders.iter().copied() {
+        let Some(name) = binder.attribute_named_any(&["binderName"]) else {
+            continue;
+        };
+        if !["constructionMarker1", "constructionMarker2"]
+            .iter()
+            .any(|marker| source_document_names_are_semantically_equal(name, marker))
+            || !seen.insert(canonicalize_source_document_record_key(name))
+        {
+            continue;
+        }
+        let Some(component) = find_presentation_component(binder) else {
+            continue;
+        };
+        let Some(scene) = component
+            .attribute_named_any(&["modelfile", "actorfile"])
+            .and_then(|model| scene_paths.get(&canonicalize_source_document_record_key(model)))
+        else {
+            continue;
+        };
+        presentations.push(WorldObjectNamedPhysicalPresentationDefinition {
+            name: AssetId::from_key(&canonicalize_source_document_record_key(name)),
+            prefab: AssetId::from_virtual_path(scene),
+            scale: component
+                .attribute_named_any(&["scale"])
+                .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                .filter(|scale| scale.is_finite() && *scale > 0.0)
+                .unwrap_or(1.0),
+            required: true,
+            initially_visible: false,
+            attach_node: None,
+            inherit_attach_rotation: false,
+            fade: None,
+        });
+    }
 }
 
 /// Applies `BFAIFadeController` states to the lowered binders. Every state's
