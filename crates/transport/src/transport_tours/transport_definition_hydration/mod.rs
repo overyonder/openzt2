@@ -110,6 +110,7 @@ pub(super) fn initialize_transport_vehicle_routes_from_first_stable_circuit_edge
     >,
     transport_circuits: Query<Option<&CircuitDirection>, With<TransportCircuit>>,
     track_segments: Query<(Entity, &TrackSegment, &CircuitMember)>,
+    stations: Query<(), With<TransportStation>>,
     mut commands: Commands,
 ) {
     for (vehicle_entity, circuit_member, mut vehicle_transform) in &mut transport_vehicles {
@@ -122,7 +123,16 @@ pub(super) fn initialize_transport_vehicle_routes_from_first_stable_circuit_edge
                 track_circuit_member.0 == circuit_member.0
                     && transport_track_segment_is_valid(track_segment)
             })
-            .min_by_key(|(entity, _, _)| entity.to_bits())
+            // A bought vehicle is created at the station, so it starts on
+            // the edge leaving one; entity order alone picked any edge.
+            .min_by_key(|(entity, track_segment, _)| {
+                let start = if circuit_runs_in_reverse {
+                    track_segment.to
+                } else {
+                    track_segment.from
+                };
+                (!stations.contains(start), entity.to_bits())
+            })
         else {
             continue;
         };
@@ -149,5 +159,88 @@ pub(super) fn initialize_transport_vehicle_routes_from_first_stable_circuit_edge
             },
             StationDestination(first_destination),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn segment(from: Entity, from_position: Vec3, to: Entity, to_position: Vec3) -> TrackSegment {
+        let points: Box<[Vec3]> = Box::new([from_position, to_position]);
+        TrackSegment {
+            definition: AssetId::default(),
+            from,
+            from_endpoint_index: 0,
+            from_position,
+            to,
+            to_endpoint_index: 0,
+            to_position,
+            path_points: points.clone(),
+            travel_path_points: points,
+            length: from_position.distance(to_position),
+        }
+    }
+
+    #[test]
+    fn a_new_vehicle_starts_on_the_edge_leaving_its_station() {
+        let mut app = App::new();
+        app.add_systems(
+            Update,
+            initialize_transport_vehicle_routes_from_first_stable_circuit_edge,
+        );
+        let world = app.world_mut();
+        let circuit = world
+            .spawn(TransportCircuit {
+                definition: AssetId::default(),
+                closed: false,
+            })
+            .id();
+        let junction = world.spawn_empty().id();
+        let station = world
+            .spawn(TransportStation {
+                definition: AssetId::default(),
+                capacity: 0,
+                queued: 0,
+                occupied: 0,
+            })
+            .id();
+        let (far, near) = (Vec3::new(10.0, 0.0, 0.0), Vec3::ZERO);
+        // Spawned first, so entity order alone would pick it.
+        world.spawn((
+            segment(junction, far, station, near),
+            CircuitMember(circuit),
+        ));
+        let leaving = world
+            .spawn((
+                segment(station, near, junction, far),
+                CircuitMember(circuit),
+            ))
+            .id();
+        let vehicle = world
+            .spawn((
+                TransportVehicle {
+                    definition: AssetId::default(),
+                    seats: 1,
+                    occupied: 0,
+                    maximum_speed_metres_per_second: 1.0,
+                },
+                CircuitMember(circuit),
+                Transform::default(),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world()
+                .get::<RoutePosition>(vehicle)
+                .map(|route| route.segment),
+            Some(leaving)
+        );
+        assert_eq!(
+            app.world()
+                .get::<Transform>(vehicle)
+                .map(|transform| transform.translation),
+            Some(near)
+        );
     }
 }
