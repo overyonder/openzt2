@@ -313,6 +313,7 @@ pub(super) struct HighlightedTrackDecalOriginal(Handle<EffectPassMaterial>);
 /// would start from `station_highlight1` (blue) and the station it would
 /// connect to `station_highlight2` (green), and blinks the road already
 /// joined to the start `endpoint_highlight2` (blue) every `colorAnimationCycle`.
+/// With the delete tool it colours the road leg under the cursor red.
 // ponytail: the colours and cycle are copied from modes.xml, not lowered from it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn highlight_transport_track_connection_stations(
@@ -321,7 +322,11 @@ pub(super) fn highlight_transport_track_connection_stations(
     tool: Res<ConstructionTool>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    cursors: Query<(&ConstructionCursor, &WorldMember)>,
+    cursors: Query<(
+        &ConstructionCursor,
+        &WorldMember,
+        Option<&openzt2_zoo_state::construction::construction_interaction_types::DeleteHoverTarget>,
+    )>,
     stations: Query<(
         Entity,
         &TransportStation,
@@ -357,7 +362,11 @@ pub(super) fn highlight_transport_track_connection_stations(
     const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
 
     let mut wanted = HashMap::new();
-    if let (Some((_, kind)), Ok((cursor, world_member)), Some(definitions)) = (
+    let on = (time.elapsed_secs() / COLOR_ANIMATION_CYCLE_SECONDS).rem_euclid(2.0) < 1.0;
+    if let (ConstructionTool::Delete, Ok((_, _, Some(hovered)))) = (*tool, cursors.single()) {
+        light_deleted_track_leg(hovered.0, on, &pieces, &children, &decals, &mut wanted);
+    }
+    if let (Some((_, kind)), Ok((cursor, world_member, _)), Some(definitions)) = (
         selected_transport_track_definition(*tool),
         cursors.single(),
         active_definitions.get(&definitions),
@@ -405,7 +414,6 @@ pub(super) fn highlight_transport_track_connection_stations(
             light_station(target, STATION_TARGET);
         }
         if let Some(start) = start {
-            let on = (time.elapsed_secs() / COLOR_ANIMATION_CYCLE_SECONDS).rem_euclid(2.0) < 1.0;
             let color = if on { ROAD_END } else { Color::WHITE };
             for (piece_entity, piece) in &pieces {
                 let Ok((_, _, route, _)) = segments.get(piece.route_segment) else {
@@ -449,6 +457,39 @@ pub(super) fn highlight_transport_track_connection_stations(
         }
     }
     *lit = wanted;
+}
+
+/// `ZTDeleteMode` colours what the delete tool would remove `mouseover`
+/// (red), alternating with `alternate` (orange): here the whole road leg the
+/// hovered piece belongs to, which is what the sale removes.
+fn light_deleted_track_leg(
+    hovered: Entity,
+    on: bool,
+    pieces: &Query<(Entity, &TransportTrackConstructionPiece)>,
+    children: &Query<&Children>,
+    decals: &Query<(
+        &MeshMaterial3d<EffectPassMaterial>,
+        Option<&HighlightedTrackDecalOriginal>,
+    )>,
+    wanted: &mut HashMap<Entity, Color>,
+) {
+    let Ok((_, hovered)) = pieces.get(hovered) else {
+        return;
+    };
+    let color = if on {
+        Color::srgb(1.0, 0.0, 0.0)
+    } else {
+        Color::srgb(1.0, 128.0 / 255.0, 0.0)
+    };
+    for (piece_entity, piece) in pieces {
+        if piece.route_segment == hovered.route_segment {
+            for child in children.get(piece_entity).into_iter().flatten().copied() {
+                if decals.contains(child) {
+                    wanted.insert(child, color);
+                }
+            }
+        }
+    }
 }
 
 /// Draws a road decal as its texture times `color`, or as its own material
