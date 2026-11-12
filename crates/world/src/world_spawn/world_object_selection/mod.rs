@@ -40,10 +40,16 @@ pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
     if !primary_pointer.just_pressed || ui_pointer_capture.over_ui {
         return;
     }
-    // This click recycles what it hits.
+    // This click recycles what it hits, or starts or extends a road or sky
+    // tram line from the station or tower it hits.
     if tool.is_some_and(|tool| {
-        *tool
-            == openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Delete
+        use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
+        matches!(
+            *tool,
+            ConstructionTool::Delete
+                | ConstructionTool::SkyTrackPlacement(_)
+                | ConstructionTool::GroundTrackPlacement(_)
+        )
     }) {
         return;
     }
