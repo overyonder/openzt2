@@ -289,6 +289,10 @@ impl EffectPassMaterial {
             return false;
         }
         self.fixed_function.values[5].x = 1.0; // D3DTOP_DISABLE for stage one.
+        // The shipped decal textures carry at most half alpha. The original
+        // paints a road into the terrain through its opaque paint mask, so
+        // the decal doubles the texture alpha to draw it as solid.
+        self.fixed_function.values[0].w = 5.0; // D3DTOP_MODULATE2X alpha
         self.pipeline_specialization_key.cull_face = None;
         self.pipeline_specialization_key.depth_write_enabled = false;
         self.pipeline_specialization_key.blend_state = Some(BlendState::ALPHA_BLENDING);
