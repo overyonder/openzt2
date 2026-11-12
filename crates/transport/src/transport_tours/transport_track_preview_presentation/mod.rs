@@ -137,6 +137,11 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 continue;
             }
             material.recreate_uniform_buffers_for_runtime_material(&mut effect_uniform_buffers);
+            if let Some(tinted) = tint.and_then(|tint| {
+                material.clone_tinted(Vec4::from_array(tint), &mut effect_uniform_buffers)
+            }) {
+                material = tinted;
+            }
             if elevated {
                 let Some(mesh) = crate::transport_tours::transport_track_piece_presentation::construct_elevated_ground_track_triangle_strip(
                     points,
@@ -148,7 +153,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     Transform::from_rotation(preview.transform.rotation.inverse()),
                     Visibility::Inherited,
                     ChildOf(preview_entity),
-                    Mesh3d(meshes.add(tint_track_preview_mesh(mesh, tint))),
+                    Mesh3d(meshes.add(mesh)),
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     TransportTrackConstructionPreviewAuthoredPrefab {
                         owner: preview_entity,
@@ -180,7 +185,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 .with_rotation(preview.transform.rotation.inverse()),
                 Visibility::Inherited,
                 ChildOf(preview_entity),
-                Mesh3d(meshes.add(tint_track_preview_mesh(mesh, tint))),
+                Mesh3d(meshes.add(mesh)),
                 MeshMaterial3d(effect_pass_materials.add(material)),
                 TransportTrackConstructionPreviewAuthoredPrefab {
                     owner: preview_entity,
@@ -192,8 +197,9 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
 
 /// `ZTGroundTrackMode` in `UI/modes/modes.xml` colours a road that can't be
 /// placed `place_no` (200, 20, 10, 90) and one that is too steep `too_steep`
-/// (255, 255, 0, 255). The decal's diffuse comes from the vertex colour, so
-/// the colour multiplies the road texture.
+/// (255, 255, 0, 255). The road decal ignores vertex colour, so the preview
+/// draws with a copy of its material lit only by that colour, which
+/// multiplies the road texture; it stays as opaque as the road.
 // ponytail: the two colours are copied from modes.xml, not lowered from it.
 fn invalid_track_preview_tint(
     validity: openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
@@ -204,16 +210,6 @@ fn invalid_track_preview_tint(
     match validity {
         PlacementValidity::Valid { .. } | PlacementValidity::Pending => None,
         PlacementValidity::Invalid(PlacementFailure::TooSteep) => Some([1.0, 1.0, 0.0, 1.0]),
-        PlacementValidity::Invalid(_) => {
-            Some([200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0, 90.0 / 255.0])
-        }
+        PlacementValidity::Invalid(_) => Some([200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0, 1.0]),
     }
-}
-
-fn tint_track_preview_mesh(mut mesh: Mesh, tint: Option<[f32; 4]>) -> Mesh {
-    if let Some(tint) = tint {
-        let vertices = mesh.count_vertices();
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![tint; vertices]);
-    }
-    mesh
 }
