@@ -37,7 +37,10 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         >,
     )>,
     projected_prefabs: Query<(Entity, &TransportTrackConstructionPreviewAuthoredPrefab)>,
-    rope_anchors: crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
+    (rope_anchors, mut standard_materials): (
+        crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
+        ResMut<Assets<StandardMaterial>>,
+    ),
     mut last_drawn: Local<
         bevy::platform::collections::HashMap<
             Entity,
@@ -142,11 +145,11 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     &materials.footprint_invalid
                 };
                 for (width, material, lift) in [
-                    (1.0, footprint, 0.01),
+                    (1.0, footprint, 0.02),
                     (
                         materials.grid_radius[0] * 2.0,
                         &materials.grid_cardinal[0],
-                        0.0,
+                        0.01,
                     ),
                 ] {
                     let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
@@ -159,9 +162,17 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     ) else {
                         continue;
                     };
+                    // The fitted mesh may wind either way; draw both sides.
+                    let Some(source) = standard_materials.get(material).cloned() else {
+                        continue;
+                    };
+                    let material = standard_materials.add(StandardMaterial {
+                        cull_mode: None,
+                        ..source
+                    });
                     commands.spawn((
                         Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(material.clone()),
+                        MeshMaterial3d(material),
                         Transform::from_translation(base + Vec3::Y * lift).with_rotation(rotation),
                         ChildOf(root),
                     ));
