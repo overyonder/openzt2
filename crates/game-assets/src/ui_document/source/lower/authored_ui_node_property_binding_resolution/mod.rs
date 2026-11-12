@@ -533,6 +533,15 @@ pub(super) fn lower_authored_ui_node_property_bindings_to_canonical_records(
             "entityimagedisplay" => Some(UiNodePropertyBinding::ImageContent(
                 UiImagePropertyBindingSource::SelectedEntityIcon,
             )),
+            // The engine shows the list matching the station's track kind;
+            // `entityinfo.xml` authors both lists visible.
+            "groundvehiclessoldlist" | "skyvehiclessoldlist" => {
+                Some(UiNodePropertyBinding::Visibility(
+                    UiBooleanPropertyBindingSource::TransportStationRunsSkyTrack {
+                        sky: normalized_name.starts_with("sky"),
+                    },
+                ))
+            }
             _ => None,
         };
         if let Some(binding) = binding {

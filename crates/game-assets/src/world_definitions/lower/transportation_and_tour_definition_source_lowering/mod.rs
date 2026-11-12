@@ -568,6 +568,45 @@ pub(super) fn bind_vehicle(
             seats,
             maximum_speed_metres_per_second,
         });
+    // The station panel's "vehicles sold" type lists (`groundvehicle`,
+    // `skytram` in `UI/layout/entityinfo.xml`) list vehicles from the catalogue.
+    let Some(icon) = record
+        .descendant_named("UIToggleButton")
+        .and_then(|button| find_descendant(button, "default"))
+        .and_then(|element| element.attribute_named_any(&["image"]))
+        .filter(|image| !image.trim().is_empty() && *image != "_VALUE_")
+        .map(id)
+    else {
+        return Ok(());
+    };
+    let name_key = record
+        .descendant_named("UIHelpInfo")
+        .and_then(|element| element.attribute_named_any(&["ids"]))
+        .map(id)
+        .unwrap_or_default();
+    let mut type_tokens = record.type_tokens();
+    if type_tokens.is_empty() {
+        type_tokens.push(record.key.to_owned());
+    }
+    output.document.catalogue.push(CatalogueEntry {
+        filter_values: super::catalogue_entry_source_lowering::authored_catalogue_filter_values(
+            record,
+        ),
+        id: id(&format!("catalogue/transport/{}", record.key)),
+        definition: id(record.key),
+        kind: type_tokens
+            .last()
+            .map_or_else(|| id(record.key), |value| id(value)),
+        kinds: type_tokens.iter().map(|value| id(value)).collect(),
+        category: CatalogueCategory::Transport,
+        authored_purchase_sort_key: authored_catalogue_purchase_sort_key(record),
+        authored_purchase_sort_fallback_type_name:
+            authored_catalogue_purchase_sort_fallback_type_name(record),
+        authored_type_registry_source_order: [u64::MAX; 3],
+        filters: CatalogueFilterFlags::PURCHASABLE,
+        name_key,
+        icon,
+    });
     Ok(())
 }
 
