@@ -25,9 +25,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    terrain_index: Res<TerrainIndex>,
-    terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+    terrain: PreviewTerrain,
     previews: Query<(
         Entity,
         Ref<ConstructionPreview>,
@@ -41,17 +39,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
         ResMut<Assets<StandardMaterial>>,
     ),
-    mut last_drawn: Local<
-        bevy::platform::collections::HashMap<
-            Entity,
-            (
-                Vec<Vec3>,
-                openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
-                Option<Entity>,
-                bool,
-            ),
-        >,
-    >,
+    mut last_drawn: Local<bevy::platform::collections::HashMap<Entity, DrawnTrackPreview>>,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
@@ -94,125 +82,24 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             continue;
         };
         if track.kind == TransportationTrackKind::Sky {
-            let Some(presentation) = track.sky_tower_presentation.as_ref() else {
-                continue;
-            };
-            if track_preview.path_points.len() != 2 {
-                continue;
-            }
-            let root = commands
-                .spawn((
-                    Transform::IDENTITY,
-                    Visibility::Inherited,
-                    ChildOf(preview_entity),
-                    TransportTrackConstructionPreviewAuthoredPrefab {
-                        owner: preview_entity,
-                    },
-                ))
-                .id();
-            crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_tower(
+            spawn_sky_track_preview(
                 &mut commands,
                 definitions,
-                root,
-                &preview.transform,
-                &track_preview.path_points,
-                1,
-                1,
-                presentation.initial_height_metres.max(
-                    track_preview.path_points[0].y - track_preview.path_points[1].y
-                        + track.sky_rope_clearance_metres.unwrap_or_default(),
-                ),
-                presentation,
+                track,
+                preview_entity,
+                &preview,
+                &track_preview,
+                grid,
+                terrain_decal_pass.as_ref(),
+                &mut SkyPreviewAssets {
+                    meshes: &mut meshes,
+                    effect_pass_materials: &mut effect_pass_materials,
+                    effect_uniform_buffers: &mut effect_uniform_buffers,
+                    standard_materials: &mut standard_materials,
+                },
+                &terrain,
+                &rope_anchors,
             );
-            // The tower's footprint and the placement grid, as for objects.
-            if let Some(materials) = grid {
-                let valid = matches!(
-                    preview.validity,
-                    openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { .. }
-                );
-                let base = preview
-                    .transform
-                    .compute_affine()
-                    .inverse()
-                    .transform_point3(track_preview.path_points[1]);
-                // Fitted to the terrain, as road decals are, so a slope
-                // doesn't bury them.
-                let tower_base = track_preview.path_points[1];
-                let rotation = preview.transform.rotation.inverse();
-                let footprint = if valid {
-                    &materials.footprint_valid
-                } else {
-                    &materials.footprint_invalid
-                };
-                for (width, material, lift) in [
-                    (1.0, footprint, 0.02),
-                    (
-                        materials.grid_radius[1] * 2.0,
-                        &materials.grid_cardinal[1],
-                        0.01,
-                    ),
-                ] {
-                    let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
-                        width,
-                        tower_base,
-                        0.0,
-                        &terrain_index,
-                        &terrain_assets,
-                        &terrain_chunks,
-                    ) else {
-                        continue;
-                    };
-                    // The fitted mesh may wind either way; draw both sides.
-                    let Some(source) = standard_materials.get(material).cloned() else {
-                        continue;
-                    };
-                    let material = standard_materials.add(StandardMaterial {
-                        cull_mode: None,
-                        ..source
-                    });
-                    commands.spawn((
-                        Mesh3d(meshes.add(mesh)),
-                        MeshMaterial3d(material),
-                        Transform::from_translation(base + Vec3::Y * lift).with_rotation(rotation),
-                        ChildOf(root),
-                    ));
-                }
-            }
-            // As in the original, a line runs from the last tower top (or
-            // station wheel) to the top of the tower being placed.
-            let clearance = track.sky_rope_clearance_metres.unwrap_or_default();
-            let height = presentation
-                .initial_height_metres
-                .max(track_preview.path_points[0].y - track_preview.path_points[1].y + clearance);
-            let start = rope_anchors
-                .station_wheel(track_preview.from_endpoint, track_preview.path_points[0])
-                .unwrap_or(
-                    track_preview.path_points[0] + Vec3::Y * presentation.initial_height_metres,
-                );
-            let end = track_preview
-                .to_station
-                .and_then(|station| {
-                    rope_anchors.station_wheel(station, track_preview.path_points[1])
-                })
-                .unwrap_or(track_preview.path_points[1] + Vec3::Y * height);
-            if let Some(mut line) = terrain_decal_pass.clone() {
-                let texture = definitions
-                    .texture_image(presentation.rope_texture)
-                    .unwrap_or_default();
-                if line.configure_for_authored_blue_fang_line(texture) {
-                    line.recreate_uniform_buffers_for_runtime_material(&mut effect_uniform_buffers);
-                    crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_track_rope(
-                        &mut commands,
-                        &mut meshes,
-                        effect_pass_materials.add(line),
-                        root,
-                        &preview.transform,
-                        start,
-                        end,
-                        presentation,
-                    );
-                }
-            }
             continue;
         }
         let Some(template) = terrain_decal_pass.as_ref() else {
@@ -235,9 +122,9 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
             };
             let elevated = crate::transport_tours::transport_track_piece_presentation::ground_track_piece_is_elevated_above_terrain(
                 [points[0], points[1]],
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
+                &terrain.index,
+                &terrain.assets,
+                &terrain.chunks,
             );
             let texture_identifier = if elevated {
                 presentation.elevated_path_texture
@@ -290,9 +177,9 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 presentation.ground_decal_size_metres[0],
                 decal_centre,
                 presentation.ground_decal_rotation_radians,
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
+                &terrain.index,
+                &terrain.assets,
+                &terrain.chunks,
             ) else { continue; };
             commands.spawn((
                 Transform::from_translation(
@@ -331,5 +218,183 @@ fn invalid_track_preview_tint(
         PlacementValidity::Valid { .. } | PlacementValidity::Pending => None,
         PlacementValidity::Invalid(PlacementFailure::TooSteep) => Some([1.0, 1.0, 0.0, 1.0]),
         PlacementValidity::Invalid(_) => Some([200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0, 1.0]),
+    }
+}
+
+/// The assets a sky tower preview adds.
+struct SkyPreviewAssets<'a> {
+    meshes: &'a mut Assets<Mesh>,
+    effect_pass_materials: &'a mut Assets<EffectPassMaterial>,
+    effect_uniform_buffers: &'a mut Assets<ShaderBuffer>,
+    standard_materials: &'a mut Assets<StandardMaterial>,
+}
+
+/// The ground a preview's decals are fitted to.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct PreviewTerrain<'w, 's> {
+    index: Res<'w, TerrainIndex>,
+    assets: Res<'w, Assets<TerrainAsset>>,
+    chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
+}
+
+type DrawnTrackPreview = (
+    Vec<Vec3>,
+    openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
+    Option<Entity>,
+    bool,
+);
+
+/// The tower being placed, its footprint and grid, and the line to its top.
+#[allow(clippy::too_many_arguments)]
+fn spawn_sky_track_preview(
+    commands: &mut Commands,
+    definitions: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    track: &openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackDefinition,
+    preview_entity: Entity,
+    preview: &ConstructionPreview,
+    track_preview: &TransportTrackConstructionPreview,
+    grid: Option<
+        &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials,
+    >,
+    terrain_decal_pass: Option<&EffectPassMaterial>,
+    assets: &mut SkyPreviewAssets,
+    terrain: &PreviewTerrain,
+    rope_anchors: &crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
+) {
+    let Some(presentation) = track.sky_tower_presentation.as_ref() else {
+        return;
+    };
+    if track_preview.path_points.len() != 2 {
+        return;
+    }
+    let root = commands
+        .spawn((
+            Transform::IDENTITY,
+            Visibility::Inherited,
+            ChildOf(preview_entity),
+            TransportTrackConstructionPreviewAuthoredPrefab {
+                owner: preview_entity,
+            },
+        ))
+        .id();
+    crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_tower(
+        commands,
+        definitions,
+        root,
+        &preview.transform,
+        &track_preview.path_points,
+        1,
+        1,
+        presentation.initial_height_metres.max(
+            track_preview.path_points[0].y - track_preview.path_points[1].y
+                + track.sky_rope_clearance_metres.unwrap_or_default(),
+        ),
+        presentation,
+    );
+    // The tower's footprint and the placement grid, as for objects.
+    if let Some(materials) = grid {
+        spawn_sky_tower_placement_grid(
+            commands,
+            root,
+            preview,
+            track_preview.path_points[1],
+            materials,
+            assets,
+            terrain,
+        );
+    }
+    // As in the original, a line runs from the last tower top (or
+    // station wheel) to the top of the tower being placed.
+    let clearance = track.sky_rope_clearance_metres.unwrap_or_default();
+    let height = presentation
+        .initial_height_metres
+        .max(track_preview.path_points[0].y - track_preview.path_points[1].y + clearance);
+    let start = rope_anchors
+        .station_wheel(track_preview.from_endpoint, track_preview.path_points[0])
+        .unwrap_or(track_preview.path_points[0] + Vec3::Y * presentation.initial_height_metres);
+    let end = track_preview
+        .to_station
+        .and_then(|station| rope_anchors.station_wheel(station, track_preview.path_points[1]))
+        .unwrap_or(track_preview.path_points[1] + Vec3::Y * height);
+    if let Some(mut line) = terrain_decal_pass.cloned() {
+        let texture = definitions
+            .texture_image(presentation.rope_texture)
+            .unwrap_or_default();
+        if line.configure_for_authored_blue_fang_line(texture) {
+            line.recreate_uniform_buffers_for_runtime_material(assets.effect_uniform_buffers);
+            crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_track_rope(
+                    commands,
+                    assets.meshes,
+                    assets.effect_pass_materials.add(line),
+                    root,
+                    &preview.transform,
+                    start,
+                    end,
+                    presentation,
+                );
+        }
+    }
+}
+
+/// The footprint and grid under a sky tower being placed.
+fn spawn_sky_tower_placement_grid(
+    commands: &mut Commands,
+    root: Entity,
+    preview: &ConstructionPreview,
+    tower_base_world: Vec3,
+    materials: &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials,
+    assets: &mut SkyPreviewAssets,
+    terrain: &PreviewTerrain,
+) {
+    let valid = matches!(
+        preview.validity,
+        openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { .. }
+    );
+    let base = preview
+        .transform
+        .compute_affine()
+        .inverse()
+        .transform_point3(tower_base_world);
+    // Fitted to the terrain, as road decals are, so a slope
+    // doesn't bury them.
+    let tower_base = tower_base_world;
+    let rotation = preview.transform.rotation.inverse();
+    let footprint = if valid {
+        &materials.footprint_valid
+    } else {
+        &materials.footprint_invalid
+    };
+    for (width, material, lift) in [
+        (1.0, footprint, 0.02),
+        (
+            materials.grid_radius[1] * 2.0,
+            &materials.grid_cardinal[1],
+            0.01,
+        ),
+    ] {
+        let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
+                width,
+                tower_base,
+                0.0,
+                &terrain.index,
+                &terrain.assets,
+                &terrain.chunks,
+            ) else {
+                return;
+            };
+        // The fitted mesh may wind either way; draw both sides.
+        let Some(source) = assets.standard_materials.get(material).cloned() else {
+            return;
+        };
+        let material = assets.standard_materials.add(StandardMaterial {
+            cull_mode: None,
+            ..source
+        });
+        commands.spawn((
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(material),
+            Transform::from_translation(base + Vec3::Y * lift).with_rotation(rotation),
+            ChildOf(root),
+        ));
     }
 }

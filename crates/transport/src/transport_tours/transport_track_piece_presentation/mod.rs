@@ -325,7 +325,6 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_authored_sky_track_rope(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -785,8 +784,6 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
     }
 }
 
-/// A station shows the marker of each end no road is connected to yet, where
-
 /// Whether a station carries the four markers of a sky station.
 fn names_in_pairs(
     children: &Query<&Children>,
@@ -806,6 +803,7 @@ fn names_in_pairs(
     })
 }
 
+/// A station shows the marker of each end no road is connected to yet, where
 /// the original marks the place a road can start ("Click to place road").
 #[allow(clippy::type_complexity)]
 pub(super) fn show_construction_markers_at_unconnected_station_ends(

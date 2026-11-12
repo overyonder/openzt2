@@ -130,8 +130,8 @@ fn nearest_sky_tower(
         })
         .filter_map(|(entity, transform)| {
             let base = transform.translation();
-            let distance = (0..=24)
-                .map(|step| base + Vec3::Y * (12.0 * step as f32 / 24.0))
+            let distance = (0_u8..=24)
+                .map(|step| base + Vec3::Y * (12.0 * f32::from(step) / 24.0))
                 .map(|point| {
                     let along = (point - ray.origin).dot(*ray.direction).max(0.0);
                     point.distance(ray.origin + *ray.direction * along)

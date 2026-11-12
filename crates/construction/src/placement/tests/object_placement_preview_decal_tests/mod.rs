@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -31,10 +33,8 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<Mesh>>()
-        .init_resource::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>()
-        .init_resource::<Assets<
-            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-        >>()
+        .init_resource::<TerrainIndex>()
+        .init_resource::<Assets<TerrainAsset>>()
         .add_systems(
             Update,
             rebuild_object_placement_preview_footprint_and_grid_decals,
