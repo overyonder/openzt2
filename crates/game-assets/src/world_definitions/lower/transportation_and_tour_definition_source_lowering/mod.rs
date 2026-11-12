@@ -380,19 +380,19 @@ pub(super) fn bind_track(
             "authored maximum transport-track slope exceeds stored permille",
         ));
     }
-    let purchase_cost_cents = find_descendant_named_with_nonempty_attribute(
-        record.source_document_element(),
-        "ZTEconomyComponent",
-        "cost",
-    )
-    .and_then(|economy| economy.attribute_named_any(&["cost"]))
-    .map(|cost| {
-        parse_blue_fang_source_numeric_lexeme::<f64>(cost)
-            .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
-            .and_then(|cost| money_cents(cost, record).map(i64::from))
-    })
-    .transpose()?
-    .unwrap_or_default();
+    // The concrete track inherits its cost from its type family (the
+    // skytower binder authors the pole's cost, not SkyTower_end).
+    let purchase_cost_cents = authored_type_family_components(record, "ZTEconomyComponent")
+        .into_iter()
+        .find(|economy| economy.attribute_named_any(&["cost"]).is_some())
+        .and_then(|economy| economy.attribute_named_any(&["cost"]))
+        .map(|cost| {
+            parse_blue_fang_source_numeric_lexeme::<f64>(cost)
+                .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
+                .and_then(|cost| money_cents(cost, record).map(i64::from))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let sky_tower_presentation = (kind == TransportationTrackKind::Sky)
         .then(|| {
             lower_authored_sky_tower_track_presentation(
