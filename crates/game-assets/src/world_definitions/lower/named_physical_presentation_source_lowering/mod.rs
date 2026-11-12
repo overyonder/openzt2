@@ -76,12 +76,16 @@ pub(super) fn lower_named_physical_presentations(
             prefab: scene.map_or_else(AssetId::default, |scene| AssetId::from_virtual_path(scene)),
             scale,
             required,
-            // The original engine names this binder: event markers show
-            // `unfinishedEventObj` until their event completes.
-            initially_visible: !source_document_names_are_semantically_equal(
-                name,
+            // The original engine names these binders: event markers show
+            // `unfinishedEventObj` until their event completes, and a road
+            // shows a construction marker only at an unconnected end.
+            initially_visible: ![
                 "finishedEventObj",
-            ),
+                "constructionMarker1",
+                "constructionMarker2",
+            ]
+            .iter()
+            .any(|hidden| source_document_names_are_semantically_equal(name, hidden)),
             attach_node: None,
             inherit_attach_rotation: false,
             fade: None,

@@ -8,6 +8,7 @@ use bevy::render::storage::ShaderBuffer;
 use openzt2_game_data::world_definitions::transportation_and_tours::GroundTransportTrackPiecePresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::SkyTowerTrackPresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -612,3 +613,64 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
 
 #[cfg(test)]
 mod tests;
+
+/// Shows a road's construction marker only where the road stops at a
+/// junction no road leaves, as the original marks an unfinished road
+/// ("Click to place road"); every other piece keeps its markers hidden.
+pub(super) fn show_construction_markers_at_unconnected_road_ends(
+    pieces: Query<
+        (&TransportTrackConstructionPiece, &Transform, &Children),
+        Without<PrefabAuthoredAttachmentIdentifier>,
+    >,
+    routes: Query<&TrackSegment>,
+    junctions: Query<(), With<TransportTrackJunction>>,
+    mut markers: Query<
+        (
+            &PrefabAuthoredAttachmentIdentifier,
+            &mut Visibility,
+            &mut Transform,
+        ),
+        Without<TransportTrackConstructionPiece>,
+    >,
+) {
+    let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
+    let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
+    for (piece, piece_transform, children) in &pieces {
+        let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
+            (usize::from(piece.piece_index) + 2 == route.path_points.len()
+                && junctions.contains(route.to)
+                && !routes.iter().any(|other| other.from == route.to))
+            .then_some(route.to_position)
+        });
+        for child in children {
+            let Ok((name, mut visibility, mut transform)) = markers.get_mut(*child) else {
+                continue;
+            };
+            let shown = if name.0 == marker {
+                open_end
+                    .inspect(|end| {
+                        let local = piece_transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(*end);
+                        if transform.translation != local {
+                            transform.translation = local;
+                        }
+                    })
+                    .is_some()
+            } else if name.0 == hidden_marker {
+                false
+            } else {
+                continue;
+            };
+            let next = if shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
