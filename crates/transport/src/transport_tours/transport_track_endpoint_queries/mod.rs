@@ -28,17 +28,17 @@ fn distance_from_ray_to_vertical_pole(ray: Ray3d, base: Vec3) -> f32 {
 fn transport_station_endpoint_is_available(
     station: Entity,
     endpoint_index: u8,
-    outgoing: bool,
+    _outgoing: bool,
     circuit: Entity,
     segments: &Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
 ) -> bool {
+    // A station end carries one line: a circuit leaves the station from one
+    // end and comes back into the other, as the original's sky tram meets
+    // both rope wheels.
     segments.iter().all(|(_, member, segment, _)| {
         member.0 != circuit
-            || if outgoing {
-                segment.from != station || segment.from_endpoint_index != endpoint_index
-            } else {
-                segment.to != station || segment.to_endpoint_index != endpoint_index
-            }
+            || ((segment.from != station || segment.from_endpoint_index != endpoint_index)
+                && (segment.to != station || segment.to_endpoint_index != endpoint_index))
     })
 }
 
