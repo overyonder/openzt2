@@ -38,6 +38,17 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
     )>,
     projected_prefabs: Query<(Entity, &TransportTrackConstructionPreviewAuthoredPrefab)>,
     rope_anchors: crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
+    mut last_drawn: Local<
+        bevy::platform::collections::HashMap<
+            Entity,
+            (
+                Vec<Vec3>,
+                openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
+                Option<Entity>,
+                bool,
+            ),
+        >,
+    >,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
@@ -58,6 +69,19 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         if !preview.is_changed() && !track_preview.is_changed() {
             continue;
         }
+        // The preview is rewritten every frame. Rebuilding it then would
+        // respawn a sky tower before its column pieces ever line up, so only
+        // a different preview is drawn again.
+        let drawn = (
+            track_preview.path_points.clone(),
+            preview.validity,
+            track_preview.to_station,
+            grid.is_some(),
+        );
+        if last_drawn.get(&preview_entity) == Some(&drawn) {
+            continue;
+        }
+        last_drawn.insert(preview_entity, drawn);
         for (entity, projected) in &projected_prefabs {
             if projected.owner == preview_entity {
                 commands.entity(entity).despawn();
