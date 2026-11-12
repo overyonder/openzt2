@@ -97,6 +97,7 @@ impl Plugin for TransportToursPlugin {
                     crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs,
                     crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs,
                     crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends,
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends,
                 )
                     .run_if(in_state(GamePhase::InGame)),
             )

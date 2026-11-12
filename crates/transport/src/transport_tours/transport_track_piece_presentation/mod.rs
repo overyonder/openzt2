@@ -26,6 +26,7 @@ use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::constr
 
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 
@@ -664,6 +665,72 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
                 continue;
             };
             let next = if shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
+
+/// A station shows the marker of each end no road is connected to yet, where
+/// the original marks the place a road can start ("Click to place road").
+#[allow(clippy::type_complexity)]
+pub(super) fn show_construction_markers_at_unconnected_station_ends(
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    stations: Query<(Entity, &TransportStation, &GlobalTransform)>,
+    routes: Query<&TrackSegment>,
+    children: Query<&Children>,
+    parents: Query<&GlobalTransform>,
+    mut markers: Query<(
+        &PrefabAuthoredAttachmentIdentifier,
+        &ChildOf,
+        &mut Visibility,
+        &mut Transform,
+    )>,
+) {
+    let Some(definitions) = active_definitions.get(&definition_assets) else {
+        return;
+    };
+    let names =
+        ["constructionmarker1", "constructionmarker2"].map(openzt2_game_data::AssetId::from_key);
+    for (station_entity, station, station_transform) in &stations {
+        for descendant in children.iter_descendants(station_entity) {
+            let Ok((name, parent, mut visibility, mut transform)) = markers.get_mut(descendant)
+            else {
+                continue;
+            };
+            let Some(endpoint) = (0_u8..)
+                .zip(names)
+                .find_map(|(endpoint, marker)| (marker == name.0).then_some(endpoint))
+            else {
+                continue;
+            };
+            let connected = routes.iter().any(|route| {
+                (route.from == station_entity && route.from_endpoint_index == endpoint)
+                    || (route.to == station_entity && route.to_endpoint_index == endpoint)
+            });
+            let open_end = (!connected)
+                .then(|| {
+                    crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(
+                        definitions,
+                        station,
+                        station_transform,
+                        endpoint,
+                    )
+                })
+                .flatten();
+            if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
+                let local = parent_transform.affine().inverse().transform_point3(end);
+                if transform.translation != local {
+                    transform.translation = local;
+                }
+            }
+            let next = if open_end.is_some() {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
