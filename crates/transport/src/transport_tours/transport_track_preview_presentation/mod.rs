@@ -147,8 +147,8 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 for (width, material, lift) in [
                     (1.0, footprint, 0.02),
                     (
-                        materials.grid_radius[0] * 2.0,
-                        &materials.grid_cardinal[0],
+                        materials.grid_radius[1] * 2.0,
+                        &materials.grid_cardinal[1],
                         0.01,
                     ),
                 ] {
