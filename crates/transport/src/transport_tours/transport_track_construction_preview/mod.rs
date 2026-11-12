@@ -1,5 +1,7 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
@@ -266,14 +268,19 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     };
 }
 
+/// A highlighted road decal's own material, put back afterwards.
+#[derive(Component)]
+pub(super) struct HighlightedTrackDecalOriginal(Handle<EffectPassMaterial>);
+
 /// `ZTGroundTrackMode` in `UI/modes/modes.xml` colours the station a road
 /// would start from `station_highlight1` (blue) and the station it would
-/// connect to `station_highlight2` (green).
-// ponytail: the colours are copied from modes.xml, not lowered from it. The
-// blinking `endpoint_highlight` on a road end is not drawn yet.
+/// connect to `station_highlight2` (green), and blinks the road already
+/// joined to the start `endpoint_highlight2` (blue) every `colorAnimationCycle`.
+// ponytail: the colours and cycle are copied from modes.xml, not lowered from it.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn highlight_transport_track_connection_stations(
     mut commands: Commands,
+    time: Res<Time<Real>>,
     tool: Res<ConstructionTool>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -294,12 +301,23 @@ pub(super) fn highlight_transport_track_connection_stations(
     )>,
     segments: Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
     previews: Query<&TransportTrackConstructionPreview>,
+    pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     children: Query<&Children>,
+    decals: Query<(
+        &MeshMaterial3d<EffectPassMaterial>,
+        Option<&HighlightedTrackDecalOriginal>,
+    )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
+    (mut effect_materials, mut shader_buffers): (
+        ResMut<Assets<EffectPassMaterial>>,
+        ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
+    ),
     mut lit: Local<HashMap<Entity, Color>>,
 ) {
     const STATION_START: Color = Color::srgb(0.0, 0.0, 1.0);
     const STATION_TARGET: Color = Color::srgb(0.0, 1.0, 0.0);
+    const ROAD_END: Color = Color::srgb(0.0, 0.0, 1.0);
+    const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
 
     let mut wanted = HashMap::new();
     if let (Some((_, kind)), Ok((cursor, world_member)), Some(definitions)) = (
@@ -307,64 +325,120 @@ pub(super) fn highlight_transport_track_connection_stations(
         cursors.single(),
         active_definitions.get(&definitions),
     ) {
-        let (start, target) = if let Ok(preview) = previews.single() {
-            (Some(preview.from_endpoint), preview.to_station)
-        } else {
-            // The click would start from whichever endpoint is nearer.
-            let station = find_nearest_compatible_transport_station_endpoint(
-                cursor.world,
-                kind,
-                world_member.root,
-                None,
-                true,
-                None,
-                definitions,
-                &stations,
-                &segments,
-            );
-            let junction = find_nearest_compatible_transport_track_junction(
-                cursor.world,
-                kind,
-                world_member.root,
-                None,
-                &junctions,
-                &segments,
-            );
-            (
-                nearer_transport_track_construction_endpoint(cursor.world, station, junction)
-                    .map(|endpoint| endpoint.0),
-                None,
-            )
-        };
-        for (station, color) in [(start, STATION_START), (target, STATION_TARGET)] {
-            let Some(station) = station.filter(|station| stations.contains(*station)) else {
-                continue;
-            };
+        let (start, target) = previews.single().map_or_else(
+            |_| {
+                let station = find_nearest_compatible_transport_station_endpoint(
+                    cursor.world,
+                    kind,
+                    world_member.root,
+                    None,
+                    true,
+                    None,
+                    definitions,
+                    &stations,
+                    &segments,
+                );
+                let junction = find_nearest_compatible_transport_track_junction(
+                    cursor.world,
+                    kind,
+                    world_member.root,
+                    None,
+                    &junctions,
+                    &segments,
+                );
+                (
+                    nearer_transport_track_construction_endpoint(cursor.world, station, junction)
+                        .map(|endpoint| endpoint.0),
+                    None,
+                )
+            },
+            |preview| (Some(preview.from_endpoint), preview.to_station),
+        );
+        let mut light_station = |station: Entity, color: Color| {
             for entity in children.iter_descendants(station) {
                 if renderables.contains(entity) {
                     wanted.insert(entity, color);
                 }
             }
+        };
+        if let Some(start) = start.filter(|start| stations.contains(*start)) {
+            light_station(start, STATION_START);
+        }
+        if let Some(target) = target {
+            light_station(target, STATION_TARGET);
+        }
+        if let Some(start) = start {
+            let on = (time.elapsed_secs() / COLOR_ANIMATION_CYCLE_SECONDS).rem_euclid(2.0) < 1.0;
+            let color = if on { ROAD_END } else { Color::WHITE };
+            for (piece_entity, piece) in &pieces {
+                let Ok((_, _, route, _)) = segments.get(piece.route_segment) else {
+                    continue;
+                };
+                if route.to == start || route.from == start {
+                    for child in children.get(piece_entity).into_iter().flatten().copied() {
+                        if decals.contains(child) {
+                            wanted.insert(child, color);
+                        }
+                    }
+                }
+            }
         }
     }
-    let restored = lit
-        .keys()
-        .filter(|entity| !wanted.contains_key(*entity))
-        .map(|entity| (*entity, Color::WHITE))
-        .collect::<Vec<_>>();
-    for (entity, color) in wanted.iter().map(|(e, c)| (*e, *c)).chain(restored) {
-        if lit.get(&entity) == Some(&color) {
+    for (&entity, &color) in wanted.iter().chain(
+        lit.iter()
+            .filter(|(entity, _)| !wanted.contains_key(*entity))
+            .map(|(entity, _)| (entity, &Color::WHITE)),
+    ) {
+        if lit.get(&entity) == Some(&color) && wanted.contains_key(&entity) {
             continue;
         }
-        match renderables.get_mut(entity) {
-            Ok(Some(mut current)) => current.0 = color,
-            Ok(None) => {
-                commands.entity(entity).try_insert(PrefabModelTint(color));
+        if let Ok(current) = renderables.get_mut(entity) {
+            match current {
+                Some(mut current) => current.0 = color,
+                None => {
+                    commands.entity(entity).try_insert(PrefabModelTint(color));
+                }
             }
-            Err(_) => {}
+        } else if let Ok((material, original)) = decals.get(entity) {
+            let material =
+                original.map_or_else(|| material.0.clone(), |original| original.0.clone());
+            tint_track_decal(
+                commands.entity(entity),
+                material,
+                color,
+                &mut effect_materials,
+                &mut shader_buffers,
+            );
         }
     }
     *lit = wanted;
+}
+
+/// Draws a road decal as its texture times `color`, or as its own material
+/// again for white.
+fn tint_track_decal(
+    mut decal: EntityCommands,
+    material: Handle<EffectPassMaterial>,
+    color: Color,
+    effect_materials: &mut Assets<EffectPassMaterial>,
+    shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
+) {
+    if color == Color::WHITE {
+        decal
+            .try_insert(MeshMaterial3d(material))
+            .try_remove::<HighlightedTrackDecalOriginal>();
+        return;
+    }
+    let Some(tinted) = effect_materials
+        .get(&material)
+        .and_then(|source| source.clone_tinted(color.to_srgba().to_vec4(), shader_buffers))
+    else {
+        return;
+    };
+    decal.try_insert((
+        MeshMaterial3d(effect_materials.add(tinted)),
+        HighlightedTrackDecalOriginal(material),
+    ));
 }
 
 type TrackTerrain<'w, 's> = (
