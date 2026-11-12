@@ -310,7 +310,8 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_authored_sky_track_rope(
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_authored_sky_track_rope(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     material: Handle<EffectPassMaterial>,
@@ -408,7 +409,7 @@ pub(super) struct SkyRopeAnchors<'w, 's> {
 
 impl SkyRopeAnchors<'_, '_> {
     /// The station's wheel nearest to its rope end at `near`.
-    fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
+    pub(super) fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
         if !self.stations.contains(station) {
             return None;
         }

@@ -32,8 +32,12 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         Entity,
         Ref<ConstructionPreview>,
         Ref<TransportTrackConstructionPreview>,
+        Option<
+            &openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewMaterials,
+        >,
     )>,
     projected_prefabs: Query<(Entity, &TransportTrackConstructionPreviewAuthoredPrefab)>,
+    rope_anchors: crate::transport_tours::transport_track_piece_presentation::SkyRopeAnchors,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
@@ -50,7 +54,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
         })
         .and_then(|material| effect_pass_materials.get(material))
         .cloned();
-    for (preview_entity, preview, track_preview) in &previews {
+    for (preview_entity, preview, track_preview, grid) in &previews {
         if !preview.is_changed() && !track_preview.is_changed() {
             continue;
         }
@@ -93,6 +97,78 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 ),
                 presentation,
             );
+            // The tower's footprint and the placement grid, as for objects.
+            if let Some(materials) = grid {
+                let valid = matches!(
+                    preview.validity,
+                    openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity::Valid { .. }
+                );
+                let base = preview
+                    .transform
+                    .compute_affine()
+                    .inverse()
+                    .transform_point3(track_preview.path_points[1]);
+                let plane = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
+                let footprint = if valid {
+                    &materials.footprint_valid
+                } else {
+                    &materials.footprint_invalid
+                };
+                commands.spawn((
+                    Mesh3d(plane.clone()),
+                    MeshMaterial3d(footprint.clone()),
+                    Transform::from_translation(base + Vec3::Y * 0.025)
+                        .with_rotation(preview.transform.rotation.inverse()),
+                    ChildOf(root),
+                ));
+                commands.spawn((
+                    Mesh3d(plane),
+                    MeshMaterial3d(materials.grid_cardinal[0].clone()),
+                    Transform::from_translation(base + Vec3::Y * 0.015)
+                        .with_rotation(preview.transform.rotation.inverse())
+                        .with_scale(Vec3::new(
+                            materials.grid_radius[0] * 2.0,
+                            1.0,
+                            materials.grid_radius[0] * 2.0,
+                        )),
+                    ChildOf(root),
+                ));
+            }
+            // As in the original, a line runs from the last tower top (or
+            // station wheel) to the top of the tower being placed.
+            let clearance = track.sky_rope_clearance_metres.unwrap_or_default();
+            let height = presentation
+                .initial_height_metres
+                .max(track_preview.path_points[0].y - track_preview.path_points[1].y + clearance);
+            let start = rope_anchors
+                .station_wheel(track_preview.from_endpoint, track_preview.path_points[0])
+                .unwrap_or(
+                    track_preview.path_points[0] + Vec3::Y * presentation.initial_height_metres,
+                );
+            let end = track_preview
+                .to_station
+                .and_then(|station| {
+                    rope_anchors.station_wheel(station, track_preview.path_points[1])
+                })
+                .unwrap_or(track_preview.path_points[1] + Vec3::Y * height);
+            if let Some(mut line) = terrain_decal_pass.clone() {
+                let texture = definitions
+                    .texture_image(presentation.rope_texture)
+                    .unwrap_or_default();
+                if line.configure_for_authored_blue_fang_line(texture) {
+                    line.recreate_uniform_buffers_for_runtime_material(&mut effect_uniform_buffers);
+                    crate::transport_tours::transport_track_piece_presentation::spawn_authored_sky_track_rope(
+                        &mut commands,
+                        &mut meshes,
+                        effect_pass_materials.add(line),
+                        root,
+                        &preview.transform,
+                        start,
+                        end,
+                        presentation,
+                    );
+                }
+            }
             continue;
         }
         let Some(template) = terrain_decal_pass.as_ref() else {

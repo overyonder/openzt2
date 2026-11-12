@@ -345,7 +345,11 @@ pub(super) fn highlight_transport_track_connection_stations(
         &WorldMember,
     )>,
     segments: Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
-    previews: Query<&TransportTrackConstructionPreview>,
+    previews: Query<(
+        Entity,
+        &TransportTrackConstructionPreview,
+        &ConstructionPreview,
+    )>,
     pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     children: Query<&Children>,
     decals: Query<(
@@ -362,6 +366,7 @@ pub(super) fn highlight_transport_track_connection_stations(
 ) {
     const STATION_START: Color = Color::srgb(0.0, 0.0, 1.0);
     const STATION_TARGET: Color = Color::srgb(0.0, 1.0, 0.0);
+    const PLACE_NO: Color = Color::srgb(200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0);
     const ROAD_END: Color = Color::srgb(0.0, 0.0, 1.0);
     const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
 
@@ -375,8 +380,11 @@ pub(super) fn highlight_transport_track_connection_stations(
         cursors.single(),
         active_definitions.get(&definitions),
     ) {
-        let (start, target) = previews.single().map_or_else(
-            |_| {
+        let preview = previews.single().ok();
+        let valid = preview
+            .is_none_or(|(_, _, state)| matches!(state.validity, PlacementValidity::Valid { .. }));
+        let (start, target) = preview.map_or_else(
+            || {
                 let station = find_nearest_compatible_transport_station_endpoint(
                     cursor.world,
                     kind,
@@ -403,7 +411,7 @@ pub(super) fn highlight_transport_track_connection_stations(
                     None,
                 )
             },
-            |preview| (Some(preview.from_endpoint), preview.to_station),
+            |(_, preview, _)| (Some(preview.from_endpoint), preview.to_station),
         );
         let mut light_station = |station: Entity, color: Color| {
             for entity in children.iter_descendants(station) {
@@ -412,11 +420,22 @@ pub(super) fn highlight_transport_track_connection_stations(
                 }
             }
         };
-        if let Some(start) = start.filter(|start| stations.contains(*start)) {
+        // A sky line's start is its station or its last tower.
+        if let Some(start) = start.filter(|start| {
+            stations.contains(*start)
+                || (kind == TransportationTrackKind::Sky && junctions.contains(*start))
+        }) {
             light_station(start, STATION_START);
         }
+        let placeable = if valid { STATION_TARGET } else { PLACE_NO };
         if let Some(target) = target {
-            light_station(target, STATION_TARGET);
+            light_station(target, placeable);
+        }
+        // The sky tower being placed shows whether it can stand there.
+        if let Some((preview_entity, _, _)) =
+            preview.filter(|_| kind == TransportationTrackKind::Sky)
+        {
+            light_station(preview_entity, placeable);
         }
         if let Some(start) = start {
             let color = if on { ROAD_END } else { Color::WHITE };
