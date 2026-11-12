@@ -357,10 +357,11 @@ pub(super) fn highlight_transport_track_connection_stations(
         Option<&HighlightedTrackDecalOriginal>,
     )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
-    (mut effect_materials, mut shader_buffers, pointer_ray): (
+    (mut effect_materials, mut shader_buffers, pointer_ray, ropes): (
         ResMut<Assets<EffectPassMaterial>>,
         ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
         Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
+        Query<(), With<crate::transport_tours::transport_track_piece_presentation::SkyTrackRope>>,
     ),
     mut lit: Local<HashMap<Entity, Color>>,
 ) {
@@ -416,9 +417,15 @@ pub(super) fn highlight_transport_track_connection_stations(
         // Station models carry vertex colours the model tint multiplies; the
         // sky tower parts don't, so their materials are tinted instead.
         let mut light_station = |station: Entity, color: Color| {
-            let tower = !stations.contains(station);
+            // A sky station's model has no vertex colours either.
+            let by_material = kind == TransportationTrackKind::Sky;
             for entity in children.iter_descendants(station) {
-                if (!tower && renderables.contains(entity)) || (tower && decals.contains(entity)) {
+                if ropes.contains(entity) {
+                    continue;
+                }
+                if (!by_material && renderables.contains(entity))
+                    || (by_material && decals.contains(entity))
+                {
                     wanted.insert(entity, color);
                 }
             }
@@ -440,7 +447,8 @@ pub(super) fn highlight_transport_track_connection_stations(
         {
             light_station(preview_entity, placeable);
         }
-        if let Some(start) = start {
+        // Only a road blinks; a sky line's tower is lit instead.
+        if let Some(start) = start.filter(|_| kind == TransportationTrackKind::Ground) {
             let color = if on { ROAD_END } else { Color::WHITE };
             for (piece_entity, piece) in &pieces {
                 let Ok((_, _, route, _)) = segments.get(piece.route_segment) else {

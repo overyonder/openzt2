@@ -388,8 +388,14 @@ pub(super) fn spawn_authored_sky_track_rope(
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material),
         ChildOf(parent),
+        SkyTrackRope,
     ));
 }
+
+/// A sky track's rope, which keeps its colour while its towers and stations
+/// are highlighted.
+#[derive(Component)]
+pub(super) struct SkyTrackRope;
 
 /// A sky station's rope wheels (`link_wheel`, `link_wheel2`), where its ropes
 /// turn.
