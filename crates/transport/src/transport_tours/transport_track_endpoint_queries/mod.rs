@@ -10,6 +10,8 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 
 const TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES: f32 = 8.0;
+// ponytail: a fixed radius covers both stations, read the footprint if a larger one misses.
+const TRANSPORT_STATION_POINTER_PICK_RADIUS_METRES: f32 = 10.0;
 const SKY_TOWER_POINTER_PICK_DISTANCE_METRES: f32 = 2.0;
 // ponytail: a fixed pick height, read the tower's own height if tall towers miss.
 const SKY_TOWER_POINTER_PICK_HEIGHT_METRES: f32 = 12.0;
@@ -86,14 +88,23 @@ pub(super) fn find_nearest_compatible_transport_station_endpoint(
                         transform,
                         endpoint_index,
                     )
-                    .map(|position| (entity, member.0, endpoint_index, position))
+                    .map(|position| {
+                        (
+                            (entity, member.0, endpoint_index, position),
+                            transform.translation(),
+                        )
+                    })
                 })
                 .flatten()
             })
         })
-        .filter_map(|endpoint| {
+        .filter_map(|(endpoint, centre)| {
+            // A free end is taken near itself or with the pointer over its
+            // station, as the original takes a click on the station.
             let distance_squared = endpoint.3.distance_squared(pointer_position);
-            (distance_squared <= TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES.powi(2))
+            (distance_squared <= TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES.powi(2)
+                || centre.xz().distance(pointer_position.xz())
+                    <= TRANSPORT_STATION_POINTER_PICK_RADIUS_METRES)
                 .then_some((distance_squared, endpoint))
         })
         .min_by(|left, right| left.0.total_cmp(&right.0))
