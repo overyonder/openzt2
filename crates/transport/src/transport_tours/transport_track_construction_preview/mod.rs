@@ -73,6 +73,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     )>,
     mut commits: MessageWriter<CommitConstruction>,
     mut continue_from: Local<Option<Vec3>>,
+    pointer_ray: Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
 ) {
     let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
         *continue_from = None;
@@ -92,6 +93,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
                 end,
                 kind,
                 world_member.root,
+                None,
                 None,
                 &junctions,
                 &segments,
@@ -140,6 +142,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         kind,
         world_member.root,
         None,
+        pointer_ray.0,
         &junctions,
         &segments,
     );
@@ -350,9 +353,10 @@ pub(super) fn highlight_transport_track_connection_stations(
         Option<&HighlightedTrackDecalOriginal>,
     )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
-    (mut effect_materials, mut shader_buffers): (
+    (mut effect_materials, mut shader_buffers, pointer_ray): (
         ResMut<Assets<EffectPassMaterial>>,
         ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
+        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
     ),
     mut lit: Local<HashMap<Entity, Color>>,
 ) {
@@ -389,6 +393,7 @@ pub(super) fn highlight_transport_track_connection_stations(
                     kind,
                     world_member.root,
                     None,
+                    pointer_ray.0,
                     &junctions,
                     &segments,
                 );

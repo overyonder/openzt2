@@ -10,6 +10,20 @@ use bevy::prelude::*;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 
 const TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES: f32 = 8.0;
+const SKY_TOWER_POINTER_PICK_DISTANCE_METRES: f32 = 2.0;
+// ponytail: a fixed pick height, read the tower's own height if tall towers miss.
+const SKY_TOWER_POINTER_PICK_HEIGHT_METRES: f32 = 12.0;
+
+/// The pointer ray's closest approach to a tower standing at `base`.
+fn distance_from_ray_to_vertical_pole(ray: Ray3d, base: Vec3) -> f32 {
+    (0..=24)
+        .map(|step| base + Vec3::Y * (SKY_TOWER_POINTER_PICK_HEIGHT_METRES * step as f32 / 24.0))
+        .map(|point| {
+            let along = (point - ray.origin).dot(*ray.direction).max(0.0);
+            point.distance(ray.origin + *ray.direction * along)
+        })
+        .fold(f32::INFINITY, f32::min)
+}
 
 fn transport_station_endpoint_is_available(
     station: Entity,
@@ -92,6 +106,7 @@ pub(super) fn find_nearest_compatible_transport_track_junction(
     wanted_kind: TransportationTrackKind,
     wanted_world_root: Entity,
     wanted_circuit: Option<Entity>,
+    pointer_ray: Option<Ray3d>,
     junctions: &Query<(
         Entity,
         &TransportTrackJunction,
@@ -117,8 +132,21 @@ pub(super) fn find_nearest_compatible_transport_track_junction(
         })
         .filter_map(|(entity, _, member, transform, _)| {
             let position = transform.translation();
-            let distance_squared = position.distance_squared(pointer_position);
-            (distance_squared <= TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES.powi(2))
+            // A sky tower is picked anywhere along its height, as the
+            // original takes a click on the pole itself.
+            let pole_distance = pointer_ray
+                .filter(|_| wanted_kind == TransportationTrackKind::Sky)
+                .map(|ray| distance_from_ray_to_vertical_pole(ray, position));
+            let distance_squared = pole_distance.map_or_else(
+                || position.distance_squared(pointer_position),
+                |distance| distance * distance,
+            );
+            let limit = if pole_distance.is_some() {
+                SKY_TOWER_POINTER_PICK_DISTANCE_METRES
+            } else {
+                TRANSPORT_STATION_ENDPOINT_POINTER_SNAP_DISTANCE_METRES
+            };
+            (distance_squared <= limit.powi(2))
                 .then_some((distance_squared, (entity, member.0, 0, position)))
         })
         .min_by(|left, right| left.0.total_cmp(&right.0))
