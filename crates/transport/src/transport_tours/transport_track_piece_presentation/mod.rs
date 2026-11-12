@@ -721,7 +721,12 @@ mod tests;
 /// ("Click to place road"); every other piece keeps its markers hidden.
 pub(super) fn show_construction_markers_at_unconnected_road_ends(
     pieces: Query<
-        (&TransportTrackConstructionPiece, &Transform, &Children),
+        (
+            &TransportTrackConstructionPiece,
+            &Transform,
+            &Children,
+            &TrackProfile,
+        ),
         Without<PrefabAuthoredAttachmentIdentifier>,
     >,
     routes: Query<&TrackSegment>,
@@ -737,9 +742,12 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
 ) {
     let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
     let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
-    for (piece, piece_transform, children) in &pieces {
+    for (piece, piece_transform, children, profile) in &pieces {
+        // A sky tower carries its own marker on its top.
+        let ground = profile.kind == TransportationTrackKind::Ground;
         let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
-            (usize::from(piece.piece_index) + 2 == route.path_points.len()
+            (ground
+                && usize::from(piece.piece_index) + 2 == route.path_points.len()
                 && junctions.contains(route.to)
                 && !routes.iter().any(|other| other.from == route.to))
             .then_some(route.to_position)
