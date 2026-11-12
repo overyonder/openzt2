@@ -390,6 +390,42 @@ fn spawn_authored_sky_track_rope(
     ));
 }
 
+/// A sky station's rope wheels (`link_wheel`, `link_wheel2`), where its ropes
+/// turn.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct SkyRopeAnchors<'w, 's> {
+    stations: Query<'w, 's, (), With<TransportStation>>,
+    children: Query<'w, 's, &'static Children>,
+    nodes: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
+            &'static GlobalTransform,
+        ),
+    >,
+}
+
+impl SkyRopeAnchors<'_, '_> {
+    /// The station's wheel nearest to its rope end at `near`.
+    fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
+        if !self.stations.contains(station) {
+            return None;
+        }
+        let wheels = ["link_wheel", "link_wheel2"].map(openzt2_game_data::AssetId::from_key);
+        self.children
+            .iter_descendants(station)
+            .filter_map(|node| self.nodes.get(node).ok())
+            .filter(|(id, _)| wheels.contains(&id.0))
+            .map(|(_, transform)| transform.translation())
+            .min_by(|a, b| {
+                a.xz()
+                    .distance(near.xz())
+                    .total_cmp(&b.xz().distance(near.xz()))
+            })
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut commands: Commands,
@@ -404,7 +440,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    endpoint_transforms: Query<&GlobalTransform, With<TransportTrackJunction>>,
+    (endpoint_transforms, rope_anchors): (
+        Query<&GlobalTransform, With<TransportTrackJunction>>,
+        SkyRopeAnchors,
+    ),
     existing_sky_towers: Query<&AuthoredLinkedSkyTowerPresentationProjected>,
     routes: Query<&TrackSegment>,
     pieces: Query<
@@ -444,10 +483,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 continue;
             };
             if piece.piece_index == 0 && route.path_points.len() == 2 {
-                let Ok(tower_global_transform) = endpoint_transforms.get(route.to) else {
-                    continue;
-                };
-                let tower_world_transform = tower_global_transform.compute_transform();
+                let tower_world_transform = endpoint_transforms
+                    .get(route.to)
+                    .ok()
+                    .map(GlobalTransform::compute_transform);
                 let Some(template) = terrain_decal_pass.as_ref() else {
                     continue;
                 };
@@ -468,9 +507,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     route.from_position.y - route.to_position.y
                         + track.sky_rope_clearance_metres.unwrap_or_default(),
                 );
-                if existing_sky_towers.get(route.to).is_err()
-                    && tower_targets_projected_this_run.insert(route.to)
-                {
+                if let Some(tower_world_transform) = tower_world_transform.filter(|_| {
+                    existing_sky_towers.get(route.to).is_err()
+                        && tower_targets_projected_this_run.insert(route.to)
+                }) {
                     let top_kind = authored_sky_tower_top_kind(route, &routes);
                     let tower_presentation_root = commands
                         .spawn((
@@ -502,14 +542,22 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 let source_height_metres = presentation
                     .initial_height_metres
                     .max(route.to_position.y - route.from_position.y + rope_clearance);
+                // The rope runs between tower tops, and at a station over the
+                // wheel (link_wheel) next to the end it leaves from.
+                let start = rope_anchors
+                    .station_wheel(route.from, route.path_points[0])
+                    .unwrap_or(route.path_points[0] + Vec3::Y * source_height_metres);
+                let end = rope_anchors
+                    .station_wheel(route.to, route.path_points[1])
+                    .unwrap_or(route.path_points[1] + Vec3::Y * promoted_height_metres);
                 spawn_authored_sky_track_rope(
                     &mut commands,
                     &mut meshes,
                     material,
                     entity,
                     transform,
-                    route.path_points[0] + Vec3::Y * (source_height_metres - rope_clearance),
-                    route.path_points[1] + Vec3::Y * (promoted_height_metres - rope_clearance),
+                    start,
+                    end,
                     presentation,
                 );
             }
