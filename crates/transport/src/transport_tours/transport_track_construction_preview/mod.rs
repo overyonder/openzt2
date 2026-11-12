@@ -413,9 +413,12 @@ pub(super) fn highlight_transport_track_connection_stations(
             },
             |(_, preview, _)| (Some(preview.from_endpoint), preview.to_station),
         );
+        // Station models carry vertex colours the model tint multiplies; the
+        // sky tower parts don't, so their materials are tinted instead.
         let mut light_station = |station: Entity, color: Color| {
+            let tower = !stations.contains(station);
             for entity in children.iter_descendants(station) {
-                if renderables.contains(entity) {
+                if (!tower && renderables.contains(entity)) || (tower && decals.contains(entity)) {
                     wanted.insert(entity, color);
                 }
             }
