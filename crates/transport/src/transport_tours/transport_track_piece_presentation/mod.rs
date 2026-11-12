@@ -725,7 +725,14 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                 })
                 .flatten();
             if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
-                let local = parent_transform.affine().inverse().transform_point3(end);
+                // ponytail: fixed 1.5 m step out of the building, tune if a station hides it
+                let outward = (end - station_transform.translation())
+                    .with_y(0.0)
+                    .normalize_or_zero();
+                let local = parent_transform
+                    .affine()
+                    .inverse()
+                    .transform_point3(end + outward * 1.5);
                 if transform.translation != local {
                     transform.translation = local;
                 }
