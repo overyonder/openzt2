@@ -31,6 +31,10 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<Mesh>>()
+        .init_resource::<openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>()
+        .init_resource::<Assets<
+            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+        >>()
         .add_systems(
             Update,
             rebuild_object_placement_preview_footprint_and_grid_decals,
