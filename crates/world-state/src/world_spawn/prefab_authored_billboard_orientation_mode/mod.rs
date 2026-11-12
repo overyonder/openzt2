@@ -4,6 +4,9 @@ use bevy::prelude::*;
 pub struct PrefabAuthoredBillboardOrientationMode {
     pub mode: u32,
     pub authored_local_rotation: Quat,
+    /// The billboard's content faces local +Z with +Y up (a BFB model),
+    /// rather than the source +Y with +Z up (a NIF model).
+    pub faces_positive_z: bool,
 }
 
 impl PrefabAuthoredBillboardOrientationMode {
@@ -11,7 +14,14 @@ impl PrefabAuthoredBillboardOrientationMode {
         Self {
             mode,
             authored_local_rotation,
+            faces_positive_z: false,
         }
+    }
+
+    #[must_use]
+    pub fn facing_positive_z(mut self, faces_positive_z: bool) -> Self {
+        self.faces_positive_z = faces_positive_z;
+        self
     }
 }
 
