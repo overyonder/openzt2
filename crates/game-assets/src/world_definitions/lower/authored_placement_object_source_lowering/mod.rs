@@ -16,8 +16,7 @@ use super::object_facility_staff_and_guest_source_vocabulary::{
 };
 use super::source_element_tree_search::{
     authored_type_family_component_attribute, authored_type_family_components,
-    authored_type_family_elements_named, find_descendant,
-    find_descendant_named_with_nonempty_attribute, find_descendant_with_attribute,
+    authored_type_family_elements_named, find_descendant, find_descendant_with_attribute,
     find_presentation_component,
 };
 use super::source_model_scene_path_normalization::normalize_scene_path;
@@ -247,19 +246,18 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|element| element.attribute_named_any(&["ids"]))
         .map(id)
         .unwrap_or_default();
-    let price_cents = find_descendant_named_with_nonempty_attribute(
-        record.source_document_element(),
-        "ZTEconomyComponent",
-        "cost",
-    )
-    .and_then(|element| element.attribute_named_any(&["cost"]))
-    .map(|cost| {
-        let value = parse_blue_fang_source_numeric_lexeme::<f64>(cost)
-            .ok_or_else(|| BindError::record(record, "invalid authored placement cost"))?;
-        money_cents(value, record).map(i64::from)
-    })
-    .transpose()?
-    .unwrap_or_default();
+    // An object inherits its cost from its type family, as the sky tram pole
+    // takes it from the skytower binder.
+    let price_cents = authored_type_family_components(record, "ZTEconomyComponent")
+        .into_iter()
+        .find_map(|element| element.attribute_named_any(&["cost"]))
+        .map(|cost| {
+            let value = parse_blue_fang_source_numeric_lexeme::<f64>(cost)
+                .ok_or_else(|| BindError::record(record, "invalid authored placement cost"))?;
+            money_cents(value, record).map(i64::from)
+        })
+        .transpose()?
+        .unwrap_or_default();
     let upkeep = find_descendant_with_attribute(
         record.source_document_element(),
         "ZTTransaction",

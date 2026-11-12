@@ -202,6 +202,21 @@ pub(super) fn spawn_authored_sky_tower(
     } else {
         point - points[index - 1]
     };
+    // The construction marker over a tower's top, shown while a line ends
+    // there (skytower's constructionMarker binders).
+    if let Some(marker) = definitions.scene(openzt2_game_data::AssetId::from_virtual_path(
+        &openzt2_game_assets::model_source::native_model_source_lowering::native_model_scene_labelled_asset_path(
+            "ui/fx/underconstruction/underconstruction_sky.nif",
+        ),
+    )) {
+        commands.spawn((
+            Transform::from_translation(local + Vec3::Y * height),
+            Visibility::Hidden,
+            ChildOf(parent),
+            openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation::new(marker),
+            SkyTowerConstructionMarker,
+        ));
+    }
     openzt2_world::world_spawn::expanding_column_presentation::spawn_expanding_column_presentation(
         commands,
         definitions,
@@ -310,7 +325,7 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_authored_sky_track_rope(
+pub(super) fn spawn_authored_sky_track_rope(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     material: Handle<EffectPassMaterial>,
@@ -387,7 +402,78 @@ fn spawn_authored_sky_track_rope(
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material),
         ChildOf(parent),
+        SkyTrackRope,
     ));
+}
+
+/// The construction marker over a sky tower.
+#[derive(Component)]
+pub(super) struct SkyTowerConstructionMarker;
+
+/// A sky tower shows its construction marker while no line leaves it, as
+/// the original marks where a line can be continued.
+pub(super) fn show_construction_markers_at_open_sky_towers(
+    towers: Query<(Entity, &AuthoredLinkedSkyTowerPresentationProjected)>,
+    routes: Query<&TrackSegment>,
+    mut markers: Query<(&ChildOf, &mut Visibility), With<SkyTowerConstructionMarker>>,
+) {
+    for (tower, projected) in &towers {
+        let open = !routes.iter().any(|route| route.from == tower);
+        for (parent, mut visibility) in &mut markers {
+            if parent.parent() != projected.root {
+                continue;
+            }
+            let next = if open {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
+
+/// A sky track's rope, which keeps its colour while its towers and stations
+/// are highlighted.
+#[derive(Component)]
+pub(super) struct SkyTrackRope;
+
+/// A sky station's rope wheels (`link_wheel`, `link_wheel2`), where its ropes
+/// turn.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct SkyRopeAnchors<'w, 's> {
+    stations: Query<'w, 's, (), With<TransportStation>>,
+    children: Query<'w, 's, &'static Children>,
+    nodes: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
+            &'static GlobalTransform,
+        ),
+    >,
+}
+
+impl SkyRopeAnchors<'_, '_> {
+    /// The station's wheel nearest to its rope end at `near`.
+    pub(super) fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
+        if !self.stations.contains(station) {
+            return None;
+        }
+        let wheels = ["link_wheel", "link_wheel2"].map(openzt2_game_data::AssetId::from_key);
+        self.children
+            .iter_descendants(station)
+            .filter_map(|node| self.nodes.get(node).ok())
+            .filter(|(id, _)| wheels.contains(&id.0))
+            .map(|(_, transform)| transform.translation())
+            .min_by(|a, b| {
+                a.xz()
+                    .distance(near.xz())
+                    .total_cmp(&b.xz().distance(near.xz()))
+            })
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -404,7 +490,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    endpoint_transforms: Query<&GlobalTransform, With<TransportTrackJunction>>,
+    (endpoint_transforms, rope_anchors): (
+        Query<&GlobalTransform, With<TransportTrackJunction>>,
+        SkyRopeAnchors,
+    ),
     existing_sky_towers: Query<&AuthoredLinkedSkyTowerPresentationProjected>,
     routes: Query<&TrackSegment>,
     pieces: Query<
@@ -444,16 +533,18 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 continue;
             };
             if piece.piece_index == 0 && route.path_points.len() == 2 {
-                let Ok(tower_global_transform) = endpoint_transforms.get(route.to) else {
+                let tower_world_transform = endpoint_transforms
+                    .get(route.to)
+                    .ok()
+                    .map(GlobalTransform::compute_transform);
+                let Some(template) = terrain_decal_pass.as_ref() else {
                     continue;
                 };
-                let tower_world_transform = tower_global_transform.compute_transform();
-                let (Some(texture), Some(template)) = (
-                    definitions.texture_image(presentation.rope_texture),
-                    terrain_decal_pass.as_ref(),
-                ) else {
-                    continue;
-                };
+                // The shipped rope names elevpathtest.tga, which no archive
+                // contains; the original draws the rope untextured then.
+                let texture = definitions
+                    .texture_image(presentation.rope_texture)
+                    .unwrap_or_default();
                 let mut line_material = template.clone();
                 if !line_material.configure_for_authored_blue_fang_line(texture) {
                     error!("sky track could not bind the authored BFLine fixed-function state");
@@ -466,9 +557,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     route.from_position.y - route.to_position.y
                         + track.sky_rope_clearance_metres.unwrap_or_default(),
                 );
-                if existing_sky_towers.get(route.to).is_err()
-                    && tower_targets_projected_this_run.insert(route.to)
-                {
+                if let Some(tower_world_transform) = tower_world_transform.filter(|_| {
+                    existing_sky_towers.get(route.to).is_err()
+                        && tower_targets_projected_this_run.insert(route.to)
+                }) {
                     let top_kind = authored_sky_tower_top_kind(route, &routes);
                     let tower_presentation_root = commands
                         .spawn((
@@ -500,14 +592,22 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 let source_height_metres = presentation
                     .initial_height_metres
                     .max(route.to_position.y - route.from_position.y + rope_clearance);
+                // The rope runs between tower tops, and at a station over the
+                // wheel (link_wheel) next to the end it leaves from.
+                let start = rope_anchors
+                    .station_wheel(route.from, route.path_points[0])
+                    .unwrap_or(route.path_points[0] + Vec3::Y * source_height_metres);
+                let end = rope_anchors
+                    .station_wheel(route.to, route.path_points[1])
+                    .unwrap_or(route.path_points[1] + Vec3::Y * promoted_height_metres);
                 spawn_authored_sky_track_rope(
                     &mut commands,
                     &mut meshes,
                     material,
                     entity,
                     transform,
-                    route.path_points[0] + Vec3::Y * (source_height_metres - rope_clearance),
-                    route.path_points[1] + Vec3::Y * (promoted_height_metres - rope_clearance),
+                    start,
+                    end,
                     presentation,
                 );
             }
@@ -620,7 +720,12 @@ mod tests;
 /// ("Click to place road"); every other piece keeps its markers hidden.
 pub(super) fn show_construction_markers_at_unconnected_road_ends(
     pieces: Query<
-        (&TransportTrackConstructionPiece, &Transform, &Children),
+        (
+            &TransportTrackConstructionPiece,
+            &Transform,
+            &Children,
+            &TrackProfile,
+        ),
         Without<PrefabAuthoredAttachmentIdentifier>,
     >,
     routes: Query<&TrackSegment>,
@@ -636,9 +741,12 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
 ) {
     let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
     let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
-    for (piece, piece_transform, children) in &pieces {
+    for (piece, piece_transform, children, profile) in &pieces {
+        // A sky tower carries its own marker on its top.
+        let ground = profile.kind == TransportationTrackKind::Ground;
         let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
-            (usize::from(piece.piece_index) + 2 == route.path_points.len()
+            (ground
+                && usize::from(piece.piece_index) + 2 == route.path_points.len()
                 && junctions.contains(route.to)
                 && !routes.iter().any(|other| other.from == route.to))
             .then_some(route.to_position)
@@ -676,6 +784,25 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
     }
 }
 
+/// Whether a station carries the four markers of a sky station.
+fn names_in_pairs(
+    children: &Query<&Children>,
+    markers: &Query<(
+        &PrefabAuthoredAttachmentIdentifier,
+        &ChildOf,
+        &mut Visibility,
+        &mut Transform,
+    )>,
+    station: Entity,
+    names: [openzt2_game_data::AssetId; 4],
+) -> bool {
+    children.iter_descendants(station).any(|entity| {
+        markers
+            .get(entity)
+            .is_ok_and(|(name, ..)| name.0 == names[3])
+    })
+}
+
 /// A station shows the marker of each end no road is connected to yet, where
 /// the original marks the place a road can start ("Click to place road").
 #[allow(clippy::type_complexity)]
@@ -692,24 +819,34 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
         &mut Visibility,
         &mut Transform,
     )>,
+    rope_anchors: SkyRopeAnchors,
 ) {
     let Some(definitions) = active_definitions.get(&definition_assets) else {
         return;
     };
-    let names =
-        ["constructionmarker1", "constructionmarker2"].map(openzt2_game_data::AssetId::from_key);
+    // A ground station marks each end with one marker; a sky station marks
+    // each rope end with a pair (markers 1-2 and 3-4).
+    let names = [
+        "constructionmarker1",
+        "constructionmarker2",
+        "constructionmarker3",
+        "constructionmarker4",
+    ]
+    .map(openzt2_game_data::AssetId::from_key);
     for (station_entity, station, station_transform) in &stations {
+        let pair = names_in_pairs(&children, &markers, station_entity, names);
         for descendant in children.iter_descendants(station_entity) {
             let Ok((name, parent, mut visibility, mut transform)) = markers.get_mut(descendant)
             else {
                 continue;
             };
-            let Some(endpoint) = (0_u8..)
+            let Some(marker) = (0_u8..)
                 .zip(names)
-                .find_map(|(endpoint, marker)| (marker == name.0).then_some(endpoint))
+                .find_map(|(index, marker)| (marker == name.0).then_some(index))
             else {
                 continue;
             };
+            let endpoint = if pair { marker / 2 } else { marker };
             let connected = routes.iter().any(|route| {
                 (route.from == station_entity && route.from_endpoint_index == endpoint)
                     || (route.to == station_entity && route.to_endpoint_index == endpoint)
@@ -729,10 +866,22 @@ pub(super) fn show_construction_markers_at_unconnected_station_ends(
                 let outward = (end - station_transform.translation())
                     .with_y(0.0)
                     .normalize_or_zero();
+                // A sky station's pair hangs over its rope wheel, one each side.
+                let position = if pair {
+                    let side = Vec3::Y.cross(outward) * if marker % 2 == 0 { 1.0 } else { -1.0 };
+                    rope_anchors
+                        .station_wheel(station_entity, end)
+                        .unwrap_or(end)
+                        + side
+                        // ponytail: fixed lift above the roof, match zt.exe if a station differs
+                        + Vec3::Y * 3.0
+                } else {
+                    end + outward * 1.5
+                };
                 let local = parent_transform
                     .affine()
                     .inverse()
-                    .transform_point3(end + outward * 1.5);
+                    .transform_point3(position);
                 if transform.translation != local {
                     transform.translation = local;
                 }

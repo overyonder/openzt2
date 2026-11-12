@@ -1,7 +1,6 @@
 //! Builds authored placement decals and projects preview validity onto visuals.
 
 use bevy::prelude::*;
-use bevy::render::render_resource::Face;
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
@@ -24,6 +23,7 @@ use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrevie
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewOwner;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRenderable;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewVisualState;
+use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates;
 
 pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
     mut commands: Commands,
@@ -60,7 +60,8 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
                         base_color_texture: Some(image),
                         alpha_mode: AlphaMode::Blend,
                         unlit: true,
-                        cull_mode: Some(Face::Back),
+                        // Terrain-fitted decals may wind either way.
+                        cull_mode: None,
                         ..default()
                     })
                 })
@@ -160,6 +161,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         Option<&mut ObjectPlacementPreviewVisualState>,
     )>,
     decals: Query<(Entity, &ObjectPlacementPreviewOwner), With<ObjectPlacementPreviewDecal>>,
+    terrain: PreviewDecalTerrain,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -221,6 +223,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
                 && state.footprint_material == *footprint_material
                 && state.grid_material == *grid_material
                 && state.grid_radius == grid_radius
+                && state.world_translation == preview.transform.translation
                 && state
                     .footprint_translations
                     .iter()
@@ -237,6 +240,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             footprint_material: footprint_material.clone(),
             grid_material: grid_material.clone(),
             grid_radius,
+            world_translation: preview.transform.translation,
         };
         let plane = plane
             .get_or_insert_with(|| meshes.add(Plane3d::default().mesh().size(1.0, 1.0)))
@@ -246,30 +250,30 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
                 commands.entity(decal).despawn();
             }
         }
+        let decals = PreviewDecals {
+            owner: entity,
+            preview: preview.transform.compute_affine(),
+            rotation: next.decal_rotation,
+            plane: &plane,
+        };
         for translation in &next.footprint_translations {
-            commands.spawn((
-                Mesh3d(plane.clone()),
-                MeshMaterial3d(next.footprint_material.clone()),
-                Transform::from_translation(*translation).with_rotation(next.decal_rotation),
-                ObjectPlacementPreviewDecal,
-                ObjectPlacementPreviewOwner(entity),
-                ChildOf(entity),
-            ));
+            decals.spawn(
+                &mut commands,
+                &mut meshes,
+                &terrain,
+                *translation,
+                1.0,
+                &next.footprint_material,
+            );
         }
-        commands.spawn((
-            Mesh3d(plane),
-            MeshMaterial3d(next.grid_material.clone()),
-            Transform::from_xyz(0.0, 0.015, 0.0)
-                .with_rotation(next.decal_rotation)
-                .with_scale(Vec3::new(
-                    next.grid_radius * 2.0,
-                    1.0,
-                    next.grid_radius * 2.0,
-                )),
-            ObjectPlacementPreviewDecal,
-            ObjectPlacementPreviewOwner(entity),
-            ChildOf(entity),
-        ));
+        decals.spawn(
+            &mut commands,
+            &mut meshes,
+            &terrain,
+            Vec3::new(0.0, 0.015, 0.0),
+            next.grid_radius * 2.0,
+            &next.grid_material,
+        );
         if let Some(mut state) = state {
             *state = next;
         } else {
@@ -335,4 +339,69 @@ fn calculate_occupied_footprint_maximum_axis_span(cells: &[FootprintCell]) -> i3
 
 fn convert_authored_srgba_bytes_to_bevy_color(value: [u8; 4]) -> Color {
     Color::srgba_u8(value[0], value[1], value[2], value[3])
+}
+
+/// The ground placement decals are fitted to.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct PreviewDecalTerrain<'w, 's> {
+    index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
+    assets: Res<
+        'w,
+        Assets<
+            openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
+        >,
+    >,
+    chunks: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk,
+            Option<&'static openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
+        ),
+    >,
+}
+
+struct PreviewDecals<'a> {
+    owner: Entity,
+    preview: bevy::math::Affine3A,
+    rotation: Quat,
+    plane: &'a Handle<Mesh>,
+}
+
+impl PreviewDecals<'_> {
+    /// A decal fitted to the terrain, as the original draws it on the ground,
+    /// so a slope doesn't bury it; a flat plane stands in off the map.
+    fn spawn(
+        &self,
+        commands: &mut Commands,
+        meshes: &mut Assets<Mesh>,
+        terrain: &PreviewDecalTerrain,
+        translation: Vec3,
+        width: f32,
+        material: &Handle<StandardMaterial>,
+    ) {
+        let centre = self.preview.transform_point3(translation);
+        let (mesh, scale) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
+            width,
+            centre,
+            0.0,
+            &terrain.index,
+            &terrain.assets,
+            &terrain.chunks,
+        )
+        .map_or_else(
+            || (self.plane.clone(), Vec3::new(width, 1.0, width)),
+            |mesh| (meshes.add(mesh), Vec3::ONE),
+        );
+        commands.spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(translation)
+                .with_rotation(self.rotation)
+                .with_scale(scale),
+            ObjectPlacementPreviewDecal,
+            ObjectPlacementPreviewOwner(self.owner),
+            ChildOf(self.owner),
+        ));
+    }
 }

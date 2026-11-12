@@ -199,9 +199,14 @@ fn lower_station_construction_markers(
         let Some(name) = binder.attribute_named_any(&["binderName"]) else {
             continue;
         };
-        if !["constructionMarker1", "constructionMarker2"]
-            .iter()
-            .any(|marker| source_document_names_are_semantically_equal(name, marker))
+        if ![
+            "constructionMarker1",
+            "constructionMarker2",
+            "constructionMarker3",
+            "constructionMarker4",
+        ]
+        .iter()
+        .any(|marker| source_document_names_are_semantically_equal(name, marker))
             || !seen.insert(canonicalize_source_document_record_key(name))
         {
             continue;

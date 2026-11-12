@@ -303,22 +303,27 @@ pub(super) fn bind_station(
         ));
     }
     let kind = authored_transportation_track_kind(record)?;
-    let cardinal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryCardinal")?,
-                authored_transportation_offset_metres(record, "p_ExitCardinal")?,
-            ])
-        })
-        .transpose()?;
-    let diagonal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
-                authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
-            ])
-        })
-        .transpose()?;
+    // A sky station's ropes leave from its two seed points, whichever way
+    // the station faces.
+    let (cardinal_endpoint_offsets_metres, diagonal_endpoint_offsets_metres) =
+        if kind == TransportationTrackKind::Ground {
+            (
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryCardinal")?,
+                    authored_transportation_offset_metres(record, "p_ExitCardinal")?,
+                ]),
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
+                    authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
+                ]),
+            )
+        } else {
+            let seeds = [
+                authored_transportation_offset_metres(record, "p_SeedA")?,
+                authored_transportation_offset_metres(record, "p_SeedB")?,
+            ];
+            (Some(seeds), Some(seeds))
+        };
     output
         .document
         .stations
@@ -375,19 +380,19 @@ pub(super) fn bind_track(
             "authored maximum transport-track slope exceeds stored permille",
         ));
     }
-    let purchase_cost_cents = find_descendant_named_with_nonempty_attribute(
-        record.source_document_element(),
-        "ZTEconomyComponent",
-        "cost",
-    )
-    .and_then(|economy| economy.attribute_named_any(&["cost"]))
-    .map(|cost| {
-        parse_blue_fang_source_numeric_lexeme::<f64>(cost)
-            .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
-            .and_then(|cost| money_cents(cost, record).map(i64::from))
-    })
-    .transpose()?
-    .unwrap_or_default();
+    // The concrete track inherits its cost from its type family (the
+    // skytower binder authors the pole's cost, not SkyTower_end).
+    let purchase_cost_cents = authored_type_family_components(record, "ZTEconomyComponent")
+        .into_iter()
+        .find(|economy| economy.attribute_named_any(&["cost"]).is_some())
+        .and_then(|economy| economy.attribute_named_any(&["cost"]))
+        .map(|cost| {
+            parse_blue_fang_source_numeric_lexeme::<f64>(cost)
+                .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
+                .and_then(|cost| money_cents(cost, record).map(i64::from))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let sky_tower_presentation = (kind == TransportationTrackKind::Sky)
         .then(|| {
             lower_authored_sky_tower_track_presentation(

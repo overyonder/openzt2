@@ -73,6 +73,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     )>,
     mut commits: MessageWriter<CommitConstruction>,
     mut continue_from: Local<Option<Vec3>>,
+    pointer_ray: Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
 ) {
     let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
         *continue_from = None;
@@ -92,6 +93,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
                 end,
                 kind,
                 world_member.root,
+                None,
                 None,
                 &junctions,
                 &segments,
@@ -140,6 +142,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
         kind,
         world_member.root,
         None,
+        pointer_ray.0,
         &junctions,
         &segments,
     );
@@ -309,6 +312,13 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
 #[derive(Component)]
 pub(super) struct HighlightedTrackDecalOriginal(Handle<EffectPassMaterial>);
 
+// `ZTGroundTrackMode` in `UI/modes/modes.xml`.
+const STATION_START: Color = Color::srgb(0.0, 0.0, 1.0);
+const STATION_TARGET: Color = Color::srgb(0.0, 1.0, 0.0);
+const PLACE_NO: Color = Color::srgb(200.0 / 255.0, 20.0 / 255.0, 10.0 / 255.0);
+const ROAD_END: Color = Color::srgb(0.0, 0.0, 1.0);
+const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
+
 /// `ZTGroundTrackMode` in `UI/modes/modes.xml` colours the station a road
 /// would start from `station_highlight1` (blue) and the station it would
 /// connect to `station_highlight2` (green), and blinks the road already
@@ -342,7 +352,11 @@ pub(super) fn highlight_transport_track_connection_stations(
         &WorldMember,
     )>,
     segments: Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
-    previews: Query<&TransportTrackConstructionPreview>,
+    previews: Query<(
+        Entity,
+        &TransportTrackConstructionPreview,
+        &ConstructionPreview,
+    )>,
     pieces: Query<(Entity, &TransportTrackConstructionPiece)>,
     children: Query<&Children>,
     decals: Query<(
@@ -350,81 +364,96 @@ pub(super) fn highlight_transport_track_connection_stations(
         Option<&HighlightedTrackDecalOriginal>,
     )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
-    (mut effect_materials, mut shader_buffers): (
+    (mut effect_materials, mut shader_buffers, pointer_ray, ropes): (
         ResMut<Assets<EffectPassMaterial>>,
         ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
+        Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
+        Query<(), With<crate::transport_tours::transport_track_piece_presentation::SkyTrackRope>>,
     ),
     mut lit: Local<HashMap<Entity, Color>>,
 ) {
-    const STATION_START: Color = Color::srgb(0.0, 0.0, 1.0);
-    const STATION_TARGET: Color = Color::srgb(0.0, 1.0, 0.0);
-    const ROAD_END: Color = Color::srgb(0.0, 0.0, 1.0);
-    const COLOR_ANIMATION_CYCLE_SECONDS: f32 = 0.5;
-
     let mut wanted = HashMap::new();
     let on = (time.elapsed_secs() / COLOR_ANIMATION_CYCLE_SECONDS).rem_euclid(2.0) < 1.0;
     if let (ConstructionTool::Delete, Ok((_, _, Some(hovered)))) = (*tool, cursors.single()) {
-        light_deleted_track_leg(hovered.0, on, &pieces, &children, &decals, &mut wanted);
+        light_deleted_track_leg(
+            hovered.0,
+            on,
+            &pieces,
+            &children,
+            &decals,
+            &ropes,
+            &mut wanted,
+        );
     }
     if let (Some((_, kind)), Ok((cursor, world_member, _)), Some(definitions)) = (
         selected_transport_track_definition(*tool),
         cursors.single(),
         active_definitions.get(&definitions),
     ) {
-        let (start, target) = previews.single().map_or_else(
-            |_| {
-                let station = find_nearest_compatible_transport_station_endpoint(
-                    cursor.world,
-                    kind,
-                    world_member.root,
-                    None,
-                    true,
-                    None,
-                    definitions,
-                    &stations,
-                    &segments,
-                );
-                let junction = find_nearest_compatible_transport_track_junction(
-                    cursor.world,
-                    kind,
-                    world_member.root,
-                    None,
-                    &junctions,
-                    &segments,
-                );
+        let preview = previews.single().ok();
+        let valid = preview
+            .is_none_or(|(_, _, state)| matches!(state.validity, PlacementValidity::Valid { .. }));
+        let (start, target) = preview.map_or_else(
+            || {
                 (
-                    nearer_transport_track_construction_endpoint(cursor.world, station, junction)
-                        .map(|endpoint| endpoint.0),
+                    endpoint_under_pointer(
+                        cursor.world,
+                        kind,
+                        world_member.root,
+                        pointer_ray.0,
+                        definitions,
+                        &stations,
+                        &junctions,
+                        &segments,
+                    ),
                     None,
                 )
             },
-            |preview| (Some(preview.from_endpoint), preview.to_station),
+            |(_, preview, _)| (Some(preview.from_endpoint), preview.to_station),
         );
+        // Station models carry vertex colours the model tint multiplies; the
+        // sky tower parts don't, so their materials are tinted instead.
+        // A sky station's model has no vertex colours either.
+        let by_material = kind == TransportationTrackKind::Sky;
         let mut light_station = |station: Entity, color: Color| {
             for entity in children.iter_descendants(station) {
-                if renderables.contains(entity) {
+                if !ropes.contains(entity)
+                    && if by_material {
+                        decals.contains(entity)
+                    } else {
+                        renderables.contains(entity)
+                    }
+                {
                     wanted.insert(entity, color);
                 }
             }
         };
-        if let Some(start) = start.filter(|start| stations.contains(*start)) {
+        // A sky line's start is its station or its last tower.
+        if let Some(start) = start.filter(|start| {
+            stations.contains(*start)
+                || (kind == TransportationTrackKind::Sky && junctions.contains(*start))
+        }) {
             light_station(start, STATION_START);
         }
+        let placeable = if valid { STATION_TARGET } else { PLACE_NO };
         if let Some(target) = target {
-            light_station(target, STATION_TARGET);
+            light_station(target, placeable);
         }
-        if let Some(start) = start {
+        // The sky tower being placed shows whether it can stand there.
+        if let Some((preview_entity, _, _)) =
+            preview.filter(|_| kind == TransportationTrackKind::Sky)
+        {
+            light_station(preview_entity, placeable);
+        }
+        // Only a road blinks; a sky line's tower is lit instead.
+        if let Some(start) = start.filter(|_| kind == TransportationTrackKind::Ground) {
             let color = if on { ROAD_END } else { Color::WHITE };
             for (piece_entity, piece) in &pieces {
-                let Ok((_, _, route, _)) = segments.get(piece.route_segment) else {
-                    continue;
-                };
-                if route.to == start || route.from == start {
-                    for child in children.get(piece_entity).into_iter().flatten().copied() {
-                        if decals.contains(child) {
-                            wanted.insert(child, color);
-                        }
-                    }
+                if segments
+                    .get(piece.route_segment)
+                    .is_ok_and(|(_, _, route, _)| route.to == start || route.from == start)
+                {
+                    light_track_decals(piece_entity, color, &children, &decals, &mut wanted);
                 }
             }
         }
@@ -437,26 +466,115 @@ pub(super) fn highlight_transport_track_connection_stations(
         if lit.get(&entity) == Some(&color) && wanted.contains_key(&entity) {
             continue;
         }
-        if let Ok(current) = renderables.get_mut(entity) {
-            match current {
-                Some(mut current) => current.0 = color,
-                None => {
-                    commands.entity(entity).try_insert(PrefabModelTint(color));
-                }
-            }
-        } else if let Ok((material, original)) = decals.get(entity) {
-            let material =
-                original.map_or_else(|| material.0.clone(), |original| original.0.clone());
-            tint_track_decal(
-                commands.entity(entity),
-                material,
-                color,
-                &mut effect_materials,
-                &mut shader_buffers,
-            );
-        }
+        apply_highlight_color(
+            &mut commands,
+            entity,
+            color,
+            &mut renderables,
+            &decals,
+            &mut effect_materials,
+            &mut shader_buffers,
+        );
     }
     *lit = wanted;
+}
+
+/// Tints a station model or lights a road decal or tower part `color`.
+fn apply_highlight_color(
+    commands: &mut Commands,
+    entity: Entity,
+    color: Color,
+    renderables: &mut Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
+    decals: &Query<(
+        &MeshMaterial3d<EffectPassMaterial>,
+        Option<&HighlightedTrackDecalOriginal>,
+    )>,
+    effect_materials: &mut Assets<EffectPassMaterial>,
+    shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
+) {
+    if let Ok(current) = renderables.get_mut(entity) {
+        match current {
+            Some(mut current) => current.0 = color,
+            None => {
+                commands.entity(entity).try_insert(PrefabModelTint(color));
+            }
+        }
+    } else if let Ok((material, original)) = decals.get(entity) {
+        let material = original.map_or_else(|| material.0.clone(), |original| original.0.clone());
+        tint_track_decal(
+            commands.entity(entity),
+            material,
+            color,
+            effect_materials,
+            shader_buffers,
+        );
+    }
+}
+
+/// Lights the road decals of a track piece `color`.
+fn light_track_decals(
+    piece: Entity,
+    color: Color,
+    children: &Query<&Children>,
+    decals: &Query<(
+        &MeshMaterial3d<EffectPassMaterial>,
+        Option<&HighlightedTrackDecalOriginal>,
+    )>,
+    wanted: &mut HashMap<Entity, Color>,
+) {
+    for child in children.get(piece).into_iter().flatten().copied() {
+        if decals.contains(child) {
+            wanted.insert(child, color);
+        }
+    }
+}
+
+/// The station end or line end a new line would start from at the pointer.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn endpoint_under_pointer(
+    pointer: Vec3,
+    kind: TransportationTrackKind,
+    world: Entity,
+    pointer_ray: Option<Ray3d>,
+    definitions: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
+    stations: &Query<(
+        Entity,
+        &TransportStation,
+        &CircuitMember,
+        &GlobalTransform,
+        &WorldMember,
+    )>,
+    junctions: &Query<(
+        Entity,
+        &TransportTrackJunction,
+        &CircuitMember,
+        &GlobalTransform,
+        &WorldMember,
+    )>,
+    segments: &Query<(Entity, &CircuitMember, &TrackSegment, &TrackProfile)>,
+) -> Option<Entity> {
+    let station = find_nearest_compatible_transport_station_endpoint(
+        pointer,
+        kind,
+        world,
+        None,
+        true,
+        None,
+        definitions,
+        stations,
+        segments,
+    );
+    let junction = find_nearest_compatible_transport_track_junction(
+        pointer,
+        kind,
+        world,
+        None,
+        pointer_ray,
+        junctions,
+        segments,
+    );
+    nearer_transport_track_construction_endpoint(pointer, station, junction)
+        .map(|endpoint| endpoint.0)
 }
 
 /// `ZTDeleteMode` colours what the delete tool would remove `mouseover`
@@ -471,23 +589,29 @@ fn light_deleted_track_leg(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
     )>,
+    ropes: &Query<
+        (),
+        With<crate::transport_tours::transport_track_piece_presentation::SkyTrackRope>,
+    >,
     wanted: &mut HashMap<Entity, Color>,
 ) {
-    let Ok((_, hovered)) = pieces.get(hovered) else {
-        return;
-    };
     let color = if on {
         Color::srgb(1.0, 0.0, 0.0)
     } else {
         Color::srgb(1.0, 128.0 / 255.0, 0.0)
     };
+    // A sky tower: its own parts, not its ropes.
+    let Ok((_, hovered)) = pieces.get(hovered) else {
+        for part in children.iter_descendants(hovered) {
+            if decals.contains(part) && !ropes.contains(part) {
+                wanted.insert(part, color);
+            }
+        }
+        return;
+    };
     for (piece_entity, piece) in pieces {
         if piece.route_segment == hovered.route_segment {
-            for child in children.get(piece_entity).into_iter().flatten().copied() {
-                if decals.contains(child) {
-                    wanted.insert(child, color);
-                }
-            }
+            light_track_decals(piece_entity, color, children, decals, wanted);
         }
     }
 }

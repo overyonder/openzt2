@@ -87,6 +87,8 @@ pub struct ObjectPlacementPreviewVisualState {
     pub footprint_material: Handle<StandardMaterial>,
     pub grid_material: Handle<StandardMaterial>,
     pub grid_radius: f32,
+    /// Where the preview stood, as its decals follow the terrain there.
+    pub world_translation: Vec3,
 }
 
 #[derive(Component, Debug, Clone)]
