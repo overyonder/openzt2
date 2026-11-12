@@ -13,6 +13,12 @@ pub(super) struct ProjectedPrefabTintMaterial {
     authored_base_color: Color,
 }
 
+/// The material a model without vertex colours draws with untinted.
+#[derive(Component)]
+pub(super) struct ProjectedPrefabTintEffectMaterial {
+    original: Handle<EffectPassMaterial>,
+}
+
 #[derive(Component)]
 pub struct ProjectedPrefabTintMesh {
     handle: Handle<Mesh>,
@@ -35,12 +41,17 @@ pub(super) fn project_prefab_model_tints_onto_standard_materials_and_effect_pass
         Entity,
         Option<&Mesh3d>,
         Option<&MeshMaterial3d<StandardMaterial>>,
-        Has<MeshMaterial3d<EffectPassMaterial>>,
+        Option<&MeshMaterial3d<EffectPassMaterial>>,
         Option<&ProjectedPrefabTintMaterial>,
         Option<&ProjectedPrefabTintMesh>,
+        Option<&ProjectedPrefabTintEffectMaterial>,
     )>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    (mut effect_materials, mut shader_buffers): (
+        ResMut<Assets<EffectPassMaterial>>,
+        ResMut<Assets<bevy::render::storage::ShaderBuffer>>,
+    ),
 ) {
     for (root, expanded, root_tint) in &roots {
         if !expanded.is_added() && root_tint.as_ref().is_none_or(|tint| !tint.is_changed()) {
@@ -53,12 +64,45 @@ pub(super) fn project_prefab_model_tints_onto_standard_materials_and_effect_pass
         for entity in
             std::iter::once(root).chain(children.iter_descendants_depth_first::<Children>(root))
         {
-            let Ok((entity, mesh, standard, effect, projected_material, projected_mesh)) =
-                primitives.get(entity)
+            let Ok((
+                entity,
+                mesh,
+                standard,
+                effect,
+                projected_material,
+                projected_mesh,
+                projected_effect,
+            )) = primitives.get(entity)
             else {
                 continue;
             };
-            if effect {
+            if let Some(effect) = effect {
+                // A model without vertex colours (a sky station or tower) is
+                // tinted through a copy of its material instead.
+                let has_vertex_colors = projected_mesh.is_some()
+                    || mesh
+                        .and_then(|source| meshes.get(&source.0))
+                        .is_some_and(|mesh| mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some());
+                if !has_vertex_colors {
+                    let original =
+                        projected_effect.map_or_else(|| effect.0.clone(), |p| p.original.clone());
+                    let material = if tint.0 == Color::WHITE {
+                        Some(original.clone())
+                    } else {
+                        effect_materials.get(&original).cloned().and_then(|source| {
+                            source
+                                .clone_tinted(tint.0.to_srgba().to_vec4(), &mut shader_buffers)
+                                .map(|tinted| effect_materials.add(tinted))
+                        })
+                    };
+                    if let Some(material) = material {
+                        commands.entity(entity).insert((
+                            MeshMaterial3d(material),
+                            ProjectedPrefabTintEffectMaterial { original },
+                        ));
+                    }
+                    continue;
+                }
                 if let Some(projected_mesh) = projected_mesh {
                     if let Some(mut mesh) = meshes.get_mut(&projected_mesh.handle) {
                         multiply_authored_mesh_vertex_colors_by_rgb_tint(
