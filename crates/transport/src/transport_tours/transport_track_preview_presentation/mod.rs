@@ -132,31 +132,40 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                     .compute_affine()
                     .inverse()
                     .transform_point3(track_preview.path_points[1]);
-                let plane = meshes.add(Plane3d::default().mesh().size(1.0, 1.0));
+                // Fitted to the terrain, as road decals are, so a slope
+                // doesn't bury them.
+                let tower_base = track_preview.path_points[1];
+                let rotation = preview.transform.rotation.inverse();
                 let footprint = if valid {
                     &materials.footprint_valid
                 } else {
                     &materials.footprint_invalid
                 };
-                commands.spawn((
-                    Mesh3d(plane.clone()),
-                    MeshMaterial3d(footprint.clone()),
-                    Transform::from_translation(base + Vec3::Y * 0.025)
-                        .with_rotation(preview.transform.rotation.inverse()),
-                    ChildOf(root),
-                ));
-                commands.spawn((
-                    Mesh3d(plane),
-                    MeshMaterial3d(materials.grid_cardinal[0].clone()),
-                    Transform::from_translation(base + Vec3::Y * 0.015)
-                        .with_rotation(preview.transform.rotation.inverse())
-                        .with_scale(Vec3::new(
-                            materials.grid_radius[0] * 2.0,
-                            1.0,
-                            materials.grid_radius[0] * 2.0,
-                        )),
-                    ChildOf(root),
-                ));
+                for (width, material, lift) in [
+                    (1.0, footprint, 0.01),
+                    (
+                        materials.grid_radius[0] * 2.0,
+                        &materials.grid_cardinal[0],
+                        0.0,
+                    ),
+                ] {
+                    let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
+                        width,
+                        tower_base,
+                        0.0,
+                        &terrain_index,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    ) else {
+                        continue;
+                    };
+                    commands.spawn((
+                        Mesh3d(meshes.add(mesh)),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_translation(base + Vec3::Y * lift).with_rotation(rotation),
+                        ChildOf(root),
+                    ));
+                }
             }
             // As in the original, a line runs from the last tower top (or
             // station wheel) to the top of the tower being placed.
