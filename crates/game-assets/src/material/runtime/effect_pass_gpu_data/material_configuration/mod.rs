@@ -253,7 +253,8 @@ impl EffectPassMaterial {
         self.fixed_function.values[46].x = 0.0;
         self.pipeline_specialization_key.cull_face = None;
         self.pipeline_specialization_key.depth_write_enabled = true;
-        self.pipeline_specialization_key.depth_compare = CompareFunction::LessEqual;
+        // D3DCMP_LESSEQUAL under the reverse-Z depth buffer.
+        self.pipeline_specialization_key.depth_compare = CompareFunction::GreaterEqual;
         self.pipeline_specialization_key.blend_state = None;
         self.pipeline_specialization_key.color_writes = ColorWrites::ALL;
         true
