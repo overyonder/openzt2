@@ -50,6 +50,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
                 refresh_selected_transport_sale_quote,
                 begin_deletion_transaction_preparation,
                 prepare_transport_track_sale,
+                crate::transport_tours::transport_track_construction_transaction::apply_stepped_transport_track_construction_edits,
                 apply_prepared_transport_track_construction_edits,
                 apply_transport_station_and_track_topology_mutation_requests,
                 acknowledge_completed_transport_track_topology_applications,
@@ -120,8 +121,8 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             id: definition,
             object: definition,
             kind: TransportationTrackKind::Ground,
-            cardinal_endpoint_offsets_metres: [[0.0; 3]; 2],
-            diagonal_endpoint_offsets_metres: [[0.0; 3]; 2],
+            cardinal_endpoint_offsets_metres: [[0.0, -0.5, 0.0], [0.0, 0.5, 0.0]],
+            diagonal_endpoint_offsets_metres: [[0.0, -0.75, 0.0], [0.0, 0.75, 0.0]],
             max_grade_permille: 100,
             purchase_cost_cents: 10_000,
             sky_maximum_connection_distance_metres: None,
@@ -140,6 +141,12 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
         .index_test_document(handle, &document);
     let root = app.world_mut().spawn_empty().id();
     let world = WorldMember { root };
+    app.insert_resource(
+        openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator::from_snapshot(
+            root, 100,
+        )
+        .unwrap(),
+    );
     let circuit = app
         .world_mut()
         .spawn((
@@ -218,9 +225,10 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
         let attachment = app.world_mut().spawn(ChildOf(junction)).id();
         let presentation = app.world_mut().spawn(ChildOf(pieces[1])).id();
         app.update();
+        // The delete tool takes one piece of a longer route.
         assert_eq!(
             app.world().get::<CurrentSellQuote>(pieces[1]).unwrap().0,
-            Money(expected)
+            Money(expected / 2)
         );
         // Leaving a quoted selection without a deletion intent cannot mutate the route.
         app.world_mut().resource_mut::<SelectedEntity>().0 = None;
@@ -240,7 +248,6 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
             Money(expected)
         );
         app.world_mut().write_message(DeleteEntity(junction));
-        app.world_mut().write_message(DeleteEntity(pieces[1]));
         app.update();
         let prepared: Vec<_> = app
             .world_mut()
@@ -349,7 +356,7 @@ fn removing_a_middle_route_keeps_the_road_beyond_it() {
         .world_mut()
         .spawn((onward, CircuitMember(circuit), world))
         .id();
-    app.world_mut().write_message(DeleteEntity(pieces[0]));
+    app.world_mut().write_message(DeleteEntity(junction));
     app.update();
     let prepared = app
         .world_mut()
@@ -369,4 +376,90 @@ fn removing_a_middle_route_keeps_the_road_beyond_it() {
     for survivor in [junction, onward, end] {
         assert!(app.world().get_entity(survivor).is_ok());
     }
+}
+
+#[test]
+fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
+    let (mut app, circuit, pieces, junction, source) = sale_application(80.0);
+    let world = *app.world().get::<WorldMember>(source).unwrap();
+    // Start from a junction a road leads into, so undo can lay the route again.
+    app.world_mut()
+        .entity_mut(source)
+        .remove::<TransportStation>()
+        .insert((
+            TransportTrackJunction,
+            PersistentId(4),
+            CircuitMember(circuit),
+        ));
+    let mut incoming = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+    incoming.from = junction;
+    incoming.to = source;
+    app.world_mut()
+        .spawn((incoming, CircuitMember(circuit), world));
+    for entity in [source, junction] {
+        let position = if entity == source {
+            Vec3::ZERO
+        } else {
+            Vec3::X * 2.0
+        };
+        app.world_mut()
+            .entity_mut(entity)
+            .insert(GlobalTransform::from_translation(position));
+    }
+    app.world_mut().write_message(DeleteEntity(pieces[0]));
+    app.update();
+    let prepared = app
+        .world_mut()
+        .resource_mut::<Messages<TransportTrackConstructionEditPrepared>>()
+        .drain()
+        .next()
+        .unwrap();
+    assert_eq!(prepared.cost, Money(-8_000));
+    let apply = |app: &mut App, application| {
+        app.world_mut()
+            .write_message(ApplyPreparedTransportTrackConstructionEditRequest {
+                transaction: prepared.transaction,
+                application,
+            });
+        // Messages last two updates, so read them after each one, without
+        // draining the steps' own acknowledgements.
+        let mut cursor = bevy::ecs::message::MessageCursor::<
+            TransportTrackConstructionEditApplicationAcknowledged,
+        >::default();
+        let mut accepted = Vec::new();
+        for _ in 0..8 {
+            app.update();
+            let messages = app
+                .world()
+                .resource::<Messages<TransportTrackConstructionEditApplicationAcknowledged>>();
+            accepted.extend(
+                cursor
+                    .read(messages)
+                    .filter(|ack| ack.transaction == prepared.transaction)
+                    .map(|ack| ack.accepted),
+            );
+        }
+        accepted
+    };
+    assert_eq!(apply(&mut app, EditApplication::InitialCommit), [true]);
+    // The second piece is laid again from a junction at its start.
+    let routes = app
+        .world_mut()
+        .query::<&TrackSegment>()
+        .iter(app.world())
+        .filter(|route| route.from != junction)
+        .map(|route| route.path_points.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(routes, [vec![Vec3::X, Vec3::X * 2.0].into_boxed_slice()]);
+    assert!(app.world().get_entity(pieces[0]).is_err());
+
+    assert_eq!(apply(&mut app, EditApplication::Undo), [true]);
+    let routes = app
+        .world_mut()
+        .query::<&TrackSegment>()
+        .iter(app.world())
+        .filter(|route| route.from != junction)
+        .map(|route| route.path_points.len())
+        .collect::<Vec<_>>();
+    assert_eq!(routes, [3]);
 }

@@ -160,6 +160,7 @@ impl TransportTrackSaleQueries<'_, '_> {
             removes_track: true,
             piece_entities: pieces.iter().map(|(_, id, _, _, _)| **id).collect(),
             destination_junction_entity: destination.0,
+            source_junction_entity: None,
             definition: route.definition,
             kind: profile.kind,
             maximum_grade_permille: profile.maximum_grade_permille,
@@ -175,8 +176,21 @@ impl TransportTrackSaleQueries<'_, '_> {
         })
     }
 
+    /// A road piece's place in its route and its world, when the delete tool
+    /// takes that one piece out of a longer route.
+    pub fn single_piece(&self, target: Entity) -> Option<(usize, WorldMember)> {
+        let (_, _, piece, _, world) = self.pieces.get(target).ok()?;
+        let (_, route, _, _) = self.routes.get(piece.route_segment).ok()?;
+        (route.path_points.len() > 2).then_some((usize::from(piece.piece_index), *world))
+    }
+
     pub fn quote(&self, target: Entity, definitions: WorldDefinitionsView<'_>) -> Option<Money> {
         let edit = self.terminal_route_edit(target)?;
+        let removed_pieces = if self.single_piece(target).is_some() {
+            1
+        } else {
+            edit.piece_entities.len()
+        };
         let track = definitions.find_track(edit.definition)?;
         let object = definitions.find_object(track.object)?;
         if !object
@@ -186,9 +200,9 @@ impl TransportTrackSaleQueries<'_, '_> {
             return None;
         }
         let refund = calculate_authored_object_sale_refund(object)?;
-        Some(Money(refund.0.checked_mul(
-            i64::try_from(edit.piece_entities.len()).ok()?,
-        )?))
+        Some(Money(
+            refund.0.checked_mul(i64::try_from(removed_pieces).ok()?)?,
+        ))
     }
 
     pub fn removal_still_matches(&self, edit: &PreparedTransportTrackConstructionEdit) -> bool {

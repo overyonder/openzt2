@@ -682,17 +682,14 @@ fn light_deleted_track_leg(
         Color::srgb(1.0, 128.0 / 255.0, 0.0)
     };
     // A sky tower: its own parts, not its ropes.
-    let Ok((_, hovered)) = pieces.get(hovered) else {
-        for part in children.iter_descendants(hovered) {
-            if decals.contains(part) && !ropes.contains(part) {
-                wanted.insert(part, color);
-            }
-        }
+    // A road piece: just that piece, as the delete tool takes one piece out.
+    if pieces.contains(hovered) {
+        light_track_decals(hovered, color, children, decals, wanted);
         return;
-    };
-    for (piece_entity, piece) in pieces {
-        if piece.route_segment == hovered.route_segment {
-            light_track_decals(piece_entity, color, children, decals, wanted);
+    }
+    for part in children.iter_descendants(hovered) {
+        if decals.contains(part) && !ropes.contains(part) {
+            wanted.insert(part, color);
         }
     }
 }
