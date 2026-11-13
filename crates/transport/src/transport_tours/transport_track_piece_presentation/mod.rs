@@ -67,8 +67,8 @@ const fn authored_ground_track_piece_type(heading: u8) -> u8 {
 
 /// `appearance` of a piece whose end at compass point `end` meets a piece
 /// leaving towards `away`, named by its texture: `NtoSE` comes from the north
-/// and turns south-east at its south end; `SWtoCurve` comes from the
-/// south-west and curves at its north-east end, whichever way.
+/// and turns south-east at its south end; `SWtoCurve` curves at its south-west
+/// end, whichever way the road goes on.
 const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> {
     Some(match (end, away) {
         (4, 3) => 2,
@@ -79,10 +79,10 @@ const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> 
         (2, 1) => 8,
         (6, 5) => 4,
         (6, 7) => 5,
-        (1, _) => 3,
-        (5, _) => 7,
-        (7, _) => 1,
-        (3, _) => 5,
+        (1, _) => 7,
+        (5, _) => 3,
+        (7, _) => 5,
+        (3, _) => 1,
         _ => return None,
     })
 }
