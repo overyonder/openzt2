@@ -489,6 +489,38 @@ fn despawn_source_junction(
     }
 }
 
+/// The step to apply after `done` steps of `application`, and how.
+fn step_at(
+    steps: &TransportTrackConstructionEditSteps,
+    application: EditApplication,
+    done: usize,
+) -> Option<(Entity, EditApplication)> {
+    match application {
+        EditApplication::InitialCommit | EditApplication::Redo => {
+            steps.steps.get(done).map(|step| (*step, application))
+        }
+        EditApplication::Undo => steps
+            .steps
+            .len()
+            .checked_sub(done + 1)
+            .map(|index| (steps.steps[index], application)),
+        // Reverse the steps the failed application completed.
+        EditApplication::FailureRollback => {
+            let undo = match steps.last_application? {
+                EditApplication::Undo => EditApplication::Redo,
+                _ => EditApplication::Undo,
+            };
+            let applied_forward = steps.last_application != Some(EditApplication::Undo);
+            let index = if applied_forward {
+                steps.completed.checked_sub(done + 1)?
+            } else {
+                steps.steps.len().checked_sub(steps.completed)? + done
+            };
+            (done < steps.completed).then(|| (steps.steps[index], undo))
+        }
+    }
+}
+
 /// Applies a stepped transaction's route edits one after another, each once
 /// the one before it is acknowledged; an undo runs them in reverse, and a
 /// rollback reverses only the steps the failed application completed.
@@ -502,36 +534,6 @@ pub(super) fn apply_stepped_transport_track_construction_edits(
     >,
     mut transactions: Query<(Entity, &mut TransportTrackConstructionEditSteps)>,
 ) {
-    fn step_at(
-        steps: &TransportTrackConstructionEditSteps,
-        application: EditApplication,
-        done: usize,
-    ) -> Option<(Entity, EditApplication)> {
-        match application {
-            EditApplication::InitialCommit | EditApplication::Redo => {
-                steps.steps.get(done).map(|step| (*step, application))
-            }
-            EditApplication::Undo => steps
-                .steps
-                .len()
-                .checked_sub(done + 1)
-                .map(|index| (steps.steps[index], application)),
-            // Reverse the steps the failed application completed.
-            EditApplication::FailureRollback => {
-                let undo = match steps.last_application? {
-                    EditApplication::Undo => EditApplication::Redo,
-                    _ => EditApplication::Undo,
-                };
-                let applied_forward = steps.last_application != Some(EditApplication::Undo);
-                let index = if applied_forward {
-                    steps.completed.checked_sub(done + 1)?
-                } else {
-                    steps.steps.len().checked_sub(steps.completed)? + done
-                };
-                (done < steps.completed).then(|| (steps.steps[index], undo))
-            }
-        }
-    }
     let wanted = request_cursor
         .read(&step_requests)
         .filter(|request| transactions.contains(request.transaction))

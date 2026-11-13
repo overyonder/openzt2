@@ -47,10 +47,12 @@ pub struct PreparedTransportTrackConstructionEdit {
     pub application_in_flight: Option<EditApplication>,
 }
 
-/// A transaction made of several route edits, each on its own child entity,
-/// (the transaction's own edit only marks it as a transport edit),
-/// applied in order and undone in reverse, as removing one piece from the
-/// middle of a road removes its route and lays the two pieces of road left.
+/// A transaction made of several route edits, applied in order and undone
+/// in reverse.
+///
+/// Each edit sits on its own child entity; the transaction's own edit only
+/// marks it as a transport edit. Removing one piece from the middle of a road
+/// removes its route and lays the road left on each side.
 #[derive(Component, Debug, Clone, Default)]
 pub struct TransportTrackConstructionEditSteps {
     pub steps: Vec<Entity>,

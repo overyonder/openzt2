@@ -178,6 +178,7 @@ impl TransportTrackSaleQueries<'_, '_> {
 
     /// A road piece's place in its route and its world, when the delete tool
     /// takes that one piece out of a longer route.
+    #[must_use]
     pub fn single_piece(&self, target: Entity) -> Option<(usize, WorldMember)> {
         let (_, _, piece, _, world) = self.pieces.get(target).ok()?;
         let (_, route, _, _) = self.routes.get(piece.route_segment).ok()?;
