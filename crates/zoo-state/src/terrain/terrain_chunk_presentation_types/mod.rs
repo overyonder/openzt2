@@ -18,3 +18,17 @@ pub struct TerrainChunkRejected;
 /// Last edit revision applied to the mesh and blend image.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerrainRenderRevision(pub u64);
+
+/// A texture painted into the terrain surface image.
+///
+/// The original paints a road (`paintTexture`) into the ground. It covers the square of `size_m`
+/// around `centre` (world XZ) with the `uv_min`..`uv_max` part of `texture`,
+/// U along +X and V along +Z, blended by twice the texture's alpha.
+#[derive(Component, Debug, Clone, PartialEq)]
+pub struct TerrainPaintedTexture {
+    pub centre: Vec2,
+    pub size_m: f32,
+    pub texture: Handle<Image>,
+    pub uv_min: Vec2,
+    pub uv_max: Vec2,
+}

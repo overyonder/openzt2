@@ -22,6 +22,7 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
+use crate::transport_tours::transport_track_piece_presentation::PaintedTrackHighlight;
 use crate::transport_tours::transport_track_endpoint_queries::find_nearest_compatible_transport_station_endpoint;
 use crate::transport_tours::transport_track_endpoint_queries::find_nearest_compatible_transport_track_junction;
 use crate::transport_tours::transport_track_endpoint_queries::nearer_transport_track_construction_endpoint;
@@ -362,6 +363,7 @@ pub(super) fn highlight_transport_track_connection_stations(
     decals: Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
     (mut effect_materials, mut shader_buffers, pointer_ray, ropes): (
@@ -488,6 +490,7 @@ fn apply_highlight_color(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     effect_materials: &mut Assets<EffectPassMaterial>,
     shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
@@ -499,7 +502,17 @@ fn apply_highlight_color(
                 commands.entity(entity).try_insert(PrefabModelTint(color));
             }
         }
-    } else if let Ok((material, original)) = decals.get(entity) {
+    } else if let Ok((material, original, painted)) = decals.get(entity) {
+        // A painted road shows its decal only while lit.
+        if painted {
+            commands
+                .entity(entity)
+                .try_insert(if color == Color::WHITE {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                });
+        }
         let material = original.map_or_else(|| material.0.clone(), |original| original.0.clone());
         tint_track_decal(
             commands.entity(entity),
@@ -519,6 +532,7 @@ fn light_track_decals(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     wanted: &mut HashMap<Entity, Color>,
 ) {
@@ -588,6 +602,7 @@ fn light_deleted_track_leg(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     ropes: &Query<
         (),

@@ -19,6 +19,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -476,6 +477,49 @@ impl SkyRopeAnchors<'_, '_> {
     }
 }
 
+/// A road piece's decal over its painted road, shown only while the piece is
+/// highlighted.
+#[derive(Component)]
+pub(super) struct PaintedTrackHighlight;
+
+/// The road a ground piece paints into the terrain (`paintTexture`), and the
+/// size of a decal of the whole texture laid over it. Paint textures are
+/// authored at the terrain's texel size with their copy window centred, so a
+/// 43-texel window sits in 64 texels and an 86-texel one in 128.
+fn authored_ground_track_paint(
+    presentation: &GroundTransportTrackPiecePresentationDefinition,
+    centre: Vec2,
+    texture: Handle<Image>,
+    terrain_assets: &Assets<TerrainAsset>,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) -> Option<(TerrainPaintedTexture, f32)> {
+    let start = Vec2::from(presentation.paint_sample_start_texels);
+    let copy = Vec2::from(presentation.paint_copy_dimension_texels);
+    if copy.cmple(Vec2::ZERO).any() {
+        return None;
+    }
+    let (chunk, _) = terrain_chunks.iter().next()?;
+    let texel_metres = f32::from(chunk.side.checked_sub(1)?) * chunk.spacing_m
+        / f32::from(
+            terrain_assets
+                .get(&chunk.asset)?
+                .canonical_terrain_grid()
+                .presentation
+                .surface_resolution,
+        );
+    let reference = start.x.mul_add(2.0, copy.x).max(1.0).log2().ceil().exp2();
+    Some((
+        TerrainPaintedTexture {
+            centre,
+            size_m: copy.x * texel_metres,
+            texture,
+            uv_min: start / reference,
+            uv_max: (start + copy) / reference,
+        },
+        reference * texel_metres,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut commands: Commands,
@@ -685,26 +729,50 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 0.0,
                 presentation.ground_decal_offset_metres[1],
             ));
+            let paint = definitions
+                .texture_image(presentation.paint_texture)
+                .and_then(|paint_texture| {
+                    authored_ground_track_paint(
+                        presentation,
+                        decal_centre.xz(),
+                        paint_texture,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    )
+                });
+            let decal_size = paint
+                .as_ref()
+                .map_or(presentation.ground_decal_size_metres[0], |(_, size)| *size);
             let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
-                presentation.ground_decal_size_metres[0],
+                decal_size,
                 decal_centre,
                 presentation.ground_decal_rotation_radians,
                 &terrain_index,
                 &terrain_assets,
                 &terrain_chunks,
             ) else { continue; };
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(effect_pass_materials.add(material)),
-                Transform::from_translation(
-                    transform
-                        .compute_affine()
-                        .inverse()
-                        .transform_point3(decal_centre),
-                )
-                .with_rotation(transform.rotation.inverse()),
-                ChildOf(entity),
-            ));
+            let decal = commands
+                .spawn((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(effect_pass_materials.add(material)),
+                    Transform::from_translation(
+                        transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(decal_centre),
+                    )
+                    .with_rotation(transform.rotation.inverse()),
+                    ChildOf(entity),
+                ))
+                .id();
+            // As in the original, the road is painted into the ground; the
+            // decal only shows a highlight.
+            if let Some((paint, _)) = paint {
+                commands.entity(entity).insert(paint);
+                commands
+                    .entity(decal)
+                    .insert((PaintedTrackHighlight, Visibility::Hidden));
+            }
         }
         commands
             .entity(entity)

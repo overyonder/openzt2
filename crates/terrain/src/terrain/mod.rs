@@ -54,6 +54,7 @@ use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
+use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_under_changed_painted_textures;
 use crate::terrain::terrain_ground_path_surface_projection::recompose_ground_path_surfaces_into_terrain_chunk_images;
 use crate::terrain::terrain_ground_path_surface_projection::retain_ground_path_surface_image_dependencies;
 use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
@@ -184,6 +185,7 @@ impl Plugin for TerrainPlugin {
                     refresh_changed_terrain_chunk_meshes_and_surface_images,
                     retain_ground_path_surface_image_dependencies,
                     mark_terrain_chunks_requiring_ground_path_surface_recomposition,
+                    mark_terrain_chunks_under_changed_painted_textures,
                     recompose_ground_path_surfaces_into_terrain_chunk_images,
                     project_terrain_brush_cursor_onto_terrain_surfaces,
                     remove_despawned_terrain_chunks_from_spatial_index,
