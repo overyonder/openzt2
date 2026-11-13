@@ -120,7 +120,11 @@ crate::transport_tours::transport_track_piece_presentation::show_construction_ma
             )
             .add_systems(
                 FixedUpdate,
-                crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits
+                (
+                    crate::transport_tours::transport_track_construction_transaction::apply_stepped_transport_track_construction_edits,
+                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits,
+                )
+                    .chain()
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                     .run_if(in_state(GamePhase::InGame)),

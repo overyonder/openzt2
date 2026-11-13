@@ -1,3 +1,4 @@
+use bevy::ecs::message::MessageCursor;
 use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -24,6 +25,7 @@ use openzt2_zoo_state::transport_tours::transport_track_construction_types::Prep
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditApplicationAcknowledged;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPreparationRejected;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPrepared;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditSteps;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
 
@@ -112,6 +114,7 @@ pub(super) fn prepare_transport_track_construction_edit(
                 removes_track: false,
                 piece_entities: piece_entities.into_boxed_slice(),
                 destination_junction_entity,
+                source_junction_entity: None,
                 definition: preview.definition,
                 kind: track_definition.kind,
                 maximum_grade_permille: track_definition.max_grade_permille,
@@ -166,8 +169,12 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
     mut connections: MessageWriter<ConnectTransportTrackRequest>,
     mut disconnections: MessageWriter<DisconnectTransportTrackRequest>,
     mut acknowledged: MessageWriter<TransportTrackConstructionEditApplicationAcknowledged>,
+    stepped: Query<(), With<TransportTrackConstructionEditSteps>>,
 ) {
     for request in requests.read() {
+        if stepped.contains(request.transaction) {
+            continue;
+        }
         let Ok((mut edit, world_member)) = edits.get_mut(request.transaction) else {
             acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
                 transaction: request.transaction,
@@ -208,9 +215,17 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                     .iter()
                     .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
             });
+        let live_source_junction_entity = edit.source_junction_entity.and_then(|wanted_id| {
+            persistent_entities
+                .iter()
+                .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
+        });
         if live_entities.len() != edit.piece_entities.len() && !live_entities.is_empty() {
             for entity in live_entities {
                 commands.entity(entity).despawn();
+            }
+            if let Some(endpoint) = live_source_junction_entity {
+                commands.entity(endpoint).despawn();
             }
             edit.applied_entities.clear();
             if let Some(endpoint) = live_destination_junction_entity {
@@ -240,6 +255,9 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
             }
             edit.applied_entities.clear();
             if let Some(endpoint) = live_destination_junction_entity {
+                commands.entity(endpoint).despawn();
+            }
+            if let Some(endpoint) = live_source_junction_entity {
                 commands.entity(endpoint).despawn();
             }
             if let Some(preview) = edit.preview.take() {
@@ -311,6 +329,31 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
                 ))
                 .id()
         };
+        let from_endpoint = match (edit.source_junction_entity, live_source_junction_entity) {
+            (_, Some(endpoint)) => endpoint,
+            (Some(source_id), None) => {
+                let Some(&source_position) = edit.path_points.first() else {
+                    acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
+                        transaction: request.transaction,
+                        application: request.application,
+                        accepted: false,
+                    });
+                    continue;
+                };
+                commands
+                    .spawn((
+                        source_id,
+                        openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction,
+                        openzt2_zoo_state::transport_tours::transport_circuit_types::CircuitMember(edit.circuit),
+                        Transform::from_translation(source_position),
+                        GlobalTransform::from_translation(source_position),
+                        Visibility::Inherited,
+                        *world_member,
+                    ))
+                    .id()
+            }
+            (None, None) => edit.from_endpoint,
+        };
         let Some(&track) = applied_entities.first() else {
             acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
                 transaction: request.transaction,
@@ -334,7 +377,7 @@ pub(super) fn apply_prepared_transport_track_construction_edits(
             application: request.application,
             track,
             circuit: edit.circuit,
-            from: edit.from_endpoint,
+            from: from_endpoint,
             from_endpoint_index: edit.from_endpoint_index,
             to: destination_endpoint,
             to_endpoint_index: edit.to_endpoint_index,
@@ -392,6 +435,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         }) {
             commands.entity(endpoint).despawn();
         }
+        despawn_source_junction(&mut commands, &edit, &persistent_entities);
         edit.application_in_flight = None;
         acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
             transaction: rejected.transaction,
@@ -418,6 +462,7 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
         }) {
             commands.entity(endpoint).despawn();
         }
+        despawn_source_junction(&mut commands, &edit, &persistent_entities);
         edit.application_in_flight = None;
         if let Some(preview) = edit.preview.take() {
             commands.entity(preview).despawn();
@@ -427,5 +472,161 @@ pub(super) fn acknowledge_completed_transport_track_topology_applications(
             application: disconnected.application,
             accepted: true,
         });
+    }
+}
+
+fn despawn_source_junction(
+    commands: &mut Commands,
+    edit: &PreparedTransportTrackConstructionEdit,
+    persistent_entities: &Query<(Entity, &PersistentId)>,
+) {
+    if let Some(endpoint) = edit.source_junction_entity.and_then(|wanted_id| {
+        persistent_entities
+            .iter()
+            .find_map(|(entity, id)| (*id == wanted_id).then_some(entity))
+    }) {
+        commands.entity(endpoint).despawn();
+    }
+}
+
+/// The step to apply after `done` steps of `application`, and how.
+fn step_at(
+    steps: &TransportTrackConstructionEditSteps,
+    application: EditApplication,
+    done: usize,
+) -> Option<(Entity, EditApplication)> {
+    match application {
+        EditApplication::InitialCommit | EditApplication::Redo => {
+            steps.steps.get(done).map(|step| (*step, application))
+        }
+        EditApplication::Undo => steps
+            .steps
+            .len()
+            .checked_sub(done + 1)
+            .map(|index| (steps.steps[index], application)),
+        // Reverse the steps the failed application completed.
+        EditApplication::FailureRollback => {
+            let undo = match steps.last_application? {
+                EditApplication::Undo => EditApplication::Redo,
+                _ => EditApplication::Undo,
+            };
+            let applied_forward = steps.last_application != Some(EditApplication::Undo);
+            let index = if applied_forward {
+                steps.completed.checked_sub(done + 1)?
+            } else {
+                steps.steps.len().checked_sub(steps.completed)? + done
+            };
+            (done < steps.completed).then(|| (steps.steps[index], undo))
+        }
+    }
+}
+
+/// Applies a stepped transaction's route edits one after another, each once
+/// the one before it is acknowledged; an undo runs them in reverse, and a
+/// rollback reverses only the steps the failed application completed.
+// It reads and writes the same messages, so it holds them with its own cursors.
+pub(super) fn apply_stepped_transport_track_construction_edits(
+    mut step_requests: ResMut<Messages<ApplyPreparedTransportTrackConstructionEditRequest>>,
+    mut acknowledged: ResMut<Messages<TransportTrackConstructionEditApplicationAcknowledged>>,
+    mut request_cursor: Local<MessageCursor<ApplyPreparedTransportTrackConstructionEditRequest>>,
+    mut acknowledgement_cursor: Local<
+        MessageCursor<TransportTrackConstructionEditApplicationAcknowledged>,
+    >,
+    mut transactions: Query<(Entity, &mut TransportTrackConstructionEditSteps)>,
+) {
+    let wanted = request_cursor
+        .read(&step_requests)
+        .filter(|request| transactions.contains(request.transaction))
+        .copied()
+        .collect::<Vec<_>>();
+    for request in wanted {
+        let Ok((_, mut steps)) = transactions.get_mut(request.transaction) else {
+            continue;
+        };
+        if steps.in_flight.is_some() {
+            continue;
+        }
+        if request.application != EditApplication::FailureRollback {
+            steps.last_application = Some(request.application);
+            steps.completed = 0;
+        }
+        match step_at(&steps, request.application, 0) {
+            Some((step, application)) => {
+                steps.in_flight = Some((request.application, 0));
+                step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
+                    transaction: step,
+                    application,
+                });
+            }
+            None => {
+                acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
+                    transaction: request.transaction,
+                    application: request.application,
+                    accepted: true,
+                });
+            }
+        }
+    }
+    let step_acknowledgements = acknowledgement_cursor
+        .read(&acknowledged)
+        .copied()
+        .collect::<Vec<_>>();
+    for step_acknowledgement in step_acknowledgements {
+        let Some((transaction, mut steps)) = transactions.iter_mut().find(|(_, steps)| {
+            steps.steps.contains(&step_acknowledgement.transaction) && steps.in_flight.is_some()
+        }) else {
+            continue;
+        };
+        let Some((application, done)) = steps.in_flight else {
+            continue;
+        };
+        if step_at(&steps, application, done).map(|(step, _)| step)
+            != Some(step_acknowledgement.transaction)
+        {
+            continue;
+        }
+        if !step_acknowledgement.accepted {
+            // Reverse the steps already done, then report the failure.
+            let failed = steps.failed.take().unwrap_or(application);
+            if application != EditApplication::FailureRollback {
+                if let Some((step, step_application)) =
+                    step_at(&steps, EditApplication::FailureRollback, 0)
+                {
+                    steps.failed = Some(failed);
+                    steps.in_flight = Some((EditApplication::FailureRollback, 0));
+                    step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
+                        transaction: step,
+                        application: step_application,
+                    });
+                    continue;
+                }
+            }
+            steps.in_flight = None;
+            acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
+                transaction,
+                application: failed,
+                accepted: false,
+            });
+            continue;
+        }
+        let done = done + 1;
+        if application != EditApplication::FailureRollback {
+            steps.completed = done;
+        }
+        if let Some((step, step_application)) = step_at(&steps, application, done) {
+            steps.in_flight = Some((application, done));
+            step_requests.write(ApplyPreparedTransportTrackConstructionEditRequest {
+                transaction: step,
+                application: step_application,
+            });
+        } else {
+            steps.in_flight = None;
+            let failed = steps.failed.take();
+            acknowledged.write(TransportTrackConstructionEditApplicationAcknowledged {
+                transaction,
+                application: failed.unwrap_or(application),
+                accepted: failed.is_none(),
+            });
+        }
     }
 }

@@ -279,13 +279,15 @@ pub(super) fn apply_transport_station_and_track_topology_mutation_requests(
             !transport_station_capacity_is_valid(station)
                 || find_authored_transportation_kind_for_transport_station(definitions, station)
                     != Some(profile.kind)
+            // A road left after a gap starts at a junction nothing leads into
+            // yet; any road that does lead into it must be of the same kind.
         }) || (from_junction.is_some()
-            && !segments.iter().any(|(track_entity, member, segment)| {
+            && segments.iter().any(|(track_entity, member, segment)| {
                 member.0 == request.circuit
                     && segment.to == request.from
                     && tracks
                         .get(track_entity)
-                        .is_ok_and(|(_, _, adjacent_profile)| adjacent_profile.kind == profile.kind)
+                        .is_ok_and(|(_, _, adjacent_profile)| adjacent_profile.kind != profile.kind)
             }))
         {
             rejected_tracks.write(TransportTrackConnectionRejected {

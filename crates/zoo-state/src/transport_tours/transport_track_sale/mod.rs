@@ -71,7 +71,8 @@ impl TransportTrackSaleQueries<'_, '_> {
     }
 
     // A terminal route owns its destination junction and every projected piece.
-    // Shared junctions and stations need a multi-route deletion transaction.
+    // A route with more road beyond it keeps its destination, so removing it
+    // leaves a gap with a free road end on each side, as in the original.
     pub fn terminal_route_edit(
         &self,
         target: Entity,
@@ -93,27 +94,43 @@ impl TransportTrackSaleQueries<'_, '_> {
                     .flatten()
             })?;
         let (_, route, member, world) = self.routes.get(route_entity).ok()?;
-        let (destination_id, destination_world) = self.junctions.get(route.to).ok()?;
-        if destination_world.root != world.root
-            || self.circuits.get(member.0).ok()?.root != world.root
-            || self.routes.iter().any(|(entity, other, _, _)| {
-                entity != route_entity && (other.from == route.to || other.to == route.to)
-            })
-        {
+        let destination =
+            if let Ok((destination_id, destination_world)) = self.junctions.get(route.to) {
+                (destination_world.root == world.root).then_some(())?;
+                let continues = self
+                    .routes
+                    .iter()
+                    .any(|(entity, other, _, _)| entity != route_entity && other.from == route.to);
+                if self
+                    .routes
+                    .iter()
+                    .any(|(entity, other, _, _)| entity != route_entity && other.to == route.to)
+                {
+                    return None;
+                }
+                if continues {
+                    (None, Some(route.to))
+                } else {
+                    (Some(*destination_id), None)
+                }
+            } else {
+                (self.stations.get(route.to).ok()?.root == world.root).then_some(())?;
+                (None, Some(route.to))
+            };
+        if self.circuits.get(member.0).ok()?.root != world.root {
             return None;
         }
         let source_is_station = self
             .stations
             .get(route.from)
             .is_ok_and(|source| source.root == world.root);
-        let source_is_connected_junction = self
+        // ponytail: a road left after a gap can be removed from its first
+        // piece too; undoing that is refused, since nothing leads into it.
+        let source_is_junction = self
             .junctions
             .get(route.from)
-            .is_ok_and(|(_, source)| source.root == world.root)
-            && self.routes.iter().any(|(entity, other, other_member, _)| {
-                entity != route_entity && other.to == route.from && other_member.0 == member.0
-            });
-        if !source_is_station && !source_is_connected_junction {
+            .is_ok_and(|(_, source)| source.root == world.root);
+        if !source_is_station && !source_is_junction {
             return None;
         }
         let (_, _, _, profile, _) = self.pieces.get(route_entity).ok()?;
@@ -142,14 +159,15 @@ impl TransportTrackSaleQueries<'_, '_> {
         Some(PreparedTransportTrackConstructionEdit {
             removes_track: true,
             piece_entities: pieces.iter().map(|(_, id, _, _, _)| **id).collect(),
-            destination_junction_entity: Some(*destination_id),
+            destination_junction_entity: destination.0,
+            source_junction_entity: None,
             definition: route.definition,
             kind: profile.kind,
             maximum_grade_permille: profile.maximum_grade_permille,
             circuit: member.0,
             from_endpoint: route.from,
             from_endpoint_index: route.from_endpoint_index,
-            to_endpoint: None,
+            to_endpoint: destination.1,
             to_endpoint_index: route.to_endpoint_index,
             path_points: route.path_points.clone(),
             applied_entities: pieces.iter().map(|(entity, _, _, _, _)| *entity).collect(),
@@ -158,8 +176,22 @@ impl TransportTrackSaleQueries<'_, '_> {
         })
     }
 
+    /// A road piece's place in its route and its world, when the delete tool
+    /// takes that one piece out of a longer route.
+    #[must_use]
+    pub fn single_piece(&self, target: Entity) -> Option<(usize, WorldMember)> {
+        let (_, _, piece, _, world) = self.pieces.get(target).ok()?;
+        let (_, route, _, _) = self.routes.get(piece.route_segment).ok()?;
+        (route.path_points.len() > 2).then_some((usize::from(piece.piece_index), *world))
+    }
+
     pub fn quote(&self, target: Entity, definitions: WorldDefinitionsView<'_>) -> Option<Money> {
         let edit = self.terminal_route_edit(target)?;
+        let removed_pieces = if self.single_piece(target).is_some() {
+            1
+        } else {
+            edit.piece_entities.len()
+        };
         let track = definitions.find_track(edit.definition)?;
         let object = definitions.find_object(track.object)?;
         if !object
@@ -169,9 +201,9 @@ impl TransportTrackSaleQueries<'_, '_> {
             return None;
         }
         let refund = calculate_authored_object_sale_refund(object)?;
-        Some(Money(refund.0.checked_mul(
-            i64::try_from(edit.piece_entities.len()).ok()?,
-        )?))
+        Some(Money(
+            refund.0.checked_mul(i64::try_from(removed_pieces).ok()?)?,
+        ))
     }
 
     pub fn removal_still_matches(&self, edit: &PreparedTransportTrackConstructionEdit) -> bool {
@@ -183,6 +215,7 @@ impl TransportTrackSaleQueries<'_, '_> {
         self.terminal_route_edit(target).is_some_and(|current| {
             current.piece_entities == edit.piece_entities
                 && current.destination_junction_entity == edit.destination_junction_entity
+                && current.to_endpoint == edit.to_endpoint
                 && current.definition == edit.definition
                 && current.kind == edit.kind
                 && current.maximum_grade_permille == edit.maximum_grade_permille

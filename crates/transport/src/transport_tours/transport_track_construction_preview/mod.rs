@@ -262,6 +262,36 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         &stations,
         &segments,
     );
+    // A road left after a gap starts at a junction nothing leads into; a road
+    // can be built back into it, along the way that road leaves.
+    let gap_start = segments
+        .iter()
+        .filter(|(_, member, segment, profile)| {
+            member.0 == track_preview.circuit
+                && profile.kind == TransportationTrackKind::Ground
+                && segment.from != track_preview.from_endpoint
+                && !stations.contains(segment.from)
+                && !segments
+                    .iter()
+                    .any(|(_, _, other, _)| other.to == segment.from)
+                && segment.from_position.distance(cursor.world) <= GAP_START_SNAP_DISTANCE_METRES
+        })
+        .min_by(|(_, _, left, _), (_, _, right, _)| {
+            left.from_position
+                .distance_squared(cursor.world)
+                .total_cmp(&right.from_position.distance_squared(cursor.world))
+        })
+        .and_then(|(_, member, segment, _)| {
+            let heading = (*segment.path_points.get(1)? - *segment.path_points.first()?)
+                .xz()
+                .try_normalize()?;
+            Some(((segment.from, member.0, 0, segment.from_position), heading))
+        });
+    let snapped_station_endpoint = nearer_transport_track_construction_endpoint(
+        cursor.world,
+        snapped_station_endpoint,
+        gap_start.map(|(endpoint, _)| endpoint),
+    );
     let snapped_station_chain = snapped_station_endpoint.and_then(|endpoint| {
         build_authored_axis_and_diagonal_transport_track_piece_chain(
             track_definition,
@@ -274,7 +304,9 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
     let to_heading = snapped_station_chain
         .as_ref()
         .and_then(|((station, _, _, position), _)| {
-            let (_, _, _, transform, _) = stations.get(*station).ok()?;
+            let Ok((_, _, _, transform, _)) = stations.get(*station) else {
+                return gap_start.map(|(_, heading)| heading);
+            };
             (transform.translation() - *position).xz().try_normalize()
         })
         .filter(|_| selected_kind == TransportationTrackKind::Ground);
@@ -339,6 +371,8 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
     };
 }
+
+const GAP_START_SNAP_DISTANCE_METRES: f32 = 8.0;
 
 /// A highlighted road decal's own material, put back afterwards.
 #[derive(Component)]
@@ -648,17 +682,14 @@ fn light_deleted_track_leg(
         Color::srgb(1.0, 128.0 / 255.0, 0.0)
     };
     // A sky tower: its own parts, not its ropes.
-    let Ok((_, hovered)) = pieces.get(hovered) else {
-        for part in children.iter_descendants(hovered) {
-            if decals.contains(part) && !ropes.contains(part) {
-                wanted.insert(part, color);
-            }
-        }
+    // A road piece: just that piece, as the delete tool takes one piece out.
+    if pieces.contains(hovered) {
+        light_track_decals(hovered, color, children, decals, wanted);
         return;
-    };
-    for (piece_entity, piece) in pieces {
-        if piece.route_segment == hovered.route_segment {
-            light_track_decals(piece_entity, color, children, decals, wanted);
+    }
+    for part in children.iter_descendants(hovered) {
+        if decals.contains(part) && !ropes.contains(part) {
+            wanted.insert(part, color);
         }
     }
 }

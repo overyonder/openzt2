@@ -7,6 +7,10 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPreparationRejected;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditPrepared;
 use openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::PreparedTransportTrackConstructionEdit;
+use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionEditSteps;
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
+use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 pub(crate) fn refresh_selected_transport_sale_quote(
     mut commands: Commands,
@@ -45,6 +49,7 @@ pub(super) fn prepare_transport_track_sale(
     active: Res<WorldDefinitions>,
     mut prepared: MessageWriter<TransportTrackConstructionEditPrepared>,
     mut rejected: MessageWriter<TransportTrackConstructionEditPreparationRejected>,
+    mut allocator: ResMut<PersistentIdAllocator>,
 ) {
     for request in requests.read() {
         if !sales.requires_transport_sale(request.target) {
@@ -63,12 +68,89 @@ pub(super) fn prepare_transport_track_sale(
             });
             continue;
         };
+        if let Some((index, world)) = sales.single_piece(request.target) {
+            let Some(steps) = single_piece_removal_steps(
+                &mut commands,
+                &mut allocator,
+                request.transaction,
+                &edit,
+                index,
+                world,
+            ) else {
+                rejected.write(TransportTrackConstructionEditPreparationRejected {
+                    transaction: request.transaction,
+                    reason: PlacementFailure::InvalidTopology,
+                });
+                continue;
+            };
+            commands.entity(request.transaction).insert(steps);
+        }
         commands.entity(request.transaction).insert(edit);
         prepared.write(TransportTrackConstructionEditPrepared {
             transaction: request.transaction,
             cost: Money(cost),
         });
     }
+}
+
+/// Taking piece `index` out of a route: remove the route, then lay the road
+/// before the piece to a new junction and the road after it from another,
+/// as the original leaves a gap one piece long.
+fn single_piece_removal_steps(
+    commands: &mut Commands,
+    allocator: &mut PersistentIdAllocator,
+    transaction: Entity,
+    removal: &PreparedTransportTrackConstructionEdit,
+    index: usize,
+    world: WorldMember,
+) -> Option<TransportTrackConstructionEditSteps> {
+    let mut allocate = || allocator.allocate(world.root).ok();
+    let laid = |points: &[bevy::math::Vec3]| PreparedTransportTrackConstructionEdit {
+        removes_track: false,
+        piece_entities: Box::default(),
+        destination_junction_entity: None,
+        source_junction_entity: None,
+        path_points: points.into(),
+        applied_entities: Vec::new(),
+        preview: None,
+        application_in_flight: None,
+        to_endpoint: None,
+        to_endpoint_index: 0,
+        ..removal.clone()
+    };
+    let mut edits = vec![removal.clone()];
+    let points = &removal.path_points;
+    if index > 0 {
+        let mut before = laid(points.get(..=index)?);
+        before.piece_entities = (0..index).map(|_| allocate()).collect::<Option<_>>()?;
+        before.destination_junction_entity = Some(allocate()?);
+        edits.push(before);
+    }
+    if index + 2 < points.len() {
+        let mut after = laid(points.get(index + 1..)?);
+        after.piece_entities = (index + 1..points.len() - 1)
+            .map(|_| allocate())
+            .collect::<Option<_>>()?;
+        after.source_junction_entity = Some(allocate()?);
+        after.from_endpoint_index = 0;
+        // The road beyond keeps its end: a junction the route owned is laid
+        // again, anything else is met where it stands.
+        if removal.destination_junction_entity.is_some() {
+            after.destination_junction_entity = Some(allocate()?);
+        } else {
+            after.to_endpoint = removal.to_endpoint;
+            after.to_endpoint_index = removal.to_endpoint_index;
+        }
+        edits.push(after);
+    }
+    let steps = edits
+        .into_iter()
+        .map(|edit| commands.spawn((edit, world, ChildOf(transaction))).id())
+        .collect();
+    Some(TransportTrackConstructionEditSteps {
+        steps,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
