@@ -87,41 +87,58 @@ const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> 
     })
 }
 
+/// The heading of the piece at `index`, and the turn appearance at its start
+/// and end where a neighbouring piece leaves at an angle.
+fn authored_ground_track_turns(route: &[Vec3], index: usize) -> (u8, [Option<u8>; 2]) {
+    let heading = compass_point(route[index + 1] - route[index]);
+    let turn = |end: u8, leaving: Vec3| {
+        let away = compass_point(leaving);
+        (away != end)
+            .then(|| authored_ground_track_turn_appearance(end, away))
+            .flatten()
+    };
+    let start = index
+        .checked_sub(1)
+        .and_then(|previous| turn((heading + 4) & 7, route[previous] - route[index]));
+    let end = route
+        .get(index + 2)
+        .and_then(|next| turn(heading, *next - route[index + 1]));
+    (heading, [start, end])
+}
+
 pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     definitions: &'a [GroundTransportTrackPiecePresentationDefinition],
     route: &[Vec3],
     index: usize,
 ) -> Option<&'a GroundTransportTrackPiecePresentationDefinition> {
-    let heading = compass_point(route[index + 1] - route[index]);
-    // Each end that a neighbouring piece leaves at an angle.
-    let turns = [
-        index
-            .checked_sub(1)
-            .map(|previous| ((heading + 4) & 7, route[previous] - route[index])),
-        route
-            .get(index + 2)
-            .map(|next| (heading, *next - route[index + 1])),
-    ]
-    .into_iter()
-    .flatten()
-    .filter_map(|(end, leaving)| {
-        let away = compass_point(leaving);
-        (away != end)
-            .then(|| authored_ground_track_turn_appearance(end, away))
-            .flatten()
-    })
-    .collect::<Vec<_>>();
+    let (heading, turns) = authored_ground_track_turns(route, index);
     let piece_type = authored_ground_track_piece_type(heading);
-    let appearance = match (piece_type, turns.as_slice()) {
-        (_, []) => 0,
+    let appearance = match (piece_type, turns) {
+        (_, [None, None]) => 0,
         // A diagonal curving at both ends.
-        (3, [_, _]) => 9,
-        (4, [_, _]) => 10,
-        (_, [first, ..]) => *first,
+        (3, [Some(_), Some(_)]) => 9,
+        (4, [Some(_), Some(_)]) => 10,
+        (_, [Some(first), _] | [None, Some(first)]) => first,
     };
     definitions.iter().find(|definition| {
         definition.piece_type == piece_type && definition.appearance == appearance
     })
+}
+
+/// How far a piece turning at one end is painted towards that end, so its
+/// turn texture meets the piece leaving there.
+// ponytail: 0.75 m was fitted against the shipped textures, not read from zt.exe.
+const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
+
+fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
+    let direction = (route[index + 1] - route[index])
+        .with_y(0.0)
+        .normalize_or_zero();
+    match authored_ground_track_turns(route, index).1 {
+        [Some(_), None] => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        [None, Some(_)] => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        _ => Vec3::ZERO,
+    }
 }
 
 /// Lays a road texture as the original paints it: V runs north (-Z).
@@ -833,7 +850,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 presentation.ground_decal_offset_metres[0],
                 0.0,
                 presentation.ground_decal_offset_metres[1],
-            ));
+            )) + authored_ground_track_paint_shift(
+                &joined_points,
+                usize::from(piece.piece_index) + first,
+            );
             let paint = definitions
                 .texture_image(presentation.paint_texture)
                 .and_then(|paint_texture| {
