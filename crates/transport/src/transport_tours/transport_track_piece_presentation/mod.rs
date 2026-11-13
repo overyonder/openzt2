@@ -169,6 +169,90 @@ fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegmen
         })
 }
 
+/// A ground route's points with, at each end where exactly one other route
+/// joins it, that route's next point, so a piece at a joint turns towards
+/// the road it meets; and the index of the route's first point in them.
+fn ground_route_points_with_joined_neighbours(
+    route: &TrackSegment,
+    routes: &Query<&TrackSegment>,
+) -> (Vec<Vec3>, usize) {
+    // A station's two ends share its entity, so an end is the pair.
+    let neighbour = |junction: (Entity, u8)| {
+        let mut joined = routes.iter().filter_map(|candidate| {
+            if core::ptr::eq(candidate, route) {
+                return None;
+            }
+            let points = &candidate.path_points;
+            if (candidate.from, candidate.from_endpoint_index) == junction {
+                points.get(1).copied()
+            } else if (candidate.to, candidate.to_endpoint_index) == junction {
+                points.len().checked_sub(2).map(|index| points[index])
+            } else {
+                None
+            }
+        });
+        match (joined.next(), joined.next()) {
+            (Some(point), None) => Some(point),
+            _ => None,
+        }
+    };
+    let before = neighbour((route.from, route.from_endpoint_index));
+    let points = before
+        .into_iter()
+        .chain(route.path_points.iter().copied())
+        .chain(neighbour((route.to, route.to_endpoint_index)))
+        .collect();
+    (points, usize::from(before.is_some()))
+}
+
+/// The decal or elevated strip a ground piece draws, redrawn with it.
+#[derive(Component)]
+pub(super) struct GroundTrackPieceDecal;
+
+/// Redraws the road pieces next to a joint a route was added to or removed
+/// from, so they turn towards (or no longer towards) the road there.
+pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
+    mut commands: Commands,
+    added: Query<(Entity, &TrackSegment), Added<TrackSegment>>,
+    mut removed: RemovedComponents<TrackSegment>,
+    mut joints: Local<bevy::platform::collections::HashMap<Entity, [Entity; 2]>>,
+    routes: Query<(Entity, &TrackSegment)>,
+    pieces: Query<(Entity, &TransportTrackConstructionPiece, &Children)>,
+    decals: Query<(), With<GroundTrackPieceDecal>>,
+) {
+    let mut changed = removed
+        .read()
+        .filter_map(|route| joints.remove(&route))
+        .flatten()
+        .collect::<HashSet<_>>();
+    for (entity, route) in &added {
+        joints.insert(entity, [route.from, route.to]);
+        changed.extend([route.from, route.to]);
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let neighbours = routes
+        .iter()
+        .filter(|(entity, route)| {
+            !added.contains(*entity)
+                && (changed.contains(&route.from) || changed.contains(&route.to))
+        })
+        .map(|(entity, _)| entity)
+        .collect::<HashSet<_>>();
+    for (piece, construction, children) in &pieces {
+        if !neighbours.contains(&construction.route_segment) {
+            continue;
+        }
+        for child in children.iter().filter(|child| decals.contains(*child)) {
+            commands.entity(child).despawn();
+        }
+        commands
+            .entity(piece)
+            .remove::<AuthoredTransportTrackPiecePresentationProjected>();
+    }
+}
+
 pub(super) fn invalidate_sky_tower_presentations_after_connection_topology_changes(
     mut commands: Commands,
     routes: Query<&TrackSegment>,
@@ -679,10 +763,11 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             else {
                 continue;
             };
+            let (joined_points, first) = ground_route_points_with_joined_neighbours(route, &routes);
             let Some(presentation) = select_authored_ground_track_piece_presentation(
                 &track.ground_piece_presentations,
-                &route.path_points,
-                usize::from(piece.piece_index),
+                &joined_points,
+                usize::from(piece.piece_index) + first,
             ) else {
                 error!("ground track has no authored pieceType/appearance texture case");
                 commands
@@ -736,6 +821,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     Transform::from_rotation(transform.rotation.inverse()),
                     ChildOf(entity),
+                    GroundTrackPieceDecal,
                 ));
                 commands
                     .entity(entity)
@@ -781,6 +867,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     )
                     .with_rotation(transform.rotation.inverse()),
                     ChildOf(entity),
+                    GroundTrackPieceDecal,
                 ))
                 .id();
             // As in the original, the road is painted into the ground; the
