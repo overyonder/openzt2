@@ -126,8 +126,9 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     })
 }
 
-/// How far a piece turning at one end is painted towards that end, so its
-/// turn texture meets the piece leaving there.
+/// How far a straight piece turning at one end is painted towards that end:
+/// its turn texture's strip stops short of the joint, where the diagonal's
+/// curve texture meets it.
 // ponytail: 0.75 m was fitted against the shipped textures, not read from zt.exe.
 const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
 
@@ -135,9 +136,10 @@ fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
     let direction = (route[index + 1] - route[index])
         .with_y(0.0)
         .normalize_or_zero();
-    match authored_ground_track_turns(route, index).1 {
-        [Some(_), None] => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
-        [None, Some(_)] => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+    match authored_ground_track_turns(route, index) {
+        (heading, _) if heading % 2 == 1 => Vec3::ZERO,
+        (_, [Some(_), None]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        (_, [None, Some(_)]) => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
         _ => Vec3::ZERO,
     }
 }
