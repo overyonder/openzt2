@@ -518,6 +518,7 @@ fn apply_highlight_color(
             commands.entity(entity),
             material,
             color,
+            painted,
             effect_materials,
             shader_buffers,
         );
@@ -631,12 +632,13 @@ fn light_deleted_track_leg(
     }
 }
 
-/// Draws a road decal as its texture times `color`, or as its own material
-/// again for white.
+/// Draws a road decal as its texture times `color` (or, `flat`, as `color` in
+/// its shape), or as its own material again for white.
 fn tint_track_decal(
     mut decal: EntityCommands,
     material: Handle<EffectPassMaterial>,
     color: Color,
+    flat: bool,
     effect_materials: &mut Assets<EffectPassMaterial>,
     shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
 ) {
@@ -646,10 +648,14 @@ fn tint_track_decal(
             .try_remove::<HighlightedTrackDecalOriginal>();
         return;
     }
-    let Some(tinted) = effect_materials
-        .get(&material)
-        .and_then(|source| source.clone_tinted(color.to_srgba().to_vec4(), shader_buffers))
-    else {
+    let colour = color.to_srgba().to_vec4();
+    let Some(tinted) = effect_materials.get(&material).and_then(|source| {
+        if flat {
+            source.clone_flat_coloured(colour, shader_buffers)
+        } else {
+            source.clone_tinted(colour, shader_buffers)
+        }
+    }) else {
         return;
     };
     decal.try_insert((

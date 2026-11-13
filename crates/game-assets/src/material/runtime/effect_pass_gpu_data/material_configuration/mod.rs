@@ -290,9 +290,9 @@ impl EffectPassMaterial {
             return false;
         }
         self.fixed_function.values[5].x = 1.0; // D3DTOP_DISABLE for stage one.
-        // The shipped decal textures carry at most half alpha. The original
-        // paints a road into the terrain through its opaque paint mask, so
-        // the decal doubles the texture alpha to draw it as solid.
+                                               // The shipped decal textures carry at most half alpha. The original
+                                               // paints a road into the terrain through its opaque paint mask, so
+                                               // the decal doubles the texture alpha to draw it as solid.
         self.fixed_function.values[0].w = 5.0; // D3DTOP_MODULATE2X alpha
         self.pipeline_specialization_key.cull_face = None;
         self.pipeline_specialization_key.depth_write_enabled = false;
@@ -392,6 +392,21 @@ impl EffectPassMaterial {
         tinted.uniform_buffer_assets.fixed_function =
             buffers.add(shader_buffer_from_uniform_value(&tinted.fixed_function));
         Some(tinted)
+    }
+
+    /// `colour` in the texture's shape: like [`Self::clone_tinted`], but the
+    /// colour replaces the texture's colour instead of multiplying it, so a
+    /// dark texture still shows the colour.
+    pub fn clone_flat_coloured(
+        &self,
+        colour: Vec4,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) -> Option<Self> {
+        let mut coloured = self.clone_tinted(colour, buffers)?;
+        coloured.fixed_function.values[0].x = 3.0; // D3DTOP_SELECTARG2
+        coloured.uniform_buffer_assets.fixed_function =
+            buffers.add(shader_buffer_from_uniform_value(&coloured.fixed_function));
+        Some(coloured)
     }
 
     pub fn clone_with_fixed_function_world_lighting_context(
