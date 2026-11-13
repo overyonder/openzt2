@@ -43,60 +43,48 @@ pub(super) struct AuthoredLinkedSkyTowerPresentationProjected {
 
 pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
 
-fn signed_planar_cross_product(left: Vec3, right: Vec3) -> i8 {
-    let cross_product = left.x * right.z - left.z * right.x;
-    if cross_product > 0.0 {
-        1
-    } else if cross_product < 0.0 {
-        -1
-    } else {
-        0
-    }
-}
-
-fn authored_ground_track_piece_type(direction: Vec3) -> u8 {
+/// The compass point a direction heads to: 0 = north (-Z, source +Y),
+/// 2 = east (+X), counting clockwise in eighths.
+fn compass_point(direction: Vec3) -> u8 {
     let heading = direction
         .x
-        .atan2(direction.z)
+        .atan2(-direction.z)
         .to_degrees()
         .rem_euclid(360.0);
-    match ((heading / 45.0).round() as u8) & 7 {
-        0 | 4 => 1,
-        2 | 6 => 2,
-        1 | 5 => 3,
-        3 | 7 => 4,
-        _ => unreachable!(),
+    ((heading / 45.0).round() as u8) & 7
+}
+
+/// `pieceType` of `ZTTransportGroundTrackTextureData`: 1 north-south,
+/// 2 east-west, 3 north-east to south-west, 4 north-west to south-east.
+const fn authored_ground_track_piece_type(heading: u8) -> u8 {
+    match heading & 3 {
+        0 => 1,
+        2 => 2,
+        1 => 3,
+        _ => 4,
     }
 }
 
-fn authored_ground_track_piece_appearance(piece_type: u8, flags: [i8; 2]) -> u8 {
-    match (piece_type, flags) {
-        (1, [-1, _]) => 6,
-        (1, [1, _]) => 7,
-        (1, [0, -1]) => 2,
-        (1, [0, 1]) => 3,
-        (2, [-1, _]) => 8,
-        (2, [1, _]) => 1,
-        (2, [0, -1]) => 4,
-        (2, [0, 1]) => 5,
-        (3, [-1, -1]) => 14,
-        (3, [-1, 1]) => 11,
-        (3, [-1, 0]) => 3,
-        (3, [1, -1]) => 9,
-        (3, [1, 1]) => 15,
-        (3, [1, 0]) => 4,
-        (3, [0, -1]) => 7,
-        (3, [0, 1]) => 8,
-        (4, [-1, -1]) => 16,
-        (4, [-1, 1]) => 12,
-        (4, [-1, 0]) => 1,
-        (4, [1, -1]) => 10,
-        (4, [1, 1]) => 13,
-        (4, [1, 0]) => 2,
-        (4, [0, -1]) => 5,
-        (4, [0, 1]) => 6,
-        _ => 0,
-    }
+/// `appearance` of a piece whose end at compass point `end` meets a piece
+/// leaving towards `away`, named by its texture: `NtoSE` comes from the north
+/// and turns south-east at its south end; `SWtoCurve` comes from the
+/// south-west and curves at its north-east end, whichever way.
+const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> {
+    Some(match (end, away) {
+        (4, 3) => 2,
+        (4, 5) => 3,
+        (0, 7) => 6,
+        (0, 1) => 7,
+        (2, 3) => 1,
+        (2, 1) => 8,
+        (6, 5) => 4,
+        (6, 7) => 5,
+        (1, _) => 3,
+        (5, _) => 7,
+        (7, _) => 1,
+        (3, _) => 5,
+        _ => return None,
+    })
 }
 
 pub(super) fn select_authored_ground_track_piece_presentation<'a>(
@@ -104,20 +92,50 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     route: &[Vec3],
     index: usize,
 ) -> Option<&'a GroundTransportTrackPiecePresentationDefinition> {
-    let direction = (route[index + 1] - route[index]).normalize_or_zero();
-    let flags = [
-        index.checked_sub(1).map_or(0, |previous| {
-            signed_planar_cross_product(direction, route[index] - route[previous])
-        }),
-        route.get(index + 2).map_or(0, |next| {
-            signed_planar_cross_product(direction, *next - route[index + 1])
-        }),
-    ];
-    let piece_type = authored_ground_track_piece_type(direction);
-    let appearance = authored_ground_track_piece_appearance(piece_type, flags);
+    let heading = compass_point(route[index + 1] - route[index]);
+    // Each end that a neighbouring piece leaves at an angle.
+    let turns = [
+        index
+            .checked_sub(1)
+            .map(|previous| ((heading + 4) & 7, route[previous] - route[index])),
+        route
+            .get(index + 2)
+            .map(|next| (heading, *next - route[index + 1])),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|(end, leaving)| {
+        let away = compass_point(leaving);
+        (away != end)
+            .then(|| authored_ground_track_turn_appearance(end, away))
+            .flatten()
+    })
+    .collect::<Vec<_>>();
+    let piece_type = authored_ground_track_piece_type(heading);
+    let appearance = match (piece_type, turns.as_slice()) {
+        (_, []) => 0,
+        // A diagonal curving at both ends.
+        (3, [_, _]) => 9,
+        (4, [_, _]) => 10,
+        (_, [first, ..]) => *first,
+    };
     definitions.iter().find(|definition| {
         definition.piece_type == piece_type && definition.appearance == appearance
     })
+}
+
+/// Lays a road texture as the original paints it: V runs north (-Z).
+pub(super) fn mirror_texture_rows(mut mesh: Mesh) -> Mesh {
+    for attribute in [Mesh::ATTRIBUTE_UV_0, Mesh::ATTRIBUTE_UV_1] {
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+            mesh.attribute_mut(attribute)
+        {
+            for uv in uvs {
+                uv[1] = 1.0 - uv[1];
+            }
+        }
+    }
+    mesh
 }
 
 fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegment>) -> u8 {
@@ -753,7 +771,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             ) else { continue; };
             let decal = commands
                 .spawn((
-                    Mesh3d(meshes.add(mesh)),
+                    Mesh3d(meshes.add(mirror_texture_rows(mesh))),
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     Transform::from_translation(
                         transform

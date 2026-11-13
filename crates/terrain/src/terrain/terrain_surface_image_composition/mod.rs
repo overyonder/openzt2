@@ -620,7 +620,9 @@ pub(super) fn blend_terrain_surface_paint_into_terrain_surface_image(
         for destination_x in destination_min.x..destination_max.x {
             let world = output_origin
                 + (UVec2::new(destination_x, destination_y).as_vec2() + 0.5) * output_texel_step;
-            let local = (world - paint_min) / paint.size_m;
+            // V runs north (-Z), as the original lays a painted texture.
+            let local = Vec2::new(world.x - paint_min.x, paint_min.y + paint.size_m - world.y)
+                / paint.size_m;
             if local.cmplt(Vec2::ZERO).any() || local.cmpge(Vec2::ONE).any() {
                 continue;
             }

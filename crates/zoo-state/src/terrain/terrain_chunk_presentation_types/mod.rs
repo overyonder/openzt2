@@ -23,7 +23,7 @@ pub struct TerrainRenderRevision(pub u64);
 ///
 /// The original paints a road (`paintTexture`) into the ground. It covers the square of `size_m`
 /// around `centre` (world XZ) with the `uv_min`..`uv_max` part of `texture`,
-/// U along +X and V along +Z, blended by twice the texture's alpha.
+/// U along +X (east) and V along -Z (north), blended by twice the texture's alpha.
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct TerrainPaintedTexture {
     pub centre: Vec2,
