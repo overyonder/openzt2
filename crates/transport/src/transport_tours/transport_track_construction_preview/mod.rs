@@ -28,6 +28,7 @@ use crate::transport_tours::transport_track_endpoint_queries::find_nearest_compa
 use crate::transport_tours::transport_track_endpoint_queries::nearer_transport_track_construction_endpoint;
 use crate::transport_tours::transport_track_piece_chain_geometry::build_authored_axis_and_diagonal_transport_track_piece_chain;
 use crate::transport_tours::transport_track_piece_chain_geometry::build_projected_authored_axis_or_diagonal_transport_track_piece_chain;
+use crate::transport_tours::transport_track_piece_chain_geometry::track_piece_chain_turns_are_gentle;
 
 fn selected_transport_track_definition(
     tool: ConstructionTool,
@@ -232,6 +233,24 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         return;
     };
     let from_position = track_preview.from_position;
+    // A road leaves a station along its axis and a road end the way its last
+    // piece runs.
+    let from_heading = if let Ok((_, _, _, station, _)) = stations.get(track_preview.from_endpoint)
+    {
+        (from_position - station.translation()).xz().try_normalize()
+    } else {
+        segments
+            .iter()
+            .find(|(_, _, segment, _)| segment.to == track_preview.from_endpoint)
+            .and_then(|(_, _, segment, _)| {
+                let points = &segment.path_points;
+                let last = points.len().checked_sub(1)?;
+                (points[last] - points[last.checked_sub(1)?])
+                    .xz()
+                    .try_normalize()
+            })
+    }
+    .filter(|_| selected_kind == TransportationTrackKind::Ground);
     let snapped_station_endpoint = find_nearest_compatible_transport_station_endpoint(
         cursor.world,
         selected_kind,
@@ -251,6 +270,14 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         )
         .map(|chain| (endpoint, chain))
     });
+    // ...and enters a station along its axis, never from the side.
+    let to_heading = snapped_station_chain
+        .as_ref()
+        .and_then(|((station, _, _, position), _)| {
+            let (_, _, _, transform, _) = stations.get(*station).ok()?;
+            (transform.translation() - *position).xz().try_normalize()
+        })
+        .filter(|_| selected_kind == TransportationTrackKind::Ground);
     let (to_station, to_endpoint_index, to_position, path_points_and_cost) =
         if let Some(((station, _, endpoint_index, position), chain)) = snapped_station_chain {
             (Some(station), endpoint_index, position, Some(chain))
@@ -258,6 +285,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             let chain = build_projected_authored_axis_or_diagonal_transport_track_piece_chain(
                 track_definition,
                 from_position,
+                from_heading,
                 cursor.world,
             );
             let projected_position = chain
@@ -295,8 +323,11 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             track_definition,
             &path_points,
         );
+        let gentle = track_piece_chain_turns_are_gentle(from_heading, &path_points, to_heading);
         track_preview.path_points = path_points;
-        if valid {
+        if !gentle {
+            PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
+        } else if valid {
             PlacementValidity::Valid { cost }
         } else {
             PlacementValidity::Invalid(PlacementFailure::TooSteep)

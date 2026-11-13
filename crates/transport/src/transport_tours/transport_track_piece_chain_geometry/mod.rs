@@ -138,6 +138,7 @@ pub(super) fn build_authored_axis_and_diagonal_transport_track_piece_chain(
 pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_chain(
     definition: &TransportationTrackDefinition,
     from_position: Vec3,
+    from_heading: Option<Vec2>,
     pointer_position: Vec3,
 ) -> Option<(Vec<Vec3>, Money)> {
     const TRACK_ALIGNMENT_EPSILON_METRES: f32 = 0.001;
@@ -195,8 +196,12 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
         Vec2::NEG_Y,
         Vec2::new(1.0, -1.0).normalize(),
     ];
+    // A road bends at most 45 degrees from the way it already runs.
     let direction = cardinal_and_diagonal_directions
         .into_iter()
+        .filter(|direction| {
+            from_heading.is_none_or(|heading| track_turn_is_gentle(heading, *direction))
+        })
         .max_by(|left, right| {
             left.dot(normalized_displacement)
                 .total_cmp(&right.dot(normalized_displacement))
@@ -239,4 +244,61 @@ pub(super) fn build_projected_authored_axis_or_diagonal_transport_track_piece_ch
         .checked_mul(i64::from(piece_count))
         .map(Money)?;
     Some((path_points, cost))
+}
+
+fn track_turn_is_gentle(from: Vec2, to: Vec2) -> bool {
+    from.dot(to) >= core::f32::consts::FRAC_1_SQRT_2 - 0.01
+}
+
+/// As in the original, a ground road turns at most 45 degrees at each joint,
+/// including where it leaves `from_heading` and meets `to_heading`.
+pub(super) fn track_piece_chain_turns_are_gentle(
+    from_heading: Option<Vec2>,
+    points: &[Vec3],
+    to_heading: Option<Vec2>,
+) -> bool {
+    let headings: Vec<Vec2> = from_heading
+        .into_iter()
+        .chain(
+            points
+                .windows(2)
+                .filter_map(|pair| (pair[1] - pair[0]).xz().try_normalize()),
+        )
+        .chain(to_heading)
+        .collect();
+    headings
+        .windows(2)
+        .all(|pair| track_turn_is_gentle(pair[0], pair[1]))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::track_piece_chain_turns_are_gentle;
+    use bevy::prelude::*;
+
+    #[test]
+    fn a_road_turns_at_most_45_degrees_at_a_joint() {
+        let points = [Vec3::ZERO, Vec3::X, Vec3::new(2.0, 0.0, 1.0)];
+        assert!(track_piece_chain_turns_are_gentle(
+            Some(Vec2::X),
+            &points,
+            None
+        ));
+        assert!(!track_piece_chain_turns_are_gentle(
+            Some(Vec2::Y),
+            &points,
+            None
+        ));
+        let right_angle = [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 0.0, 1.0)];
+        assert!(!track_piece_chain_turns_are_gentle(
+            None,
+            &right_angle,
+            None
+        ));
+        assert!(!track_piece_chain_turns_are_gentle(
+            None,
+            &points,
+            Some(Vec2::NEG_X)
+        ));
+    }
 }
