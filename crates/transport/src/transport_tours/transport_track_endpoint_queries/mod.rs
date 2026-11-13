@@ -19,7 +19,9 @@ const SKY_TOWER_POINTER_PICK_HEIGHT_METRES: f32 = 12.0;
 /// The pointer ray's closest approach to a tower standing at `base`.
 fn distance_from_ray_to_vertical_pole(ray: Ray3d, base: Vec3) -> f32 {
     (0_u8..=24)
-        .map(|step| base + Vec3::Y * (SKY_TOWER_POINTER_PICK_HEIGHT_METRES * f32::from(step) / 24.0))
+        .map(|step| {
+            base + Vec3::Y * (SKY_TOWER_POINTER_PICK_HEIGHT_METRES * f32::from(step) / 24.0)
+        })
         .map(|point| {
             let along = (point - ray.origin).dot(*ray.direction).max(0.0);
             point.distance(ray.origin + *ray.direction * along)

@@ -192,7 +192,11 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
                 .with_rotation(preview.transform.rotation.inverse()),
                 Visibility::Inherited,
                 ChildOf(preview_entity),
-                Mesh3d(meshes.add(mesh)),
+                Mesh3d(meshes.add(
+                    crate::transport_tours::transport_track_piece_presentation::mirror_texture_rows(
+                        mesh,
+                    ),
+                )),
                 MeshMaterial3d(effect_pass_materials.add(material)),
                 TransportTrackConstructionPreviewAuthoredPrefab {
                     owner: preview_entity,
