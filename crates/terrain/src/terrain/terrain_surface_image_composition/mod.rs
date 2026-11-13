@@ -7,6 +7,7 @@ use bevy::{
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_data::terrain::{TerrainBiome, TerrainWaterDepth};
 
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -581,4 +582,124 @@ pub(super) fn blend_ground_path_surface_patch_into_terrain_surface_image(
         }
     }
     Some(())
+}
+
+/// Paints `paint` into its terrain chunk image: each texel under the paint's
+/// square takes the nearest paint texel, blended by twice its alpha (the
+/// `MODULATE2X` the road decal uses).
+pub(super) fn blend_terrain_surface_paint_into_terrain_surface_image(
+    surface: &mut Image,
+    chunk: &TerrainChunk,
+    margin_cells: f32,
+    paint: &TerrainPaintedTexture,
+    texture: &Image,
+) -> Option<()> {
+    let chunk_cells = f32::from(chunk.side.checked_sub(1)?);
+    let extent = read_rgba_image_extent(surface)?;
+    let texture_extent = read_rgba_image_extent(texture)?;
+    let output_origin = chunk.origin - Vec2::splat(margin_cells * chunk.spacing_m);
+    let output_texel_step =
+        margin_cells.mul_add(2.0, chunk_cells) * chunk.spacing_m / extent.as_vec2();
+    if output_texel_step.cmple(Vec2::ZERO).any() || paint.size_m <= 0.0 {
+        return None;
+    }
+    let paint_min = paint.centre - Vec2::splat(paint.size_m * 0.5);
+    let destination_min = ((paint_min - output_origin) / output_texel_step)
+        .floor()
+        .as_ivec2()
+        .max(IVec2::ZERO)
+        .as_uvec2();
+    let destination_max = ((paint_min + Vec2::splat(paint.size_m) - output_origin)
+        / output_texel_step)
+        .ceil()
+        .as_ivec2()
+        .clamp(IVec2::ZERO, extent.as_ivec2())
+        .as_uvec2();
+    let surface_bytes = surface.data.as_mut()?;
+    for destination_y in destination_min.y..destination_max.y {
+        for destination_x in destination_min.x..destination_max.x {
+            let world = output_origin
+                + (UVec2::new(destination_x, destination_y).as_vec2() + 0.5) * output_texel_step;
+            // V runs north (-Z), as the original lays a painted texture.
+            let local = Vec2::new(world.x - paint_min.x, paint_min.y + paint.size_m - world.y)
+                / paint.size_m;
+            if local.cmplt(Vec2::ZERO).any() || local.cmpge(Vec2::ONE).any() {
+                continue;
+            }
+            let texel = ((paint.uv_min + (paint.uv_max - paint.uv_min) * local)
+                * texture_extent.as_vec2())
+            .floor()
+            .as_ivec2()
+            .rem_euclid(texture_extent.as_ivec2())
+            .as_uvec2();
+            let source = read_wrapped_rgba_image_pixel(texture, texel.x, texel.y)?;
+            let alpha = (u16::from(source[3]) * 2).min(255);
+            if alpha == 0 {
+                continue;
+            }
+            let target = (destination_y * extent.x + destination_x) as usize * 4;
+            for channel in 0..3 {
+                let ground = u16::from(surface_bytes[target + channel]);
+                let blended = (u16::from(source[channel]) * alpha + ground * (255 - alpha)) / 255;
+                surface_bytes[target + channel] = u8::try_from(blended).unwrap_or(u8::MAX);
+            }
+        }
+    }
+    Some(())
+}
+
+#[cfg(test)]
+mod painted_texture_tests {
+    use super::*;
+
+    fn image(width: u32, pixels: &[[u8; 4]]) -> Image {
+        Image::new(
+            Extent3d {
+                width,
+                height: pixels.len() as u32 / width,
+                depth_or_array_layers: 1,
+            },
+            TextureDimension::D2,
+            pixels.concat(),
+            TextureFormat::Rgba8Unorm,
+            RenderAssetUsages::default(),
+        )
+    }
+
+    #[test]
+    fn paint_covers_its_square_blended_by_twice_its_alpha() {
+        // A 4 m chunk drawn 1 texel per metre, no margin.
+        let chunk = TerrainChunk {
+            source_coord: IVec2::ZERO,
+            coord: IVec2::ZERO,
+            asset: Handle::default(),
+            origin: Vec2::ZERO,
+            spacing_m: 1.0,
+            side: 5,
+        };
+        let mut surface = image(4, &[[0, 0, 0, 255]; 16]);
+        // Left half opaque white, right half alpha 64 (blends at 128).
+        let texture = image(2, &[[255, 255, 255, 128], [255, 255, 255, 64]]);
+        let paint = TerrainPaintedTexture {
+            centre: Vec2::new(2.0, 2.0),
+            size_m: 2.0,
+            texture: Handle::default(),
+            uv_min: Vec2::ZERO,
+            uv_max: Vec2::ONE,
+        };
+        blend_terrain_surface_paint_into_terrain_surface_image(
+            &mut surface,
+            &chunk,
+            0.0,
+            &paint,
+            &texture,
+        )
+        .unwrap();
+        let red = |x: usize, y: usize| surface.data.as_ref().unwrap()[(y * 4 + x) * 4];
+        assert_eq!(
+            [red(0, 1), red(1, 1), red(2, 1), red(3, 1)],
+            [0, 255, 128, 0]
+        );
+        assert_eq!([red(1, 0), red(1, 3)], [0, 0]);
+    }
 }

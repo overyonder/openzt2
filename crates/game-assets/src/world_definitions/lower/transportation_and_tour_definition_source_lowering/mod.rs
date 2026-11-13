@@ -244,6 +244,19 @@ fn lower_authored_ground_transport_track_piece_presentations(
                 })
                 .transpose()?
                 .unwrap_or(0.0);
+            let paint_texture = texture_data
+                .attribute_named_any(&["paintTexture"])
+                .map(id)
+                .unwrap_or_default();
+            let paint_pair = |name| {
+                texture_data
+                    .attribute_named_any(&[name])
+                    .map(parse_f32_pair)
+                    .transpose()
+                    .map(Option::unwrap_or_default)
+            };
+            let paint_sample_start_texels = paint_pair("paintSampleStart")?;
+            let paint_copy_dimension_texels = paint_pair("paintCopyDimension")?;
             let elevated_path_texture = texture_data
                 .attribute_named_any(&["elevatedPathTexture"])
                 .map(id)
@@ -269,6 +282,9 @@ fn lower_authored_ground_transport_track_piece_presentations(
                 ground_decal_rotation_radians: ground_decal_rotation_degrees.to_radians(),
                 ground_decal_size_metres,
                 ground_decal_offset_metres,
+                paint_texture,
+                paint_sample_start_texels,
+                paint_copy_dimension_texels,
                 elevated_path_texture,
                 elevated_path_rotation_radians: elevated_path_rotation_degrees.to_radians(),
             })

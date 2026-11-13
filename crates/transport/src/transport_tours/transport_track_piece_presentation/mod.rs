@@ -19,6 +19,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -42,60 +43,68 @@ pub(super) struct AuthoredLinkedSkyTowerPresentationProjected {
 
 pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
 
-fn signed_planar_cross_product(left: Vec3, right: Vec3) -> i8 {
-    let cross_product = left.x * right.z - left.z * right.x;
-    if cross_product > 0.0 {
-        1
-    } else if cross_product < 0.0 {
-        -1
-    } else {
-        0
-    }
-}
-
-fn authored_ground_track_piece_type(direction: Vec3) -> u8 {
+/// The compass point a direction heads to: 0 = north (-Z, source +Y),
+/// 2 = east (+X), counting clockwise in eighths.
+fn compass_point(direction: Vec3) -> u8 {
     let heading = direction
         .x
-        .atan2(direction.z)
+        .atan2(-direction.z)
         .to_degrees()
         .rem_euclid(360.0);
-    match ((heading / 45.0).round() as u8) & 7 {
-        0 | 4 => 1,
-        2 | 6 => 2,
-        1 | 5 => 3,
-        3 | 7 => 4,
-        _ => unreachable!(),
+    ((heading / 45.0).round() as u8) & 7
+}
+
+/// `pieceType` of `ZTTransportGroundTrackTextureData`: 1 north-south,
+/// 2 east-west, 3 north-east to south-west, 4 north-west to south-east.
+const fn authored_ground_track_piece_type(heading: u8) -> u8 {
+    match heading & 3 {
+        0 => 1,
+        2 => 2,
+        1 => 3,
+        _ => 4,
     }
 }
 
-fn authored_ground_track_piece_appearance(piece_type: u8, flags: [i8; 2]) -> u8 {
-    match (piece_type, flags) {
-        (1, [-1, _]) => 6,
-        (1, [1, _]) => 7,
-        (1, [0, -1]) => 2,
-        (1, [0, 1]) => 3,
-        (2, [-1, _]) => 8,
-        (2, [1, _]) => 1,
-        (2, [0, -1]) => 4,
-        (2, [0, 1]) => 5,
-        (3, [-1, -1]) => 14,
-        (3, [-1, 1]) => 11,
-        (3, [-1, 0]) => 3,
-        (3, [1, -1]) => 9,
-        (3, [1, 1]) => 15,
-        (3, [1, 0]) => 4,
-        (3, [0, -1]) => 7,
-        (3, [0, 1]) => 8,
-        (4, [-1, -1]) => 16,
-        (4, [-1, 1]) => 12,
-        (4, [-1, 0]) => 1,
-        (4, [1, -1]) => 10,
-        (4, [1, 1]) => 13,
-        (4, [1, 0]) => 2,
-        (4, [0, -1]) => 5,
-        (4, [0, 1]) => 6,
-        _ => 0,
-    }
+/// `appearance` of a piece whose end at compass point `end` meets a piece
+/// leaving towards `away`, named by its texture: `NtoSE` comes from the north
+/// and turns south-east at its south end. A diagonal shares the appearance of
+/// the straight it meets, so `SWtoCurve` is laid where a road from the
+/// south-west meets a straight at the diagonal's north-east end.
+const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> {
+    Some(match (end, away) {
+        (4, 3) => 2,
+        (4, 5) => 3,
+        (0, 7) => 6,
+        (0, 1) => 7,
+        (2, 3) => 1,
+        (2, 1) => 8,
+        (6, 5) => 4,
+        (6, 7) => 5,
+        (7, _) => 1,
+        (1, _) => 3,
+        (3, _) => 5,
+        (5, _) => 7,
+        _ => return None,
+    })
+}
+
+/// The heading of the piece at `index`, and the turn appearance at its start
+/// and end where a neighbouring piece leaves at an angle.
+fn authored_ground_track_turns(route: &[Vec3], index: usize) -> (u8, [Option<u8>; 2]) {
+    let heading = compass_point(route[index + 1] - route[index]);
+    let turn = |end: u8, leaving: Vec3| {
+        let away = compass_point(leaving);
+        (away != end)
+            .then(|| authored_ground_track_turn_appearance(end, away))
+            .flatten()
+    };
+    let start = index
+        .checked_sub(1)
+        .and_then(|previous| turn((heading + 4) & 7, route[previous] - route[index]));
+    let end = route
+        .get(index + 2)
+        .and_then(|next| turn(heading, *next - route[index + 1]));
+    (heading, [start, end])
 }
 
 pub(super) fn select_authored_ground_track_piece_presentation<'a>(
@@ -103,20 +112,50 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     route: &[Vec3],
     index: usize,
 ) -> Option<&'a GroundTransportTrackPiecePresentationDefinition> {
-    let direction = (route[index + 1] - route[index]).normalize_or_zero();
-    let flags = [
-        index.checked_sub(1).map_or(0, |previous| {
-            signed_planar_cross_product(direction, route[index] - route[previous])
-        }),
-        route.get(index + 2).map_or(0, |next| {
-            signed_planar_cross_product(direction, *next - route[index + 1])
-        }),
-    ];
-    let piece_type = authored_ground_track_piece_type(direction);
-    let appearance = authored_ground_track_piece_appearance(piece_type, flags);
+    let (heading, turns) = authored_ground_track_turns(route, index);
+    let piece_type = authored_ground_track_piece_type(heading);
+    let appearance = match (piece_type, turns) {
+        (_, [None, None]) => 0,
+        // A diagonal curving at both ends.
+        (3, [Some(_), Some(_)]) => 9,
+        (4, [Some(_), Some(_)]) => 10,
+        (_, [Some(first), _] | [None, Some(first)]) => first,
+    };
     definitions.iter().find(|definition| {
         definition.piece_type == piece_type && definition.appearance == appearance
     })
+}
+
+/// How far a straight piece turning at one end is painted towards that end:
+/// its turn texture's strip stops short of the joint, where the diagonal's
+/// curve texture meets it.
+// ponytail: 0.75 m was fitted against the shipped textures, not read from zt.exe.
+const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
+
+fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
+    let direction = (route[index + 1] - route[index])
+        .with_y(0.0)
+        .normalize_or_zero();
+    match authored_ground_track_turns(route, index) {
+        (heading, _) if heading % 2 == 1 => Vec3::ZERO,
+        (_, [Some(_), None]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        (_, [None, Some(_)]) => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        _ => Vec3::ZERO,
+    }
+}
+
+/// Lays a road texture as the original paints it: V runs north (-Z).
+pub(super) fn mirror_texture_rows(mut mesh: Mesh) -> Mesh {
+    for attribute in [Mesh::ATTRIBUTE_UV_0, Mesh::ATTRIBUTE_UV_1] {
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+            mesh.attribute_mut(attribute)
+        {
+            for uv in uvs {
+                uv[1] = 1.0 - uv[1];
+            }
+        }
+    }
+    mesh
 }
 
 fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegment>) -> u8 {
@@ -148,6 +187,90 @@ fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegmen
                 0
             }
         })
+}
+
+/// A ground route's points with, at each end where exactly one other route
+/// joins it, that route's next point, so a piece at a joint turns towards
+/// the road it meets; and the index of the route's first point in them.
+fn ground_route_points_with_joined_neighbours(
+    route: &TrackSegment,
+    routes: &Query<&TrackSegment>,
+) -> (Vec<Vec3>, usize) {
+    // A station's two ends share its entity, so an end is the pair.
+    let neighbour = |junction: (Entity, u8)| {
+        let mut joined = routes.iter().filter_map(|candidate| {
+            if core::ptr::eq(candidate, route) {
+                return None;
+            }
+            let points = &candidate.path_points;
+            if (candidate.from, candidate.from_endpoint_index) == junction {
+                points.get(1).copied()
+            } else if (candidate.to, candidate.to_endpoint_index) == junction {
+                points.len().checked_sub(2).map(|index| points[index])
+            } else {
+                None
+            }
+        });
+        match (joined.next(), joined.next()) {
+            (Some(point), None) => Some(point),
+            _ => None,
+        }
+    };
+    let before = neighbour((route.from, route.from_endpoint_index));
+    let points = before
+        .into_iter()
+        .chain(route.path_points.iter().copied())
+        .chain(neighbour((route.to, route.to_endpoint_index)))
+        .collect();
+    (points, usize::from(before.is_some()))
+}
+
+/// The decal or elevated strip a ground piece draws, redrawn with it.
+#[derive(Component)]
+pub(super) struct GroundTrackPieceDecal;
+
+/// Redraws the road pieces next to a joint a route was added to or removed
+/// from, so they turn towards (or no longer towards) the road there.
+pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
+    mut commands: Commands,
+    added: Query<(Entity, &TrackSegment), Added<TrackSegment>>,
+    mut removed: RemovedComponents<TrackSegment>,
+    mut joints: Local<bevy::platform::collections::HashMap<Entity, [Entity; 2]>>,
+    routes: Query<(Entity, &TrackSegment)>,
+    pieces: Query<(Entity, &TransportTrackConstructionPiece, &Children)>,
+    decals: Query<(), With<GroundTrackPieceDecal>>,
+) {
+    let mut changed = removed
+        .read()
+        .filter_map(|route| joints.remove(&route))
+        .flatten()
+        .collect::<HashSet<_>>();
+    for (entity, route) in &added {
+        joints.insert(entity, [route.from, route.to]);
+        changed.extend([route.from, route.to]);
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let neighbours = routes
+        .iter()
+        .filter(|(entity, route)| {
+            !added.contains(*entity)
+                && (changed.contains(&route.from) || changed.contains(&route.to))
+        })
+        .map(|(entity, _)| entity)
+        .collect::<HashSet<_>>();
+    for (piece, construction, children) in &pieces {
+        if !neighbours.contains(&construction.route_segment) {
+            continue;
+        }
+        for child in children.iter().filter(|child| decals.contains(*child)) {
+            commands.entity(child).despawn();
+        }
+        commands
+            .entity(piece)
+            .remove::<AuthoredTransportTrackPiecePresentationProjected>();
+    }
 }
 
 pub(super) fn invalidate_sky_tower_presentations_after_connection_topology_changes(
@@ -476,6 +599,50 @@ impl SkyRopeAnchors<'_, '_> {
     }
 }
 
+/// A road piece's decal over its painted road, shown only while the piece is
+/// highlighted.
+#[derive(Component)]
+pub(super) struct PaintedTrackHighlight;
+
+/// The road a ground piece paints into the terrain (`paintTexture`), and the
+/// size of a decal of the whole texture laid over it. Paint textures are
+/// authored at the terrain's texel size with their copy window centred, so a
+/// 43-texel window sits in 64 texels and an 86-texel one in 128.
+fn authored_ground_track_paint(
+    presentation: &GroundTransportTrackPiecePresentationDefinition,
+    centre: Vec2,
+    texture: Handle<Image>,
+    terrain_assets: &Assets<TerrainAsset>,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) -> Option<(TerrainPaintedTexture, f32)> {
+    let start = Vec2::from(presentation.paint_sample_start_texels);
+    let copy = Vec2::from(presentation.paint_copy_dimension_texels);
+    if copy.cmple(Vec2::ZERO).any() {
+        return None;
+    }
+    let (chunk, _) = terrain_chunks.iter().next()?;
+    let presentation_grid = &terrain_assets
+        .get(&chunk.asset)?
+        .canonical_terrain_grid()
+        .presentation;
+    // A chunk's surface image also covers its margin cells on each side.
+    let texel_metres = f32::from(presentation_grid.surface_margin_cells)
+        .mul_add(2.0, f32::from(chunk.side.checked_sub(1)?))
+        * chunk.spacing_m
+        / f32::from(presentation_grid.surface_resolution);
+    let reference = start.x.mul_add(2.0, copy.x).max(1.0).log2().ceil().exp2();
+    Some((
+        TerrainPaintedTexture {
+            centre,
+            size_m: copy.x * texel_metres,
+            texture,
+            uv_min: start / reference,
+            uv_max: (start + copy) / reference,
+        },
+        reference * texel_metres,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     mut commands: Commands,
@@ -617,10 +784,11 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             else {
                 continue;
             };
+            let (joined_points, first) = ground_route_points_with_joined_neighbours(route, &routes);
             let Some(presentation) = select_authored_ground_track_piece_presentation(
                 &track.ground_piece_presentations,
-                &route.path_points,
-                usize::from(piece.piece_index),
+                &joined_points,
+                usize::from(piece.piece_index) + first,
             ) else {
                 error!("ground track has no authored pieceType/appearance texture case");
                 commands
@@ -674,6 +842,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     Transform::from_rotation(transform.rotation.inverse()),
                     ChildOf(entity),
+                    GroundTrackPieceDecal,
                 ));
                 commands
                     .entity(entity)
@@ -684,27 +853,55 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 presentation.ground_decal_offset_metres[0],
                 0.0,
                 presentation.ground_decal_offset_metres[1],
-            ));
+            )) + authored_ground_track_paint_shift(
+                &joined_points,
+                usize::from(piece.piece_index) + first,
+            );
+            let paint = definitions
+                .texture_image(presentation.paint_texture)
+                .and_then(|paint_texture| {
+                    authored_ground_track_paint(
+                        presentation,
+                        decal_centre.xz(),
+                        paint_texture,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    )
+                });
+            let decal_size = paint
+                .as_ref()
+                .map_or(presentation.ground_decal_size_metres[0], |(_, size)| *size);
             let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
-                presentation.ground_decal_size_metres[0],
+                decal_size,
                 decal_centre,
                 presentation.ground_decal_rotation_radians,
                 &terrain_index,
                 &terrain_assets,
                 &terrain_chunks,
             ) else { continue; };
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(effect_pass_materials.add(material)),
-                Transform::from_translation(
-                    transform
-                        .compute_affine()
-                        .inverse()
-                        .transform_point3(decal_centre),
-                )
-                .with_rotation(transform.rotation.inverse()),
-                ChildOf(entity),
-            ));
+            let decal = commands
+                .spawn((
+                    Mesh3d(meshes.add(mirror_texture_rows(mesh))),
+                    MeshMaterial3d(effect_pass_materials.add(material)),
+                    Transform::from_translation(
+                        transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(decal_centre),
+                    )
+                    .with_rotation(transform.rotation.inverse()),
+                    ChildOf(entity),
+                    GroundTrackPieceDecal,
+                ))
+                .id();
+            // As in the original, the road is painted into the ground; the
+            // decal only shows a highlight.
+            if let Some((paint, _)) = paint {
+                commands.entity(entity).insert(paint);
+                commands
+                    .entity(decal)
+                    .insert((PaintedTrackHighlight, Visibility::Hidden));
+            }
         }
         commands
             .entity(entity)

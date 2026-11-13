@@ -22,11 +22,13 @@ use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPreview;
+use crate::transport_tours::transport_track_piece_presentation::PaintedTrackHighlight;
 use crate::transport_tours::transport_track_endpoint_queries::find_nearest_compatible_transport_station_endpoint;
 use crate::transport_tours::transport_track_endpoint_queries::find_nearest_compatible_transport_track_junction;
 use crate::transport_tours::transport_track_endpoint_queries::nearer_transport_track_construction_endpoint;
 use crate::transport_tours::transport_track_piece_chain_geometry::build_authored_axis_and_diagonal_transport_track_piece_chain;
 use crate::transport_tours::transport_track_piece_chain_geometry::build_projected_authored_axis_or_diagonal_transport_track_piece_chain;
+use crate::transport_tours::transport_track_piece_chain_geometry::track_piece_chain_turns_are_gentle;
 
 fn selected_transport_track_definition(
     tool: ConstructionTool,
@@ -231,6 +233,24 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         return;
     };
     let from_position = track_preview.from_position;
+    // A road leaves a station along its axis and a road end the way its last
+    // piece runs.
+    let from_heading = if let Ok((_, _, _, station, _)) = stations.get(track_preview.from_endpoint)
+    {
+        (from_position - station.translation()).xz().try_normalize()
+    } else {
+        segments
+            .iter()
+            .find(|(_, _, segment, _)| segment.to == track_preview.from_endpoint)
+            .and_then(|(_, _, segment, _)| {
+                let points = &segment.path_points;
+                let last = points.len().checked_sub(1)?;
+                (points[last] - points[last.checked_sub(1)?])
+                    .xz()
+                    .try_normalize()
+            })
+    }
+    .filter(|_| selected_kind == TransportationTrackKind::Ground);
     let snapped_station_endpoint = find_nearest_compatible_transport_station_endpoint(
         cursor.world,
         selected_kind,
@@ -250,6 +270,14 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
         )
         .map(|chain| (endpoint, chain))
     });
+    // ...and enters a station along its axis, never from the side.
+    let to_heading = snapped_station_chain
+        .as_ref()
+        .and_then(|((station, _, _, position), _)| {
+            let (_, _, _, transform, _) = stations.get(*station).ok()?;
+            (transform.translation() - *position).xz().try_normalize()
+        })
+        .filter(|_| selected_kind == TransportationTrackKind::Ground);
     let (to_station, to_endpoint_index, to_position, path_points_and_cost) =
         if let Some(((station, _, endpoint_index, position), chain)) = snapped_station_chain {
             (Some(station), endpoint_index, position, Some(chain))
@@ -257,6 +285,7 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             let chain = build_projected_authored_axis_or_diagonal_transport_track_piece_chain(
                 track_definition,
                 from_position,
+                from_heading,
                 cursor.world,
             );
             let projected_position = chain
@@ -294,8 +323,11 @@ pub(super) fn update_transport_track_construction_preview_from_pointer_and_stati
             track_definition,
             &path_points,
         );
+        let gentle = track_piece_chain_turns_are_gentle(from_heading, &path_points, to_heading);
         track_preview.path_points = path_points;
-        if valid {
+        if !gentle {
+            PlacementValidity::Invalid(PlacementFailure::InvalidTopology)
+        } else if valid {
             PlacementValidity::Valid { cost }
         } else {
             PlacementValidity::Invalid(PlacementFailure::TooSteep)
@@ -362,6 +394,7 @@ pub(super) fn highlight_transport_track_connection_stations(
     decals: Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     mut renderables: Query<Option<&mut PrefabModelTint>, With<PrefabRenderable>>,
     (mut effect_materials, mut shader_buffers, pointer_ray, ropes): (
@@ -488,6 +521,7 @@ fn apply_highlight_color(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     effect_materials: &mut Assets<EffectPassMaterial>,
     shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
@@ -499,12 +533,23 @@ fn apply_highlight_color(
                 commands.entity(entity).try_insert(PrefabModelTint(color));
             }
         }
-    } else if let Ok((material, original)) = decals.get(entity) {
+    } else if let Ok((material, original, painted)) = decals.get(entity) {
+        // A painted road shows its decal only while lit.
+        if painted {
+            commands
+                .entity(entity)
+                .try_insert(if color == Color::WHITE {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                });
+        }
         let material = original.map_or_else(|| material.0.clone(), |original| original.0.clone());
         tint_track_decal(
             commands.entity(entity),
             material,
             color,
+            painted,
             effect_materials,
             shader_buffers,
         );
@@ -519,6 +564,7 @@ fn light_track_decals(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     wanted: &mut HashMap<Entity, Color>,
 ) {
@@ -588,6 +634,7 @@ fn light_deleted_track_leg(
     decals: &Query<(
         &MeshMaterial3d<EffectPassMaterial>,
         Option<&HighlightedTrackDecalOriginal>,
+        Has<PaintedTrackHighlight>,
     )>,
     ropes: &Query<
         (),
@@ -616,12 +663,13 @@ fn light_deleted_track_leg(
     }
 }
 
-/// Draws a road decal as its texture times `color`, or as its own material
-/// again for white.
+/// Draws a road decal as its texture times `color` (or, `flat`, as `color` in
+/// its shape), or as its own material again for white.
 fn tint_track_decal(
     mut decal: EntityCommands,
     material: Handle<EffectPassMaterial>,
     color: Color,
+    flat: bool,
     effect_materials: &mut Assets<EffectPassMaterial>,
     shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
 ) {
@@ -631,10 +679,14 @@ fn tint_track_decal(
             .try_remove::<HighlightedTrackDecalOriginal>();
         return;
     }
-    let Some(tinted) = effect_materials
-        .get(&material)
-        .and_then(|source| source.clone_tinted(color.to_srgba().to_vec4(), shader_buffers))
-    else {
+    let rgba = color.to_srgba().to_vec4();
+    let Some(tinted) = effect_materials.get(&material).and_then(|source| {
+        if flat {
+            source.clone_flat_coloured(rgba, shader_buffers)
+        } else {
+            source.clone_tinted(rgba, shader_buffers)
+        }
+    }) else {
         return;
     };
     decal.try_insert((
