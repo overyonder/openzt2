@@ -601,14 +601,15 @@ fn authored_ground_track_paint(
         return None;
     }
     let (chunk, _) = terrain_chunks.iter().next()?;
-    let texel_metres = f32::from(chunk.side.checked_sub(1)?) * chunk.spacing_m
-        / f32::from(
-            terrain_assets
-                .get(&chunk.asset)?
-                .canonical_terrain_grid()
-                .presentation
-                .surface_resolution,
-        );
+    let presentation_grid = &terrain_assets
+        .get(&chunk.asset)?
+        .canonical_terrain_grid()
+        .presentation;
+    // A chunk's surface image also covers its margin cells on each side.
+    let texel_metres = f32::from(presentation_grid.surface_margin_cells)
+        .mul_add(2.0, f32::from(chunk.side.checked_sub(1)?))
+        * chunk.spacing_m
+        / f32::from(presentation_grid.surface_resolution);
     let reference = start.x.mul_add(2.0, copy.x).max(1.0).log2().ceil().exp2();
     Some((
         TerrainPaintedTexture {
