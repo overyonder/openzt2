@@ -333,3 +333,40 @@ fn removing_tail_preserves_the_incoming_route_and_its_tower_attachment() {
         assert!(app.world().get_entity(survivor).is_ok());
     }
 }
+
+#[test]
+fn removing_a_middle_route_keeps_the_road_beyond_it() {
+    let (mut app, circuit, pieces, junction, _) = sale_application(80.0);
+    let world = *app.world().get::<WorldMember>(junction).unwrap();
+    let end = app
+        .world_mut()
+        .spawn((TransportTrackJunction, PersistentId(5), world))
+        .id();
+    let mut onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+    onward.from = junction;
+    onward.to = end;
+    let onward = app
+        .world_mut()
+        .spawn((onward, CircuitMember(circuit), world))
+        .id();
+    app.world_mut().write_message(DeleteEntity(pieces[0]));
+    app.update();
+    let prepared = app
+        .world_mut()
+        .resource_mut::<Messages<TransportTrackConstructionEditPrepared>>()
+        .drain()
+        .next()
+        .unwrap();
+    app.world_mut()
+        .write_message(ApplyPreparedTransportTrackConstructionEditRequest {
+            transaction: prepared.transaction,
+            application: EditApplication::InitialCommit,
+        });
+    app.update();
+    for removed in pieces {
+        assert!(app.world().get_entity(removed).is_err());
+    }
+    for survivor in [junction, onward, end] {
+        assert!(app.world().get_entity(survivor).is_ok());
+    }
+}
