@@ -280,13 +280,19 @@ pub(super) fn authored_footprint_dimensions(
             .filter(|value| {
                 value.is_finite()
                     && *value >= 0.0
-                    && value.ceil() <= f32::from(i16::MAX)
-                    && value * 50.0 <= f32::from(i16::MAX)
+                    && (value * AUTHORED_FOOTPRINT_TILE_M).ceil() <= f32::from(i16::MAX)
+                    && value * AUTHORED_FOOTPRINT_TILE_M * 50.0 <= f32::from(i16::MAX)
             })
             .ok_or_else(|| simple_error(format!("{name} has invalid authored {attribute}")))
     };
-    Ok(Some([dimension("width")?, dimension("height")?]))
+    // An authored footprint counts the original's 2 m tiles, as the Extinct
+    // Research Lab's 9x4 holds its 17.6 x 8.8 m model; placement cells are 1 m.
+    Ok(Some(
+        [dimension("width")?, dimension("height")?].map(|tiles| tiles * AUTHORED_FOOTPRINT_TILE_M),
+    ))
 }
+
+const AUTHORED_FOOTPRINT_TILE_M: f32 = 2.0;
 
 pub(super) fn authored_placement_bounds_from_shadow_collision_or_dimensions(
     record: &RecordView<'_, '_>,
