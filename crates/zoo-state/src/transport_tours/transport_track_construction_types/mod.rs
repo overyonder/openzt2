@@ -30,6 +30,9 @@ pub struct PreparedTransportTrackConstructionEdit {
     pub removes_track: bool,
     pub piece_entities: Box<[PersistentId]>,
     pub destination_junction_entity: Option<PersistentId>,
+    /// A junction the edit spawns to start from, as a road left after a gap
+    /// starts; `from_endpoint` is then ignored.
+    pub source_junction_entity: Option<PersistentId>,
     pub definition: AssetId,
     pub kind: TransportationTrackKind,
     pub maximum_grade_permille: u16,
@@ -42,6 +45,25 @@ pub struct PreparedTransportTrackConstructionEdit {
     pub applied_entities: Vec<Entity>,
     pub preview: Option<Entity>,
     pub application_in_flight: Option<EditApplication>,
+}
+
+/// A transaction made of several route edits, applied in order and undone
+/// in reverse.
+///
+/// Each edit sits on its own child entity; the transaction's own edit only
+/// marks it as a transport edit. Removing one piece from the middle of a road
+/// removes its route and lays the road left on each side.
+#[derive(Component, Debug, Clone, Default)]
+pub struct TransportTrackConstructionEditSteps {
+    pub steps: Vec<Entity>,
+    /// The application in progress and how many steps of it are done.
+    pub in_flight: Option<(EditApplication, usize)>,
+    /// How many steps the last application completed, for rolling it back.
+    pub completed: usize,
+    pub last_application: Option<EditApplication>,
+    /// The application whose failed step is being rolled back, acknowledged
+    /// as failed once the steps before it are reversed.
+    pub failed: Option<EditApplication>,
 }
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
