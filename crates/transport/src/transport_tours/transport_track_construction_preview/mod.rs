@@ -679,12 +679,12 @@ fn tint_track_decal(
             .try_remove::<HighlightedTrackDecalOriginal>();
         return;
     }
-    let colour = color.to_srgba().to_vec4();
+    let rgba = color.to_srgba().to_vec4();
     let Some(tinted) = effect_materials.get(&material).and_then(|source| {
         if flat {
-            source.clone_flat_coloured(colour, shader_buffers)
+            source.clone_flat_coloured(rgba, shader_buffers)
         } else {
-            source.clone_tinted(colour, shader_buffers)
+            source.clone_tinted(rgba, shader_buffers)
         }
     }) else {
         return;
