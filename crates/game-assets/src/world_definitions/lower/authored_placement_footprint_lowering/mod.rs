@@ -262,6 +262,7 @@ pub(super) fn bind_authored_placeable(
         moving_footprint: moving_footprint(record)?,
         automatic_footprint,
         ground_paths_block_placement: authored_ground_paths_block_placement(record)?,
+        dock_arrow: authored_dock_arrow(record)?,
     });
     Ok(0)
 }
@@ -280,13 +281,19 @@ pub(super) fn authored_footprint_dimensions(
             .filter(|value| {
                 value.is_finite()
                     && *value >= 0.0
-                    && value.ceil() <= f32::from(i16::MAX)
-                    && value * 50.0 <= f32::from(i16::MAX)
+                    && (value * AUTHORED_FOOTPRINT_TILE_M).ceil() <= f32::from(i16::MAX)
+                    && value * AUTHORED_FOOTPRINT_TILE_M * 50.0 <= f32::from(i16::MAX)
             })
             .ok_or_else(|| simple_error(format!("{name} has invalid authored {attribute}")))
     };
-    Ok(Some([dimension("width")?, dimension("height")?]))
+    // An authored footprint counts the original's 2 m tiles, as the Extinct
+    // Research Lab's 9x4 holds its 17.6 x 8.8 m model; placement cells are 1 m.
+    Ok(Some(
+        [dimension("width")?, dimension("height")?].map(|tiles| tiles * AUTHORED_FOOTPRINT_TILE_M),
+    ))
 }
+
+const AUTHORED_FOOTPRINT_TILE_M: f32 = 2.0;
 
 pub(super) fn authored_placement_bounds_from_shadow_collision_or_dimensions(
     record: &RecordView<'_, '_>,
@@ -333,4 +340,36 @@ pub(super) fn authored_placement_bounds_from_shadow_collision_or_dimensions(
                 maximum_xz: dimensions.map(|value| value * 0.5),
             })
         })
+}
+
+/// `ZTPlacementData dockArrowStyle` (`special`, `standard` or `none`) and
+/// `dockArrowSize`, which `zt.exe` reads for the entrance arrow.
+fn authored_dock_arrow(
+    record: &RecordView<'_, '_>,
+) -> Result<Option<openzt2_game_data::world_definitions::object_placement::DockArrow>, BindError> {
+    let style =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowStyle")
+            .map(canonicalize_source_document_record_key);
+    let at_model_node = match style.as_deref() {
+        Some("special") => true,
+        Some("standard") => false,
+        _ => return Ok(None),
+    };
+    let size_metres =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowSize")
+            .map(|value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .filter(|size| size.is_finite() && *size > 0.0)
+                    .ok_or_else(|| {
+                        BindError::record(record, format!("invalid dockArrowSize {value:?}"))
+                    })
+            })
+            .transpose()?
+            .unwrap_or(1.0);
+    Ok(Some(
+        openzt2_game_data::world_definitions::object_placement::DockArrow {
+            at_model_node,
+            size_metres,
+        },
+    ))
 }
