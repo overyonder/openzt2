@@ -913,7 +913,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
 mod tests;
 
 /// Shows a road's construction marker only where the road stops at a
-/// junction no road leaves, as the original marks an unfinished road
+/// junction no road leaves or starts at one no road leads into, as the original marks an unfinished road
 /// ("Click to place road"); every other piece keeps its markers hidden.
 pub(super) fn show_construction_markers_at_unconnected_road_ends(
     pieces: Query<
@@ -941,12 +941,25 @@ pub(super) fn show_construction_markers_at_unconnected_road_ends(
     for (piece, piece_transform, children, profile) in &pieces {
         // A sky tower carries its own marker on its top.
         let ground = profile.kind == TransportationTrackKind::Ground;
+        // A road left after a gap starts at a junction no road leads into,
+        // and the original marks that end too.
         let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
-            (ground
-                && usize::from(piece.piece_index) + 2 == route.path_points.len()
+            let last = usize::from(piece.piece_index) + 2 == route.path_points.len();
+            if !ground {
+                None
+            } else if last
                 && junctions.contains(route.to)
-                && !routes.iter().any(|other| other.from == route.to))
-            .then_some(route.to_position)
+                && !routes.iter().any(|other| other.from == route.to)
+            {
+                Some(route.to_position)
+            } else if piece.piece_index == 0
+                && junctions.contains(route.from)
+                && !routes.iter().any(|other| other.to == route.from)
+            {
+                Some(route.from_position)
+            } else {
+                None
+            }
         });
         for child in children {
             let Ok((name, mut visibility, mut transform)) = markers.get_mut(*child) else {
