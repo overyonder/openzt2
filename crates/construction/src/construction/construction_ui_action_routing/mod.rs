@@ -65,6 +65,7 @@ pub(super) struct ConstructionUiIntents<'w, 's> {
     pending_transactions: Query<'w, 's, &'static EditCommitProgress>,
     uncrate: MessageWriter<'w, RemoveWorldEntityFromCrate>,
     fence_previews: Query<'w, 's, (Entity, &'static mut FencePreview), With<ConstructionPreview>>,
+    rotations: MessageWriter<'w, openzt2_interface_state::input::input_types::ActionRequest>,
 }
 pub(super) fn route_construction_ui_actions(
     mut activations: MessageReader<UiNodeActivated>,
@@ -204,6 +205,23 @@ pub(super) fn route_construction_ui_actions(
                             .write(SelectConstructionTool(ConstructionTool::Place(
                                 placeable.definition,
                             )));
+                    } else if matches!(*selected_tool, ConstructionTool::Place(_)) {
+                        // The rotate buttons and keys turn an object being
+                        // placed, as Q and E do.
+                        use openzt2_interface_state::input::input_types::{
+                            ActionRequest, ActionSource, GameAction,
+                        };
+                        let action = if *steps < 0 {
+                            GameAction::RotateObjectLeft
+                        } else {
+                            GameAction::RotateObjectRight
+                        };
+                        for _ in 0..steps.unsigned_abs() {
+                            intents.rotations.write(ActionRequest {
+                                action,
+                                source: ActionSource::System,
+                            });
+                        }
                     }
                 }
                 UiConstructionAction::SetTerrainCursorSize { direction } => {
