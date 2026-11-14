@@ -53,3 +53,28 @@ fn ground_fit_height_offset_comes_from_the_authored_fit_component(
     );
     Ok(())
 }
+
+#[test]
+fn price_comes_from_the_first_economy_component_with_a_cost(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // A shipped Jeep station takes donations in an economy component without
+    // a cost before the one that costs 1000.
+    let documents = [(
+        "entities/station.xml",
+        r#"<BFTypedBinder binderType="Station"><types><entity><station/></entity></types><binder><BFNamedBinder binderName="stationEconomy"><instance><ZTEconomyComponent><ZTTransaction name="donate" cost="10"/></ZTEconomyComponent></instance></BFNamedBinder><BFBinder><instance><ZTEconomyComponent cost="1000"><ZTTransaction name="build" costType="parent"/></ZTEconomyComponent></instance></BFBinder></binder></BFTypedBinder>"#,
+    )]
+    .map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    bind_authored_placement_object(
+        &index.find("Station").ok_or("Station")?,
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &mut tables,
+    )?;
+    assert_eq!(tables.document.objects[0].price_cents, 100_000);
+    Ok(())
+}
