@@ -117,6 +117,7 @@ impl Plugin for ObjectPlacementPlugin {
                     rebuild_object_placement_preview_footprint_and_grid_decals,
                     crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows,
                     project_object_placement_validity_onto_preview_model_tint,
+                    crate::placement::object_placement_preview_presentation::hide_alpha_blended_meshes_of_object_placement_previews,
                     animate_object_placement_preview_presentation_toward_authoritative_transform,
                 )
                     .chain()
