@@ -247,8 +247,9 @@ pub(super) fn bind_authored_placement_object(
         .map(id)
         .unwrap_or_default();
     // An object inherits its cost from its type family, as the sky tram pole
-    // takes it from the skytower binder.
-    let price_cents = authored_type_family_components(record, "ZTEconomyComponent")
+    // takes it from the skytower binder. A station's first economy component
+    // takes donations and has no cost, so look past it.
+    let price_cents = authored_type_family_elements_named(record, "ZTEconomyComponent")
         .into_iter()
         .find_map(|element| element.attribute_named_any(&["cost"]))
         .map(|cost| {
