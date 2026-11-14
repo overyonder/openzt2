@@ -100,6 +100,7 @@ pub(crate) struct AnimalCandidateFacts {
     habitat: Option<&'static HabitatMember>,
     mate: Has<Mate>,
     reproduction: Option<&'static ReproductionNeed>,
+    pub(super) escaped: Has<openzt2_zoo_state::animal_health::types::Escaped>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {

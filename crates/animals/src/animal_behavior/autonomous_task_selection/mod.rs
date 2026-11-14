@@ -115,9 +115,10 @@ pub(super) fn select_idle_animal_tasks(
         let authored_types = &variant.behavior_subject_type_identifiers;
         // Actors which do not generate traversability have no area restriction.
         // Others reach only targets in the habitat they stand in.
-        let area_restricted = authored_types
-            .contains(&AssetId::from_key("b_generatestraversabilityinfo"))
-            || authored_types.contains(&AssetId::from_key("unspecified"));
+        // An escaped animal reaches targets outside its habitat too.
+        let area_restricted = !facts.escaped
+            && (authored_types.contains(&AssetId::from_key("b_generatestraversabilityinfo"))
+                || authored_types.contains(&AssetId::from_key("unspecified")));
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
@@ -456,10 +457,11 @@ pub(super) fn select_idle_animal_tasks(
                     {
                         continue;
                     }
-                    let distance = facts
-                        .transform
-                        .translation()
-                        .distance(transform.translation());
+                    let distance = facts.transform.translation().distance(
+                        world_objects
+                            .fence_middle(edge)
+                            .unwrap_or_else(|| transform.translation()),
+                    );
                     let electric = object
                         .behavior_type_identifiers
                         .contains(&AssetId::from_key("b_electric"));
