@@ -419,6 +419,98 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 continue;
             }
+            // Fence tasks target the fences around the animal's habitat.
+            // ponytail: a task is told apart by its name. Only bashing runs;
+            // jumping, climbing and tunnelling wait until an animal can cross
+            // the fence, rather than play out in front of it.
+            let task_name = task.name.rsplit(':').next().unwrap_or_default();
+            if task_name.contains("Fence") {
+                if !task_name.starts_with("Bash") {
+                    continue;
+                }
+                let fence_types = task
+                    .targets
+                    .iter()
+                    .map(|target| AssetId::from_key(&target.to_ascii_lowercase()))
+                    .collect::<Vec<_>>();
+                let boundary = animal_habitat
+                    .and_then(|habitat| world_objects.habitat_regions.get(habitat).ok())
+                    .map_or(&[][..], |region| &region.boundary_fence_entities[..]);
+                if task.name.contains("Fence") {
+                    debug!(?animal, task = %task.name, ?animal_habitat, fences = boundary.len(),
+                        "animal fence task looks at its habitat's fences");
+                }
+                for &fence in boundary {
+                    let Ok((edge, transform)) = world_objects.fences.get(fence) else {
+                        continue;
+                    };
+                    let (Some(definition), Some(object)) = (
+                        definitions.find_fence(edge.definition),
+                        definitions.find_object(edge.definition),
+                    ) else {
+                        continue;
+                    };
+                    if !fence_types
+                        .iter()
+                        .any(|fence_type| object.behavior_type_identifiers.contains(fence_type))
+                    {
+                        continue;
+                    }
+                    let distance = facts
+                        .transform
+                        .translation()
+                        .distance(transform.translation());
+                    let electric = object
+                        .behavior_type_identifiers
+                        .contains(&AssetId::from_key("b_electric"));
+                    if !candidate_requirements_are_satisfied(
+                        &task.candidate_eligibility_requirements,
+                        |role, required| match role {
+                            BehaviorCandidateRole::Subject => {
+                                facts.matches_type(required, authored_types)
+                            }
+                            BehaviorCandidateRole::Target => {
+                                object.behavior_type_identifiers.contains(&required)
+                            }
+                            BehaviorCandidateRole::Object => false,
+                        },
+                        |role, fact| match role {
+                            BehaviorCandidateRole::Subject => facts.satisfies(fact),
+                            BehaviorCandidateRole::Target => {
+                                fence_satisfies(fact, definition.strength, electric, distance)
+                            }
+                            BehaviorCandidateRole::Object => false,
+                        },
+                    ) || target_retry_delays
+                        .get(animal)
+                        .is_ok_and(|delays| delays.rejects(fence))
+                    {
+                        debug!(?animal, task = %task.name, ?fence, strength = definition.strength,
+                            electric, "animal fence task refused the fence");
+                        continue;
+                    }
+                    let Some(score) = scoring::score_animal_task(
+                        task,
+                        &facts,
+                        policy.outside_range_need_value,
+                        distance,
+                        &mut random,
+                    ) else {
+                        debug!(?animal, task = %task.name, ?fence,
+                            "animal fence task has no score for the fence");
+                        continue;
+                    };
+                    debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
+                    considered_candidates += 1;
+                    ranking.consider(
+                        (document, declaration, task, fence, None, None),
+                        task.priority.unwrap_or_default(),
+                        score,
+                        |upper| random.range_u32(upper),
+                    );
+                }
+                continue;
+            }
             let Some(target_requirement) =
                 indexed_world_object_target_requirement(&task.candidate_eligibility_requirements)
             else {
@@ -624,6 +716,36 @@ pub(super) fn select_idle_animal_tasks(
     *world_objects.candidates = candidates;
 }
 
+/// A fence target's qualifiers: its strength, whether it is electric, how
+/// far it is and that it bounds the animal's habitat.
+fn fence_satisfies(
+    fact: &openzt2_game_data::behavior::eligibility::BehaviorCandidateEligibilityFact,
+    strength: u16,
+    electric: bool,
+    distance: f32,
+) -> bool {
+    use openzt2_game_data::behavior::eligibility::{
+        BehaviorConditionEligibilityFact as Condition, BehaviorEligibilityFactInput as Input,
+        BehaviorEligibilityFactValue as Value, BehaviorEntityStateEligibilityFact as State,
+        BehaviorSpatialEligibilityFact as Spatial,
+    };
+    match (fact.fact_input, fact.expected_value) {
+        (Input::Condition(Condition::FenceStrength), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(i32::from(strength) << 16, expected, fact.comparison)
+        }
+        (Input::State(State::Electric), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(i32::from(electric) << 16, expected, fact.comparison)
+        }
+        (Input::State(State::InHabitat), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(1 << 16, expected, fact.comparison)
+        }
+        (Input::Spatial(Spatial::InSight), Value::Q16(radius)) => {
+            distance < radius as f32 / 65_536.0
+        }
+        _ => false,
+    }
+}
+
 fn unsupported_action(
     phase: &openzt2_game_data::behavior::document::BehaviorTaskActionPhase,
 ) -> Option<&str> {
@@ -667,4 +789,34 @@ fn subject_can_consider_task(
         },
         |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact),
     )
+}
+
+#[cfg(test)]
+mod fence_target_tests {
+    use super::fence_satisfies;
+    use openzt2_game_data::behavior::eligibility::{
+        BehaviorCandidateEligibilityFact as Fact, BehaviorConditionEligibilityFact as Condition,
+        BehaviorEligibilityFactComparison as Comparison, BehaviorEligibilityFactInput as Input,
+        BehaviorEligibilityFactValue as Value, BehaviorEntityStateEligibilityFact as State,
+    };
+
+    #[test]
+    fn a_fence_qualifies_by_its_strength_and_whether_it_is_electric() {
+        // An elephant bashes fences up to strength 8 (`f_FenceStrength="LE 8"`).
+        let up_to_eight = Fact {
+            fact_input: Input::Condition(Condition::FenceStrength),
+            comparison: Comparison::LessOrEqual,
+            expected_value: Value::Q16(8 << 16),
+        };
+        assert!(fence_satisfies(&up_to_eight, 1, false, 5.0));
+        assert!(!fence_satisfies(&up_to_eight, 10, false, 5.0));
+        // A raptor bashes only fences that aren't electric (`b_Electric="false"`).
+        let not_electric = Fact {
+            fact_input: Input::State(State::Electric),
+            comparison: Comparison::Equal,
+            expected_value: Value::Q16(0),
+        };
+        assert!(fence_satisfies(&not_electric, 8, false, 5.0));
+        assert!(!fence_satisfies(&not_electric, 8, true, 5.0));
+    }
 }

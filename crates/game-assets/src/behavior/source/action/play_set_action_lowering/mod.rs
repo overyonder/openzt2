@@ -20,7 +20,13 @@ pub(super) fn lower_play_set_action_source_node(
     if source_node
         .attributes
         .iter()
-        .any(|attribute| attribute.name() != "behSet")
+        // A bash plays its set out; stopping it when the animal meets the
+        // fence it bashes changes nothing there.
+        .any(|attribute| {
+            attribute.name() != "behSet"
+                && !(attribute.name() == "interruptEvent"
+                    && attribute.value().trim() == "collideWithTarget")
+        })
         || source_node.element_children().next().is_some()
     {
         return Err(invalid_behavior_source_data(

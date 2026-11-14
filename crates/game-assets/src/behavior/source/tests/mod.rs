@@ -261,3 +261,47 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
     };
     assert!(following.follows_medium_changes);
 }
+
+#[test]
+fn bashing_a_fence_docks_on_it_plays_out_the_bash_and_breaks_it() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped ElephantAfrican BashFence task acts on its fence.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/elephant.beh"),
+        br#"<BehaviorSets><Bash><behaviors><ZTBehDockFence subjectNode="Node_Front" targetAnim="Stand_HeadRam" locoSpeed="fast"/><BFBehPlaySet behSet="SmashFence" interruptEvent="collideWithTarget"/><ZTBehMorph morphEntity="target" morphTargetEntityType="s_Broken" morphFade="true" morphPeriod="1"/></behaviors></Bash></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::Dock(dock), BehaviorAction::PlaySet(_), BehaviorAction::MorphTarget(morph)] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("a fence dock, the bash set and the morph expected");
+    };
+    // The animal stops short of the fence segment's middle on its own side.
+    assert_eq!(dock.radial_distance_m, Some(2.0));
+    assert_eq!(dock.subject_node_name, None);
+    assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
+
+#[test]
+fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped Utahraptor SmashFence set kills its fence.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/utahraptor.beh"),
+        br#"<BehaviorSets><SmashFence><behaviors><BFBehKill targetAnim="Stand_SmashFence" killTarget="true" radius="5" radiusKillType="fence" fadeOutPeriod="1" killUsingDestroyEntity="true"/></behaviors></SmashFence></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::AnimationClip(clip), BehaviorAction::MorphTarget(morph)] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("the smash clip, then the fence's morph expected");
+    };
+    assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
+    assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
