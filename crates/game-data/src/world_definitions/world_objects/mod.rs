@@ -268,6 +268,11 @@ pub struct WaterFilterPolicy {
     pub cleanup_rate: f32,
     /// Dirt the filter holds before a worker has to clean it.
     pub maximum_dirt_capacity: f32,
+    /// `maintenanceThresholds`: the dirt percent at which a worker is called,
+    /// and at which the call is dropped, for the filter panel's preemptive,
+    /// regular and occasional schedules.
+    #[serde(default)]
+    pub maintenance_thresholds: Option<[[f32; 2]; 3]>,
 }
 
 #[allow(

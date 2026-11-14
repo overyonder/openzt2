@@ -190,3 +190,49 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
         Some(StaffRequestJobEvent::Cancelled { .. })
     ));
 }
+
+#[test]
+fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
+    use openzt2_game_data::world_definitions::world_objects::WaterFilterPolicy;
+    use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
+    use openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex;
+    let mut row = number_row(Comparison::RisesAbove, false);
+    row.attribute_key = Some(AssetId::from_key("f_filterdirtylevel"));
+    let filter = WaterFilter {
+        policy: WaterFilterPolicy {
+            cleanup_interval_seconds: 2.0,
+            cleanup_rate: 750.0,
+            maximum_dirt_capacity: 75_000.0,
+            maintenance_thresholds: Some([[20.0, 10.0], [50.0, 10.0], [80.0, 10.0]]),
+        },
+        seconds_until_cleanup: 0.0,
+        dirt_percent: 0.0,
+    };
+    let thresholds = |schedule| {
+        filter_schedule_row(&row, &filter, schedule)
+            .map(|row| (row.threshold, row.cancel_threshold))
+    };
+    // The panel starts on regular.
+    assert_eq!(
+        thresholds(None),
+        Some((
+            StaffRequestThresholdValue::Number(50.0),
+            StaffRequestThresholdValue::Number(10.0)
+        ))
+    );
+    assert_eq!(
+        thresholds(Some(&MaintenanceScheduleIndex(0))),
+        Some((
+            StaffRequestThresholdValue::Number(20.0),
+            StaffRequestThresholdValue::Number(10.0)
+        ))
+    );
+    assert_eq!(
+        thresholds(Some(&MaintenanceScheduleIndex(2))).map(|(threshold, _)| threshold),
+        Some(StaffRequestThresholdValue::Number(80.0))
+    );
+    // Other requests keep their authored thresholds.
+    assert!(
+        filter_schedule_row(&number_row(Comparison::RisesAbove, false), &filter, None).is_none()
+    );
+}
