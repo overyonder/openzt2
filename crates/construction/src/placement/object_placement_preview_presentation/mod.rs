@@ -131,11 +131,14 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
                     footprint_invalid,
                     grid_cardinal: [small_cardinal, medium_cardinal, large_cardinal],
                     grid_diagonal: [small_diagonal, medium_diagonal, large_diagonal],
+                    // As a footprint, the grid's radius counts the
+                    // original's 2 m tiles: its texture has a line every tile.
                     grid_radius: [
                         policy.grid_small_radius,
                         policy.grid_medium_radius,
                         policy.grid_large_radius,
-                    ],
+                    ]
+                    .map(|tiles| tiles * 2.0),
                     entrance_arrow: materials.add(StandardMaterial {
                         base_color_texture: Some(asset_server.load(ENTRANCE_ARROW_IMAGE)),
                         alpha_mode: AlphaMode::Blend,
