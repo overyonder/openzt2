@@ -487,6 +487,32 @@ pub(super) fn bind_authored_placement_object(
                     cleanup_interval_seconds: element_number(filter, &["cleanupInterval"], 0.0)?,
                     cleanup_rate: element_number(filter, &["cleanupRate"], 0.0)?,
                     maximum_dirt_capacity: element_number(filter, &["maximumDirtCapacity"], 0.0)?,
+                    maintenance_thresholds: filter
+                        .element_children()
+                        .find(|child| child.name.as_str() == "maintenanceThresholds")
+                        .map(|thresholds| -> Result<_, BindError> {
+                            let schedule = |name: &str| -> Result<[f32; 2], BindError> {
+                                let row = thresholds
+                                    .element_children()
+                                    .find(|child| child.name.as_str() == name)
+                                    .ok_or_else(|| {
+                                        BindError::record(
+                                            record,
+                                            format!("maintenanceThresholds has no {name}"),
+                                        )
+                                    })?;
+                                Ok([
+                                    element_number(row, &["threshold"], 0.0)?,
+                                    element_number(row, &["cancelThreshold"], 0.0)?,
+                                ])
+                            };
+                            Ok([
+                                schedule("preemptive")?,
+                                schedule("regular")?,
+                                schedule("occasional")?,
+                            ])
+                        })
+                        .transpose()?,
                 })
             })
             .transpose()?,

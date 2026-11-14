@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 use openzt2_game_data::world_definitions::staff_management::StaffRequestControllerDefinition;
+use openzt2_game_data::world_definitions::staff_management::StaffRequestThresholdValue;
 use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -263,6 +264,7 @@ pub(super) fn evaluate_staff_request_rows(
         Option<&DrinkContainer>,
         Option<&FacilityContainedWaste>,
         Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
+        Option<&openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex>,
     )>,
     animal_needs: Query<
         AnimalRequestFacts,
@@ -272,7 +274,7 @@ pub(super) fn evaluate_staff_request_rows(
     mut requests: MessageWriter<StaffJobRequest>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (entity, definition, mut binding, food, drink, waste, filter) in &mut entities {
+    for (entity, definition, mut binding, food, drink, waste, filter, schedule) in &mut entities {
         let Some(rows) = canonical_rows(
             &active_world_definitions,
             &world_definition_assets,
@@ -336,11 +338,35 @@ pub(super) fn evaluate_staff_request_rows(
             let Some(sample) = sample else {
                 continue;
             };
-            if let Some(event) = evaluate_staff_request_row(row, state, entity, Some(sample)) {
+            let scheduled = filter.and_then(|filter| filter_schedule_row(row, filter, schedule));
+            if let Some(event) = evaluate_staff_request_row(
+                scheduled.as_ref().unwrap_or(row),
+                state,
+                entity,
+                Some(sample),
+            ) {
                 emit_job_event(event, &jobs, &mut requests, &mut cancellations);
             }
         }
     }
+}
+
+/// A filter's cleaning request with the thresholds of the schedule chosen in
+/// its panel, which default to regular as the panel does.
+fn filter_schedule_row(
+    row: &StaffRequestControllerDefinition,
+    filter: &openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter,
+    schedule: Option<&openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex>,
+) -> Option<StaffRequestControllerDefinition> {
+    if row.attribute_key != Some(AssetId::from_key("f_filterdirtylevel")) {
+        return None;
+    }
+    let thresholds = filter.policy.maintenance_thresholds?;
+    let [threshold, cancel] = *thresholds.get(usize::from(schedule.map_or(1, |index| index.0)))?;
+    let mut row = row.clone();
+    row.threshold = StaffRequestThresholdValue::Number(threshold);
+    row.cancel_threshold = StaffRequestThresholdValue::Number(cancel);
+    Some(row)
 }
 
 fn find_row<'a>(

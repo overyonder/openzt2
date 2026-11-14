@@ -55,6 +55,35 @@ fn ground_fit_height_offset_comes_from_the_authored_fit_component(
 }
 
 #[test]
+fn a_water_filter_reads_its_maintenance_schedule_thresholds(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As the shipped Water_Filter authors them.
+    let documents = [(
+        "entities/filter.xml",
+        r#"<BFTypedBinder binderType="Filter"><types><entity><building><Filter/></building></entity></types><binder><BFBinder><instance><ZTAIWaterFilterComponent cleanupInterval="2.0" cleanupRate="750.0" maximumDirtCapacity="75000.0"><maintenanceThresholds><preemptive threshold="20" cancelThreshold="10"/><regular threshold="50" cancelThreshold="10"/><occasional threshold="80" cancelThreshold="10"/></maintenanceThresholds></ZTAIWaterFilterComponent></instance></BFBinder></binder></BFTypedBinder>"#,
+    )]
+    .map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    bind_authored_placement_object(
+        &index.find("Filter").ok_or("Filter")?,
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &mut tables,
+    )?;
+    assert_eq!(
+        tables.document.objects[0]
+            .water_filter
+            .and_then(|filter| filter.maintenance_thresholds),
+        Some([[20.0, 10.0], [50.0, 10.0], [80.0, 10.0]])
+    );
+    Ok(())
+}
+
+#[test]
 fn price_comes_from_the_first_economy_component_with_a_cost(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // A shipped Jeep station takes donations in an economy component without

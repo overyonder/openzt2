@@ -183,7 +183,11 @@ pub(super) struct NamedPresentationFade(WorldObjectFadeRange);
 /// hides the others. Binders whose attribute has no live value here keep their
 /// authored visibility.
 pub(super) fn select_named_presentation_fade_states(
-    owners: Query<(Option<&FoodContainer>, Option<&DrinkContainer>)>,
+    owners: Query<(
+        Option<&FoodContainer>,
+        Option<&DrinkContainer>,
+        Option<&openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter>,
+    )>,
     mut states: Query<(
         &NamedPhysicalPresentation,
         &NamedPresentationFade,
@@ -191,18 +195,21 @@ pub(super) fn select_named_presentation_fade_states(
     )>,
 ) {
     let food_level = AssetId::from_key("f_foodlevel");
+    let filter_dirty_level = AssetId::from_key("f_filterdirtylevel");
     for (owner, fade, mut visibility) in &mut states {
-        let Ok((food, drink)) = owners.get(owner.0) else {
+        let Ok((food, drink, filter)) = owners.get(owner.0) else {
             continue;
         };
         // Container amounts are authored points in Q16.
-        let value = (fade.0.attribute == food_level)
-            .then(|| {
-                food.map(|food| food.amount_q16)
-                    .or(drink.map(|drink| drink.amount_q16))
-            })
-            .flatten()
-            .map(|amount| amount as f32 / 65_536.0);
+        let value = if fade.0.attribute == food_level {
+            food.map(|food| food.amount_q16)
+                .or(drink.map(|drink| drink.amount_q16))
+                .map(|amount| amount as f32 / 65_536.0)
+        } else if fade.0.attribute == filter_dirty_level {
+            filter.map(|filter| filter.dirt_percent)
+        } else {
+            None
+        };
         let Some(value) = value else {
             continue;
         };
