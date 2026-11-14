@@ -277,6 +277,7 @@ pub(super) fn bind_placeable(
         moving_footprint: moving_footprint(record)?,
         automatic_footprint: false,
         ground_paths_block_placement: false,
+        dock_arrow: None,
     });
     Ok(())
 }

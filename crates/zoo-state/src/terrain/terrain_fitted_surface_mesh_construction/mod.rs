@@ -38,8 +38,29 @@ pub fn construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_ro
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
 ) -> Option<Mesh> {
-    if !width.is_finite()
-        || width <= 0.0
+    construct_rectangular_surface_mesh_fitted_to_canonical_terrain_samples(
+        Vec2::splat(width),
+        centre,
+        texture_rotation_radians,
+        terrain_index,
+        terrain_assets,
+        terrain_chunks,
+    )
+}
+
+/// Constructs a mesh from the terrain triangles beneath a world-space
+/// rectangle `size` (X by Z), its texture stretched once across it.
+#[allow(clippy::many_single_char_names, clippy::too_many_lines)]
+pub fn construct_rectangular_surface_mesh_fitted_to_canonical_terrain_samples(
+    size: Vec2,
+    centre: Vec3,
+    texture_rotation_radians: f32,
+    terrain_index: &TerrainIndex,
+    terrain_assets: &Assets<TerrainAsset>,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) -> Option<Mesh> {
+    if !size.is_finite()
+        || size.min_element() <= 0.0
         || !centre.is_finite()
         || !terrain_index.chunk_span_m.is_finite()
         || terrain_index.chunk_span_m <= 0.0
@@ -47,9 +68,8 @@ pub fn construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_ro
         return None;
     }
 
-    let half_width = width * 0.5;
-    let footprint_minimum = centre.xz() - Vec2::splat(half_width);
-    let footprint_maximum = centre.xz() + Vec2::splat(half_width);
+    let footprint_minimum = centre.xz() - size * 0.5;
+    let footprint_maximum = centre.xz() + size * 0.5;
     let minimum_chunk_coordinate = ((footprint_minimum - terrain_index.origin)
         / terrain_index.chunk_span_m)
         .floor()
@@ -121,7 +141,7 @@ pub fn construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_ro
                             footprint_minimum,
                             footprint_maximum,
                             centre,
-                            width,
+                            size,
                             texture_rotation_radians,
                             &mut positions,
                             &mut normals,
@@ -156,7 +176,7 @@ fn append_canonical_terrain_triangle_clipped_to_square_footprint(
     footprint_minimum: Vec2,
     footprint_maximum: Vec2,
     centre: Vec3,
-    width: f32,
+    size: Vec2,
     texture_rotation_radians: f32,
     positions: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
@@ -198,10 +218,8 @@ fn append_canonical_terrain_triangle_clipped_to_square_footprint(
             vertex.z - centre.z,
         ]);
         normals.push(normal);
-        let unrotated_texture_coordinate = Vec2::new(
-            (vertex.x - footprint_minimum.x) / width,
-            (vertex.z - footprint_minimum.y) / width,
-        );
+        let unrotated_texture_coordinate =
+            (Vec2::new(vertex.x, vertex.z) - footprint_minimum) / size;
         let texture_coordinate = Vec2::splat(0.5)
             + Mat2::from_angle(texture_rotation_radians)
                 * (unrotated_texture_coordinate - Vec2::splat(0.5));

@@ -32,6 +32,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
         moving_footprint: false,
         automatic_footprint: false,
         ground_paths_block_placement: false,
+        dock_arrow: None,
     }
 }
 

@@ -122,6 +122,7 @@ fn document() -> WorldDefinitionDocument {
             moving_footprint: false,
             automatic_footprint: false,
             ground_paths_block_placement: false,
+            dock_arrow: None,
         }],
         ..Default::default()
     }

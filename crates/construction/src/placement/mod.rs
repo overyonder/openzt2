@@ -115,6 +115,7 @@ impl Plugin for ObjectPlacementPlugin {
                     request_changed_object_placement_preview_evaluations,
                     evaluate_requested_object_placement_previews,
                     rebuild_object_placement_preview_footprint_and_grid_decals,
+                    crate::placement::object_placement_preview_presentation::pulse_object_placement_entrance_arrows,
                     project_object_placement_validity_onto_preview_model_tint,
                     animate_object_placement_preview_presentation_toward_authoritative_transform,
                 )

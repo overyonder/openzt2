@@ -262,6 +262,7 @@ pub(super) fn bind_authored_placeable(
         moving_footprint: moving_footprint(record)?,
         automatic_footprint,
         ground_paths_block_placement: authored_ground_paths_block_placement(record)?,
+        dock_arrow: authored_dock_arrow(record)?,
     });
     Ok(0)
 }
@@ -339,4 +340,36 @@ pub(super) fn authored_placement_bounds_from_shadow_collision_or_dimensions(
                 maximum_xz: dimensions.map(|value| value * 0.5),
             })
         })
+}
+
+/// `ZTPlacementData dockArrowStyle` (`special`, `standard` or `none`) and
+/// `dockArrowSize`, which `zt.exe` reads for the entrance arrow.
+fn authored_dock_arrow(
+    record: &RecordView<'_, '_>,
+) -> Result<Option<openzt2_game_data::world_definitions::object_placement::DockArrow>, BindError> {
+    let style =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowStyle")
+            .map(canonicalize_source_document_record_key);
+    let at_model_node = match style.as_deref() {
+        Some("special") => true,
+        Some("standard") => false,
+        _ => return Ok(None),
+    };
+    let size_metres =
+        authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowSize")
+            .map(|value| {
+                parse_blue_fang_source_numeric_lexeme::<f32>(value)
+                    .filter(|size| size.is_finite() && *size > 0.0)
+                    .ok_or_else(|| {
+                        BindError::record(record, format!("invalid dockArrowSize {value:?}"))
+                    })
+            })
+            .transpose()?
+            .unwrap_or(1.0);
+    Ok(Some(
+        openzt2_game_data::world_definitions::object_placement::DockArrow {
+            at_model_node,
+            size_metres,
+        },
+    ))
 }
