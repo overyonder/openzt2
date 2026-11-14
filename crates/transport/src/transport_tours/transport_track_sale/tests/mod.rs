@@ -382,7 +382,8 @@ fn removing_a_middle_route_keeps_the_road_beyond_it() {
 fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
     let (mut app, circuit, pieces, junction, source) = sale_application(80.0);
     let world = *app.world().get::<WorldMember>(source).unwrap();
-    // Start from a junction a road leads into, so undo can lay the route again.
+    // Start from a junction: this fixture's station is no transport station,
+    // so a route can't be laid from it again.
     app.world_mut()
         .entity_mut(source)
         .remove::<TransportStation>()
@@ -462,4 +463,83 @@ fn removing_one_piece_leaves_a_gap_and_undo_restores_the_route() {
         .map(|route| route.path_points.len())
         .collect::<Vec<_>>();
     assert_eq!(routes, [3]);
+}
+
+#[test]
+fn undo_lays_again_a_leg_or_piece_removed_after_a_gap() {
+    // Removing the whole leg (through its junction), then one piece of it.
+    for take_one_piece in [false, true] {
+        let (mut app, circuit, pieces, junction, source) = sale_application(80.0);
+        let world = *app.world().get::<WorldMember>(source).unwrap();
+        let end = app
+            .world_mut()
+            .spawn((TransportTrackJunction, PersistentId(5), world))
+            .id();
+        let mut onward = app.world().get::<TrackSegment>(pieces[0]).unwrap().clone();
+        onward.from = junction;
+        onward.to = end;
+        app.world_mut()
+            .spawn((onward, CircuitMember(circuit), world));
+        // The leg starts at a junction nothing leads into, as a road after a gap.
+        app.world_mut()
+            .entity_mut(source)
+            .remove::<TransportStation>()
+            .insert((
+                TransportTrackJunction,
+                PersistentId(4),
+                CircuitMember(circuit),
+            ));
+        for (entity, position) in [(source, Vec3::ZERO), (junction, Vec3::X * 2.0)] {
+            app.world_mut()
+                .entity_mut(entity)
+                .insert(GlobalTransform::from_translation(position));
+        }
+        app.world_mut()
+            .write_message(DeleteEntity(if take_one_piece {
+                pieces[0]
+            } else {
+                junction
+            }));
+        app.update();
+        let prepared = app
+            .world_mut()
+            .resource_mut::<Messages<TransportTrackConstructionEditPrepared>>()
+            .drain()
+            .next()
+            .unwrap();
+        let apply = |app: &mut App, application| {
+            app.world_mut()
+                .write_message(ApplyPreparedTransportTrackConstructionEditRequest {
+                    transaction: prepared.transaction,
+                    application,
+                });
+            let mut cursor = bevy::ecs::message::MessageCursor::<
+                TransportTrackConstructionEditApplicationAcknowledged,
+            >::default();
+            let mut accepted = Vec::new();
+            for _ in 0..8 {
+                app.update();
+                let messages = app
+                    .world()
+                    .resource::<Messages<TransportTrackConstructionEditApplicationAcknowledged>>();
+                accepted.extend(
+                    cursor
+                        .read(messages)
+                        .filter(|ack| ack.transaction == prepared.transaction)
+                        .map(|ack| ack.accepted),
+                );
+            }
+            accepted
+        };
+        assert_eq!(apply(&mut app, EditApplication::InitialCommit), [true]);
+        assert!(app.world().get_entity(pieces[0]).is_err());
+        assert_eq!(apply(&mut app, EditApplication::Undo), [true]);
+        let restored = app
+            .world_mut()
+            .query::<&TrackSegment>()
+            .iter(app.world())
+            .filter(|route| route.to == junction)
+            .count();
+        assert_eq!(restored, 1);
+    }
 }
