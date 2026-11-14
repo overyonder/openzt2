@@ -29,6 +29,7 @@ use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution;
 mod behavior_face_target_execution;
 mod behavior_fact_modification;
 mod behavior_feedback_dispatch_execution;
+pub(crate) mod behavior_fence_crossing_execution;
 mod behavior_head_look_execution;
 mod behavior_hide_execution;
 mod behavior_interaction_container_execution;
@@ -88,6 +89,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_face_target_execution::register_face_target_execution(application);
         behavior_target_morph_execution::register_target_morph_execution(application);
+        behavior_fence_crossing_execution::register_fence_crossing_execution(application);
         behavior_token_execution::register_token_execution(application);
         behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);
