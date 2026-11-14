@@ -27,6 +27,8 @@ use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyProte
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topology_grid_cells_between_endpoints;
 use openzt2_zoo_state::topology::topology_grid_geometry::calculate_heading_quantized_fence_segment_cells_between_endpoints;
 
+/// A fence run's cells, cost and gate, and the broken segments it replaces.
+#[allow(clippy::type_complexity)]
 pub(super) fn calculate_fence_construction_plan(
     preview: &FencePreview,
     index: &TopologyIndex,
@@ -35,7 +37,8 @@ pub(super) fn calculate_fence_construction_plan(
     terrain_index: &TerrainIndex,
     terrain_assets: &Assets<TerrainAsset>,
     terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-) -> Result<(Vec<IVec3>, Money, Option<Gate>), PlacementFailure> {
+    hosts: &GateHostEdges,
+) -> Result<(Vec<IVec3>, Money, Option<Gate>, Vec<Entity>), PlacementFailure> {
     let (unit_price, gate, segment_length_cm) =
         read_fence_construction_facts(definitions, preview.definition)
             .ok_or(PlacementFailure::InvalidTopology)?;
@@ -100,23 +103,38 @@ pub(super) fn calculate_fence_construction_plan(
                 .collect::<Vec<_>>()
         })
         .collect::<Vec<_>>();
-    let occupied = index.edges.keys().any(|edge| {
-        calculate_adjacent_topology_grid_cells_between_endpoints(edge.lo, edge.hi).is_ok_and(
-            |cells| {
-                cells.windows(2).any(|step| {
-                    EdgeKey::new(step[0], step[1]).is_some_and(|key| proposed_steps.contains(&key))
-                })
-            },
-        )
-    });
-    if occupied {
-        return Err(PlacementFailure::Occupied);
+    // As in the original, a fence built over a segment an animal broke
+    // replaces it; any other segment in the way occupies the run.
+    let mut replaced = Vec::new();
+    for (edge, entity) in &index.edges {
+        let Ok(steps) = calculate_adjacent_topology_grid_cells_between_endpoints(edge.lo, edge.hi)
+        else {
+            continue;
+        };
+        let steps = steps
+            .windows(2)
+            .filter_map(|step| EdgeKey::new(step[0], step[1]))
+            .collect::<Vec<_>>();
+        if !steps.iter().any(|step| proposed_steps.contains(step)) {
+            continue;
+        }
+        let broken = hosts.get(*entity).is_ok_and(|(fence, gate, protected)| {
+            !gate
+                && !protected
+                && definitions
+                    .fences()
+                    .any(|candidate| candidate.broken == Some(fence.definition))
+        });
+        if !broken || !steps.iter().all(|step| proposed_steps.contains(step)) {
+            return Err(PlacementFailure::Occupied);
+        }
+        replaced.push(*entity);
     }
     let segments = i64::try_from(cells.len() - 1).map_err(|_| PlacementFailure::InvalidTopology)?;
     let cost = unit_price
         .checked_mul(segments)
         .ok_or(PlacementFailure::InvalidTopology)?;
-    Ok((cells, Money(cost), gate))
+    Ok((cells, Money(cost), gate, replaced))
 }
 
 /// The corners a fence preview runs through: its two ends, or the closed
