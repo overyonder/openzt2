@@ -228,6 +228,39 @@ fn footprint_rectangle(
     ))
 }
 
+/// `zt.exe` draws a building being placed without its alpha-blended meshes,
+/// such as a station's glass and the track under it.
+pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
+    materials: Res<
+        Assets<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>,
+    >,
+    previews: Query<(), With<ConstructionPreview>>,
+    parents: Query<&ChildOf>,
+    mut meshes: Query<
+        (
+            Entity,
+            &MeshMaterial3d<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>,
+            &openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder,
+            &mut Visibility,
+        ),
+        Changed<MeshMaterial3d<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>>,
+    >,
+) {
+    for (entity, material, order, mut visibility) in &mut meshes {
+        // A technique's later passes hang under its first and hide with it.
+        if order.is_first_authored_pass()
+            && materials
+                .get(&material.0)
+                .is_some_and(|material| !material.has_opaque_blend_state())
+            && parents
+                .iter_ancestors(entity)
+                .any(|ancestor| previews.contains(ancestor))
+        {
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
 /// Slides each entrance arrow back and forth along the way it points.
 pub(super) fn pulse_object_placement_entrance_arrows(
     time: Res<Time>,
