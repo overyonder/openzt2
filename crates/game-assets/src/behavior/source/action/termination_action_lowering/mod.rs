@@ -54,3 +54,53 @@ pub(super) fn lower_termination_action_source_node(
     }
     Ok(Some(BehaviorAction::Termination(termination_action)))
 }
+
+/// `BFBehKill` on the fence a raptor smashes (`radiusKillType="fence"`): its
+/// clip, then the fence becomes its broken variant, as `ZTBehMorph` makes it
+/// for an elephant.
+// ponytail: only the target fence breaks; the authored `radius` would also
+// break fences beside it.
+pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[BehaviorAction; 2]>> {
+    if node.name != "BFBehKill" || node.attribute("radiusKillType").map(str::trim) != Some("fence")
+    {
+        return Ok(None);
+    }
+    if node.attributes.iter().any(|attribute| {
+        !matches!(
+            attribute.name(),
+            "targetAnim"
+                | "killTarget"
+                | "radius"
+                | "radiusKillType"
+                | "fadeOutPeriod"
+                | "killUsingDestroyEntity"
+        )
+    }) || !read_boolean_attribute_or_false(node, "killTarget")?
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehKill on a fence has unmapped authored policy",
+        ));
+    }
+    let animation_clip_asset_key = node
+        .attribute("targetAnim")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| invalid_behavior_source_data("BFBehKill on a fence has no targetAnim"))?
+        .to_owned();
+    Ok(Some([
+        BehaviorAction::AnimationClip(
+            openzt2_game_data::behavior::action::animation::BehaviorAnimationClipAction {
+                animation_clip_asset_key,
+                looping: false,
+                physical_object: None,
+                play_duration_seconds: None,
+                interrupts_current_animation: false,
+                interruptible: false,
+                ground_fit: None,
+                blend_duration_seconds: None,
+                playback_speed: None,
+            },
+        ),
+        BehaviorAction::MorphTarget(openzt2_game_data::AssetId::from_key("s_broken")),
+    ]))
+}

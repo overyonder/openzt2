@@ -30,6 +30,7 @@ pub(super) fn bind_fence(
     })?;
     output.document.fences.push(FenceDefinition {
         fitting_curves: Vec::new(),
+        broken: None,
         id: id(record.key),
         object: asset(record, &["object", "entity"]),
         segment_length_cm: number_or(record, &["segmentLengthCm", "lengthCm"], 300)?,

@@ -219,6 +219,19 @@ pub(super) fn bind_authored_fence(
         segment_length_cm: 300,
         height_cm: 0,
         strength: number_or(record, &["f_FenceStrength", "fenceStrength"], 0)?,
+        // A fence names its broken variant as `s_Broken` or as the ruin
+        // `ZTEntityDestructionData` leaves when it is destroyed.
+        broken: record
+            .descendant_named("BFAIEntityDataShared")
+            .and_then(|data| data.attribute_named_any(&["s_Broken"]))
+            .or_else(|| {
+                record
+                    .descendant_named("ZTEntityDestructionData")
+                    .and_then(|data| data.attribute_named_any(&["entityRuinBinderName"]))
+            })
+            .map(str::trim)
+            .filter(|broken| !broken.is_empty())
+            .map(id),
         blocks: authored_fence_traversal_blocking_flags(record)?,
         gate,
         post_prefab: prefab("start_post"),

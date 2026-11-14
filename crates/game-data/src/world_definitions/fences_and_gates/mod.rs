@@ -26,6 +26,9 @@ pub struct FenceDefinition {
     pub gate_policy: FenceGatePolicy,
     #[serde(default)]
     pub fitting_curves: Vec<FenceFittingCurve>,
+    /// `s_Broken`: the fence an animal leaves when it bashes this one.
+    #[serde(default)]
+    pub broken: Option<AssetId>,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]

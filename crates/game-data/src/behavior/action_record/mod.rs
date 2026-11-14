@@ -87,6 +87,9 @@ pub enum BehaviorAction {
         looping: bool,
     },
     PlaceTarget(action::place_target::BehaviorPlaceTargetAction),
+    /// `ZTBehMorph` on the target: it becomes the type its attribute names,
+    /// as a fence an animal bashes becomes its `s_Broken` variant.
+    MorphTarget(crate::AssetId),
     LocomotionSwitchSet(action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction),
     AnimationSwitchSet(action::locomotion_switch_set::BehaviorAnimationSwitchSetAction),
     AnimalShowEvent(action::show_event::BehaviorShowEventAction),
