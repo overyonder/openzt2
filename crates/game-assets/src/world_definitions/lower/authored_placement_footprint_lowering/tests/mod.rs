@@ -55,8 +55,12 @@ fn zero_cardinal_footprint_occupies_the_cell_containing_the_object() {
         |cells: &[FootprintCell]| cells.iter().map(|cell| cell.offset).collect::<Vec<_>>();
     assert_eq!(offsets(&placeable.footprint), [[0, 0]]);
     assert_eq!(placeable.pivot_cm, [50, 50]);
-    assert_eq!(offsets(&placeable.diagonal_footprint), [[0, 0]]);
-    assert_eq!(placeable.diagonal_pivot_cm, [50, 50]);
+    // dfootprint 1x1 is one 2 m tile.
+    assert_eq!(
+        offsets(&placeable.diagonal_footprint),
+        [[0, 0], [1, 0], [0, 1], [1, 1]]
+    );
+    assert_eq!(placeable.diagonal_pivot_cm, [100, 100]);
 }
 
 #[test]

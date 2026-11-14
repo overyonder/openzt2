@@ -103,6 +103,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
                 validity: PlacementValidity::Pending,
             },
             ObjectPlacementPreviewMaterials {
+                entrance_arrow: Handle::default(),
                 footprint_valid: Handle::default(),
                 footprint_invalid: Handle::default(),
                 grid_cardinal: default(),
