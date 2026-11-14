@@ -41,6 +41,17 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) habitat_index: Res<'w, HabitatIndex>,
     pub(super) topology_grid: Res<'w, TopologyGrid>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
+    /// Fences an animal bashes, jumps, climbs or tunnels under.
+    pub(super) fences: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+            &'static GlobalTransform,
+        ),
+    >,
+    pub(super) habitat_regions:
+        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatRegion>,
 }
 
 impl WorldObjectTargetSources<'_, '_> {

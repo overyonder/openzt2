@@ -246,8 +246,15 @@ fn lower_behavior_action_nodes<'a>(
                 action_node,
             ) {
                 Ok(Some(actions)) => Ok(actions.to_vec()),
-                Ok(None) => action::lower_one_behavior_action_source_node(action_node)
-                    .map(|action| vec![action]),
+                Ok(None) => {
+                    match action::termination_action_lowering::lower_fence_kill_actions(action_node)
+                    {
+                        Ok(Some(actions)) => Ok(actions.to_vec()),
+                        Ok(None) => action::lower_one_behavior_action_source_node(action_node)
+                            .map(|action| vec![action]),
+                        Err(error) => Err(error),
+                    }
+                }
                 Err(error) => Err(error),
             };
         match lowered {

@@ -41,6 +41,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     target_entrances: Query<&PlacedObjectAuthoredEntrance>,
     target_definition_references: Query<&DefinitionId>,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
+    fences: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::FenceEdge>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     children: Query<&Children>,
@@ -155,10 +156,11 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             continue;
         }
         let docking_action = docking_action.expect("a dock or a queue approach");
-        // A path holds any number of guests; its reservation tag names no slot.
+        // A path holds any number of guests, and a fence any number of
+        // animals; their reservation tags name no slot.
         if let Some(reservation_tag) = behavior_task
             .reservation_tag(&behavior_document_assets)
-            .filter(|_| !path_tiles.contains(target))
+            .filter(|_| !path_tiles.contains(target) && !fences.contains(target))
         {
             let Some(definition) = target_definition else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(

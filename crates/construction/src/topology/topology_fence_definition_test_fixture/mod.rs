@@ -62,6 +62,7 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
         }],
         fences: vec![FenceDefinition {
             fitting_curves: Vec::new(),
+            broken: None,
             id: definition,
             object,
             segment_length_cm: 100,
