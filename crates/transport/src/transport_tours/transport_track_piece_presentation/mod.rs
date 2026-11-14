@@ -138,10 +138,39 @@ fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
         .normalize_or_zero();
     match authored_ground_track_turns(route, index) {
         (heading, _) if heading % 2 == 1 => Vec3::ZERO,
-        (_, [Some(_), None]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        (_, [Some(_), _]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
         (_, [None, Some(_)]) => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
         _ => Vec3::ZERO,
     }
+}
+
+/// A straight's turn texture is painted towards its turn, which leaves the
+/// other end bare: that end is painted a second time towards it, with the end's
+/// own turn texture, or with the plain road where a straight carries on.
+fn authored_ground_track_second_paint<'a>(
+    definitions: &'a [GroundTransportTrackPiecePresentationDefinition],
+    route: &[Vec3],
+    index: usize,
+) -> Option<(&'a GroundTransportTrackPiecePresentationDefinition, Vec3)> {
+    let (heading, turns) = authored_ground_track_turns(route, index);
+    if heading % 2 == 1 {
+        return None;
+    }
+    let (appearance, towards_end) = match turns {
+        [Some(_), Some(end)] => (end, true),
+        [Some(_), None] if route.get(index + 2).is_some() => (0, true),
+        [None, Some(_)] if index > 0 => (0, false),
+        _ => return None,
+    };
+    let piece_type = authored_ground_track_piece_type(heading);
+    let definition = definitions.iter().find(|definition| {
+        definition.piece_type == piece_type && definition.appearance == appearance
+    })?;
+    let direction = (route[index + 1] - route[index])
+        .with_y(0.0)
+        .normalize_or_zero();
+    let shift = direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES;
+    Some((definition, if towards_end { shift } else { -shift }))
 }
 
 /// Lays a road texture as the original paints it: V runs north (-Z).
@@ -898,6 +927,34 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             // decal only shows a highlight.
             if let Some((paint, _)) = paint {
                 commands.entity(entity).insert(paint);
+                let end_paint = authored_ground_track_second_paint(
+                    &track.ground_piece_presentations,
+                    &joined_points,
+                    usize::from(piece.piece_index) + first,
+                )
+                .and_then(|(end, shift)| {
+                    let centre = transform.transform_point(Vec3::new(
+                        end.ground_decal_offset_metres[0],
+                        0.0,
+                        end.ground_decal_offset_metres[1],
+                    )) + shift;
+                    authored_ground_track_paint(
+                        end,
+                        centre.xz(),
+                        definitions.texture_image(end.paint_texture)?,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    )
+                });
+                if let Some((end_paint, _)) = end_paint {
+                    commands.spawn((
+                        end_paint,
+                        Transform::IDENTITY,
+                        Visibility::Inherited,
+                        ChildOf(entity),
+                        GroundTrackPieceDecal,
+                    ));
+                }
                 commands
                     .entity(decal)
                     .insert((PaintedTrackHighlight, Visibility::Hidden));
