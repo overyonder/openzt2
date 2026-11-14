@@ -160,42 +160,9 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
 }
 
 const ENTRANCE_ARROW_IMAGE: &str = "ui/fx/footprint/entrance_arrow.tga";
-// ponytail: size, gap and pulse were matched by eye to the original.
-const ENTRANCE_ARROW_GAP_M: f32 = 0.9;
+// ponytail: the pulse was matched by eye to the original.
 const ENTRANCE_ARROW_PULSE_M: f32 = 0.3;
 const ENTRANCE_ARROW_PULSE_SECONDS: f32 = 1.0;
-
-/// Where the entrance arrow of a building lies, in the preview's frame, and
-/// the way it points: in the middle of the footprint's front edge, outside it,
-/// pointing in, as the original marks where guests go in.
-fn entrance_arrow_placement(
-    footprint: &[FootprintCell],
-    pivot: Vec2,
-    turns: u8,
-    inverse_rotation: Quat,
-) -> Option<(Vec3, Vec3)> {
-    let occupied = footprint.iter().filter(footprint_cell_is_occupied);
-    let (minimum_x, maximum_x, maximum_y) = occupied.fold(None, |bounds, cell| {
-        let (x, y) = (i32::from(cell.offset[0]), i32::from(cell.offset[1]));
-        Some(
-            bounds.map_or((x, x, y), |(low, high, top): (i32, i32, i32)| {
-                (low.min(x), high.max(x), top.max(y))
-            }),
-        )
-    })?;
-    #[allow(clippy::cast_precision_loss)]
-    let front = Vec2::new(
-        (minimum_x + maximum_x + 1) as f32 / 2.0,
-        (maximum_y + 1) as f32 + ENTRANCE_ARROW_GAP_M,
-    );
-    let place = |point: Vec2| {
-        let world = rotate_object_placement_point_by_quarter_turns(point, turns / 2);
-        inverse_rotation.mul_vec3(Vec3::new(world.x, 0.03, world.y))
-    };
-    let rest = place(front - pivot);
-    let inward = place(front - pivot - Vec2::Y) - rest;
-    Some((rest, inward.normalize_or_zero()))
-}
 
 /// The world-axis rectangle a cardinal footprint covers: its centre in the
 /// preview's frame and its size.
@@ -428,43 +395,28 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         // `special` arrow waits and the decals are laid again.
         let mut arrow_pending = false;
         let arrow = definition.dock_arrow.and_then(|arrow| {
-            // A `special` arrow stands at the model's Dock_Arrow node and
-            // points into the building; a `standard` one, or a model without
-            // the node, in front of the footprint.
-            let at_node = arrow
-                .at_model_node
-                .then(|| {
-                    let Some(model) = arrow_nodes.model_bounds(entity) else {
-                        arrow_pending = true;
-                        return None;
-                    };
-                    let node = arrow_nodes.dock_arrow(entity)?;
-                    let inward = (-node).with_y(0.0).normalize_or_zero();
-                    // The node marks the entrance; as in the original, the
-                    // arrow lies just outside the footprint and the model
-                    // there, so a roof doesn't hide it.
-                    let rotation = preview.transform.rotation;
-                    let (low, high) = model;
-                    let inside = |point: Vec3| {
-                        (point.x > low.x && point.x < high.x && point.z > low.z && point.z < high.z)
-                            || next.footprint_translations.iter().any(|cell| {
-                                let offset = rotation * (point - *cell);
-                                offset.x.abs() < 0.5 && offset.z.abs() < 0.5
-                            })
-                    };
-                    let edge = (0_u8..80)
-                        .map(|step| node - inward * (f32::from(step) * 0.25))
-                        .find(|point| !inside(point.with_y(0.025)))?;
-                    let rest = (edge - inward * (arrow.size_metres * 0.5)).with_y(0.03);
-                    Some((rest, inward))
-                })
-                .flatten();
-            if arrow_pending {
+            let Some((low, high)) = arrow_nodes.model_bounds(entity) else {
+                arrow_pending = true;
                 return None;
-            }
-            at_node
-                .or_else(|| entrance_arrow_placement(footprint, pivot, turns, inverse_rotation))
-                .map(|placement| (placement, arrow.size_metres))
+            };
+            // The arrow stands at the model's Dock_Arrow node, just outside
+            // the footprint and the model there so a roof doesn't hide it,
+            // and points into the building.
+            let node = arrow_nodes.dock_arrow(entity)?;
+            let inward = (-node).with_y(0.0).normalize_or_zero();
+            let rotation = preview.transform.rotation;
+            let inside = |point: Vec3| {
+                (point.x > low.x && point.x < high.x && point.z > low.z && point.z < high.z)
+                    || next.footprint_translations.iter().any(|cell| {
+                        let offset = rotation * (point - *cell);
+                        offset.x.abs() < 0.5 && offset.z.abs() < 0.5
+                    })
+            };
+            let edge = (0_u8..80)
+                .map(|step| node - inward * (f32::from(step) * 0.25))
+                .find(|point| !inside(point.with_y(0.025)))?;
+            let rest = (edge - inward * (arrow.size_metres * 0.5)).with_y(0.03);
+            Some(((rest, inward), arrow.size_metres))
         });
         if let Some(((rest, direction), size)) = arrow {
             // The texture points down its rows; turn it to point inward.
