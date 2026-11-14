@@ -43,7 +43,11 @@ fn morph_current_behavior_targets(
     documents: Res<Assets<BehaviorDocumentAsset>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    mut actors: Query<&mut BehaviorTaskExecutionState, Without<PendingBehaviorTaskFailure>>,
+    mut actors: Query<
+        (&mut BehaviorTaskExecutionState, &GlobalTransform),
+        Without<PendingBehaviorTaskFailure>,
+    >,
+    grid: Res<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
     mut fences: Query<&mut FenceEdge>,
     nodes: Query<&TopologyNode>,
     mut topology: ResMut<TopologyIndex>,
@@ -52,7 +56,7 @@ fn morph_current_behavior_targets(
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
-    for mut task in &mut actors {
+    for (mut task, actor_transform) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -71,7 +75,11 @@ fn morph_current_behavior_targets(
                 if let (Some(broken), Ok(first), Ok(second)) =
                     (broken, nodes.get(edge.a), nodes.get(edge.b))
                 {
-                    debug!(from = ?edge.definition, to = ?broken, "fence broken by an animal");
+                    debug!(from = ?edge.definition, to = ?broken,
+                        actor = %actor_transform.translation(),
+                        first = %grid.cell_translation(first.cell),
+                        second = %grid.cell_translation(second.cell),
+                        "fence broken by an animal");
                     edge.definition = broken;
                     // The segment's model follows the topology index.
                     topology.set_changed();

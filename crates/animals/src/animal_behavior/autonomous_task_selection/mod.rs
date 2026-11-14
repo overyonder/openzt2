@@ -340,6 +340,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 } else {
@@ -348,6 +349,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 }
@@ -456,10 +458,11 @@ pub(super) fn select_idle_animal_tasks(
                     {
                         continue;
                     }
-                    let distance = facts
-                        .transform
-                        .translation()
-                        .distance(transform.translation());
+                    let distance = facts.transform.translation().distance(
+                        world_objects
+                            .fence_middle(edge)
+                            .unwrap_or_else(|| transform.translation()),
+                    );
                     let electric = object
                         .behavior_type_identifiers
                         .contains(&AssetId::from_key("b_electric"));
@@ -540,10 +543,15 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 let target_position = target.transform.translation();
                 let location = WorldObjectTargetLocation {
+                    // An escaped animal reaches what its breach leads to.
                     in_habitat: !area_restricted
-                        || animal_habitat.is_some_and(|habitat| {
-                            world_objects.habitat_at(target_position) == Some(habitat)
-                        }),
+                        || if facts.escaped {
+                            world_objects.escaped_animal_reaches(target_position)
+                        } else {
+                            animal_habitat.is_some_and(|habitat| {
+                                world_objects.habitat_at(target_position) == Some(habitat)
+                            })
+                        },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
                 };
                 if !candidate_requirements_are_satisfied(

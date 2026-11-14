@@ -29,6 +29,7 @@ pub(super) fn detect_animal_containment_breaches_and_mark_newly_escaped_animals(
             continue;
         }
         if existing_escape_state.is_none() {
+            debug!(animal = ?containment_change.affected_entity, "animal escaped its habitat");
             commands
                 .entity(containment_change.affected_entity)
                 .insert(Escaped {
