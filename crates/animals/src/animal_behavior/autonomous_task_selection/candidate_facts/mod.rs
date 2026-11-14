@@ -100,9 +100,16 @@ pub(crate) struct AnimalCandidateFacts {
     habitat: Option<&'static HabitatMember>,
     mate: Has<Mate>,
     reproduction: Option<&'static ReproductionNeed>,
+    need_points: Option<&'static openzt2_zoo_state::animal_welfare::types::NeedPoints>,
 }
 
 impl AnimalCandidateFactsItem<'_, '_> {
+    /// The current good and bad need points.
+    pub(super) fn need_points(&self) -> (f32, f32) {
+        self.need_points
+            .map_or((0.0, 0.0), |points| (points.good, points.bad))
+    }
+
     pub(crate) fn variant_id(&self) -> AssetId {
         self.variant.0
     }

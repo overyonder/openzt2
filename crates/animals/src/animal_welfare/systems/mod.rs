@@ -165,11 +165,54 @@ pub(crate) fn initialize_animal_needs(
             suitability,
             AnimalWelfare(value),
             CumulativeNeedPoints::default(),
+            NeedPoints::default(),
             classify_animal_welfare_against_authored_thresholds(value, critical, good),
         ));
         if scripted.is_some() {
             commands.entity(entity).remove::<crate::animal_lifecycle::scripted_animal_spawning::ScriptedAnimalInitialization>();
         }
+    }
+}
+
+// ponytail: `animal.xml`'s `f_NeedPointUpdateInterval`, `f_NeedPointGoodDelta`,
+// `f_NeedPointBadDelta` and `f_NeedPointMax`; read them from the animal
+// family if a species ever authors its own.
+const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
+const NEED_POINT_DELTA: f32 = 0.2;
+const NEED_POINT_MAX: f32 = 100.0;
+
+/// One need-point update: the branch matching the animal's needs grows, the
+/// other is cleared.
+pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
+    if unmet {
+        points.bad = (points.bad + NEED_POINT_DELTA).min(NEED_POINT_MAX);
+        points.good = 0.0;
+    } else {
+        points.good = (points.good + NEED_POINT_DELTA).min(NEED_POINT_MAX);
+        points.bad = 0.0;
+    }
+}
+
+/// Every update an animal with an unmet need gains bad need points and loses
+/// its good ones, and an animal whose needs are all met the other way round.
+pub(super) fn update_need_points(
+    time: Res<Time<Fixed>>,
+    mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
+    mut outcomes: MessageWriter<AccumulateNeedPoints>,
+) {
+    for (animal, triggers, mut points) in &mut animals {
+        points.seconds_until_update -= time.delta_secs();
+        if points.seconds_until_update > 0.0 {
+            continue;
+        }
+        points.seconds_until_update += NEED_POINT_UPDATE_SECONDS;
+        let unmet = triggers.0 != 0;
+        step_need_points(&mut points, unmet);
+        outcomes.write(AccumulateNeedPoints {
+            animal,
+            good: if unmet { 0.0 } else { NEED_POINT_DELTA },
+            bad: if unmet { NEED_POINT_DELTA } else { 0.0 },
+        });
     }
 }
 
