@@ -131,11 +131,14 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
                     footprint_invalid,
                     grid_cardinal: [small_cardinal, medium_cardinal, large_cardinal],
                     grid_diagonal: [small_diagonal, medium_diagonal, large_diagonal],
+                    // As a footprint, the grid's radius counts the
+                    // original's 2 m tiles: its texture has a line every tile.
                     grid_radius: [
                         policy.grid_small_radius,
                         policy.grid_medium_radius,
                         policy.grid_large_radius,
-                    ],
+                    ]
+                    .map(|tiles| tiles * 2.0),
                     entrance_arrow: materials.add(StandardMaterial {
                         base_color_texture: Some(asset_server.load(ENTRANCE_ARROW_IMAGE)),
                         alpha_mode: AlphaMode::Blend,
@@ -223,6 +226,39 @@ fn footprint_rectangle(
         inverse_rotation.mul_vec3(Vec3::new(centre.x, 0.025, centre.y)),
         size,
     ))
+}
+
+/// `zt.exe` draws a building being placed without its alpha-blended meshes,
+/// such as a station's glass and the track under it.
+pub(super) fn hide_alpha_blended_meshes_of_object_placement_previews(
+    materials: Res<
+        Assets<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>,
+    >,
+    previews: Query<(), With<ConstructionPreview>>,
+    parents: Query<&ChildOf>,
+    mut meshes: Query<
+        (
+            Entity,
+            &MeshMaterial3d<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>,
+            &openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder,
+            &mut Visibility,
+        ),
+        Changed<MeshMaterial3d<openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial>>,
+    >,
+) {
+    for (entity, material, order, mut visibility) in &mut meshes {
+        // A technique's later passes hang under its first and hide with it.
+        if order.is_first_authored_pass()
+            && materials
+                .get(&material.0)
+                .is_some_and(|material| !material.has_opaque_blend_state())
+            && parents
+                .iter_ancestors(entity)
+                .any(|ancestor| previews.contains(ancestor))
+        {
+            *visibility = Visibility::Hidden;
+        }
+    }
 }
 
 /// Slides each entrance arrow back and forth along the way it points.
