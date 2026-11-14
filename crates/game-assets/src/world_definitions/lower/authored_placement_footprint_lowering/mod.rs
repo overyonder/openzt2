@@ -350,11 +350,9 @@ fn authored_dock_arrow(
     let style =
         authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowStyle")
             .map(canonicalize_source_document_record_key);
-    let at_model_node = match style.as_deref() {
-        Some("special") => true,
-        Some("standard") => false,
-        _ => return Ok(None),
-    };
+    if style.as_deref() != Some("special") {
+        return Ok(None);
+    }
     let size_metres =
         authored_type_family_component_attribute(record, "ZTPlacementData", "dockArrowSize")
             .map(|value| {
@@ -367,9 +365,6 @@ fn authored_dock_arrow(
             .transpose()?
             .unwrap_or(1.0);
     Ok(Some(
-        openzt2_game_data::world_definitions::object_placement::DockArrow {
-            at_model_node,
-            size_metres,
-        },
+        openzt2_game_data::world_definitions::object_placement::DockArrow { size_metres },
     ))
 }

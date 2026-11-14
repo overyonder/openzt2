@@ -75,17 +75,16 @@ pub struct PlaceableDefinition {
     /// entity type collide with ground path tiles under their footprint.
     #[serde(default)]
     pub ground_paths_block_placement: bool,
-    /// The arrow `zt.exe` draws in front of an entrance while the object is
-    /// placed, from `ZTPlacementData dockArrowStyle` and `dockArrowSize`.
+    /// The arrow `zt.exe` draws at an entrance while the object is placed,
+    /// for a `ZTPlacementData dockArrowStyle` of `special`; `standard` and
+    /// `none` draw none.
     #[serde(default)]
     pub dock_arrow: Option<DockArrow>,
 }
 
 #[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct DockArrow {
-    /// `special` stands the arrow at the model's `Dock_Arrow` node;
-    /// `standard` in front of the footprint.
-    pub at_model_node: bool,
+    /// `dockArrowSize`.
     pub size_metres: f32,
 }
 
