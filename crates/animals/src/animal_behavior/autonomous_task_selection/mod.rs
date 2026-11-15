@@ -421,14 +421,9 @@ pub(super) fn select_idle_animal_tasks(
                 continue;
             }
             // Fence tasks target the fences around the animal's habitat.
-            // ponytail: a task is told apart by its name. Only bashing runs;
-            // jumping, climbing and tunnelling wait until an animal can cross
-            // the fence, rather than play out in front of it.
+            // ponytail: a fence task is told apart by its name.
             let task_name = task.name.rsplit(':').next().unwrap_or_default();
             if task_name.contains("Fence") {
-                if !task_name.starts_with("Bash") {
-                    continue;
-                }
                 let fence_types = task
                     .targets
                     .iter()
@@ -691,6 +686,17 @@ pub(super) fn select_idle_animal_tasks(
             started.insert(shore);
         } else {
             started.remove::<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>();
+        }
+        // A crossing ends with the animal on the fence's far side.
+        if world_objects.fences.contains(target)
+            && super::behavior_fence_crossing_execution::fence_task_crosses(
+                task.name.rsplit(':').next().unwrap_or_default(),
+            )
+        {
+            started.insert(super::behavior_fence_crossing_execution::CrossingFence {
+                execution_id,
+                fence: target,
+            });
         }
         started.insert(BehaviorTaskExecutionState {
             execution_id,
