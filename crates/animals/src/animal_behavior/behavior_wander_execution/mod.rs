@@ -84,7 +84,10 @@ fn execute_current_wander_actions(
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    habitats: Res<HabitatIndex>,
+    (habitats, habitat_summaries): (
+        Res<HabitatIndex>,
+        Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
+    ),
     topology: Res<TopologyGrid>,
     mut sequence: ResMut<NavigationRequestSequence>,
     mut requests: MessageWriter<NavigateTo>,
@@ -301,10 +304,18 @@ fn execute_current_wander_actions(
                     let point = Vec3::new(point[0] as f32, point[1] as f32, point[2] as f32) * 0.01;
                     if point.xz().distance_squared(position.xz()) <= agent.radius_m.max(0.1).powi(2)
                         || !avoids_entities(position.xz(), point.xz())
-                        // An escaped animal roams out of its broken habitat.
-                        || (!escaped
-                            && locate_habitat_at_world_position(&habitats, point.xz(), *topology)
-                                != habitat)
+                        // An escaped animal roams wherever its breach leads.
+                        || if escaped {
+                            !super::escaped_animal_reaches(
+                                &habitats,
+                                *topology,
+                                &habitat_summaries,
+                                point.xz(),
+                            )
+                        } else {
+                            locate_habitat_at_world_position(&habitats, point.xz(), *topology)
+                                != habitat
+                        }
                     {
                         continue;
                     }

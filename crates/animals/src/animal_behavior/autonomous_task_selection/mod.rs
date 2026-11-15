@@ -115,10 +115,9 @@ pub(super) fn select_idle_animal_tasks(
         let authored_types = &variant.behavior_subject_type_identifiers;
         // Actors which do not generate traversability have no area restriction.
         // Others reach only targets in the habitat they stand in.
-        // An escaped animal reaches targets outside its habitat too.
-        let area_restricted = !facts.escaped
-            && (authored_types.contains(&AssetId::from_key("b_generatestraversabilityinfo"))
-                || authored_types.contains(&AssetId::from_key("unspecified")));
+        let area_restricted = authored_types
+            .contains(&AssetId::from_key("b_generatestraversabilityinfo"))
+            || authored_types.contains(&AssetId::from_key("unspecified"));
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
@@ -341,6 +340,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 } else {
@@ -349,6 +349,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 }
@@ -542,10 +543,15 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 let target_position = target.transform.translation();
                 let location = WorldObjectTargetLocation {
+                    // An escaped animal reaches what its breach leads to.
                     in_habitat: !area_restricted
-                        || animal_habitat.is_some_and(|habitat| {
-                            world_objects.habitat_at(target_position) == Some(habitat)
-                        }),
+                        || if facts.escaped {
+                            world_objects.escaped_animal_reaches(target_position)
+                        } else {
+                            animal_habitat.is_some_and(|habitat| {
+                                world_objects.habitat_at(target_position) == Some(habitat)
+                            })
+                        },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
                 };
                 if !candidate_requirements_are_satisfied(

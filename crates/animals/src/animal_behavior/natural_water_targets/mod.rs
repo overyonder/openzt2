@@ -34,6 +34,8 @@ pub(super) struct NaturalWaterTargets<'w, 's> {
     assets: Res<'w, Assets<TerrainAsset>>,
     index: Res<'w, TerrainIndex>,
     habitats: Res<'w, HabitatIndex>,
+    habitat_summaries:
+        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
     grid: Res<'w, TopologyGrid>,
 }
 
@@ -43,6 +45,7 @@ impl NaturalWaterTargets<'_, '_> {
         world: Entity,
         position: Vec3,
         radius: f32,
+        escaped: bool,
         output: &mut Vec<SelectedNaturalWaterTarget>,
     ) {
         output.clear();
@@ -56,7 +59,7 @@ impl NaturalWaterTargets<'_, '_> {
             }
             for &point in &cells.centres {
                 if point.xz().distance_squared(position.xz()) >= radius * radius
-                    || !self.same_habitat(point, position)
+                    || !self.reaches(point, position, escaped)
                 {
                     continue;
                 }
@@ -87,6 +90,21 @@ impl NaturalWaterTargets<'_, '_> {
             }
         }
     }
+    /// Whether an animal at `from` can reach `point`: in its own habitat, or,
+    /// once escaped, wherever its breach leads.
+    pub(super) fn reaches(&self, point: Vec3, from: Vec3, escaped: bool) -> bool {
+        if escaped {
+            super::escaped_animal_reaches(
+                &self.habitats,
+                *self.grid,
+                &self.habitat_summaries,
+                point.xz(),
+            )
+        } else {
+            self.same_habitat(point, from)
+        }
+    }
+
     pub(super) fn same_habitat(&self, first: Vec3, second: Vec3) -> bool {
         let first = locate_habitat_at_world_position(&self.habitats, first.xz(), *self.grid);
         first.is_some()
@@ -128,6 +146,7 @@ impl NaturalWaterTargets<'_, '_> {
         actor: Entity,
         point: Vec3,
         shore: &SelectedNaturalWaterTarget,
+        escaped: bool,
     ) -> bool {
         let Some((chunk, edited)) = terrain_chunk_at(&self.index, point.xz())
             .and_then(|entity| self.chunks.get(entity).ok())
@@ -142,7 +161,7 @@ impl NaturalWaterTargets<'_, '_> {
             return false;
         };
         self.dry_endpoint(actor, point)
-            && self.same_habitat(point, shore.approach)
+            && self.reaches(point, shore.approach, escaped)
             && self
                 .agents
                 .get(actor)
@@ -196,14 +215,17 @@ impl NaturalWaterTargets<'_, '_> {
         world: Entity,
         position: Vec3,
         radius: f32,
+        escaped: bool,
         output: &mut Vec<SelectedNaturalWaterTarget>,
     ) {
         output.clear();
-        let habitat_at =
-            |point: Vec3| locate_habitat_at_world_position(&self.habitats, point.xz(), *self.grid);
-        let Some(habitat) = habitat_at(position) else {
+        // An animal in its habitat drinks there; an escaped one wherever its
+        // breach leads.
+        if !escaped
+            && locate_habitat_at_world_position(&self.habitats, position.xz(), *self.grid).is_none()
+        {
             return;
-        };
+        }
         for (region, cells, parent) in &self.regions {
             if !cells.cell_size_m.is_finite() || cells.cell_size_m <= 0.0 {
                 continue;
@@ -223,7 +245,7 @@ impl NaturalWaterTargets<'_, '_> {
                 }
                 for direction in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
                     let mut dry = wet + direction * cells.cell_size_m;
-                    if !self.dry_endpoint(actor, dry) || habitat_at(dry) != Some(habitat) {
+                    if !self.dry_endpoint(actor, dry) || !self.reaches(dry, position, escaped) {
                         continue;
                     }
                     let Some(chunk_entity) = terrain_chunk_at(&self.index, dry.xz()) else {
@@ -256,7 +278,7 @@ impl NaturalWaterTargets<'_, '_> {
                     };
                     wet_edge.y = height;
                     if position.xz().distance_squared(wet_edge.xz()) >= radius * radius
-                        || habitat_at(wet_edge) != Some(habitat)
+                        || !self.reaches(wet_edge, position, escaped)
                     {
                         continue;
                     }
