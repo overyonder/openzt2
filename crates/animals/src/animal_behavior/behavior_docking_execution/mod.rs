@@ -41,10 +41,11 @@ pub(super) fn start_current_supported_behavior_docking_actions(
     target_entrances: Query<&PlacedObjectAuthoredEntrance>,
     target_definition_references: Query<&DefinitionId>,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
-    (fences, topology_nodes, topology_grid): (
+    (fences, topology_nodes, topology_grid, ground): (
         Query<&openzt2_zoo_state::topology::topology_graph_types::FenceEdge>,
         Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
         Res<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
+        openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
     ),
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
@@ -228,11 +229,14 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             ) else {
                 continue;
             };
-            // A fence segment's origin is its first end; dock on its middle.
+            // A fence segment's origin is its first end; dock on its middle,
+            // on the ground there rather than at the topology layer's height.
             let centre = fences.get(target).ok().and_then(|edge| {
                 let first = topology_grid.cell_translation(topology_nodes.get(edge.a).ok()?.cell);
                 let second = topology_grid.cell_translation(topology_nodes.get(edge.b).ok()?.cell);
-                Some(Vec3::X * (second - first).xz().length() * 0.5)
+                let middle = (first + second) * 0.5;
+                let middle = middle.with_y(ground.ground_height(middle.xz()).unwrap_or(middle.y));
+                Some(target_transform.affine().inverse().transform_point3(middle))
             });
             radial_dock_point_and_forward_in_target_space(
                 actor_transform,
