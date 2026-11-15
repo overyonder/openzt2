@@ -112,9 +112,59 @@ pub fn score_supported_behavior_task(
     outside_range_need_value: f32,
     target_distance: f32,
     source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
+    scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
+) -> Option<f32> {
+    score_behavior_task(
+        task,
+        outside_range_need_value,
+        target_distance,
+        None,
+        source_need,
+        scalar_value,
+    )
+}
+
+/// As [`score_supported_behavior_task`], for an animal with its current good
+/// and bad need points: an authored `needPointsGood` or `needPointsBad` is
+/// the least the animal must have for the task to run, as `InviteReproduction`
+/// waits for a contented animal and `BashFence` for an unhappy one.
+pub fn score_behavior_task_with_need_points(
+    task: &openzt2_game_data::behavior::document::BehaviorTask,
+    outside_range_need_value: f32,
+    target_distance: f32,
+    need_points: (f32, f32),
+    source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
+    scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
+) -> Option<f32> {
+    score_behavior_task(
+        task,
+        outside_range_need_value,
+        target_distance,
+        Some(need_points),
+        source_need,
+        scalar_value,
+    )
+}
+
+fn score_behavior_task(
+    task: &openzt2_game_data::behavior::document::BehaviorTask,
+    outside_range_need_value: f32,
+    target_distance: f32,
+    need_points: Option<(f32, f32)>,
+    source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
     mut scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
 ) -> Option<f32> {
     use openzt2_game_data::behavior::score::BehaviorScore;
+    if let Some((good, bad)) = need_points {
+        let met = task.scores.iter().all(|score| match score {
+            BehaviorScore::AggregateGoodNeeds { weight } => good >= *weight,
+            BehaviorScore::AggregateBadNeeds { weight } => bad >= *weight,
+            _ => true,
+        });
+        if !met {
+            return None;
+        }
+    }
     if task
         .scores
         .iter()
@@ -151,6 +201,9 @@ pub fn score_supported_behavior_task(
             }
             // Applied once to the accumulated need score below.
             BehaviorScore::DistanceInfluence(_) => {}
+            // Need-point thresholds were checked above, when they are known.
+            BehaviorScore::AggregateGoodNeeds { .. } | BehaviorScore::AggregateBadNeeds { .. }
+                if need_points.is_some() => {}
             // Current need-point branches and biome multiplier have separate owners.
             // Until those inputs are available, do not silently treat them as neutral.
             _ => return None,
@@ -165,3 +218,80 @@ pub fn score_supported_behavior_task(
 
 #[cfg(test)]
 mod inherited_species_task_compatibility_tests;
+
+#[cfg(test)]
+mod need_point_threshold_tests {
+    use super::*;
+    use openzt2_game_data::behavior::document::{BehaviorTask, BehaviorTaskActionPhase};
+    use openzt2_game_data::behavior::scalar::BehaviorScalarQ16;
+    use openzt2_game_data::behavior::score::BehaviorScore;
+
+    fn task(scores: Vec<BehaviorScore>) -> BehaviorTask {
+        BehaviorTask {
+            id: AssetId::from_key("task"),
+            name: "task".to_owned(),
+            priority: None,
+            task_delay_seconds: None,
+            reservation_tag: None,
+            sensor_tag: None,
+            subjects: Vec::new(),
+            targets: Vec::new(),
+            objects: Vec::new(),
+            candidate_eligibility_requirements: Vec::new(),
+            scores,
+            execution: BehaviorTaskActionPhase::Supported(Vec::new()),
+            completion: BehaviorTaskActionPhase::Supported(Vec::new()),
+            failure: BehaviorTaskActionPhase::Supported(Vec::new()),
+        }
+    }
+
+    fn score(task: &BehaviorTask, need_points: (f32, f32)) -> Option<f32> {
+        score_behavior_task_with_need_points(
+            task,
+            0.0,
+            1.0,
+            need_points,
+            |_| Some((50 << 16, true)),
+            |value| match value {
+                BehaviorScalarQ16::FixedQ16(value) => Some(value),
+                _ => None,
+            },
+        )
+    }
+
+    #[test]
+    fn a_fence_bash_waits_for_its_bad_need_points() {
+        // As the shipped BashFence: needPointsBad="30" fixedScore="100".
+        let bash = task(vec![
+            BehaviorScore::AggregateBadNeeds { weight: 30.0 },
+            BehaviorScore::Fixed(100.0),
+        ]);
+        assert_eq!(score(&bash, (0.0, 29.8)), None);
+        assert_eq!(score(&bash, (0.0, 30.0)), Some(100.0));
+    }
+
+    #[test]
+    fn a_contented_task_waits_for_its_good_need_points_then_scores_its_needs() {
+        // As InviteReproduction: needPointsGood with reproduction="-40".
+        let invite = task(vec![
+            BehaviorScore::AggregateGoodNeeds { weight: 50.0 },
+            BehaviorScore::AttributeValue {
+                attribute: AssetId::from_key("reproduction"),
+                value: BehaviorScalarQ16::FixedQ16(-40 << 16),
+            },
+        ]);
+        assert_eq!(score(&invite, (49.0, 0.0)), None);
+        assert_eq!(score(&invite, (50.0, 0.0)), Some(20.0));
+        // Without need points, as for guests, the threshold stays unsupported.
+        assert_eq!(
+            score_supported_behavior_task(
+                &invite,
+                0.0,
+                1.0,
+                |_| Some((50 << 16, true)),
+                |_| { Some(-40 << 16) }
+            ),
+            None
+        );
+    }
+}
