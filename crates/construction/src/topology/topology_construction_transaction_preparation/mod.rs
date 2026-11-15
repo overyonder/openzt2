@@ -52,8 +52,9 @@ fn prepare_fence_construction_snapshots(
     joined_tank_water_height: impl Fn(IVec3) -> Option<f32>,
     ground: &TankWallGroundSampling,
     paths: &Query<&PathTile>,
-) -> Result<(Vec<TopologySnapshot>, Money), PlacementFailure> {
-    let (cells, cost, gate) = calculate_fence_construction_plan(
+    (hosts, wall_tops): (&GateHostEdges, &Query<&TankWallTopHeight>),
+) -> Result<(Vec<TopologySnapshot>, Vec<TopologySnapshot>, Money), PlacementFailure> {
+    let (cells, cost, gate, replaced) = calculate_fence_construction_plan(
         preview,
         index,
         grid,
@@ -61,7 +62,31 @@ fn prepare_fence_construction_snapshots(
         terrain_index,
         terrain_assets,
         terrain_chunks,
+        hosts,
     )?;
+    let id = |entity| {
+        persistent
+            .get(entity)
+            .copied()
+            .map_err(|_| PlacementFailure::InvalidTopology)
+    };
+    // The broken segments the run is built over, removed in the same edit.
+    let removed = replaced
+        .into_iter()
+        .map(|edge| {
+            let (fence, ..) = hosts
+                .get(edge)
+                .map_err(|_| PlacementFailure::InvalidTopology)?;
+            Ok(TopologySnapshot::Fence {
+                id: id(edge)?,
+                definition: fence.definition,
+                a: id(fence.a)?,
+                b: id(fence.b)?,
+                gate: None,
+                wall_top: wall_tops.get(edge).ok().copied(),
+            })
+        })
+        .collect::<Result<Vec<_>, PlacementFailure>>()?;
     // New tank walls get the top the original's fence mode gives them.
     let tank_wall_top = if definitions.find_tank(preview.definition).is_some() {
         let (Some(policy), Some(surface)) = (
@@ -166,7 +191,7 @@ fn prepare_fence_construction_snapshots(
             wall_top,
         });
     }
-    Ok((snapshots, cost))
+    Ok((snapshots, removed, cost))
 }
 
 /// Swaps the fence segment under a gate preview for the same segment with a
@@ -347,8 +372,8 @@ pub(super) fn prepare_topology_construction_transaction(
                 },
                 &ground,
                 &paths,
-            )
-            .map(|(created, cost)| (created, Vec::new(), cost)),
+                (&gate_hosts, &wall_tops),
+            ),
             (None, Some(preview)) => prepare_path_construction_snapshots(
                 preview,
                 &index,

@@ -118,8 +118,9 @@ pub(super) fn reconcile_fence_construction_preview_presentation_segments(
                 &terrain,
                 &terrain_assets,
                 &terrain_chunks,
+                &gate_hosts,
             )
-            .map(|(cells, _, _)| cells)
+            .map(|(cells, ..)| cells)
         }
         .unwrap_or_default();
         let mut segments = cells
