@@ -509,8 +509,9 @@ pub(super) fn evaluate_topology_construction_preview_validity(
                 &terrain,
                 &terrain_assets,
                 &terrain_chunks,
+                &gate_hosts,
             )
-            .map(|(_, cost, _)| cost),
+            .map(|(_, cost, ..)| cost),
             (None, Some(path)) => calculate_path_construction_plan(
                 path,
                 &index,
