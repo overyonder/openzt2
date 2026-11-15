@@ -169,6 +169,7 @@ fn execute_water_docking(
     transforms: Query<&GlobalTransform>,
     controllers: Query<&AnimationPlaybackController>,
     movement: Query<&Destination>,
+    escaped: Query<(), With<openzt2_zoo_state::animal_health::types::Escaped>>,
     mut sequence: ResMut<NavigationRequestSequence>,
     mut navigation: MessageWriter<DockAt>,
     mut clips: MessageWriter<AnimationClipPlaybackRequest>,
@@ -252,7 +253,9 @@ fn execute_water_docking(
                     let rotation = Quat::from_rotation_y(direction.x.atan2(direction.y));
                     let (scale, _, _) = actor_transform.to_scale_rotation_translation();
                     let point = shore.water - rotation * (scale * mouth);
-                    if !point.is_finite() || !shores.docking_endpoint(actor, point, &shore) {
+                    if !point.is_finite()
+                        || !shores.docking_endpoint(actor, point, &shore, escaped.contains(actor))
+                    {
                         dock.stage = WaterDockStage::Failed;
                         continue;
                     }
@@ -327,7 +330,12 @@ fn execute_water_docking(
                 WaterDockStage::Moving { request } => {
                     if !movement.get(actor).is_ok_and(|destination| {
                         destination.request_id == request
-                            && shores.docking_endpoint(actor, destination.world, &shore)
+                            && shores.docking_endpoint(
+                                actor,
+                                destination.world,
+                                &shore,
+                                escaped.contains(actor),
+                            )
                     }) {
                         dock.stage = WaterDockStage::Failed;
                     }

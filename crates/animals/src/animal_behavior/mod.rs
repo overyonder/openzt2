@@ -2,6 +2,25 @@
 
 mod authored_disease_exposure;
 mod autonomous_task_selection;
+
+/// Whether an escaped animal can reach a point: outside every habitat, or in
+/// one whose fence is breached, rather than behind another habitat's intact
+/// fence.
+pub(super) fn escaped_animal_reaches(
+    habitats: &openzt2_zoo_state::habitat::habitat_types::HabitatIndex,
+    grid: openzt2_zoo_state::topology::topology_graph_types::TopologyGrid,
+    summaries: &Query<&openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
+    point: Vec2,
+) -> bool {
+    openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position(
+        habitats, point, grid,
+    )
+    .is_none_or(|habitat| {
+        summaries
+            .get(habitat)
+            .is_ok_and(|summary| summary.boundary_is_breached)
+    })
+}
 mod behavior_animation_clip_execution;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection;
 mod behavior_clothing_delivery;
@@ -208,5 +227,50 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 .in_set(FixedGameSet::Act)
                 .run_if(in_state(GamePhase::InGame)),
         );
+    }
+}
+
+#[cfg(test)]
+mod escaped_reach_tests {
+    use bevy::ecs::system::RunSystemOnce;
+    use bevy::prelude::*;
+    use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatSummary};
+    use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
+
+    #[test]
+    fn an_escaped_animal_reaches_open_ground_and_breached_pens_but_not_closed_ones() {
+        let mut world = World::new();
+        let summary = |breached| HabitatSummary {
+            land_area_square_metres: 1.0,
+            water_area_square_metres: 0.0,
+            biome_areas_square_metres: Box::new([]),
+            boundary_is_breached: breached,
+        };
+        let breached = world.spawn(summary(true)).id();
+        let closed = world.spawn(summary(false)).id();
+        let mut index = HabitatIndex::default();
+        index.record_habitat_for_topology_cell(IVec2::new(0, 0), breached);
+        index.record_habitat_for_topology_cell(IVec2::new(4, 0), closed);
+        world.insert_resource(index);
+        world.insert_resource(TopologyGrid {
+            origin: Vec2::ZERO,
+            spacing_m: 1.0,
+        });
+        let reaches = world
+            .run_system_once(
+                |index: Res<HabitatIndex>,
+                 grid: Res<TopologyGrid>,
+                 summaries: Query<&HabitatSummary>| {
+                    [
+                        Vec2::new(0.5, 0.5),
+                        Vec2::new(4.5, 0.5),
+                        Vec2::new(9.5, 0.5),
+                    ]
+                    .map(|point| super::escaped_animal_reaches(&index, *grid, &summaries, point))
+                },
+            )
+            .unwrap();
+        // Its own breached pen, another closed pen, open ground.
+        assert_eq!(reaches, [true, false, true]);
     }
 }

@@ -50,6 +50,8 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
             &'static GlobalTransform,
         ),
     >,
+    pub(super) habitat_summaries:
+        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
     pub(super) topology_nodes:
         Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
     pub(super) habitat_regions:
@@ -74,7 +76,8 @@ impl WorldObjectTargetSources<'_, '_> {
         );
     }
 
-    /// The middle of a fence segment, whose origin is its first end.
+    /// The middle of a fence segment, whose origin is its first end, on the
+    /// ground there.
     pub(super) fn fence_middle(
         &self,
         edge: &openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
@@ -85,7 +88,25 @@ impl WorldObjectTargetSources<'_, '_> {
         let second = self
             .topology_grid
             .cell_translation(self.topology_nodes.get(edge.b).ok()?.cell);
-        Some((first + second) * 0.5)
+        // On the ground, not at the topology layer's height.
+        let middle = (first + second) * 0.5;
+        Some(
+            middle.with_y(
+                self.terrain_surfaces
+                    .ground_height(middle.xz())
+                    .unwrap_or(middle.y),
+            ),
+        )
+    }
+
+    /// Whether an escaped animal can reach a world position.
+    pub(super) fn escaped_animal_reaches(&self, position: Vec3) -> bool {
+        super::super::escaped_animal_reaches(
+            &self.habitat_index,
+            *self.topology_grid,
+            &self.habitat_summaries,
+            position.xz(),
+        )
     }
 
     /// The fenced habitat containing a world position, if any.
