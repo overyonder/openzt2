@@ -181,20 +181,21 @@ const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
 const NEED_POINT_DELTA: f32 = 0.2;
 const NEED_POINT_MAX: f32 = 100.0;
 
-/// One need-point update: the branch matching the animal's needs grows, the
-/// other is cleared.
+/// One need-point update: the branch matching the animal's needs grows and
+/// the other shrinks by the same delta, so a moment of a met need doesn't wipe
+/// out a long spell of unhappiness.
 pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
-    if unmet {
-        points.bad = (points.bad + NEED_POINT_DELTA).min(NEED_POINT_MAX);
-        points.good = 0.0;
+    let (grows, shrinks) = if unmet {
+        (&mut points.bad, &mut points.good)
     } else {
-        points.good = (points.good + NEED_POINT_DELTA).min(NEED_POINT_MAX);
-        points.bad = 0.0;
-    }
+        (&mut points.good, &mut points.bad)
+    };
+    *grows = (*grows + NEED_POINT_DELTA).min(NEED_POINT_MAX);
+    *shrinks = (*shrinks - NEED_POINT_DELTA).max(0.0);
 }
 
 /// Every update an animal with an unmet need gains bad need points and loses
-/// its good ones, and an animal whose needs are all met the other way round.
+/// good ones, and an animal whose needs are all met the other way round.
 pub(super) fn update_need_points(
     time: Res<Time<Fixed>>,
     mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
