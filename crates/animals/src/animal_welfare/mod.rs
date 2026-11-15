@@ -55,7 +55,8 @@ impl Plugin for AnimalWelfarePlugin {
                     systems::adjust_bathroom,
                     systems::adjust_reproduction.after(systems::set_animal_need),
                     systems::set_animal_need,
-                    systems::accumulate_need_points,
+                    systems::update_need_points,
+                    systems::accumulate_need_points.after(systems::update_need_points),
                 )
                     .in_set(FixedGameSet::Act)
                     .run_if(in_state(GamePhase::InGame))

@@ -82,6 +82,16 @@ pub struct CumulativeNeedPoints {
     pub bad: f32,
 }
 
+/// The current BFAI need-point branches, `f_needPointsGood` and
+/// `f_needPointsBad`: every update one of them grows, the other is cleared.
+/// A task such as bashing a fence waits for its `needPointsBad`.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+pub struct NeedPoints {
+    pub good: f32,
+    pub bad: f32,
+    pub seconds_until_update: f32,
+}
+
 /// A focused outcome emitted by whichever behavior changed the active BFAI
 /// need-point branch. Values are the raw deltas, before current-branch clamps.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
