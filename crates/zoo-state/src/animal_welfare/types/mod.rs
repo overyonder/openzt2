@@ -83,7 +83,7 @@ pub struct CumulativeNeedPoints {
 }
 
 /// The current BFAI need-point branches, `f_needPointsGood` and
-/// `f_needPointsBad`: every update one of them grows, the other is cleared.
+/// `f_needPointsBad`: every update one of them grows and the other shrinks.
 /// A task such as bashing a fence waits for its `needPointsBad`.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 pub struct NeedPoints {
