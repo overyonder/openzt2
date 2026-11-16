@@ -124,6 +124,7 @@ fn litter(id: AssetId) -> WorldObjectDefinition {
         properties: WorldObjectPropertyFlags::LOOSE_LITTER,
         affordances: Default::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     }
 }
 

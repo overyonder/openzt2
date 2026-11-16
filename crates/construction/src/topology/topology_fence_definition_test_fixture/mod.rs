@@ -68,6 +68,7 @@ pub(super) fn install_fence_definition_with_broken_variant(
             properties: WorldObjectPropertyFlags::default(),
             affordances: WorldObjectAffordanceFlags::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         fences: vec![FenceDefinition {
             fitting_curves: Vec::new(),

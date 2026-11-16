@@ -216,6 +216,26 @@ mod typed_binder_family_reference_tests {
             )]
         );
     }
+
+    #[test]
+    fn a_destructible_building_loads_its_ruin_and_the_ruin_s_concrete_kinds() {
+        // As the shipped hot dog stand names the abstract `rubble_xt`.
+        let document = parse_blue_fang_source_document(
+            AssetPath::new("entities/objects/buildings/ai/hotdog.xml"),
+            br#"<BFTypedBinder binderType="hotdog"><shared><ZTEntityDestructionData entityRuinBinderName="rubble_xt"/></shared></BFTypedBinder>"#,
+        ).expect("valid source fixture");
+        let references =
+            collect_authored_world_definition_source_document_dependency_references(&[document]);
+        assert_eq!(
+            references
+                .into_iter()
+                .map(|(_, reference)| reference)
+                .collect::<Vec<_>>(),
+            ["rubble_xt", "rubble_xt_1", "rubble_xt_2"].map(|name| {
+                AuthoredWorldDefinitionSourceReference::OptionalDocument(name.to_owned())
+            })
+        );
+    }
 }
 
 pub(super) fn resolved_world_definition_source_documents_declare_viewing_area_type(
@@ -241,9 +261,11 @@ pub(super) fn resolved_world_definition_source_documents_declare_viewing_area_ty
     })
 }
 
-#[derive(Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(super) enum AuthoredWorldDefinitionSourceReference {
     Document(String),
+    /// Loaded when it resolves: a destructible object's ruin and its kinds.
+    OptionalDocument(String),
     GateCollisionType(String),
 }
 
@@ -319,6 +341,31 @@ pub(super) fn collect_authored_world_definition_source_document_dependency_refer
                     source_document_path.to_owned(),
                     AuthoredWorldDefinitionSourceReference::Document(reference.to_owned()),
                 ));
+            }
+        }
+        // An abstract ruin (`rubble_xt`) stands for its concrete kinds,
+        // which the shipped data names `rubble_xt_1` and `rubble_xt_2`; the
+        // fragments thrown up (`rubbleBinderName`) load with them.
+        if source_node_local_name.eq_ignore_ascii_case("ZTEntityDestructionData") {
+            if let Some(ruin) = source_node
+                .attribute_named_any(&["entityRuinBinderName"])
+                .map(str::trim)
+                .filter(|ruin| !ruin.is_empty())
+            {
+                let fragments = source_node
+                    .attribute_named_any(&["rubbleBinderName"])
+                    .map(str::trim)
+                    .filter(|fragments| !fragments.is_empty())
+                    .map(str::to_owned);
+                for reference in [ruin.to_owned(), format!("{ruin}_1"), format!("{ruin}_2")]
+                    .into_iter()
+                    .chain(fragments)
+                {
+                    source_document_references.insert((
+                        source_document_path.to_owned(),
+                        AuthoredWorldDefinitionSourceReference::OptionalDocument(reference),
+                    ));
+                }
             }
         }
         if ["fog", "skylayers"]

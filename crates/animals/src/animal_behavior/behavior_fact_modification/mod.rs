@@ -33,6 +33,10 @@ use openzt2_zoo_state::staff::staff_job_completion_rules::behavior_fact_modifica
 use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 
+use openzt2_zoo_state::guests::guest_simulation_types::{
+    AdjustGuestSatisfaction, GuestAttacked, GuestDeparturePoints,
+};
+
 use super::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
@@ -59,6 +63,7 @@ pub(super) struct BehaviorFactModificationMessageWriters<'w> {
         'w,
         openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt,
     >,
+    guest_satisfaction: MessageWriter<'w, AdjustGuestSatisfaction>,
 }
 
 pub(super) fn apply_supported_current_behavior_fact_modifications(
@@ -82,6 +87,8 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     caffeine_modes: Query<&CaffeineMode>,
     jobs: Query<&StaffJob>,
     compatibility: consumable_compatibility::AnimalConsumableCompatibility,
+    // A rampaging animal's attack scares its guest off (`AttackGuest_Rampage`).
+    mut guests: Query<&mut GuestDeparturePoints>,
     mut commands: Commands,
 ) {
     for (entity, mut task, mut random, current_job) in &mut tasks {
@@ -139,6 +146,19 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 if !compatibility.accepts(entity, affected_entity, source, content, &task, &assets) {
                     return false;
                 }
+            }
+            if guests.contains(affected_entity) {
+                return matches!(
+                    modification.modified_fact,
+                    BehaviorFact::DeparturePoints | BehaviorFact::Happiness | BehaviorFact::Attacked
+                ) && !matches!(
+                    modification.modification_value,
+                    openzt2_game_data::behavior::scalar::BehaviorScalarQ16::PriceEffectQ16(_)
+                );
+            }
+            // An animal's escape follows from where it stands.
+            if animals.contains(affected_entity) && modification.modified_fact == BehaviorFact::Escaped {
+                return true;
             }
             behavior_fact_modification_has_runtime_owner(
                 modification,
@@ -327,6 +347,31 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                             && value_q16 != 0,
                     );
                 }
+                BehaviorFact::DeparturePoints => {
+                    if let Ok(mut departure_points) = guests.get_mut(animal) {
+                        departure_points.0 = departure_points.0.saturating_add(value_q16);
+                    }
+                }
+                // Source happiness is deprivation; the satisfaction message is wellness.
+                BehaviorFact::Happiness => {
+                    modification_messages
+                        .guest_satisfaction
+                        .write(AdjustGuestSatisfaction {
+                            guest: animal,
+                            delta_q16: value_q16.saturating_neg(),
+                        });
+                }
+                BehaviorFact::Attacked => {
+                    if modification.modification_operation
+                        == BehaviorFactModificationOperation::Clear
+                        || value_q16 == 0
+                    {
+                        commands.entity(animal).remove::<GuestAttacked>();
+                    } else {
+                        commands.entity(animal).insert(GuestAttacked);
+                    }
+                }
+                BehaviorFact::Escaped => {}
                 _ => {
                     unreachable!("unsupported fact modifications were rejected before application")
                 }

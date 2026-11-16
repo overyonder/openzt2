@@ -85,6 +85,7 @@ fn marker_object(id: AssetId) -> WorldObjectDefinition {
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     }
 }
 
