@@ -1,6 +1,6 @@
-# Bevy render 0.19.1
+# Bevy render
 
-Source: crates.io `bevy_render` 0.19.1, retaining its MIT and Apache licences.
+Source: Bevy `bevy_render` at `2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2`, retaining its MIT and Apache licences.
 
 Local change in `src/storage.rs`: changed `ShaderBuffer` data reuses wgpu's
 `StagingBelt` instead of allocating staging memory through one queue write per

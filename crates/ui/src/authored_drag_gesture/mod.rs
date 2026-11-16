@@ -1,5 +1,6 @@
 use bevy::{input::mouse::AccumulatedMouseMotion, prelude::*};
 use openzt2_game_data::ui_document::widget_control::UiDragOperation;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use super::slider::UiSliderAxis;
 
@@ -31,7 +32,7 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
     motion: Res<AccumulatedMouseMotion>,
     mut gestures: Query<(
         &UiAuthoredDragGesturePolicy,
-        &Interaction,
+        &UiPointerInteraction,
         &mut Node,
         Option<&mut ScrollPosition>,
     )>,
@@ -40,7 +41,7 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
         return;
     }
     for (policy, interaction, mut node, scroll) in &mut gestures {
-        if *interaction != Interaction::Pressed {
+        if *interaction != UiPointerInteraction::Pressed {
             continue;
         }
         let mut delta = motion.delta;

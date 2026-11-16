@@ -1,6 +1,6 @@
 use bevy::ecs::query::QueryItem;
+use bevy::extract::extract_instances::ExtractInstance;
 use bevy::prelude::*;
-use bevy::render::extract_instances::ExtractInstance;
 
 /// Bevy owns draw preparation and submission. This component supplies only the
 /// authored ordering constraints between effect stages and technique passes.
@@ -23,7 +23,7 @@ pub enum AuthoredEffectTransparentRenderStage {
     Scene,
 }
 
-impl ExtractInstance for AuthoredEffectTechniquePassSubmissionOrder {
+impl ExtractInstance<bevy::render::RenderApp> for AuthoredEffectTechniquePassSubmissionOrder {
     type QueryData = &'static Self;
     type QueryFilter = ();
 

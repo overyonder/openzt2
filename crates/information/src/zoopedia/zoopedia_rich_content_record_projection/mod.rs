@@ -189,7 +189,10 @@ fn spawn_localized_zoopedia_rich_content_text(
         text_entity.insert(Underline);
     }
     if !input.is_text_span && (input.has_link_content || subject_link_path.is_some()) {
-        text_entity.insert((Button, bevy::ui::RelativeCursorPosition::default()));
+        text_entity.insert((
+            bevy::ui_widgets::Button,
+            bevy::ui::RelativeCursorPosition::default(),
+        ));
     }
     match subject_link_path {
         Some(subject_link_path) => {

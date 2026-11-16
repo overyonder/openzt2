@@ -15,6 +15,6 @@ pub struct UiFocusable {
 }
 
 /// Presentation-only focus state for keyboard/controller navigation. Pointer
-/// hover remains owned exclusively by Bevy's `Interaction` component.
+/// hover is resolved separately by the alpha-aware picker.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UiFocusPresentation(pub bool);

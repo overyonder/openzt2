@@ -1,0 +1,192 @@
+import bevy_hanabi::render::vfx_common::{
+    ChildInfo, ChildInfoBuffer, EventBuffer, DispatchIndirectArgs, IndirectBuffer,
+    EffectMetadata, RenderGroupIndirect, SimParams, Spawner, DrawIndexedIndirectArgs, BatchInfo,
+    seed, tau, pcg_hash, to_float01, frand, frand2, frand3, frand4,
+    rand_uniform_f, rand_uniform_vec2, rand_uniform_vec3, rand_uniform_vec4,
+    rand_normal_f, rand_normal_vec2, rand_normal_vec3, rand_normal_vec4, proj,
+    unpack_compressed_transform, unpack_compressed_transform_3x3_transpose
+};
+
+struct Particle {
+{{ATTRIBUTES}}
+}
+
+struct ParticleBuffer {
+    particles: array<Particle>,
+}
+
+
+{{PARENT_PARTICLE}}
+
+@if(READ_PARENT_PARTICLE)
+struct ParentParticleBuffer {
+    particles: array<ParentParticle>,
+}
+
+
+{{PROPERTIES}}
+
+/// Location of an effect in a slab.
+struct EffectLocation {
+    /// Index of the effect in the global list of effects.
+    effect_index: u32,
+    /// Base particle index, that is index in the slab of the first particle for this instance.
+    base_particle: u32,
+    /// Index of this particle relative to its effect. Note that if there's an indirection
+    /// buffer then this is the linear index in [0:N[ of the particle to update, before the indirection.
+    update_index: u32,
+}
+
+/// Find the index of an effect from the index of a particle.
+///
+/// This uses a binary search on the slab_offset field of the spawners array, which
+/// represents a prefix sum of the particle count per effect (for previous effects;
+/// the value is actually the base particle so the first entry is always 0).
+///
+/// Requirements:
+/// - var<storage, read> batch_info : BatchInfo
+/// - var<storage, read> prefix_sum : array<u32>
+fn find_location_from_particle(update_particle_index: u32) -> EffectLocation {
+    var lo = batch_info.prefix_sum_offset;
+    var hi = lo + batch_info.prefix_sum_count;
+    var num_iter = 0;  // avoid deadlocking the GPU by capping the iteration count
+    while (lo < hi) {
+        let mid = (hi + lo) >> 1u;
+        let base_particle = prefix_sum[mid];
+        if (update_particle_index >= base_particle) {
+            lo = mid + 1u;
+        } else if (update_particle_index < base_particle) {
+            hi = mid;
+        }
+        num_iter += 1;
+        if (num_iter >= 100) {
+            return EffectLocation(0xDEADBEEFu, 0xDEADBEEFu, 0xDEADBEEFu);
+        }
+    }
+    let base_index = prefix_sum[lo - 1u];
+    let update_index = update_particle_index - base_index;
+    let effect_index = lo - 1u - batch_info.prefix_sum_offset;
+    let base_particle = spawners[batch_info.spawner_base + effect_index].slab_offset;
+    return EffectLocation(effect_index, base_particle, update_index);
+}
+
+/// Transform a simulation space position into a world space position.
+///
+/// The simulation space depends on the effect's SimulationSpace value, and is either
+/// the effect space (SimulationSpace::Local) or the world space (SimulationSpace::Global).
+fn transform_position_simulation_to_world(sim_position: vec3<f32>) -> vec4<f32> {
+    @if(LOCAL_SPACE_SIMULATION)
+    let transform = unpack_compressed_transform(spawners[spawner_index].transform);
+    @if(LOCAL_SPACE_SIMULATION)
+    return transform * vec4<f32>(sim_position, 1.0);
+    @if(!LOCAL_SPACE_SIMULATION)
+    return vec4<f32>(sim_position, 1.0);
+}
+
+fn transform_normal_simulation_to_world(sim_normal: vec3<f32>) -> vec3<f32> {
+    // We use the inverse transpose transform to transform normals.
+    // The inverse transpose is the same as the transposed inverse, so we can
+    // safely use the inverse transform.
+    @if(LOCAL_SPACE_SIMULATION)
+    let transform = unpack_compressed_transform_3x3_transpose(spawners[spawner_index].inverse_transform);
+    @if(LOCAL_SPACE_SIMULATION)
+    return transform * sim_normal;
+    @if(!LOCAL_SPACE_SIMULATION)
+    return sim_normal;
+}
+
+@group(0) @binding(0) var<uniform> sim_params : SimParams;
+@group(0) @binding(1) var<storage, read_write> draw_indirect_buffer : array<DrawIndexedIndirectArgs>;
+
+// "particle" group @1
+@group(1) @binding(0) var<storage, read_write> particle_buffer : ParticleBuffer;
+@group(1) @binding(1) var<storage, read_write> indirect_buffer : IndirectBuffer;
+@if(READ_PARENT_PARTICLE)
+@group(1) @binding(2) var<storage, read> parent_particle_buffer : ParentParticleBuffer;
+
+// "spawner" group @2
+@group(2) @binding(0) var<storage, read> spawners : array<Spawner>;
+@group(2) @binding(1) var<storage, read> prefix_sum : array<u32>;
+@group(2) @binding(2) var<storage, read> batch_info : BatchInfo;
+{{PROPERTIES_BINDING}}
+{{MATERIAL_BINDINGS}}
+
+// "metadata" group @3
+@group(3) @binding(0) var<storage, read_write> effect_metadatas : array<EffectMetadata>;
+{{EMIT_EVENT_BUFFER_BINDINGS}}
+
+{{UPDATE_EXTRA}}
+
+{{EMIT_EVENT_BUFFER_APPEND_FUNCS}}
+
+var<private> effect_delta_time: f32;
+var<private> effect_metadata_index: u32;
+var<private> properties_array_index: u32;
+var<private> spawner_index: u32;
+
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
+    // Particle index in the packed update space of this batch.
+    let update_particle_index = global_invocation_id.x;
+    if (update_particle_index >= batch_info.total_update_count) {
+        return;
+    }
+
+    // Find the index of the effect this particle is part of.
+    let location = find_location_from_particle(update_particle_index);
+    spawner_index = batch_info.spawner_base + location.effect_index;
+    let spawner = &spawners[spawner_index];
+    effect_metadata_index = (*spawner).effect_metadata_index;
+    effect_delta_time = (*spawner).simulation_delta_time;
+    let base_particle = (*spawner).slab_offset;
+
+    // Cap at maximum number of alive particles for the current effect
+    let effect_metadata = &effect_metadatas[effect_metadata_index];
+    if (location.update_index >= (*effect_metadata).max_update) {
+        return;
+    }
+    properties_array_index = (*effect_metadata).properties_array_index;
+
+    let write_index = effect_metadata.indirect_write_index;
+    let read_index = 1u - write_index;
+
+    // This is the actual particle index, from the indirection buffer, addressing an
+    // actually alive particle.
+    let particle_index = indirect_buffer
+        .rows[base_particle + location.update_index]
+        .particle_index[read_index];
+
+    @if(READ_PARENT_PARTICLE)
+    let parent_base_particle = (*spawner).parent_slab_offset;
+
+    // Initialize the PRNG seed
+    seed = pcg_hash(particle_index ^ (*spawner).seed);
+
+    var particle: Particle = particle_buffer.particles[base_particle + particle_index];
+    {{AGE_CODE}}
+    {{REAP_CODE}}
+    {{UPDATE_CODE}}
+
+    {{WRITEBACK_CODE}}
+
+    // Check if alive
+    if (!is_alive) {
+        // Save dead index. Note that dead_index is a global slab index.
+        let alive_index = atomicSub(&((*effect_metadata).alive_count), 1u) - 1u;
+        indirect_buffer.rows[base_particle + alive_index].dead_index = base_particle + particle_index;
+
+        // DEBUG
+        //indirect_buffer.rows[base_particle + alive_index].particle_index[0] = 0xFFFFFFFFu;
+        //indirect_buffer.rows[base_particle + alive_index].particle_index[1] = 0xFFFFFFFFu;
+
+        // Also increment copy of dead count, which was updated in dispatch indirect
+        // pass just before, and need to remain correct after this pass. We wouldn't have
+        // to do that here if we had a per-effect pass between update and the next init.
+        atomicAdd(&((*effect_metadata).max_spawn), 1u);
+    } else {
+        // Increment visible particle count (in the absence of any GPU culling), and write
+        // the indirection index for later rendering.
+        let indirect_index = atomicAdd(&draw_indirect_buffer[(*effect_metadata).indirect_render_index].instance_count, 1u);
+        indirect_buffer.rows[base_particle + indirect_index].particle_index[write_index] = particle_index;
+    }
+}

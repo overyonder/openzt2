@@ -27,7 +27,7 @@
       inherit system;
       overlays = [(import rust-overlay)];
     };
-    rustToolchain = pkgs.rust-bin.stable."1.96.0".default.override {
+    rustToolchain = pkgs.rust-bin.stable."1.97.1".default.override {
       extensions = [
         "clippy"
         "rust-analyzer"

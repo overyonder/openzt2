@@ -27,8 +27,8 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
     bevy::asset::load_internal_asset!(
         application,
         effect_pass_gpu_data::FIXED_FUNCTION_SHADER,
-        "../fixed_function.wgsl",
-        Shader::from_wgsl
+        "../fixed_function.wesl",
+        |source, _| Shader::from_wesl(source, "embedded://openzt2/fixed_function.wesl")
     );
     application
         .add_plugins(MaterialPlugin::<EffectPassMaterial>::default())
@@ -42,10 +42,9 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
 }
 
 fn initialize_fixed_function_world_light_buffer(mut buffers: ResMut<Assets<ShaderBuffer>>) {
+    let mut buffer = ShaderBuffer::default();
+    D3d9FixedFunctionWorldLightContexts::default().write_shader_buffer(&mut buffer);
     buffers
-        .insert(
-            FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id(),
-            ShaderBuffer::from(D3d9FixedFunctionWorldLightContexts::default()),
-        )
+        .insert(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id(), buffer)
         .expect("fixed UUID shader-buffer insertion cannot fail");
 }

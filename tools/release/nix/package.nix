@@ -13,6 +13,12 @@
       ../../../Cargo.lock
       ../../../.cargo
       ../../../crates
+      ../../../vendor/avian3d
+      ../../../vendor/bevy-inspector-egui
+      ../../../vendor/bevy_egui
+      ../../../vendor/bevy_heavy
+      ../../../vendor/bevy_transform_interpolation
+      ../../../vendor/glam_matrix_extras
       ../../../vendor/taffy
       ../../../vendor/lunify
       ../../../vendor/bevy_image
@@ -52,7 +58,10 @@ in
     pname = "openzt2";
     version = manifest.workspace.package.version;
     src = source;
-    cargoLock.lockFile = ../../../Cargo.lock;
+    cargoLock = {
+      lockFile = ../../../Cargo.lock;
+      outputHashes."bevy-0.20.0-dev" = "sha256-TaCpLtOQ2T4BGmzucoxeED3lziCLDOtKm/naiuMdKpw=";
+    };
     cargoBuildFlags = ["-p" "openzt2_game" "--bin" "openzt2"];
     doCheck = false;
     nativeBuildInputs = [pkgs.pkg-config pkgs.makeWrapper pkgs.python3 pkgs.cargo-about];

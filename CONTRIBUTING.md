@@ -28,11 +28,11 @@ currently supports x86_64 Linux; native builds are described below.
 
 | Dependency | Version |
 | --- | --- |
-| Rust | 1.96.0 |
-| Bevy | 0.19.1 |
-| Avian3D | 0.7.0 |
-| Hanabi | 0.19.0 |
-| wgpu | 29.0.4 |
+| Rust | 1.97.1 |
+| Bevy | development revision `2e26874e` |
+| Avian3D | 0.8.0 |
+| Hanabi | 0.20.0 |
+| wgpu | 30.0.2 |
 | mlua | 0.11.6 (Lua 5.1) |
 | lunify | 1.1.0 |
 
@@ -108,8 +108,8 @@ export CPPFLAGS="-I$(brew --prefix)/include"
 Then, from the repository root on either platform:
 
 ```sh
-rustup toolchain install 1.96.0 --profile minimal --component rustfmt,clippy
-rustup override set 1.96.0
+rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+rustup override set 1.97.1
 export OPENZT2_RELEASE_HOST=1
 export OPENZT2_NATIVE_DEPENDENCY_DIR="$PWD/build/native"
 export KAI_CARGO_TARGET_ROOT="$HOME/.cache/cargo-targets"
@@ -162,8 +162,8 @@ Then open PowerShell 7 with the Visual Studio x64 developer environment and
 return to the repository root:
 
 ```powershell
-rustup toolchain install 1.96.0-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
-rustup override set 1.96.0-x86_64-pc-windows-msvc
+rustup toolchain install 1.97.1-x86_64-pc-windows-msvc --profile minimal --component rustfmt,clippy
+rustup override set 1.97.1-x86_64-pc-windows-msvc
 $env:OPENZT2_RELEASE_HOST = '1'
 $env:OPENZT2_NATIVE_DEPENDENCY_DIR = "$PWD/build/native"
 $env:KAI_CARGO_TARGET_ROOT = "$env:LOCALAPPDATA/cargo-targets"

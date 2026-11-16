@@ -1,8 +1,10 @@
 //! Computes size using styles and measure functions
 
-use crate::geometry::{Point, Size};
+#[cfg(feature = "content_size")]
+use crate::geometry::Rect;
+use crate::geometry::Size;
 use crate::style::{AvailableSpace, Overflow, Position};
-use crate::tree::{CollapsibleMarginSet, RunMode};
+use crate::tree::{Baselines, CollapsibleMarginSet, RunMode};
 use crate::tree::{LayoutInput, LayoutOutput, SizingMode};
 use crate::util::debug::debug_log;
 use crate::util::sys::f32_max;
@@ -77,6 +79,7 @@ where
         || style.overflow().x.is_scroll_container()
         || style.overflow().y.is_scroll_container()
         || style.position() == Position::Absolute
+        || style.contain().establishes_independent_formatting_context()
         || padding.top > 0.0
         || padding.bottom > 0.0
         || border.top > 0.0
@@ -98,8 +101,8 @@ where
             return LayoutOutput {
                 size,
                 #[cfg(feature = "content_size")]
-                content_size: Size::ZERO,
-                first_baselines: Point::NONE,
+                scrollable_overflow_rect: Rect::ZERO,
+                baselines: Baselines::NONE,
                 top_margin: CollapsibleMarginSet::ZERO,
                 bottom_margin: CollapsibleMarginSet::ZERO,
                 margins_can_collapse_through: false,
@@ -150,11 +153,28 @@ where
     };
     let size = size.maybe_max(padding_border.sum_axes().map(Some));
 
+    // A scroll container's own padding at the end of the content is part of its scrollable
+    // overflow region, so it is included in the overflow rect. Boxes that are not scroll
+    // containers do not extend their overflow region by their own padding.
+    #[cfg(feature = "content_size")]
+    let scrollable_overflow_rect = {
+        let is_scroll_container = style.overflow().x.is_scroll_container() || style.overflow().y.is_scroll_container();
+        let is_rtl = style.direction().is_rtl();
+        let start_padding = if is_rtl { padding.right } else { padding.left };
+        let end_padding = if is_rtl { padding.left } else { padding.right };
+        Rect {
+            left: 0.0,
+            right: start_padding + measured_size.width + if is_scroll_container { end_padding } else { 0.0 },
+            top: 0.0,
+            bottom: padding.top + measured_size.height + if is_scroll_container { padding.bottom } else { 0.0 },
+        }
+    };
+
     LayoutOutput {
         size,
         #[cfg(feature = "content_size")]
-        content_size: measured_size + padding.sum_axes(),
-        first_baselines: Point::NONE,
+        scrollable_overflow_rect,
+        baselines: Baselines::NONE,
         top_margin: CollapsibleMarginSet::ZERO,
         bottom_margin: CollapsibleMarginSet::ZERO,
         margins_can_collapse_through: !has_styles_preventing_being_collapsed_through

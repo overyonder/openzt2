@@ -14,6 +14,7 @@ use openzt2_game_data::ui_document::widget_control::UiDragOperation;
 use openzt2_game_data::ui_document::widget_control::UiTooltipPresentation;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use crate::authored_button_attention_pulse_presentation::UiAuthoredButtonAttentionPulse;
 use crate::authored_drag_gesture::UiAuthoredDragGesturePolicy;
@@ -190,7 +191,7 @@ pub(super) fn project_widget(
                 ScrollPosition::default(),
             ));
             if !matches!(node.kind, UiNodeKind::DropList) {
-                commands.entity(entity).insert(Interaction::None);
+                commands.entity(entity).insert(UiPointerInteraction::None);
             }
             // These lists are authored toggle sets: selecting one row
             // deselects the others.
@@ -319,7 +320,7 @@ pub(super) fn project_widget(
                     source: UiWidgetLiveCollectionSource::Unbound,
                 },
                 ScrollPosition::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
                 // Native `ZTUITypeList` derives from `UIToggleSet` and carries
                 // its own selection fact; the authored `UI_ACTIVATE_ON`/`OFF`
                 // list events drive it and the catalogue selection consumer
@@ -343,7 +344,7 @@ pub(super) fn project_widget(
                 },
                 UiAuthoredToggleGroupSelectionPolicy::new(false),
                 ScrollPosition::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
             ));
         }
         UiWidgetRecord::FinanceList {
@@ -368,7 +369,7 @@ pub(super) fn project_widget(
                     source: UiWidgetLiveCollectionSource::Unbound,
                 },
                 ScrollPosition::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
             ));
         }
         UiWidgetRecord::CatalogueDetails { grid } => {
@@ -495,7 +496,7 @@ pub(super) fn project_widget(
                         source,
                     },
                     ScrollPosition::default(),
-                    Interaction::None,
+                    UiPointerInteraction::None,
                 ));
             }
         }
@@ -538,7 +539,7 @@ pub(super) fn project_widget(
                         .cloned(),
                 },
                 UiGlobeDrag::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
                 Pickable::default(),
             ));
             commands
@@ -655,7 +656,7 @@ pub(super) fn project_widget(
             );
             commands
                 .entity(entity)
-                .insert((ScrollPosition::default(), Interaction::None));
+                .insert((ScrollPosition::default(), UiPointerInteraction::None));
             commands
                 .entity(entity)
                 .entry::<Node>()

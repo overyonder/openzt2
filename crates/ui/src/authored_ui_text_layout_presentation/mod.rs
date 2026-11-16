@@ -8,7 +8,7 @@ pub(crate) const AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY: &str = "Comic Neue"
 /// Resolves authored family names through the same platform bindings as UI fonts.
 pub fn resolve_authored_font_family_to_bevy_font_source(family: &str) -> FontSource {
     if family.eq_ignore_ascii_case("arial") {
-        FontSource::SansSerif
+        FontSource::sans_serif()
     } else if family.eq_ignore_ascii_case("comic sans ms") {
         FontSource::Family(AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY.into())
     } else {
@@ -16,9 +16,10 @@ pub fn resolve_authored_font_family_to_bevy_font_source(family: &str) -> FontSou
     }
 }
 
-#[derive(Component, Default)]
+#[derive(Component, Default, PartialEq)]
 pub struct UiSingleLineTextAlignment {
     pub horizontal_offset_pixels: f32,
+    pub(super) anchor: Vec2,
 }
 
 /// Authored font height retained for localized rich-text descendants. Glyphs
@@ -76,26 +77,52 @@ pub(super) fn bind_authored_windows_font_roles_to_available_platform_font_famili
 /// Render extraction consumes the resulting offset in that same frame.
 pub(super) fn align_authored_single_line_text_from_measured_glyph_run(
     mut texts: Query<(
-        &ComputedNode,
-        &TextLayout,
-        &TextLayoutInfo,
+        Ref<ComputedNode>,
+        Ref<TextLayout>,
+        Ref<TextLayoutInfo>,
         &mut UiSingleLineTextAlignment,
+        Option<&Children>,
     )>,
+    mut rich_tooltips: Query<
+        &mut UiGlobalTransform,
+        With<super::authored_tooltip_presentation::UiTooltipTextPresentation>,
+    >,
 ) {
-    for (node, text_layout, layout, mut alignment) in &mut texts {
+    for (node, text_layout, layout, mut alignment, children) in &mut texts {
+        if !node.is_changed()
+            && !text_layout.is_changed()
+            && !layout.is_changed()
+            && !alignment.is_added()
+        {
+            continue;
+        }
         // `TextLayoutInfo::size` is logical; `ComputedNode` and the glyph
         // offset are physical.
-        let remaining =
-            (node.content_box().size() - layout.size / node.inverse_scale_factor()).max(Vec2::ZERO);
-        let horizontal = match text_layout.justify {
-            Justify::Center => remaining.x * 0.5,
-            Justify::End | Justify::Right => remaining.x,
+        let width = layout.size.x / node.inverse_scale_factor();
+        let content = node.content_box();
+        let fraction = match text_layout.justify {
+            Justify::Center => 0.5,
+            Justify::End | Justify::Right => 1.0,
             Justify::Start | Justify::Left | Justify::Justified => 0.0,
         };
+        let horizontal = (content.width() - width).max(0.0) * fraction;
         // Offset extracted glyphs, never the node: display-field backgrounds
         // and pointer regions must retain their authored geometry.
-        if alignment.horizontal_offset_pixels != horizontal {
-            alignment.horizontal_offset_pixels = horizontal;
+        let next = UiSingleLineTextAlignment {
+            horizontal_offset_pixels: horizontal,
+            anchor: content.min + Vec2::new(horizontal + width * fraction, 0.0),
+        };
+        if *alignment == next {
+            continue;
+        }
+        *alignment = next;
+        // The rich tooltip's retained draw uses its parent's measured width and alignment.
+        if let Some(children) = children {
+            for child in children.iter() {
+                if let Ok(mut transform) = rich_tooltips.get_mut(child) {
+                    transform.set_changed();
+                }
+            }
         }
     }
 }

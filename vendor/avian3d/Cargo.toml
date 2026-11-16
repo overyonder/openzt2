@@ -1,0 +1,202 @@
+[package]
+edition = "2024"
+name = "avian3d"
+version = "0.8.0"
+authors = ["Joona Aalto <jondolf.dev@gmail.com>"]
+build = false
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "An ECS-driven physics engine for the Bevy game engine"
+documentation = "https://docs.rs/avian3d"
+readme = "README.md"
+keywords = [
+    "gamedev",
+    "physics",
+    "simulation",
+    "bevy",
+]
+categories = [
+    "game-development",
+    "science",
+    "simulation",
+]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/avianphysics/avian"
+
+[package.metadata.docs.rs]
+features = ["diagnostic_ui"]
+
+[features]
+3d = []
+bevy_diagnostic = []
+bevy_picking = ["bevy/bevy_picking"]
+bevy_scene = ["bevy/bevy_world_serialization"]
+collider-from-mesh = [
+    "bevy/bevy_mesh",
+    "bevy/bevy_mikktspace",
+    "3d",
+]
+debug-plugin = [
+    "bevy/bevy_gizmos",
+    "bevy/bevy_render",
+]
+default = [
+    "3d",
+    "parry-f32",
+    "debug-plugin",
+    "xpbd_joints",
+    "parallel",
+    "collider-from-mesh",
+    "bevy_scene",
+    "bevy_picking",
+]
+default-collider = []
+diagnostic_ui = [
+    "bevy_diagnostic",
+    "bevy/bevy_ui",
+]
+enhanced-determinism = [
+    "dep:libm",
+    "bevy_math/libm",
+    "bevy_heavy/libm",
+    "parry3d?/enhanced-determinism",
+    "parry3d-f64?/enhanced-determinism",
+]
+f64 = []
+parallel = [
+    "bevy/multi_threaded",
+    "parry3d?/parallel",
+    "parry3d-f64?/parallel",
+]
+parry-f32 = [
+    "dep:parry3d",
+    "default-collider",
+]
+parry-f64 = [
+    "f64",
+    "dep:parry3d-f64",
+    "default-collider",
+]
+serialize = [
+    "dep:serde",
+    "bevy/serialize",
+    "glam_matrix_extras/serde",
+    "bevy_heavy/serialize",
+    "bevy_transform_interpolation/serialize",
+    "parry3d?/serde-serialize",
+    "parry3d-f64?/serde-serialize",
+    "smallvec/serde",
+    "bitflags/serde",
+]
+test = []
+validate = []
+xpbd_joints = []
+
+[lib]
+name = "avian3d"
+path = "src/lib.rs"
+bench = false
+required-features = ["3d"]
+
+[dependencies.approx]
+version = "0.5"
+
+[dependencies.avian_derive]
+version = "0.2"
+
+[dependencies.bevy]
+version = "=0.20.0-dev"
+features = [
+    "std",
+    "bevy_log",
+]
+default-features = false
+
+[dependencies.bevy_curve]
+version = "=0.20.0-dev"
+features = ["approx"]
+
+[dependencies.bevy_heavy]
+version = "0.6"
+
+[dependencies.bevy_math]
+version = "=0.20.0-dev"
+features = ["approx"]
+
+[dependencies.bevy_shape]
+version = "=0.20.0-dev"
+features = ["approx"]
+
+[dependencies.bevy_transform_interpolation]
+version = "0.6"
+
+[dependencies.bitflags]
+version = "2.5.0"
+
+[dependencies.derive_more]
+version = "2"
+
+[dependencies.disqualified]
+version = "1.0"
+
+[dependencies.glam_matrix_extras]
+version = "0.4"
+features = ["bevy_reflect"]
+
+[dependencies.itertools]
+version = "0.15"
+
+[dependencies.libm]
+version = "0.2"
+optional = true
+
+[dependencies.obvhs]
+version = "0.4"
+
+[dependencies.parry3d]
+version = "0.31"
+optional = true
+
+[dependencies.parry3d-f64]
+version = "0.31"
+optional = true
+
+[dependencies.serde]
+version = "1"
+features = ["derive"]
+optional = true
+
+[dependencies.smallvec]
+version = "1.15"
+
+[dependencies.thiserror]
+version = "2"
+
+[dependencies.thread_local]
+version = "1.1"
+
+[dev-dependencies.bevy]
+version = "=0.20.0-dev"
+features = [
+    "3d",
+    "ui",
+    "https",
+    "bevy_feathers",
+]
+
+[dev-dependencies.bevy_heavy]
+version = "0.6"
+features = ["approx"]
+
+[dev-dependencies.bevy_mod_debugdump]
+version = "0.17"
+
+[dev-dependencies.criterion]
+version = "0.8"
+features = ["html_reports"]
+
+[dev-dependencies.rand]
+version = "0.10"

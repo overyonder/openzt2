@@ -4,9 +4,9 @@ use std::time::Duration;
 use bevy::{
     input_focus::{FocusCause, InputFocus},
     prelude::*,
-    text::{ComputedTextBlock, EditableText, EditableTextFilter, TextCursorStyle, TextLayoutInfo},
-    ui::widget::{TextNodeFlags, TextScroll},
-    ui_widgets::SelectAllOnFocus,
+    text::{ComputedTextBlock, EditableText, EditableTextFilter, TextCursorStyle},
+    ui::widget::TextNodeFlags,
+    ui_widgets::{SelectAllOnFocus, TextInput},
 };
 
 use openzt2_interface_state::input::input_types::ActionSource;
@@ -25,9 +25,6 @@ pub struct UiTextEditPolicy {
     select_all_on_focus: bool,
     cursor_blink_period_seconds: f32,
 }
-
-#[derive(Component)]
-pub(super) struct UiTextScrollSuppressedDuringScaledCanvasRenderExtraction;
 
 impl UiTextEditPolicy {
     pub(super) fn from_authored_text_edit_definition(
@@ -81,7 +78,7 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
                 .unwrap_or(1.0),
         );
 
-        // Bevy's TextScroll keeps the caret inside this content box. Clipping
+        // Bevy's editable viewport keeps the caret inside this content box. Clipping
         // makes the resulting horizontal scroll visible instead of drawing the
         // off-screen portion of the one-line edit over sibling controls.
         node.overflow = Overflow::clip_x();
@@ -93,6 +90,7 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
         entity_commands.remove::<(Text, TextNodeFlags)>().insert((
             ComputedTextBlock::default(),
             editable,
+            TextInput,
             TextCursorStyle::default(),
             TextLayout::no_wrap(),
         ));
@@ -116,50 +114,6 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
                 is_legal_authored_filename_character,
             ));
         }
-    }
-}
-
-/// Bevy 0.19's editable-text extractor builds its private self-clip from an
-/// unscaled content size around a transformed global centre. On the stretched
-/// authored canvas that clip cuts fitting text down to its central suffix.
-/// A fitting, unscrolled edit needs no private clip: its authored `Node`
-/// already bounds the value. Remove only that redundant render-time marker.
-pub(super) fn suppress_fitting_authored_text_edit_scroll_during_render_extraction(
-    mut commands: Commands,
-    edits: Query<
-        (Entity, &TextScroll, &ComputedNode, &TextLayoutInfo),
-        (
-            With<UiTextEditPolicy>,
-            Without<UiTextScrollSuppressedDuringScaledCanvasRenderExtraction>,
-        ),
-    >,
-) {
-    for (entity, scroll, node, layout) in &edits {
-        if scroll.0 == Vec2::ZERO
-            && layout
-                .size
-                .cmple(node.content_box().size() * node.inverse_scale_factor())
-                .all()
-        {
-            commands
-                .entity(entity)
-                .remove::<TextScroll>()
-                .insert(UiTextScrollSuppressedDuringScaledCanvasRenderExtraction);
-        }
-    }
-}
-
-/// Restore Bevy's scroll owner before its input, editing and layout systems
-/// run on the next frame.
-pub(super) fn restore_authored_text_edit_scroll_before_input(
-    mut commands: Commands,
-    edits: Query<Entity, With<UiTextScrollSuppressedDuringScaledCanvasRenderExtraction>>,
-) {
-    for entity in &edits {
-        commands
-            .entity(entity)
-            .insert(TextScroll::default())
-            .remove::<UiTextScrollSuppressedDuringScaledCanvasRenderExtraction>();
     }
 }
 

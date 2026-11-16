@@ -3,6 +3,7 @@ use openzt2_game_data::ui_document::{
     action::shell_navigation::UiShellAction, node_property_binding::*,
 };
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
@@ -411,7 +412,7 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             }
             if !enabled {
                 if let Ok(mut interaction) = presentation.interactions.get_mut(entity) {
-                    *interaction = Interaction::None;
+                    *interaction = UiPointerInteraction::None;
                 }
             }
         }

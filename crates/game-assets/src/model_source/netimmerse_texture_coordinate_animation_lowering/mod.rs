@@ -4,7 +4,7 @@
 mod tests;
 
 use anyhow::{bail, ensure, Context, Result};
-use bevy::math::cubic_splines::CubicSegment;
+use bevy::curve::cubic_splines::CubicSegment;
 use std::{collections::BTreeSet, sync::Arc};
 
 use super::netimmerse_nif_source::{

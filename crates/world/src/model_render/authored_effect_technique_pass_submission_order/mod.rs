@@ -2,8 +2,8 @@ use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::ecs::entity::EntityHashMap;
 #[cfg(test)]
 use bevy::ecs::system::RunSystemOnce;
+use bevy::extract::extract_instances::ExtractedInstances;
 use bevy::prelude::*;
-use bevy::render::extract_instances::ExtractedInstances;
 use bevy::render::render_phase::PhaseItem;
 use bevy::render::render_phase::ViewSortedRenderPhases;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -33,7 +33,9 @@ pub(super) fn project_authored_effect_opaque_base_pass_order(
 }
 
 pub(super) fn sort_authored_effect_invocations_before_bevy_mesh_batch_preparation(
-    orders: Res<ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder>>,
+    orders: Res<
+        ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder, bevy::render::RenderApp>,
+    >,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     mut invocation_distances: Local<EntityHashMap<(bool, f32)>>,
 ) {
@@ -101,8 +103,10 @@ mod authored_effect_ordering_tests {
         let water_base = world.spawn_empty().id();
         let water_overlay = world.spawn_empty().id();
         let view = RetainedViewEntity::new(world.spawn_empty().id().into(), None, 0);
-        let mut orders =
-            ExtractedInstances::<AuthoredEffectTechniquePassSubmissionOrder>::default();
+        let mut orders = ExtractedInstances::<
+            AuthoredEffectTechniquePassSubmissionOrder,
+            bevy::render::RenderApp,
+        >::default();
         for (entity, invocation, index) in [
             (near_base, near_base, 0),
             (near_overlay, near_base, 1),

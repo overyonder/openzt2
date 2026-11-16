@@ -1,5 +1,5 @@
 use bevy::prelude::*;
-use bevy_inspector_egui::bevy_egui::{EguiContext, EguiMultipassSchedule, PrimaryEguiContext};
+use bevy_inspector_egui::bevy_egui::{EguiContext, EguiSchedule, PrimaryEguiContext};
 
 use openzt2_interface_state::shell::shell_screen_presentation_types::ShellUiCamera;
 
@@ -25,7 +25,7 @@ pub(super) fn own_primary_egui_context_on_shell_camera(
         if context != target {
             commands
                 .entity(context)
-                .remove::<(PrimaryEguiContext, EguiMultipassSchedule, EguiContext)>();
+                .remove::<(PrimaryEguiContext, EguiSchedule, EguiContext)>();
         }
     }
 

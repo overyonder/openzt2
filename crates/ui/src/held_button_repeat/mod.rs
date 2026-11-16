@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_interface_state::input::input_types::ActionSource;
 
@@ -14,11 +15,16 @@ pub(super) struct UiButtonHold {
 
 pub(super) fn repeat_held_buttons(
     time: Res<Time>,
-    mut buttons: Query<(Entity, &Interaction, &UiButtonPolicy, &mut UiButtonHold)>,
+    mut buttons: Query<(
+        Entity,
+        &UiPointerInteraction,
+        &UiButtonPolicy,
+        &mut UiButtonHold,
+    )>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
     for (entity, interaction, policy, mut hold) in &mut buttons {
-        if *interaction != Interaction::Pressed || policy.repeat_delay_seconds <= 0.0 {
+        if *interaction != UiPointerInteraction::Pressed || policy.repeat_delay_seconds <= 0.0 {
             if hold.elapsed_seconds != 0.0 {
                 hold.elapsed_seconds = 0.0;
             }

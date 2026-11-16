@@ -8,13 +8,14 @@ use openzt2_game_assets::{
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::ui_document::action::construction::UiConstructionAction;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_interface_state::{
     input::input_types::{ActionRequest, ActionSource, GameAction},
     ui::{
-        UiSet,
         authored_ui_action_projection_components::{UiActionSource, UiConstructionActions},
         authored_ui_interaction_enabled_state::UiInteractionEnabled,
         authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+        UiSet,
     },
 };
 use openzt2_world_state::application_schedule::GameSet;
@@ -59,12 +60,12 @@ impl Plugin for RedoButtonPlugin {
 fn toggle(
     mut enabled: ResMut<RedoButtonEnabled>,
     mut checkboxes: Query<
-        (&Interaction, &mut Text),
-        (With<RedoButtonCheckbox>, Changed<Interaction>),
+        (&UiPointerInteraction, &mut Text),
+        (With<RedoButtonCheckbox>, Changed<UiPointerInteraction>),
     >,
 ) {
     for (interaction, mut label) in &mut checkboxes {
-        if *interaction == Interaction::Pressed {
+        if *interaction == UiPointerInteraction::Pressed {
             enabled.0 = !enabled.0;
             label.0 = format!(
                 "[{}] Redo button (built-in)",
@@ -112,7 +113,7 @@ fn attach(
             RedoButton { undo },
             ChildOf(parent.parent()),
             ZIndex(z.0 + 1),
-            Button,
+            bevy::ui_widgets::Button,
             UiInteractionEnabled(false),
             Visibility::Hidden,
             ImageNode::new(load_embedded_asset!(&*assets, "button.png")),
@@ -134,7 +135,7 @@ fn update(
     mut buttons: Query<(
         Entity,
         &RedoButton,
-        &Interaction,
+        &UiPointerInteraction,
         &mut Node,
         &mut Visibility,
         &mut ImageNode,
@@ -160,9 +161,9 @@ fn update(
         interactive.set_if_neq(UiInteractionEnabled(available && enabled.0));
         let x = match (available, interaction) {
             (false, _) => 64.0,
-            (true, Interaction::None) => 0.0,
-            (true, Interaction::Hovered) => 128.0,
-            (true, Interaction::Pressed) => 192.0,
+            (true, UiPointerInteraction::None) => 0.0,
+            (true, UiPointerInteraction::Hovered) => 128.0,
+            (true, UiPointerInteraction::Pressed) => 192.0,
         };
         let rect = Some(Rect::new(x, 0.0, x + 64.0, 64.0));
         if image.rect != rect {
@@ -172,12 +173,15 @@ fn update(
 }
 
 fn activate(
-    buttons: Query<(&Interaction, &UiInteractionEnabled), (With<RedoButton>, Changed<Interaction>)>,
+    buttons: Query<
+        (&UiPointerInteraction, &UiInteractionEnabled),
+        (With<RedoButton>, Changed<UiPointerInteraction>),
+    >,
     mut actions: MessageWriter<ActionRequest>,
 ) {
     if buttons
         .iter()
-        .any(|(interaction, enabled)| enabled.0 && *interaction == Interaction::Pressed)
+        .any(|(interaction, enabled)| enabled.0 && *interaction == UiPointerInteraction::Pressed)
     {
         actions.write(ActionRequest {
             action: GameAction::Redo,

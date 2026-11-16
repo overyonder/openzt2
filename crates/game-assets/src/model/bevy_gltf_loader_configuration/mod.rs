@@ -20,6 +20,7 @@ pub fn create_bevy_gltf_loader_for_lowered_source_assets(world: &mut World) -> G
         custom_vertex_attributes: custom_native_model_vertex_attributes(),
         default_sampler: world.resource::<DefaultGltfImageSampler>().get_internal(),
         default_convert_coordinates: GltfConvertCoordinates::default(),
+        default_mesh_compression: bevy::mesh::MeshCompressionArgs::none(),
         extensions: world.resource::<GltfExtensionHandlers>().0.clone(),
         default_skinned_mesh_bounds_policy: GltfSkinnedMeshBoundsPolicy::default(),
     }

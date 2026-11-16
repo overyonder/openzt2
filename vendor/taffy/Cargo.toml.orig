@@ -1,6 +1,6 @@
 [package]
 name = "taffy"
-version = "0.10.1"
+version = "0.14.0"
 authors = [
     "Alice Cecile <alice.i.cecile@gmail.com>",
     "Johnathan Kelley <jkelleyrtp@gmail.com>",
@@ -20,7 +20,7 @@ arrayvec = { version = "0.7", default-features = false }
 document-features = { version = "0.2.7", optional = true }
 serde = { version = "1.0", default-features = false, optional = true, features = ["serde_derive"] }
 slotmap = { version = "1.0.6", default-features = false, optional = true }
-grid = { version = "1.0.0", default-features = false, optional = true }
+smallvec = { version = "1.13", default-features = false, optional = true }
 cssparser = { version = "0.37.0", default-features = false, optional = true }
 
 [package.metadata.docs.rs]
@@ -37,6 +37,7 @@ default = [
     "std",
     "taffy_tree",
     "flexbox",
+    "flexbox_balance",
     "grid",
     "block_layout",
     "float_layout",
@@ -54,8 +55,10 @@ block_layout = []
 float_layout = []
 ## Enables the Flexbox layout algorithm. See [`compute_flexbox_layout`](crate::compute_flexbox_layout).
 flexbox = []
+## Enables support for `flex-wrap: balance` and `flex-line-count` from [CSS Flexbox Level 2](https://drafts.csswg.org/css-flexbox-2/)
+flexbox_balance = ["flexbox"]
 ## Enables the CSS Grid layout algorithm. See [`compute_grid_layout`](crate::compute_grid_layout).
-grid = ["alloc", "dep:grid"]
+grid = ["alloc", "dep:smallvec"]
 ## Enables calc() values for all layout algorithms
 calc = []
 ## Causes all algorithms to compute and output a content size for each node
@@ -79,7 +82,7 @@ parse = ["dep:cssparser"]
 ## Enable the `parse` feature with proc-macro dependent optimisations
 parse_faster = ["parse", "cssparser/fast_match_byte"]
 ## Allow Taffy to depend on the [`Rust Standard Library`](std)
-std = ["grid?/std", "serde?/std", "slotmap?/std"]
+std = ["serde?/std", "slotmap?/std"]
 ## Allow Taffy to depend on the alloc library
 alloc = ["serde?/alloc"]
 ## Internal feature for debugging
@@ -112,10 +115,11 @@ doc-scrape-examples = true
 [workspace]
 members = [
     "scripts/gentest",
+    "scripts/getchrome",
     "scripts/format-fixtures",
     "scripts/import-yoga-tests",
     "tests/common",
 ]
-# The cosmic_text example and benches are excluded from the workspace as including them breaks compilation
-# of all crates in the workspace with our MSRV compiler
-exclude = ["examples/cosmic_text", "benches"]
+# The Parley example and benches are excluded from the workspace as their dependencies require a newer
+# Rust version than Taffy's MSRV
+exclude = ["examples/parley", "benches"]

@@ -5,10 +5,9 @@ use bevy::{
     render::{
         render_asset::RenderAssets,
         render_resource::{
-            AsBindGroup, AsBindGroupError, BindGroupLayout, BindGroupLayoutEntry, BindingType,
-            BufferBindingType, BufferInitDescriptor, BufferUsages, OwnedBindingResource,
-            SamplerBindingType, ShaderStages, TextureSampleType, TextureViewDimension,
-            UnpreparedBindGroup,
+            AsBindGroup, AsBindGroupError, BindGroupBuilder, BindGroupLayout, BindGroupLayoutEntry,
+            BindingType, BufferBindingType, BufferInitDescriptor, BufferUsages, SamplerBindingType,
+            ShaderStages, TextureSampleType, TextureViewDimension, UnpreparedBindingResource,
         },
         renderer::RenderDevice,
         storage::GpuShaderBuffer,
@@ -40,18 +39,20 @@ impl AsBindGroup for EffectPassMaterial {
         self.pipeline_specialization_key.clone()
     }
 
-    fn unprepared_bind_group(
+    fn build_bind_group(
         &self,
         layout: &BindGroupLayout,
         render_device: &RenderDevice,
         param: &mut SystemParamItem<'_, '_, Self::Param>,
         force_no_bindless: bool,
-    ) -> Result<UnpreparedBindGroup, AsBindGroupError> {
-        let mut result = self.texture_assets.unprepared_bind_group(
+        result: &mut BindGroupBuilder,
+    ) -> Result<(), AsBindGroupError> {
+        self.texture_assets.build_bind_group(
             layout,
             render_device,
             &mut param.0,
             force_no_bindless,
+            result,
         )?;
         // D3D9 decides a stage's texture type from the bound texture. Cube
         // textures therefore move to the parallel cube range, and the unused
@@ -74,12 +75,12 @@ impl AsBindGroup for EffectPassMaterial {
                 |view| {
                     cube_texture_stage_mask |= 1 << stage;
                     if let Some((_, resource)) = result
-                        .bindings
+                        .binding_resources
                         .0
                         .iter_mut()
                         .find(|(candidate, _)| *candidate == FIRST_TEXTURE_BINDING + stage)
                     {
-                        *resource = OwnedBindingResource::TextureView(
+                        *resource = UnpreparedBindingResource::TextureView(
                             TextureViewDimension::D2,
                             fallback_image.d2.texture_view.clone(),
                         );
@@ -87,16 +88,19 @@ impl AsBindGroup for EffectPassMaterial {
                     view
                 },
             );
-            result.bindings.0.push((
+            result.binding_resources.0.push((
                 FIRST_CUBE_TEXTURE_BINDING + stage,
-                OwnedBindingResource::TextureView(TextureViewDimension::Cube, cube_texture_view),
+                UnpreparedBindingResource::TextureView(
+                    TextureViewDimension::Cube,
+                    cube_texture_view,
+                ),
             ));
         }
         let mut cube_texture_stage_mask_bytes = [0_u8; 16];
         cube_texture_stage_mask_bytes[..4].copy_from_slice(&cube_texture_stage_mask.to_le_bytes());
-        result.bindings.0.push((
+        result.binding_resources.0.push((
             CUBE_TEXTURE_STAGE_MASK_BINDING,
-            OwnedBindingResource::Buffer(render_device.create_buffer_with_data(
+            UnpreparedBindingResource::Buffer(render_device.create_buffer_with_data(
                 &BufferInitDescriptor {
                     label: Some("effect pass cube texture stages"),
                     contents: &cube_texture_stage_mask_bytes,
@@ -108,12 +112,12 @@ impl AsBindGroup for EffectPassMaterial {
             let binding =
                 10 + u32::try_from(index).map_err(|_| AsBindGroupError::RetryNextUpdate)?;
             if let Some((_, resource)) = result
-                .bindings
+                .binding_resources
                 .0
                 .iter_mut()
                 .find(|(candidate, _)| *candidate == binding)
             {
-                *resource = OwnedBindingResource::Sampler(
+                *resource = UnpreparedBindingResource::Sampler(
                     SamplerBindingType::Filtering,
                     render_device.create_sampler(&state.descriptor()),
                 );
@@ -133,12 +137,12 @@ impl AsBindGroup for EffectPassMaterial {
             let Some(buffer) = param.1.get(handle) else {
                 return Err(AsBindGroupError::RetryNextUpdate);
             };
-            result
-                .bindings
-                .0
-                .push((binding, OwnedBindingResource::Buffer(buffer.buffer.clone())));
+            result.binding_resources.0.push((
+                binding,
+                UnpreparedBindingResource::Buffer(buffer.buffer.clone()),
+            ));
         }
-        Ok(result)
+        Ok(())
     }
 
     fn bind_group_layout_entries(

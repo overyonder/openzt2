@@ -26,7 +26,7 @@ use crate::{
     asset::EffectAsset,
     render::{
         calc_hash, event::GpuChildInfo, GpuDrawIndexedIndirectArgs, GpuDrawIndirectArgs,
-        GpuEffectMetadata, GpuIndirectIndex, StorageType as _,
+        GpuEffectMetadata, GpuIndirectIndex,
     },
     ParticleLayout,
 };
@@ -265,8 +265,8 @@ impl ParticleSlab {
             "Attempted to create a zero-sized effect buffer."
         );
 
-        // Allocate the particle buffer itself, containing the attributes of each
-        // particle.
+        // Allocate the particle buffer itself, containing the attributes of
+        // each particle.
         #[cfg(debug_assertions)]
         let mapped_at_creation = true;
         #[cfg(not(debug_assertions))]
@@ -287,7 +287,8 @@ impl ParticleSlab {
             {
                 let mut mapped = particle_buffer
                     .slice(..particle_capacity_bytes)
-                    .get_mapped_range_mut();
+                    .get_mapped_range_mut()
+                    .expect("Buffer must be mapped for writing");
                 let particle_count_u32 = (particle_capacity_bytes / 4) as usize;
                 let values = vec![0xFFFF_FFFFu32; particle_count_u32];
                 mapped.copy_from_slice(cast_slice(values.as_slice()));
@@ -311,7 +312,8 @@ impl ParticleSlab {
             {
                 let mut mapped = indirect_index_buffer
                     .slice(..indirect_capacity_bytes)
-                    .get_mapped_range_mut();
+                    .get_mapped_range_mut()
+                    .expect("Buffer must be mapped for writing");
                 let mut values = vec![0u32; capacity as usize * 3];
                 let slice: &mut [u32] = values.as_mut_slice();
                 for index in 0..capacity {
@@ -323,8 +325,8 @@ impl ParticleSlab {
         }
 
         // Create the render layout.
-        // TODO - move; this only depends on the particle and spawner layouts, can be
-        // shared across slabs
+        // TODO - move; this only depends on the particle and spawner layouts,
+        // can be shared across slabs
         // FIXME - duplicated in ParticlesRenderPipeline::specialize()
         let label = format!("hanabi:bgl:render:particles@1:slab{}", slab_id.0);
         let render_particles_buffer_layout = render_device.create_bind_group_layout(
@@ -355,8 +357,8 @@ impl ParticleSlab {
         }
     }
 
-    // TODO - move; this only depends on the particle and spawner layouts, can be
-    // shared across slabs
+    // TODO - move; this only depends on the particle and spawner layouts, can
+    // be shared across slabs
     pub fn render_particles_buffer_layout(&self) -> &BindGroupLayout {
         &self.render_particles_buffer_layout
     }
@@ -568,8 +570,8 @@ impl ParticleSlab {
         // If slice is at the end of the buffer, reduce total used size
         if slice.range.end == self.used_size {
             self.used_size = slice.range.start;
-            // Check other free slices to further reduce used size and drain the free slice
-            // list
+            // Check other free slices to further reduce used size and drain the
+            // free slice list
             while let Some(free_slice) = self.free_slices.last() {
                 if free_slice.end == self.used_size {
                     self.used_size = free_slice.start;
@@ -583,8 +585,8 @@ impl ParticleSlab {
                 // The buffer is not used anymore, free it too
                 SlabState::Free
             } else {
-                // There are still some slices used, the last one of which ends at
-                // self.used_size
+                // There are still some slices used, the last one of which ends
+                // at self.used_size
                 SlabState::Used
             }
         } else {
@@ -615,8 +617,9 @@ impl ParticleSlab {
         handle: &Handle<EffectAsset>,
         _particle_layout: &ParticleLayout,
     ) -> bool {
-        // TODO - replace with check particle layout is compatible to allow tighter
-        // packing in less buffers, and update in the less dispatch calls
+        // TODO - replace with check particle layout is compatible to allow
+        // tighter packing in less buffers, and update in the less
+        // dispatch calls
         *handle == self.asset
     }
 }
@@ -947,9 +950,10 @@ impl EffectCache {
         min_binding_size: NonZeroU32,
         parent_min_binding_size: Option<NonZeroU32>,
     ) -> &BindGroupLayoutDescriptor {
-        // FIXME - This "ensure" pattern means we never de-allocate entries. This is
-        // probably fine, because there's a limited number of realistic combinations,
-        // but could cause wastes if e.g. loading widely different scenes.
+        // FIXME - This "ensure" pattern means we never de-allocate entries.
+        // This is probably fine, because there's a limited number of
+        // realistic combinations, but could cause wastes if e.g.
+        // loading widely different scenes.
         let key = ParticleBindGroupLayoutKey {
             min_binding_size,
             parent_min_binding_size,
@@ -986,7 +990,6 @@ impl EffectCache {
             &mut self.metadata_init_bind_group_layout_desc[consume_gpu_spawn_events as usize];
         if layout.is_none() {
             *layout = Some(create_metadata_init_bind_group_layout_desc(
-                &self.render_device,
                 consume_gpu_spawn_events,
             ));
         }
@@ -1006,12 +1009,7 @@ impl EffectCache {
     pub fn ensure_metadata_update_bind_group_layout_desc(&mut self, num_event_buffers: u32) {
         self.metadata_update_bind_group_layout_descs
             .entry(num_event_buffers)
-            .or_insert_with(|| {
-                create_metadata_update_bind_group_layout_desc(
-                    &self.render_device,
-                    num_event_buffers,
-                )
-            });
+            .or_insert_with(|| create_metadata_update_bind_group_layout_desc(num_event_buffers));
     }
 
     /// Get the bind group layout for the metadata@3 bind group of the
@@ -1125,31 +1123,26 @@ fn create_particle_sim_bind_group_layout_desc(
 
 /// Create the bind group layout for the metadata@3 bind group of the init pass.
 fn create_metadata_init_bind_group_layout_desc(
-    render_device: &RenderDevice,
     consume_gpu_spawn_events: bool,
 ) -> BindGroupLayoutDescriptor {
-    let storage_alignment = render_device.limits().min_storage_buffer_offset_alignment;
-    let effect_metadata_size = GpuEffectMetadata::aligned_size(storage_alignment);
-
     let mut entries = Vec::with_capacity(3);
 
-    // @group(3) @binding(0) var<storage, read_write> effect_metadata :
-    // EffectMetadata;
+    // @group(3) @binding(0) var<storage, read_write> effect_metadatas :
+    // array<EffectMetadata>
     entries.push(BindGroupLayoutEntry {
         binding: 0,
         visibility: ShaderStages::COMPUTE,
         ty: BindingType::Buffer {
             ty: BufferBindingType::Storage { read_only: false },
             has_dynamic_offset: false,
-            // This WGSL struct is manually padded, so the Rust type GpuEffectMetadata doesn't
-            // reflect its true min size.
-            min_binding_size: Some(effect_metadata_size),
+            min_binding_size: Some(GpuEffectMetadata::SHADER_SIZE),
         },
         count: None,
     });
 
     if consume_gpu_spawn_events {
-        // @group(3) @binding(1) var<storage, read> child_info_buffer : ChildInfoBuffer;
+        // @group(3) @binding(1) var<storage, read> child_info_buffer :
+        // ChildInfoBuffer;
         entries.push(BindGroupLayoutEntry {
             binding: 1,
             visibility: ShaderStages::COMPUTE,
@@ -1196,32 +1189,26 @@ fn create_metadata_init_bind_group_layout_desc(
 /// Create the bind group layout for the metadata@3 bind group of the update
 /// pass.
 fn create_metadata_update_bind_group_layout_desc(
-    render_device: &RenderDevice,
     num_event_buffers: u32,
 ) -> BindGroupLayoutDescriptor {
-    let storage_alignment = render_device.limits().min_storage_buffer_offset_alignment;
-    let effect_metadata_size = GpuEffectMetadata::aligned_size(storage_alignment);
-
     let mut entries = Vec::with_capacity(num_event_buffers as usize + 2);
 
-    // @group(3) @binding(0) var<storage, read_write> effect_metadata :
-    // EffectMetadata;
+    // @group(3) @binding(0) var<storage, read_write> effect_metadatas :
+    // array<EffectMetadata>
     entries.push(BindGroupLayoutEntry {
         binding: 0,
         visibility: ShaderStages::COMPUTE,
         ty: BindingType::Buffer {
             ty: BufferBindingType::Storage { read_only: false },
             has_dynamic_offset: false,
-            // This WGSL struct is manually padded, so the Rust type GpuEffectMetadata doesn't
-            // reflect its true min size.
-            min_binding_size: Some(effect_metadata_size),
+            min_binding_size: Some(GpuEffectMetadata::SHADER_SIZE),
         },
         count: None,
     });
 
     if num_event_buffers > 0 {
-        // @group(3) @binding(1) var<storage, read_write> child_infos : array<ChildInfo,
-        // N>;
+        // @group(3) @binding(1) var<storage, read_write> child_infos :
+        // array<ChildInfo, N>;
         entries.push(BindGroupLayoutEntry {
             binding: 1,
             visibility: ShaderStages::COMPUTE,
@@ -1234,8 +1221,8 @@ fn create_metadata_update_bind_group_layout_desc(
         });
 
         for i in 0..num_event_buffers {
-            // @group(3) @binding(2+i) var<storage, read_write> event_buffer_#i :
-            // EventBuffer;
+            // @group(3) @binding(2+i) var<storage, read_write> event_buffer_#i
+            // : EventBuffer;
             entries.push(BindGroupLayoutEntry {
                 binding: 2 + i,
                 visibility: ShaderStages::COMPUTE,
@@ -1464,9 +1451,9 @@ mod gpu_tests {
         assert_eq!(buffer.free_slices.len(), 1);
         assert_eq!(buffer.free_slices[0], 0..32);
 
-        // Try to allocate a slice larger than slice0, such that slice0 cannot be
-        // recycled, and instead the new slice has to be appended after all
-        // existing ones.
+        // Try to allocate a slice larger than slice0, such that slice0 cannot
+        // be recycled, and instead the new slice has to be appended
+        // after all existing ones.
         let slice2 = buffer.allocate(64);
         assert!(slice2.is_some());
         let slice2 = slice2.unwrap();
@@ -1482,8 +1469,8 @@ mod gpu_tests {
         assert_eq!(buffer.free_slices.len(), 1); // split
         assert_eq!(buffer.free_slices[0], 16..32);
 
-        // Allocate a second small slice that fits exactly the left space, completely
-        // recycling
+        // Allocate a second small slice that fits exactly the left space,
+        // completely recycling
         let slice4 = buffer.allocate(16);
         assert!(slice4.is_some());
         let slice4 = slice4.unwrap();
@@ -1532,8 +1519,8 @@ mod gpu_tests {
 
         // Remove the first effect instance
         let buffer_state = effect_cache.remove(&effect1).unwrap();
-        // Note: currently batching is disabled, so each instance has its own buffer,
-        // which becomes unused once the instance is destroyed.
+        // Note: currently batching is disabled, so each instance has its own
+        // buffer, which becomes unused once the instance is destroyed.
         assert_eq!(buffer_state, SlabState::Free);
         assert_eq!(effect_cache.slabs().len(), 2);
         {
@@ -1552,7 +1539,8 @@ mod gpu_tests {
             item_size
         );
         assert_eq!(slice3.range, 0..capacity);
-        // Note: currently batching is disabled, so each instance has its own buffer.
+        // Note: currently batching is disabled, so each instance has its own
+        // buffer.
         assert_eq!(effect_cache.slabs().len(), 2);
         {
             let slabs = effect_cache.slabs();

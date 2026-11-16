@@ -1,3 +1,4 @@
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mlua::Lua;
@@ -118,7 +119,7 @@ pub(super) type ScenarioLuaUiNodeQuery<'w, 's> = bevy::prelude::Query<
         &'static bevy::ui::UiGlobalTransform,
         Option<&'static openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
         Option<&'static openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled>,
-        Option<&'static bevy::prelude::Interaction>,
+        Option<&'static UiPointerInteraction>,
     ),
 >;
 

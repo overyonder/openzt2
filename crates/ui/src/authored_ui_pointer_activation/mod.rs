@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use super::authored_button_runtime_policy::UiButtonPolicy;
 use super::authored_ui_focus_state::{UiFocusScope, UiFocusable};
@@ -8,10 +9,10 @@ use super::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UiPreviousPointerInteraction(Interaction);
+pub struct UiPreviousPointerInteraction(UiPointerInteraction);
 
 impl UiPreviousPointerInteraction {
-    pub fn from_current_interaction(interaction: Interaction) -> Self {
+    pub fn from_current_interaction(interaction: UiPointerInteraction) -> Self {
         Self(interaction)
     }
 }
@@ -35,7 +36,7 @@ pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
     mut nodes: Query<
         (
             Entity,
-            &Interaction,
+            &UiPointerInteraction,
             Option<&UiInteractionEnabled>,
             Option<&UiFocusable>,
             Option<&UiButtonPolicy>,
@@ -43,7 +44,7 @@ pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
             &mut UiPreviousPointerInteraction,
             &mut UiPreviousPointerPressTimeSeconds,
         ),
-        Changed<Interaction>,
+        Changed<UiPointerInteraction>,
     >,
     mut scopes: Query<&mut UiFocusScope>,
     mut activated: MessageWriter<UiNodeActivated>,
@@ -69,11 +70,15 @@ pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
         let previous_interaction = previous.0;
         let effective_interaction = *interaction;
         let trigger = match (previous_interaction, effective_interaction) {
-            (previous, Interaction::Pressed) if enabled && previous != Interaction::Pressed => {
+            (previous, UiPointerInteraction::Pressed)
+                if enabled && previous != UiPointerInteraction::Pressed =>
+            {
                 Some(UiTrigger::Press)
             }
-            (Interaction::None, Interaction::Hovered) if enabled => Some(UiTrigger::Enter),
-            (previous, Interaction::None) if previous != Interaction::None => {
+            (UiPointerInteraction::None, UiPointerInteraction::Hovered) if enabled => {
+                Some(UiTrigger::Enter)
+            }
+            (previous, UiPointerInteraction::None) if previous != UiPointerInteraction::None => {
                 Some(UiTrigger::Leave)
             }
             _ => None,
@@ -117,13 +122,13 @@ pub(super) fn activate_authored_ui_nodes_from_pointer_interaction_changes(
 }
 
 const fn momentary_button_trigger(
-    previous: Interaction,
-    current: Interaction,
+    previous: UiPointerInteraction,
+    current: UiPointerInteraction,
 ) -> Option<UiTrigger> {
     match (previous, current) {
-        (Interaction::Pressed, Interaction::Pressed) => None,
-        (_, Interaction::Pressed) => Some(UiTrigger::On),
-        (Interaction::Pressed, _) => Some(UiTrigger::Off),
+        (UiPointerInteraction::Pressed, UiPointerInteraction::Pressed) => None,
+        (_, UiPointerInteraction::Pressed) => Some(UiTrigger::On),
+        (UiPointerInteraction::Pressed, _) => Some(UiTrigger::Off),
         _ => None,
     }
 }

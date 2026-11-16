@@ -5,6 +5,8 @@
 //! per-particle diversity / randomness, as attributes are the only quantities
 //! stored per particle.
 
+use std::borrow::Cow;
+
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -94,8 +96,9 @@ impl SetAttributeModifier {
         module: &mut Module,
         context: &mut dyn EvalContext,
     ) -> Result<String, ExprError> {
-        // Validate if possible that the expression produces the same type expected by
-        // the attribute. This makes it much easier to diagnose issues.
+        // Validate if possible that the expression produces the same type
+        // expected by the attribute. This makes it much easier to
+        // diagnose issues.
         let expr = module.try_get(self.value)?;
         if let Some(value_type) = expr.value_type() {
             let attr_value_type = self.attribute.value_type();
@@ -119,8 +122,8 @@ impl Modifier for SetAttributeModifier {
         ModifierContext::Init | ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        std::slice::from_ref(&self.attribute)
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(std::slice::from_ref(&self.attribute))
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -177,11 +180,9 @@ impl InheritAttributeModifier {
     ) -> Result<String, ExprError> {
         let attr = module.attr(self.attribute);
         let attr = context.eval(module, attr)?;
-        Ok(format!(
-            "{} = parent_particle.{};\n",
-            attr,
-            self.attribute.name()
-        ))
+        let parent_attr = module.parent_attr(self.attribute);
+        let parent_attr = context.eval(module, parent_attr)?;
+        Ok(format!("{} = {};\n", attr, parent_attr))
     }
 }
 
@@ -190,8 +191,8 @@ impl Modifier for InheritAttributeModifier {
         ModifierContext::Init
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        std::slice::from_ref(&self.attribute)
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(std::slice::from_ref(&self.attribute))
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -209,7 +210,8 @@ impl Modifier for InheritAttributeModifier {
 mod tests {
     use super::SetAttributeModifier;
     use crate::{
-        Attribute, ExprError, ModifierContext, Module, ParticleLayout, PropertyLayout, ShaderWriter,
+        Attribute, ExprError, ModifierContext, Module, ParticleLayout, PropertyLayout,
+        ShaderWriter, TextureLayout,
     };
 
     #[test]
@@ -218,10 +220,15 @@ mod tests {
         let attr = Attribute::POSITION; // vec3<f32>
         let expr = module.lit(3.); // f32
         let attr = SetAttributeModifier::new(attr, expr);
-        let property_layout = PropertyLayout::empty();
-        let particle_layout = ParticleLayout::empty();
-        let mut context =
-            ShaderWriter::new(ModifierContext::Init, &property_layout, &particle_layout);
+        let property_layout = PropertyLayout::default();
+        let particle_layout = ParticleLayout::default();
+        let texture_layout = TextureLayout::default();
+        let mut context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(matches!(
             attr.eval(&mut module, &mut context),
             Err(ExprError::TypeError(_))

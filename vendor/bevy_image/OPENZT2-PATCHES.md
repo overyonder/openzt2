@@ -1,6 +1,6 @@
 # Bevy image patch
 
-Source: crates.io `bevy_image` 0.19.1, with its Apache-2.0 and MIT licences.
+Source: Bevy `bevy_image` at `2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2`, with its Apache-2.0 and MIT licences.
 
 `src/dds.rs` selects BGRA rather than RGBA after expanding legacy
 `D3DFMT_R8G8B8` pixels. The source's BGR bytes and complete mip chain remain

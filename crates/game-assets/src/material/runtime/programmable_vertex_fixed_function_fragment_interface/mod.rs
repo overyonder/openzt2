@@ -10,7 +10,7 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
     source_path: String,
 ) -> io::Result<Shader> {
     let mut source = String::from(
-        "#import openzt2::fixed_function::{FixedFunctionFragmentInputs, evaluate_fixed_function_texture_stages}\n\
+        "import openzt2::fixed_function::{FixedFunctionFragmentInputs, evaluate_fixed_function_texture_stages};\n\
          struct ProgrammableVertexOutputs {\n",
     );
     for output in &vertex.vertex_output_signature_elements {
@@ -69,5 +69,5 @@ pub(super) fn create_fixed_function_fragment_shader_for_programmable_vertex_outp
         .map_err(io::Error::other)?;
     }
     source.push_str("    return evaluate_fixed_function_texture_stages(fixed, true);\n}\n");
-    Ok(Shader::from_wgsl(source, source_path))
+    Ok(Shader::from_wesl(source, source_path))
 }

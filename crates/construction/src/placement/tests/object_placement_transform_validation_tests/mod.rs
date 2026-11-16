@@ -186,6 +186,7 @@ fn terrain_water_follows_the_authored_water_placement_and_maximum_depth() {
                 unlocked: true,
                 affordable: true,
                 topology_valid: true,
+                surface_valid: true,
                 headroom_valid: true,
             },
         )

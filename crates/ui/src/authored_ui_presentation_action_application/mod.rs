@@ -791,9 +791,7 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                     if let Some(target) = nodes.iter_mut().find_map(|(entity, id, owner, ..)| {
                         (owner.0 == source_owner.0 && id.id == target_node).then_some(entity)
                     }) {
-                        // Authored programmatic emphasis is presentation state;
-                        // physical pointer ownership remains exclusively Bevy's
-                        // `Interaction` component.
+                        // Programmatic emphasis leaves the pointer hit target intact.
                         use super::authored_ui_focus_navigation_and_activation::AuthoredHoverPresentation;
                         let mut target = commands.entity(target);
                         target.insert(UiFocusPresentation(*hover_presented));

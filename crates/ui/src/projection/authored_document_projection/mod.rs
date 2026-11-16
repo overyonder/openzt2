@@ -13,6 +13,7 @@ use super::authored_node_property_binding_projection::{
 };
 use super::authored_node_visual_projection::project_authored_node_visuals_into_bevy_presentation;
 use super::authored_widget_projection::project_widget;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
 use bevy::prelude::*;
@@ -385,10 +386,10 @@ pub fn project_document(
                 UiFocusable { order, enabled },
                 UiInteractionEnabled(enabled),
                 UiFocusPresentation::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
             ));
             commands.entity(entity).insert((
-                UiPreviousPointerInteraction::from_current_interaction(Interaction::None),
+                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
                 UiPreviousPointerPressTimeSeconds::default(),
             ));
             default_focus.get_or_insert(entity);
@@ -398,17 +399,17 @@ pub fn project_document(
         if interactive && !focusable {
             commands.entity(entity).insert((
                 UiInteractionEnabled(enabled),
-                Interaction::None,
-                UiPreviousPointerInteraction::from_current_interaction(Interaction::None),
+                UiPointerInteraction::None,
+                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
                 UiPreviousPointerPressTimeSeconds::default(),
             ));
         }
 
         if matches!(
             &record.kind,
-            UiNodeKind::Button | UiNodeKind::Toggle | UiNodeKind::Slider | UiNodeKind::Edit
+            UiNodeKind::Button | UiNodeKind::Toggle | UiNodeKind::Slider
         ) {
-            commands.entity(entity).insert(Button);
+            commands.entity(entity).insert(bevy::ui_widgets::Button);
         }
         if matches!(&record.kind, UiNodeKind::Edit) {
             commands.entity(entity).insert(UiSubmitTarget);

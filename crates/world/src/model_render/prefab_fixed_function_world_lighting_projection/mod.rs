@@ -140,7 +140,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
     let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) else {
         return;
     };
-    buffer.set_data(contexts);
+    contexts.write_shader_buffer(&mut buffer);
     *previous_contexts = Some(contexts);
 }
 

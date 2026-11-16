@@ -4,6 +4,7 @@ use openzt2_game_data::ui_document::{
     widget::UiWidgetRecord,
 };
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -209,11 +210,14 @@ pub(crate) fn project_world_subject_positions_to_overview_map_markers(
 }
 
 pub(crate) fn request_entity_selection_from_pressed_overview_map_markers(
-    pressed_overview_map_markers: Query<(&OverviewMarker, &Interaction), Changed<Interaction>>,
+    pressed_overview_map_markers: Query<
+        (&OverviewMarker, &UiPointerInteraction),
+        Changed<UiPointerInteraction>,
+    >,
     mut selection_requests: MessageWriter<SelectionRequest>,
 ) {
     for (overview_map_marker, interaction) in &pressed_overview_map_markers {
-        if *interaction == Interaction::Pressed {
+        if *interaction == UiPointerInteraction::Pressed {
             selection_requests.write(SelectionRequest {
                 entity: Some(overview_map_marker.subject),
                 source: ActionSource::KeyboardMouse,
@@ -260,7 +264,7 @@ fn spawn_world_subject_overview_map_marker(
             translation: Val2::px(-19.0, -19.0),
             ..default()
         },
-        Interaction::None,
+        UiPointerInteraction::None,
         Pickable::default(),
         ChildOf(projected_layer_parent),
     ));

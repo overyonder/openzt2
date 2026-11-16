@@ -1,0 +1,316 @@
+import bevy_render::view::View;
+import bevy_hanabi::render::vfx_common::{
+    IndirectBuffer, SimParams, Spawner, BatchInfo,
+    seed, tau, pcg_hash, to_float01, frand, frand2, frand3, frand4,
+    rand_uniform_f, rand_uniform_vec2, rand_uniform_vec3, rand_uniform_vec4,
+    rand_normal_f, rand_normal_vec2, rand_normal_vec3, rand_normal_vec4, proj,
+    unpack_compressed_transform, unpack_compressed_transform_3x3_transpose
+};
+
+struct Particle {
+{{ATTRIBUTES}}
+}
+
+{{PROPERTIES}}
+
+struct ParticleBuffer {
+    particles: array<Particle>,
+}
+
+struct VertexOutput {
+{{VERTEX_OUTPUT_FIELDS}}
+    @builtin(position) position: vec4<f32>,
+    @location(0) color: vec4<f32>,
+    @if(NEEDS_UV)
+    @location(1) uv: vec2<f32>,
+    @if(NEEDS_NORMAL)
+    @location(2) normal: vec3<f32>,
+    @if(NEEDS_PARTICLE_FRAGMENT)
+    @location(3) @interpolate(flat) slab_particle_index: u32,
+}
+
+// Global bindings
+@group(0) @binding(0) var<uniform> view: View;
+@group(0) @binding(1) var<uniform> sim_params : SimParams;
+
+// Per-batch bindings
+@group(1) @binding(0) var<storage, read> particle_buffer : ParticleBuffer;
+@group(1) @binding(1) var<storage, read> indirect_buffer : IndirectBuffer;
+
+// Per-batch bindings
+@if(HAS_BATCHED_DRAW)
+@group(2) @binding(0) var<storage, read> spawners : array<Spawner>;
+@if(HAS_BATCHED_DRAW)
+@group(2) @binding(1) var<storage, read> prefix_sum : array<u32>;
+@if(HAS_BATCHED_DRAW)
+@group(2) @binding(2) var<storage, read> batch_info : BatchInfo;
+// Per-effect bindings
+@if(!HAS_BATCHED_DRAW)
+@group(2) @binding(0) var<storage, read> spawners : array<Spawner>;
+@if(!HAS_BATCHED_DRAW)
+@group(2) @binding(1) var<storage, read> batch_info : BatchInfo;
+{{PROPERTIES_BINDING}}
+{{MATERIAL_BINDINGS}}
+
+/// The resolved effect and particle location.
+///
+/// This is calculated at the start of the thread execution, and used after that
+/// in various functions.
+var<private> effect_location : EffectLocation;
+
+var<private> properties_array_index: u32;
+var<private> effect_delta_time: f32;
+var<private> effect_metadata_index: u32;
+var<private> spawner_index: u32;
+// var<private> properties_offset: u32;
+
+fn get_camera_position_effect_space() -> vec3<f32> {
+    let view_pos = view.world_from_view[3].xyz;
+    @if(LOCAL_SPACE_SIMULATION)
+    let inverse_transform = unpack_compressed_transform(spawners[spawner_index].inverse_transform);
+    @if(LOCAL_SPACE_SIMULATION)
+    return (inverse_transform * vec4<f32>(view_pos, 1.0)).xyz;
+    @if(!LOCAL_SPACE_SIMULATION)
+    return view_pos;
+}
+
+fn get_camera_rotation_effect_space() -> mat3x3<f32> {
+    let view_rot = mat3x3(view.world_from_view[0].xyz, view.world_from_view[1].xyz, view.world_from_view[2].xyz);
+    @if(LOCAL_SPACE_SIMULATION)
+    let inverse_transform = transpose(
+        mat3x3(
+            spawners[spawner_index].inverse_transform[0].xyz,
+            spawners[spawner_index].inverse_transform[1].xyz,
+            spawners[spawner_index].inverse_transform[2].xyz,
+        )
+    );
+    @if(LOCAL_SPACE_SIMULATION)
+    return inverse_transform * view_rot;
+    @if(!LOCAL_SPACE_SIMULATION)
+    return view_rot;
+}
+
+/// Transform a simulation space position into a world space position.
+///
+/// The simulation space depends on the effect's SimulationSpace value, and is either
+/// the effect space (SimulationSpace::Local) or the world space (SimulationSpace::Global).
+fn transform_position_simulation_to_world(sim_position: vec3<f32>) -> vec4<f32> {
+    @if(LOCAL_SPACE_SIMULATION)
+    let transform = unpack_compressed_transform(spawners[spawner_index].transform);
+    @if(LOCAL_SPACE_SIMULATION)
+    return transform * vec4<f32>(sim_position, 1.0);
+    @if(!LOCAL_SPACE_SIMULATION)
+    return vec4<f32>(sim_position, 1.0);
+}
+
+fn transform_normal_simulation_to_world(sim_normal: vec3<f32>) -> vec3<f32> {
+    // We use the inverse transpose transform to transform normals.
+    // The inverse transpose is the same as the transposed inverse, so we can
+    // safely use the inverse transform.
+    @if(LOCAL_SPACE_SIMULATION)
+    let transform = unpack_compressed_transform_3x3_transpose(spawners[spawner_index].inverse_transform);
+    @if(LOCAL_SPACE_SIMULATION)
+    return transform * sim_normal;
+    @if(!LOCAL_SPACE_SIMULATION)
+    return sim_normal;
+}
+
+/// Transform a simulation space position into a clip space position.
+///
+/// The simulation space depends on the effect's SimulationSpace value, and is either
+/// the effect space (SimulationSpace::Local) or the world space (SimulationSpace::Global).
+/// The clip space is the final [-1:1]^3 space output from the vertex shader, before
+/// perspective divide and viewport transform are applied.
+fn transform_position_simulation_to_clip(sim_position: vec3<f32>) -> vec4<f32> {
+    return view.clip_from_world * transform_position_simulation_to_world(sim_position);
+}
+
+fn inverse_transpose_mat3(m: mat3x3<f32>) -> mat3x3<f32> {
+    let tmp0 = cross(m[1], m[2]);
+    let tmp1 = cross(m[2], m[0]);
+    let tmp2 = cross(m[0], m[1]);
+    let inv_det = 1.0 / dot(m[2], tmp2);
+    return mat3x3<f32>(tmp0 * inv_det, tmp1 * inv_det, tmp2 * inv_det);
+}
+
+{{RENDER_EXTRA}}
+
+/// Location of an effect in a slab.
+struct EffectLocation {
+    /// Index of the effect in the global list of effects.
+    effect_index: u32,
+    /// Base particle index, that is index in the slab of the first particle for this instance.
+    base_particle: u32,
+    /// Index of this particle relative to its effect. Note that if there's an indirection
+    /// buffer then this is the linear index in [0:N[ of the particle to update, before the indirection.
+    update_index: u32,
+}
+
+/// Find the index of an effect from the index of a particle.
+///
+/// This uses a binary search on the slab_offset field of the spawners array, which
+/// represents a prefix sum of the particle count per effect (for previous effects;
+/// the value is actually the base particle so the first entry is always 0).
+///
+/// Requirements:
+/// - var<storage, read> batch_info : BatchInfo
+/// - var<storage, read> prefix_sum : array<u32>
+@if(HAS_BATCHED_DRAW)
+fn find_location_from_particle(slab_particle_index: u32) -> EffectLocation {
+    var lo = batch_info.prefix_sum_offset;
+    var hi = lo + batch_info.prefix_sum_count;
+    var num_iter = 0;  // avoid deadlocking the GPU by capping the iteration count
+    while (lo < hi) {
+        let mid = (hi + lo) >> 1u;
+        let base_particle = batch_info.base_particle + prefix_sum[mid];
+        if (slab_particle_index >= base_particle) {
+            lo = mid + 1u;
+        } else if (slab_particle_index < base_particle) {
+            hi = mid;
+        }
+        num_iter += 1;
+        if (num_iter >= 100) {
+            return EffectLocation(0xDEADBEEFu, 0xDEADBEEFu, 0xDEADBEEFu);
+        }
+    }
+    let effect_index = lo - 1u - batch_info.prefix_sum_offset;
+    let update_index = slab_particle_index - prefix_sum[lo - 1u];
+    let base_particle = spawners[batch_info.spawner_base + effect_offset + effect_index].slab_offset;
+    return EffectLocation(effect_index, base_particle, update_index);
+}
+
+@vertex
+fn vertex(
+    @builtin(instance_index) instance_index: u32,
+    @location(0) vertex_position: vec3<f32>,
+    @if(NEEDS_UV)
+    @location(1) vertex_uv: vec2<f32>,
+    @if(NEEDS_NORMAL)
+    @location(2) vertex_normal: vec3<f32>,
+    // @location(1) vertex_color: u32,
+    // @location(1) vertex_velocity: vec3<f32>,
+) -> VertexOutput {
+    // Find the index of the effect this particle is part of. Note that currently
+    // rendering is not yet batched, so this really derives into (effect_index = 0,
+    // base_particle = batch_info.base_particle), and the binary search is a bit useless
+    // until an actual batching is set up.
+    @if(HAS_BATCHED_DRAW)
+    effect_location = find_location_from_particle(instance_index);
+    @if(HAS_BATCHED_DRAW)
+    spawner_index = batch_info.spawner_base + effect_offset + effect_index;
+    @if(!HAS_BATCHED_DRAW)
+    effect_location.effect_index = 0u;
+    @if(!HAS_BATCHED_DRAW)
+    effect_location.base_particle = batch_info.base_particle;
+    @if(!HAS_BATCHED_DRAW)
+    effect_location.update_index = instance_index;
+    @if(!HAS_BATCHED_DRAW)
+    spawner_index = batch_info.spawner_base;
+    let spawner = &spawners[spawner_index];
+    effect_metadata_index = (*spawner).effect_metadata_index;
+    properties_array_index = (*spawner).properties_array_index;
+    effect_delta_time = (*spawner).simulation_delta_time;
+    let base_particle = effect_location.base_particle;
+
+    // Fetch particle
+    let indirect_read_index = (*spawner).render_indirect_read_index;
+    let particle_index = indirect_buffer.rows[base_particle + instance_index].particle_index[indirect_read_index];
+    var particle = particle_buffer.particles[base_particle + particle_index];
+
+    var out: VertexOutput;
+
+    @if(NEEDS_PARTICLE_FRAGMENT)
+    out.slab_particle_index = base_particle + particle_index;
+
+    // Discard first instance; we draw from second one, and link to previous one
+    @if(RIBBONS)
+    if (instance_index == 0) {
+        out.position = vec4(0.0);
+        return out;
+    }
+
+    // Fetch previous particle
+    @if(RIBBONS)
+    let prev_index = indirect_buffer.rows[base_particle + instance_index - 1u].particle_index[indirect_read_index];
+    @if(RIBBONS)
+    let prev_particle = particle_buffer.particles[base_particle + prev_index];
+
+    // Discard this instance if previous one is from a different ribbon. Again,
+    // we draw from second one of each ribbon.
+    @if(RIBBONS)
+    if (prev_particle.ribbon_id != particle.ribbon_id) {
+        out.position = vec4(0.0);
+        return out;
+    }
+
+    // Compute UVs
+    @if(NEEDS_UV)
+    var uv = vertex_uv;
+    @if(NEEDS_UV && FLIPBOOK)
+    let row_count = {{FLIPBOOK_ROW_COUNT}};
+    @if(NEEDS_UV && FLIPBOOK)
+    let ij = vec2<f32>(f32(particle.sprite_index % row_count), f32(particle.sprite_index / row_count));
+    @if(NEEDS_UV && FLIPBOOK)
+    uv = (ij + uv) * {{FLIPBOOK_SCALE}};
+    @if(NEEDS_UV)
+    out.uv = uv;
+
+{{INPUTS}}
+
+{{VERTEX_MODIFIERS}}
+
+    @if(RIBBONS)
+    var delta = particle.position - prev_particle.position;
+
+    @if(RIBBONS)
+    axis_x = normalize(delta);
+    @if(RIBBONS)
+    axis_y = normalize(cross(axis_x, axis_z));
+    @if(RIBBONS)
+    axis_z = cross(axis_x, axis_y);
+
+    @if(RIBBONS)
+    position = mix(particle.position, prev_particle.position, 0.5);
+    @if(RIBBONS)
+    size = vec3(length(delta), size.y, 1.0);
+
+    // Expand particle mesh vertex based on particle position ("origin"), and local
+    // orientation and size of the particle mesh.
+    let vpos = vertex_position * size * (*spawner).particle_size_scale;
+    let sim_position = position + axis_x * vpos.x + axis_y * vpos.y + axis_z * vpos.z;
+    out.position = transform_position_simulation_to_clip(sim_position);
+
+    out.color = color;
+
+    @if(NEEDS_NORMAL)
+    let normal = inverse_transpose_mat3(mat3x3(axis_x, axis_y, axis_z)) * vertex_normal;
+    @if(NEEDS_NORMAL)
+    out.normal = transform_normal_simulation_to_world(normal);
+
+    return out;
+}
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+    // Read fragment inputs
+    @if(USE_ALPHA_MASK)
+    var alpha_cutoff: f32 = {{ALPHA_CUTOFF}};
+    var color = in.color;
+    @if(NEEDS_UV)
+    var uv = in.uv;
+    @if(NEEDS_NORMAL)
+    var normal = in.normal;
+    @if(NEEDS_PARTICLE_FRAGMENT)
+    var particle = particle_buffer.particles[in.slab_particle_index];
+
+{{FRAGMENT_MODIFIERS}}
+
+    @if(USE_ALPHA_MASK)
+    if color.a >= alpha_cutoff {
+        color.a = 1.0;
+    } else {
+        discard;
+    }
+
+    return color;
+}

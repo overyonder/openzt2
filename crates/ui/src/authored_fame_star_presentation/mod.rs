@@ -204,7 +204,7 @@ pub(super) fn frame_fame_star_models(
             .iter_descendants(root)
             .filter_map(|entity| {
                 let (mesh, transform) = mesh_nodes.get(entity).ok()?;
-                let aabb = meshes.get(&mesh.0)?.compute_aabb()?;
+                let aabb = meshes.get(&mesh.0)?.get_aabb()?;
                 Some((
                     inverse * transform.affine(),
                     Vec3::from(aabb.center),

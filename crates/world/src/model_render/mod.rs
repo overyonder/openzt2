@@ -17,8 +17,8 @@ mod prefab_texture_replacement_projection;
 mod world_entity_model_suppression;
 
 use bevy::camera::visibility::VisibilitySystems;
+use bevy::extract::extract_instances::ExtractInstancesPlugin;
 use bevy::prelude::*;
-use bevy::render::extract_instances::ExtractInstancesPlugin;
 use bevy::render::Render;
 use bevy::render::RenderApp;
 use bevy::render::RenderSystems;
@@ -56,12 +56,14 @@ impl Plugin for ModelRenderPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ExtractInstancesPlugin::<
             AuthoredEffectTechniquePassSubmissionOrder,
+            RenderApp,
         >::extract_visible());
         app.add_observer(
             invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
         );
         app.add_plugins(ExtractInstancesPlugin::<
             environment_layer_rendering::EnvironmentPrimitiveLayer,
+            RenderApp,
         >::new());
         app.sub_app_mut(RenderApp)
             .init_resource::<environment_layer_rendering::PreparedEnvironmentLayers>()

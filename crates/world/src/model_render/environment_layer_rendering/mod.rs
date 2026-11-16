@@ -1,21 +1,21 @@
 use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::ecs::query::QueryItem;
+use bevy::extract::extract_instances::{ExtractInstance, ExtractedInstances};
 use bevy::prelude::*;
 use bevy::render::{
     batching::NoAutomaticBatching,
     camera::ExtractedCamera,
-    extract_instances::{ExtractInstance, ExtractedInstances},
     render_phase::{PhaseItem, SortedRenderPhase, ViewSortedRenderPhases},
     render_resource::{LoadOp, RenderPassDescriptor, StoreOp},
     renderer::{RenderContext, ViewQuery},
-    view::{ExtractedView, RetainedViewEntity, ViewDepthTexture, ViewTarget},
+    view::{ExtractedView, RetainedViewEntity, ViewDepthStencilTexture, ViewTarget},
 };
 use openzt2_world_state::model_render::environment_render_layer::EnvironmentRenderLayer;
 
 #[derive(Component, Clone, Copy)]
 pub(super) struct EnvironmentPrimitiveLayer(EnvironmentRenderLayer);
 
-impl ExtractInstance for EnvironmentPrimitiveLayer {
+impl ExtractInstance<bevy::render::RenderApp> for EnvironmentPrimitiveLayer {
     type QueryData = &'static Self;
     type QueryFilter = ();
     fn extract(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self> {
@@ -91,7 +91,7 @@ pub(super) fn restore_environment_phase_items_before_queueing(
 }
 
 pub(super) fn separate_prepared_environment_layers(
-    instances: Res<ExtractedInstances<EnvironmentPrimitiveLayer>>,
+    instances: Res<ExtractedInstances<EnvironmentPrimitiveLayer, bevy::render::RenderApp>>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     mut prepared: ResMut<PreparedEnvironmentLayers>,
     mut keys: Local<
@@ -140,7 +140,7 @@ pub(super) fn render_environment_layers_before_world(
         &ExtractedCamera,
         &ExtractedView,
         &ViewTarget,
-        &ViewDepthTexture,
+        &ViewDepthStencilTexture,
     )>,
     prepared: Res<PreparedEnvironmentLayers>,
     mut context: RenderContext,

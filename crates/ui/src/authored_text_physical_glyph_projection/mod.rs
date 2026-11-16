@@ -2,7 +2,6 @@ use bevy::{
     math::Affine2,
     prelude::*,
     render::Extract,
-    text::TextLayoutInfo,
     ui::ComputedStackIndex,
     ui_render::{stack_z_offsets, ExtractedUiItem, ExtractedUiNodes},
     window::PrimaryWindow,
@@ -25,38 +24,36 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
                 &ComputedStackIndex,
                 &UiGlobalTransform,
                 &TextLayout,
-                &TextLayoutInfo,
                 Option<&UiSingleLineTextAlignment>,
             ),
             (With<UiPhysicalFontSize>, With<Text>),
         >,
     >,
-    mut extracted: ResMut<ExtractedUiNodes>,
+    extracted: ResMut<ExtractedUiNodes>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
     let viewport = Vec2::new(window.width(), window.height());
-    for draw in &mut extracted.uinodes {
-        let entity = draw.main_entity.id();
+    let ExtractedUiNodes { uinodes, changed } = extracted.into_inner();
+    for main_entity in changed.iter() {
+        let Some((_, draws)) = uinodes.get_mut(main_entity) else {
+            continue;
+        };
+        let entity = main_entity.entity();
         // Rich tooltip text draws from a child laid over its single-line
         // owner's transparent fallback, so it follows the owner's geometry.
-        let Some((node, stack, transform, layout, glyphs, single_line)) =
+        let Some((node, stack, transform, layout, single_line)) =
             text_nodes.get(entity).ok().or_else(|| {
                 let (_, parent) = hierarchy.get(entity).ok()?;
                 text_nodes
                     .get(parent?.parent())
                     .ok()
-                    .filter(|owner| owner.5.is_some())
+                    .filter(|owner| owner.4.is_some())
             })
         else {
             continue;
         };
-        if !matches!(draw.item, ExtractedUiItem::Glyphs { .. })
-            && draw.z_order <= stack.0 as f32 + stack_z_offsets::MATERIAL
-        {
-            continue;
-        }
         let mut ancestor = entity;
         let mut logical_size = None;
         while let Ok((canvas, parent)) = hierarchy.get(ancestor) {
@@ -80,17 +77,14 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
             Justify::End | Justify::Right => 1.0,
             _ => 0.0,
         };
-        let width = if single_line.is_some() {
-            // Logical glyph run, physical content box.
-            glyphs.size.x / node.inverse_scale_factor()
-        } else {
-            node.content_box().size().x
-        };
         let text_offset = Vec2::new(
             single_line.map_or(0.0, |alignment| alignment.horizontal_offset_pixels),
             0.0,
         );
-        let anchor = node.content_box().min + text_offset + Vec2::new(width * alignment, 0.0);
+        let anchor = single_line.map_or_else(
+            || node.content_box().min + Vec2::new(node.content_box().width() * alignment, 0.0),
+            |line| line.anchor,
+        );
         let global = transform.affine();
         if global.matrix2.determinant().abs() <= f32::EPSILON {
             continue;
@@ -103,8 +97,14 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
             ))
             * Affine2::from_translation(-anchor)
             * global.inverse();
-        draw.transform = correction
-            * Affine2::from_translation(global.transform_vector2(text_offset))
-            * draw.transform;
+        let correction =
+            correction * Affine2::from_translation(global.transform_vector2(text_offset));
+        for draw in draws.values_mut() {
+            if matches!(draw.item, ExtractedUiItem::Glyphs { .. })
+                || draw.z_order > stack.0 as f32 + stack_z_offsets::MATERIAL
+            {
+                draw.transform = correction * draw.transform;
+            }
+        }
     }
 }

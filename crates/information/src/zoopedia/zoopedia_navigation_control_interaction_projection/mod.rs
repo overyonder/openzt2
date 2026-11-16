@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::information::UiInformationAction;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
@@ -20,7 +21,7 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
         &UiDocumentOwner,
         &mut UiInteractionEnabled,
         Option<&mut UiFocusable>,
-        &mut Interaction,
+        &mut UiPointerInteraction,
     )>,
 ) {
     for (authored_actions, document_owner, mut interaction_enabled, focusable, mut interaction) in
@@ -55,7 +56,7 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
             focusable.enabled = availability;
         }
         if !availability {
-            *interaction = Interaction::None;
+            *interaction = UiPointerInteraction::None;
         }
     }
 }

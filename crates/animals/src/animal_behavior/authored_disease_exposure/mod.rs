@@ -216,7 +216,7 @@ impl DiseaseExposureWorld<'_, '_, '_> {
 /// A cured animal drops the disease's pending tokens, its authored
 /// `clearTokens`, so it doesn't fall ill or spread the disease again at once.
 pub(super) fn clear_authored_disease_tokens_when_cured(
-    cured: On<Remove, Disease>,
+    cured: On<Remove<Disease>>,
     mut commands: Commands,
     diseases: Query<&Disease>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf)>,

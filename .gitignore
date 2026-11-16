@@ -1,5 +1,11 @@
 /target/
 /vendor/*
+!/vendor/avian3d/
+!/vendor/bevy-inspector-egui/
+!/vendor/bevy_egui/
+!/vendor/bevy_heavy/
+!/vendor/bevy_transform_interpolation/
+!/vendor/glam_matrix_extras/
 !/vendor/bevy_hanabi/
 !/vendor/bevy_image/
 !/vendor/bevy_render/

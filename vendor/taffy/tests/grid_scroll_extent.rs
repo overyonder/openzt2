@@ -36,8 +36,8 @@ fn grid_scroll_extent_includes_all_tracks_and_container_padding() {
                             x: Overflow::Scroll,
                             y: Overflow::Clip,
                         },
-                        justify_content: Some(JustifyContent::Start),
-                        align_content: Some(AlignContent::Start),
+                        justify_content: Some(JustifyContent::START),
+                        align_content: Some(AlignContent::START),
                         ..Default::default()
                     },
                     &children,
@@ -47,8 +47,8 @@ fn grid_scroll_extent_includes_all_tracks_and_container_padding() {
             let layout = tree.layout(root).unwrap();
             // 32 columns of 57px, two rows with 59px pitch and 48px items.
             // Content includes both padding edges, but excludes the border.
-            assert_eq!(layout.content_size.width, 32.0 * 57.0 + 2.0 * padding);
-            assert_eq!(layout.content_size.height, 59.0 + 48.0 + 2.0 * padding);
+            assert_eq!(layout.scrollable_overflow_rect.right, 32.0 * 57.0 + 2.0 * padding);
+            assert_eq!(layout.scrollable_overflow_rect.bottom, 59.0 + 48.0 + 2.0 * padding);
         }
     }
 }

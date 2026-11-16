@@ -296,6 +296,19 @@ impl Rect<f32> {
     pub const fn new(start: f32, end: f32, top: f32, bottom: f32) -> Self {
         Self { left: start, right: end, top, bottom }
     }
+
+    /// Returns the smallest rectangle that contains both `self` and `other`, where the fields
+    /// of each `Rect` are interpreted as edge coordinates (`left`/`top` being the minimum
+    /// coordinates and `right`/`bottom` the maximum coordinates of the rectangle)
+    #[must_use]
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            left: self.left.min(other.left),
+            right: self.right.max(other.right),
+            top: self.top.min(other.top),
+            bottom: self.bottom.max(other.bottom),
+        }
+    }
 }
 
 /// An abstract "line". Represents any type that has a start and an end
@@ -524,6 +537,17 @@ impl<T> Size<T> {
             AbstractAxis::Inline => self.width = value,
             AbstractAxis::Block => self.height = value,
         }
+    }
+
+    /// Sets the extent of the specified layout axis
+    /// Whether this is the width or height depends on the `GridAxis` provided
+    #[cfg(feature = "grid")]
+    pub(crate) fn with(mut self, axis: AbstractAxis, value: T) -> Self {
+        match axis {
+            AbstractAxis::Inline => self.width = value,
+            AbstractAxis::Block => self.height = value,
+        }
+        self
     }
 }
 

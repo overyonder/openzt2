@@ -40,7 +40,7 @@
 //!
 //! ```toml
 //! # Example: enable only 3D integration
-//! bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"] }
+//! bevy_hanabi = { version = "0.20", default-features = false, features = ["3d"] }
 //! ```
 //!
 //! # Example
@@ -185,7 +185,10 @@ use bevy::{
     camera::visibility::VisibilityClass,
     platform::collections::{HashMap, HashSet},
     prelude::*,
-    render::{extract_component::ExtractComponent, sync_world::SyncToRenderWorld},
+    render::{
+        extract_component::ExtractComponent, render_resource::IntoBindGroupLayoutEntryBuilder as _,
+        sync_world::SyncToRenderWorld,
+    },
 };
 use rand::{RngExt as _, SeedableRng as _};
 use serde::{Deserialize, Serialize};
@@ -218,6 +221,10 @@ pub use properties::*;
 pub use render::{DebugSettings, LayoutFlags, ShaderCache};
 pub use spawn::{tick_spawners, CpuValue, EffectSpawner, Random, SpawnerSettings};
 pub use time::{EffectSimulation, EffectSimulationTime};
+use wgpu::{
+    BindGroupLayoutEntry, BindingType, SamplerBindingType, ShaderStages, TextureDescriptor,
+    TextureDimension, TextureSampleType, TextureViewDimension,
+};
 
 #[allow(missing_docs)]
 pub mod prelude {
@@ -511,24 +518,35 @@ pub enum SimulationSpace {
 impl SimulationSpace {
     /// Evaluate the simulation space expression.
     ///
-    /// - In the init and udpate contexts, this expression transforms the
-    ///   particle's position from simulation space to storage space.
+    /// - Init: [`SimulationSpace::Global`] converts emitter space to simulation
+    ///   space; [`SimulationSpace::Local`] is a no-op.
+    /// - Update: no-op. Particles are already in simulation space.
     /// - In the render context, this expression transforms the particle's
     ///   position from simulation space to view space.
     pub fn eval(&self, context: &dyn EvalContext) -> Result<String, ExprError> {
         match context.modifier_context() {
-            ModifierContext::Init | ModifierContext::Update => match *self {
+            ModifierContext::Init => match *self {
                 SimulationSpace::Global => {
                     if !context.particle_layout().contains(Attribute::POSITION) {
                         return Err(ExprError::GraphEvalError(format!("Global-space simulation requires that the particles have a {} attribute.", Attribute::POSITION.name())));
                     }
-                    Ok(format!(
-                        "particle.{} += transform[3].xyz;", // TODO: get_view_position()
-                        Attribute::POSITION.name()
-                    ))
+                    let pos = Attribute::POSITION.name();
+                    let mut code = format!(
+                        "particle.{0} = (transform * vec4<f32>(particle.{0}, 1.0)).xyz;\n",
+                        pos
+                    );
+                    if context.particle_layout().contains(Attribute::VELOCITY) {
+                        let vel = Attribute::VELOCITY.name();
+                        code.push_str(&format!(
+                            "particle.{0} = (transform * vec4<f32>(particle.{0}, 0.0)).xyz;\n",
+                            vel
+                        ));
+                    }
+                    Ok(code)
                 }
                 SimulationSpace::Local => Ok("".to_string()),
             },
+            ModifierContext::Update => Ok(String::new()),
             ModifierContext::Render => Ok(match *self {
                 // TODO: cast vec3 -> vec4 auomatically
                 SimulationSpace::Global => "vec4<f32>(local_position, 1.0)",
@@ -577,8 +595,32 @@ impl From<&PropertyInstance> for PropertyValue {
     }
 }
 
+/// Marker component to tag the "main" camera.
+///
+/// Various features in Hanabi need a single camera to work with. However, Bevy
+/// doesn't have a concept of a "main" camera. This component solves this and
+/// marks a camera as the "main" one that Hanabi effects will use for camera
+/// related features, like sorting by camera distance (for semi-transparent
+/// particles), reading the depth buffer (_e.g._ for collision), or checking the
+/// camera frustum bounds (_e.g._ for frustum culling).
+///
+/// The component must be added to at most one entity
+/// having a [`Camera`] component. If absent, camera-related features will not
+/// work (but all other features continue to work). If no camera-related feature
+/// is used, adding this component is not required. Generally you want to add it
+/// to the camera that renders the "main view" of your game or application, the
+/// one that defines the final rendered view.
+///
+/// Dynamically switching camera is supported, but note that only one camera per
+/// frame can be tagged (the unique camera tagged at the time of the render
+/// world extraction phase is the camera taken into account). Tagging multiple
+/// camera will result in a system error and break Hanabi rendering.
+#[derive(Default, Clone, Copy, Component)]
+pub struct HanabiMainCamera;
+
 /// The [`VisibilityClass`] used for all particle effects.
 #[derive(Default, Clone, Copy, Component, ExtractComponent)]
+#[extract_app(bevy::render::RenderApp)]
 pub struct EffectVisibilityClass;
 
 /// Particle-based visual effect instance.
@@ -701,10 +743,143 @@ pub struct EffectMaterial {
     pub images: Vec<Handle<Image>>,
 }
 
+/// Dimension of a texture for a material slot.
+///
+/// This defines the type of WGSL texture read or sampler used, and what format
+/// is expected for the [`Image`] bound to that slot. Image binding is done via
+/// the [`EffectMaterial`] component.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, Reflect, Serialize, Deserialize)]
+#[reflect(Default)]
+pub enum SlotDimension {
+    /// A one dimensional texture. `texture_1d` in WGSL.
+    #[serde(rename = "1d")]
+    D1,
+
+    /// A two dimensional texture. `texture_2d` in WGSL.
+    #[serde(rename = "2d")]
+    #[default]
+    D2,
+
+    /// A two dimensional array texture. `texture_2d_array` in WGSL.
+    #[serde(rename = "2d-array")]
+    D2Array,
+
+    /// A cubemap texture. `texture_cube` in WGSL.
+    #[serde(rename = "cube")]
+    Cube,
+
+    /// A cubemap array texture. `texture_cube_array` in WGSL.
+    #[serde(rename = "cube-array")]
+    CubeArray,
+
+    /// A three dimensional texture. `texture_3d` in WGSL.
+    #[serde(rename = "3d")]
+    D3,
+
+    /// A two dimensional depth texture. `texture_depth_2d`.
+    #[serde(rename = "depth-2d")]
+    DepthD2,
+
+    /// A two dimensional array texture. `texture_depth_2d_array` in WGSL.
+    #[serde(rename = "depth-2d-array")]
+    DepthD2Array,
+
+    /// A cubemap texture. `texture_depth_cube` in WGSL.
+    #[serde(rename = "depth-cube")]
+    DepthCube,
+
+    /// A cubemap array texture. `texture_depth_cube_array` in WGSL.
+    #[serde(rename = "depth-cube-array")]
+    DepthCubeArray,
+}
+
+impl SlotDimension {
+    /// Check if this slot dimension uses an array texture.
+    ///
+    /// Array textures require an addition `array_index` when loading a value or
+    /// sampling the texture. See [`TextureSampleExpr`] and [`TextureLoadExpr`].
+    ///
+    /// [`TextureSampleExpr`]: graph::expr::TextureSampleExpr
+    /// [`TextureLoadExpr`]: graph::expr::TextureLoadExpr
+    pub fn is_array(&self) -> bool {
+        matches!(
+            *self,
+            SlotDimension::D2Array
+                | SlotDimension::CubeArray
+                | SlotDimension::DepthD2Array
+                | SlotDimension::DepthCubeArray
+        )
+    }
+
+    /// Check if this slot dimension uses a depth texture.
+    ///
+    /// Depth textures use a comparison sampler, and always return a scalar
+    /// `f32` value. Non-depth textures conversely return a `vec4<f32>`, and use
+    /// an interpolating sampler (and optional mip-map).
+    pub fn is_depth(&self) -> bool {
+        matches!(
+            *self,
+            SlotDimension::DepthD2
+                | SlotDimension::DepthD2Array
+                | SlotDimension::DepthCube
+                | SlotDimension::DepthCubeArray
+        )
+    }
+
+    /// Check if this slot dimension uses a cube texture.
+    ///
+    /// Cube textures have some usage restrictions. In particular, you cannot
+    /// use them with a [`TextureLoadExpr`]. They always need a multiple of 6
+    /// layers (and exactly 6 if not an array).
+    ///
+    /// [`TextureLoadExpr`]: graph::expr::TextureLoadExpr
+    pub fn is_cube(&self) -> bool {
+        matches!(
+            *self,
+            SlotDimension::Cube
+                | SlotDimension::CubeArray
+                | SlotDimension::DepthCube
+                | SlotDimension::DepthCubeArray
+        )
+    }
+
+    /// Convert this slot dimension to a WGSL texture type name.
+    pub fn to_wgsl_texture_type(&self) -> String {
+        match *self {
+            SlotDimension::D1 => "texture_1d<f32>",
+            SlotDimension::D2 => "texture_2d<f32>",
+            SlotDimension::D2Array => "texture_2d_array<f32>",
+            SlotDimension::D3 => "texture_3d<f32>",
+            SlotDimension::Cube => "texture_cube<f32>",
+            SlotDimension::CubeArray => "texture_cube_array<f32>",
+            SlotDimension::DepthD2 => "texture_depth_2d<f32>",
+            SlotDimension::DepthD2Array => "texture_depth_2d_array<f32>",
+            SlotDimension::DepthCube => "texture_depth_cube<f32>",
+            SlotDimension::DepthCubeArray => "texture_depth_cube_array<f32>",
+        }
+        .to_string()
+    }
+
+    /// Convert this slot dimension to a WGSL sampler type.
+    ///
+    /// This returns `sampler_comparison` if [`is_depth()`] is `true`, or
+    /// `sampler` otherwise.
+    ///
+    /// [`is_depth()`]: Self::is_depth
+    pub fn to_wgsl_sampler_type(&self) -> String {
+        if self.is_depth() {
+            "sampler_comparison"
+        } else {
+            "sampler"
+        }
+        .to_string()
+    }
+}
+
 /// Texture slot of a [`Module`].
 ///
 /// A texture slot defines a named bind point where a texture can be attached
-/// and sampled by an effect during rendering. A slot also has an implicit
+/// and read/sampled by an effect during rendering. A slot also has an implicit
 /// unique index corresponding to its position in the [`TextureLayout::layout`]
 /// array of the effect.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Reflect, Serialize, Deserialize)]
@@ -714,6 +889,121 @@ pub struct TextureSlot {
     /// Use a linear clamp sampler instead of the image's sampler.
     #[serde(default)]
     pub clamp_linear: bool,
+    /// Texture dimension the slot uses. This determines the sampler of the slot
+    /// in the WGSL shader.
+    pub dimension: SlotDimension,
+}
+
+impl TextureSlot {
+    /// Check if this slot accepts the given texture type.
+    ///
+    /// - `texture_dimension` determines the cardinality 1D/2D/3D of the texture
+    ///   access.
+    /// - `array_layer_count` is the number of layers of an array texture. It
+    ///   can only be > 1 for a [`SlotDimension`] corresponding to an array
+    ///   texture.
+    /// - `is_depth` determines if the texture is accessed via a comparison
+    ///   sampler as a depth texture. Note that this doesn't mean that the
+    ///   texture must contain values that semantically represent a depth value;
+    ///   the semantic of a texture value is irrelevant for the shader compiler,
+    ///   and only matters for the author.
+    pub fn accepts(
+        &self,
+        texture_dimension: TextureDimension,
+        array_layer_count: u32,
+        is_depth: bool,
+    ) -> bool {
+        let expected_dimension = match self.dimension {
+            SlotDimension::D1 => TextureDimension::D1,
+            SlotDimension::D3 => TextureDimension::D3,
+            _ => TextureDimension::D2,
+        };
+        if texture_dimension != expected_dimension {
+            return false;
+        }
+
+        // Depth slots need a texture with a depth format
+        if self.dimension.is_depth() != is_depth {
+            return false;
+        }
+
+        // Cube textures need a number of layer multiple of 6. And non-array
+        // ones need exactly 6.
+        if self.dimension.is_cube()
+            && ((!self.dimension.is_array() && (array_layer_count != 6))
+                || !array_layer_count.is_multiple_of(6))
+        {
+            return false;
+        }
+
+        // A layer count > 1 requires an array textures or a cube texture
+        if array_layer_count > 1 {
+            self.dimension.is_array() || self.dimension.is_cube()
+        } else {
+            true
+        }
+    }
+
+    /// Get the WGPU binding type [`BindingType`] for a texture bound to this
+    /// slot.
+    ///
+    /// This returns a [`BindingType::Texture`].
+    pub fn to_texture_binding_type(&self) -> BindingType {
+        let (sample_type, view_dimension) = match self.dimension {
+            SlotDimension::D1 => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::D1,
+            ),
+            SlotDimension::D2 => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::D2,
+            ),
+            SlotDimension::D2Array => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::D2Array,
+            ),
+            SlotDimension::D3 => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::D3,
+            ),
+            SlotDimension::Cube => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::Cube,
+            ),
+            SlotDimension::CubeArray => (
+                TextureSampleType::Float { filterable: true },
+                TextureViewDimension::CubeArray,
+            ),
+            SlotDimension::DepthD2 => (TextureSampleType::Depth, TextureViewDimension::D2),
+            SlotDimension::DepthD2Array => {
+                (TextureSampleType::Depth, TextureViewDimension::D2Array)
+            }
+            SlotDimension::DepthCube => (TextureSampleType::Depth, TextureViewDimension::Cube),
+            SlotDimension::DepthCubeArray => {
+                (TextureSampleType::Depth, TextureViewDimension::CubeArray)
+            }
+        };
+        BindingType::Texture {
+            sample_type,
+            view_dimension,
+            multisampled: false,
+        }
+    }
+
+    /// Get the WGPU binding type [`BindingType`] for a sampler bound to this
+    /// slot.
+    ///
+    /// This returns a [`BindingType::Sampler`] which is either a
+    /// [`SamplerBindingType::Comparison`] if [`SlotDimension::is_depth()`] is
+    /// `true`, or [`SamplerBindingType::Filtering`] otherwise.
+    pub fn to_sampler_binding_type(&self) -> BindingType {
+        let sampler_binding_type = if self.dimension.is_depth() {
+            SamplerBindingType::Comparison
+        } else {
+            SamplerBindingType::Filtering
+        };
+        BindingType::Sampler(sampler_binding_type)
+    }
 }
 
 /// Texture layout.
@@ -737,6 +1027,78 @@ impl TextureLayout {
     /// to it.
     pub fn get_slot_by_name(&self, name: &str) -> Option<usize> {
         self.layout.iter().position(|slot| slot.name == name)
+    }
+
+    /// Check if the given texture is compatible with the given slot.
+    ///
+    /// This checks that the slot index is valid, and that
+    /// [`TextureSlot::accepts()`] is `true` for that slot.
+    pub fn is_compatible(&self, slot_index: u32, texture_descriptor: &TextureDescriptor) -> bool {
+        if slot_index >= self.layout.len() as u32 {
+            return false;
+        }
+        if texture_descriptor.sample_count > 1 {
+            // Multisampled textures not currently supported by Hanabi
+            return false;
+        }
+        let slot = &self.layout[slot_index as usize];
+        slot.accepts(
+            texture_descriptor.dimension,
+            texture_descriptor.array_layer_count(),
+            texture_descriptor.format.is_depth_stencil_format(),
+        )
+    }
+
+    /// Append the bindings for the textures described by this layout.
+    pub fn append_layout_bindings(
+        &self,
+        start_binding: u32,
+        entries: &mut Vec<BindGroupLayoutEntry>,
+    ) {
+        let mut bind_index = start_binding;
+        for slot in &self.layout {
+            let tex_index = bind_index;
+            let sampler_index = bind_index + 1;
+            entries.push(
+                slot.to_texture_binding_type()
+                    .into_bind_group_layout_entry_builder()
+                    .build(
+                        tex_index,
+                        ShaderStages::COMPUTE | ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ),
+            );
+            entries.push(
+                slot.to_sampler_binding_type()
+                    .into_bind_group_layout_entry_builder()
+                    .build(
+                        sampler_index,
+                        ShaderStages::COMPUTE | ShaderStages::VERTEX | ShaderStages::FRAGMENT,
+                    ),
+            );
+            bind_index += 2;
+        }
+    }
+
+    /// Generate the WGSL code for the material bindings of this layout.
+    pub fn to_wgsl_binding(&self, group_index: u32, start_index: u32) -> String {
+        if self.layout.is_empty() {
+            return String::new();
+        }
+        let mut code = String::with_capacity(160 * self.layout.len());
+        let mut bind_index = start_index;
+        for (slot_index, slot) in self.layout.iter().enumerate() {
+            let tex_index = bind_index;
+            let sampler_index = bind_index + 1;
+            let texture_type = slot.dimension.to_wgsl_texture_type();
+            let sampler_type = slot.dimension.to_wgsl_sampler_type();
+            code.push_str(&format!(
+                "@group({group_index}) @binding({tex_index}) var material_texture_{slot_index}: {texture_type};
+@group({group_index}) @binding({sampler_index}) var material_sampler_{slot_index}: {sampler_type};
+"
+            ));
+            bind_index += 2;
+        }
+        code
     }
 }
 
@@ -826,12 +1188,12 @@ pub struct EffectShaders {
     pub render: Handle<Shader>,
 }
 
-/// Source code (WGSL) of an effect.
+/// Source code (WESL) of an effect.
 ///
 /// The source code is generated from an [`EffectAsset`] by applying all
 /// modifiers. The resulting source code is _configured_ (the Hanabi variables
 /// `{{VARIABLE}}` are replaced with the relevant WGSL code) but is not
-/// _specialized_ (the conditional directives like `#if` are still present).
+/// _specialized_ (the conditional attributes like `@if` are still present).
 ///
 /// This is mainly used internally by Hanabi as an intermediate step toward
 /// generating the final [`EffectShaders`], and is exposed mainly for debugging
@@ -839,11 +1201,11 @@ pub struct EffectShaders {
 /// directly.
 #[derive(Debug, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct EffectShaderSources {
-    /// WGSL source code for the init compute shader.
+    /// WESL source code for the init compute shader.
     pub init_shader_source: String,
-    /// WGSL source code for the update compute shader.
+    /// WESL source code for the update compute shader.
     pub update_shader_source: String,
-    /// WGSL source code for the render graphics shader (both vertex and
+    /// WESL source code for the render graphics shader (both vertex and
     /// fragment).
     pub render_shader_source: String,
     /// Effect flags the source codes were generated with.
@@ -883,9 +1245,9 @@ impl EffectShaderSources {
 
         let particle_layout = asset.particle_layout();
 
-        // The particle layout cannot be empty currently because we always emit some
-        // Particle{} struct and it needs at least one field. There's probably no use
-        // case for an empty layout anyway.
+        // The particle layout cannot be empty currently because we always emit
+        // some Particle{} struct and it needs at least one field.
+        // There's probably no use case for an empty layout anyway.
         if particle_layout.size() == 0 {
             return Err(ShaderGenerateError::Validate(format!(
                 "Asset {} has invalid empty particle layout.",
@@ -901,8 +1263,8 @@ impl EffectShaderSources {
             }
         }
 
-        // Currently the POSITION attribute is mandatory, as it's always used by the
-        // render shader.
+        // Currently the POSITION attribute is mandatory, as it's always used by
+        // the render shader.
         if !particle_layout.contains(Attribute::POSITION) {
             return Err(ShaderGenerateError::Validate(format!(
                 "The particle layout of asset '{}' is missing the '{}' attribute. Add a modifier using that attribute, for example the SetAttributeModifier.",
@@ -910,8 +1272,9 @@ impl EffectShaderSources {
             )));
         }
 
-        // Currently ribbon rendering requires AGE, so warn if it's missing because
-        // everything will break with some weird error aboud bind groups or whatnot.
+        // Currently ribbon rendering requires AGE, so warn if it's missing
+        // because everything will break with some weird error aboud
+        // bind groups or whatnot.
         if particle_layout.contains(Attribute::RIBBON_ID)
             && !particle_layout.contains(Attribute::AGE)
         {
@@ -921,15 +1284,20 @@ impl EffectShaderSources {
             )));
         }
 
-        // Generate the WGSL code declaring all the attributes inside the Particle
-        // struct.
+        // Generate the WGSL code declaring all the attributes inside the
+        // Particle struct.
         let attributes_code = particle_layout.generate_code();
-        let parent_attributes_code = parent_layout
-            .map(|layout| layout.generate_code())
+        let parent_particle_code = parent_layout
+            .map(|layout| {
+                format!(
+                    "@if(READ_PARENT_PARTICLE)\nstruct ParentParticle {{\n{}\n}}",
+                    layout.generate_code()
+                )
+            })
             .unwrap_or_default();
 
-        // For the renderer, assign all its inputs to the values of the attributes
-        // present, or a default value.
+        // For the renderer, assign all its inputs to the values of the
+        // attributes present, or a default value.
         let mut inputs_code = String::new();
         // All required attributes, except the size/color which are variadic
         let required_attributes =
@@ -994,8 +1362,9 @@ impl EffectShaderSources {
                 present_attributes.insert(attr);
             }
         }
-        // For all attributes required by the render shader, if they're not explicitly
-        // stored in the particle layout, define a variable with their default value.
+        // For all attributes required by the render shader, if they're not
+        // explicitly stored in the particle layout, define a variable
+        // with their default value.
         if !has_size {
             inputs_code += &format!(
                 "var size = {0};\n",
@@ -1027,20 +1396,26 @@ impl EffectShaderSources {
             "@group(2) @binding(3) var<storage, read> properties : array<Properties>;".to_string()
         };
 
-        // Event buffer bindings for the update pass, if the effect emits GPU events to
-        // one or more other effects.
+        // Generate the shader code defining the material bindings. These occupy
+        // the @group(2) @binding(4..) range.
+        let texture_layout = asset.texture_layout();
+        let material_bindings_code = texture_layout.to_wgsl_binding(2, 4);
+
+        // Event buffer bindings for the update pass, if the effect emits GPU
+        // events to one or more other effects.
         let mut emit_event_buffer_bindings_code = String::with_capacity(256);
         emit_event_buffer_bindings_code.push_str(
-            "@group(3) @binding(1) var<storage, read_write> child_info_buffer : ChildInfoBuffer;\n",
+            "@if(EMITS_GPU_SPAWN_EVENTS)\n@group(3) @binding(1) var<storage, read_write> child_info_buffer : ChildInfoBuffer;\n",
         );
         let mut emit_event_buffer_append_funcs_code = String::with_capacity(1024);
         let base_binding_index = 2;
         for i in 0..num_event_bindings {
             let binding_index = base_binding_index + i;
             emit_event_buffer_bindings_code.push_str(&format!(
-                "@group(3) @binding({binding_index}) var<storage, read_write> event_buffer_{i} : EventBuffer;\n"));
+                "@if(EMITS_GPU_SPAWN_EVENTS)\n@group(3) @binding({binding_index}) var<storage, read_write> event_buffer_{i} : EventBuffer;\n"));
             emit_event_buffer_append_funcs_code.push_str(&format!(
                 r##"/// Append one or more spawn events to the event buffer.
+@if(EMITS_GPU_SPAWN_EVENTS)
 fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u32) {{
     // Optimize this case.
     if (count == 0u) {{
@@ -1067,9 +1442,9 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             emit_event_buffer_append_funcs_code = "// (not emitting GPU events)".into();
         }
 
-        // Start from the base module containing the expressions actually serialized in
-        // the asset. We will add the ones created on-the-fly by applying the
-        // modifiers to the contexts.
+        // Start from the base module containing the expressions actually
+        // serialized in the asset. We will add the ones created
+        // on-the-fly by applying the modifiers to the contexts.
         let mut module = asset.module().clone();
 
         let mut layout_flags = LayoutFlags::NONE;
@@ -1091,8 +1466,12 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
         // Generate the shader code for the initializing shader
         let (init_code, init_extra, init_sim_space_transform_code, consume_gpu_spawn_events) = {
             // Apply all the init modifiers
-            let mut init_context =
-                ShaderWriter::new(ModifierContext::Init, &property_layout, &particle_layout);
+            let mut init_context = ShaderWriter::new(
+                ModifierContext::Init,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             for m in asset.init_modifiers() {
                 if let Err(err) = m.apply(&mut module, &mut init_context) {
                     error!(
@@ -1115,8 +1494,8 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                     ShaderGenerateError::Expr(err)
                 })?;
 
-            // Effect uses GPU spawn events if it produces them, or if it has a parent and
-            // consumes them from that parent.
+            // Effect uses GPU spawn events if it produces them, or if it has a
+            // parent and consumes them from that parent.
             let consume_gpu_spawn_events =
                 init_context.emits_gpu_spawn_events().unwrap_or(false) || parent_layout.is_some();
 
@@ -1128,13 +1507,36 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             )
         };
 
+        // Every attribute read from the parent particle, either with an
+        // InheritAttributeModifier or a parent attribute expression, must be stored by
+        // the parent effect. Otherwise the init shader reads a field missing from the
+        // ParentParticle struct and fails to compile.
+        if let Some(parent_layout) = parent_layout {
+            let mut parent_attributes = HashSet::new();
+            module.gather_parent_attributes(&mut parent_attributes);
+            let mut missing = parent_attributes
+                .into_iter()
+                .filter(|attr| !parent_layout.contains(*attr))
+                .map(|attr| format!("'{}'", attr.name().to_ascii_uppercase()))
+                .collect::<Vec<_>>();
+            if !missing.is_empty() {
+                missing.sort();
+                return Err(ShaderGenerateError::Validate(format!(
+                    "Effect asset '{}' reads the parent particle attribute(s) {}, but the particle layout of its parent effect doesn't contain them. Add a modifier using those attributes to the parent effect, for example the SetAttributeModifier.",
+                    asset.name,
+                    missing.join(", ")
+                )));
+            }
+        }
+
         let init_shader_source = PARTICLES_INIT_SHADER_TEMPLATE
             .replace("{{ATTRIBUTES}}", &attributes_code)
-            .replace("{{PARENT_ATTRIBUTES}}", &parent_attributes_code)
+            .replace("{{PARENT_PARTICLE}}", &parent_particle_code)
             .replace("{{INIT_CODE}}", &init_code)
             .replace("{{INIT_EXTRA}}", &init_extra)
             .replace("{{PROPERTIES}}", &properties_code)
             .replace("{{PROPERTIES_BINDING}}", &properties_binding_code)
+            .replace("{{MATERIAL_BINDINGS}}", &material_bindings_code)
             .replace(
                 "{{SIMULATION_SPACE_TRANSFORM_PARTICLE}}",
                 &init_sim_space_transform_code,
@@ -1147,8 +1549,12 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
 
         // Generate the shader code for the update shader
         let (mut update_code, update_extra, emit_gpu_spawn_events) = {
-            let mut update_context =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+            let mut update_context = ShaderWriter::new(
+                ModifierContext::Update,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             for m in asset.update_modifiers() {
                 if let Err(err) = m.apply(&mut module, &mut update_context) {
                     error!(
@@ -1180,7 +1586,8 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
         let has_velocity = present_attributes.contains(&Attribute::VELOCITY);
         if asset.motion_integration != MotionIntegration::None {
             if has_position && has_velocity {
-                // Note the prepended "\n" to prevent appending to a comment line.
+                // Note the prepended "\n" to prevent appending to a comment
+                // line.
                 let code = format!(
                     "\nparticle.{0} += particle.{1} * effect_delta_time;\n",
                     Attribute::POSITION.name(),
@@ -1213,7 +1620,6 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             alpha_cutoff_code,
             flipbook_scale_code,
             flipbook_row_count_code,
-            material_bindings_code,
         ) = {
             let texture_layout = module.texture_layout();
             let mut render_context =
@@ -1249,38 +1655,24 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                     return 0_f32.to_wgsl_string();
                 })
             } else {
-                String::new()
+                // WESL parses disabled branches before conditional translation.
+                // Keep the unused initializer syntactically valid.
+                "0.0".to_string()
             };
 
             let (flipbook_scale_code, flipbook_row_count_code) = if let Some(grid_size) =
                 render_context.sprite_grid_size
             {
                 layout_flags |= LayoutFlags::FLIPBOOK;
-                // Note: row_count needs to be i32, not u32, because of sprite_index
+                // Note: row_count needs to be i32, not u32, because of
+                // sprite_index
                 let flipbook_row_count_code = (grid_size.x as i32).to_wgsl_string();
                 let flipbook_scale_code =
                     Vec2::new(1.0 / grid_size.x as f32, 1.0 / grid_size.y as f32).to_wgsl_string();
                 (flipbook_scale_code, flipbook_row_count_code)
             } else {
-                (String::new(), String::new())
+                ("vec2<f32>(1.0)".to_string(), "1i".to_string())
             };
-
-            trace!(
-                "Generating material bindings code for layout: {:?}",
-                texture_layout
-            );
-            let mut material_bindings_code = String::new();
-            let mut bind_index = 0;
-            for (slot, _) in texture_layout.layout.iter().enumerate() {
-                let tex_index = bind_index;
-                let sampler_index = bind_index + 1;
-                material_bindings_code.push_str(&format!(
-                    "@group(3) @binding({tex_index}) var material_texture_{slot}: texture_2d<f32>;
-@group(3) @binding({sampler_index}) var material_sampler_{slot}: sampler;
-"
-                ));
-                bind_index += 2;
-            }
 
             (
                 render_context.vertex_code,
@@ -1290,7 +1682,6 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                 alpha_cutoff_code,
                 flipbook_scale_code,
                 flipbook_row_count_code,
-                material_bindings_code,
             )
         };
 
@@ -1320,9 +1711,9 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
                 );
             }
         } else {
-            // Since we're using a dead index buffer, all particles that make it to the
-            // update compute shader are guaranteed to be alive (we never
-            // simulate dead particles).
+            // Since we're using a dead index buffer, all particles that make it
+            // to the update compute shader are guaranteed to be
+            // alive (we never simulate dead particles).
             age_code = "\n    let was_alive = true;\n    var is_alive = true;".to_string();
         }
 
@@ -1354,11 +1745,11 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             .unwrap();
         }
 
-        // Configure the update shader template, and make sure a corresponding shader
-        // asset exists
+        // Configure the update shader template, and make sure a corresponding
+        // shader asset exists
         let update_shader_source = PARTICLES_UPDATE_SHADER_TEMPLATE
             .replace("{{ATTRIBUTES}}", &attributes_code)
-            .replace("{{PARENT_ATTRIBUTES}}", &parent_attributes_code)
+            .replace("{{PARENT_PARTICLE}}", &parent_particle_code)
             .replace("{{AGE_CODE}}", &age_code)
             .replace("{{REAP_CODE}}", &reap_code)
             .replace("{{UPDATE_CODE}}", &update_code)
@@ -1366,6 +1757,7 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             .replace("{{UPDATE_EXTRA}}", &update_extra)
             .replace("{{PROPERTIES}}", &properties_code)
             .replace("{{PROPERTIES_BINDING}}", &properties_binding_code)
+            .replace("{{MATERIAL_BINDINGS}}", &material_bindings_code)
             .replace(
                 "{{EMIT_EVENT_BUFFER_BINDINGS}}",
                 &emit_event_buffer_bindings_code,
@@ -1380,8 +1772,8 @@ fn append_spawn_events_{0}(base_child_index: u32, particle_index: u32, count: u3
             update_shader_source
         );
 
-        // Configure the render shader template, and make sure a corresponding shader
-        // asset exists
+        // Configure the render shader template, and make sure a corresponding
+        // shader asset exists
         let render_shader_source = PARTICLES_RENDER_SHADER_TEMPLATE
             .replace("{{ATTRIBUTES}}", &attributes_code)
             .replace("{{INPUTS}}", &inputs_code)
@@ -1514,26 +1906,28 @@ impl CompiledParticleEffect {
         );
 
         // #289 - Panic in fn extract_effects
-        // We now keep a strong handle. Since CompiledParticleEffect is kept in sync
-        // with the source ParticleEffect, this shouldn't produce any strong cyclic
-        // dependency.
+        // We now keep a strong handle. Since CompiledParticleEffect is kept in
+        // sync with the source ParticleEffect, this shouldn't produce
+        // any strong cyclic dependency.
         debug_assert!(instance.handle.is_strong());
 
-        // Note: if something marked the ParticleEffect as changed (via Mut for example)
-        // but didn't actually change anything, or at least didn't change the asset,
-        // then we may end up here with the same asset handle. Don't try to be
-        // too smart, and rebuild everything anyway, it's easier than trying to
-        // diff what may or may not have changed.
+        // Note: if something marked the ParticleEffect as changed (via Mut for
+        // example) but didn't actually change anything, or at least
+        // didn't change the asset, then we may end up here with the
+        // same asset handle. Don't try to be too smart, and rebuild
+        // everything anyway, it's easier than trying to diff what may
+        // or may not have changed.
         self.asset = instance.handle.clone();
         self.simulation_condition = asset.simulation_condition;
         self.prng_seed = instance.prng_seed.unwrap_or(asset.prng_seed);
 
-        // Check if the instance changed. If so, rebuild some data from this compiled
-        // effect based on the new data of the effect instance.
+        // Check if the instance changed. If so, rebuild some data from this
+        // compiled effect based on the new data of the effect instance.
         if rebuild {
-            // Clear the compiled effect if the effect instance changed. We could try to get
-            // smarter here, only invalidate what changed, but for now just wipe everything
-            // and rebuild from scratch all three shaders together.
+            // Clear the compiled effect if the effect instance changed. We
+            // could try to get smarter here, only invalidate what
+            // changed, but for now just wipe everything and rebuild
+            // from scratch all three shaders together.
             self.effect_shader = None;
         }
 
@@ -1570,13 +1964,13 @@ impl CompiledParticleEffect {
             self.alpha_mode
         );
 
-        // TODO - Replace with Option<EffectShader { handle: Handle<Shader>, hash:
-        // u64 }> where the hash takes into account the code and extra code
-        // for each pass (and any other varying item). We don't need to keep
-        // around the entire shader code, only a hash of it for compare (or, maybe safer
-        // to avoid hash collisions, an index into a shader cache). The only
-        // use is to be able to compare 2 instances and see if they can be
-        // batched together.
+        // TODO - Replace with Option<EffectShader { handle: Handle<Shader>,
+        // hash: u64 }> where the hash takes into account the code and
+        // extra code for each pass (and any other varying item). We
+        // don't need to keep around the entire shader code, only a hash
+        // of it for compare (or, maybe safer to avoid hash collisions,
+        // an index into a shader cache). The only use is to be able to
+        // compare 2 instances and see if they can be batched together.
         self.effect_shader = Some(EffectShaders {
             init: shader_cache.get_or_insert(
                 &asset.name,
@@ -1629,9 +2023,9 @@ impl CompiledParticleEffect {
     }
 }
 
-const PARTICLES_INIT_SHADER_TEMPLATE: &str = include_str!("render/vfx_init.wgsl");
-const PARTICLES_UPDATE_SHADER_TEMPLATE: &str = include_str!("render/vfx_update.wgsl");
-const PARTICLES_RENDER_SHADER_TEMPLATE: &str = include_str!("render/vfx_render.wgsl");
+const PARTICLES_INIT_SHADER_TEMPLATE: &str = include_str!("render/vfx_init.wesl");
+const PARTICLES_UPDATE_SHADER_TEMPLATE: &str = include_str!("render/vfx_update.wesl");
+const PARTICLES_RENDER_SHADER_TEMPLATE: &str = include_str!("render/vfx_render.wesl");
 
 /// Trait to convert any data structure to its equivalent shader code.
 trait ShaderCode {
@@ -1791,10 +2185,11 @@ fn compile_effects(
 ) {
     trace!("compile_effects: {} effect(s)", q_effects.iter().len());
 
-    // Loop over all existing effects and collect the valid ones. We do a separate
-    // pass because we can't borrow mutably while doing a double lookup on the
-    // query. This map is used to lookup valid parents, and filter out effects with
-    // a declared parent but unresolved parent asset.
+    // Loop over all existing effects and collect the valid ones. We do a
+    // separate pass because we can't borrow mutably while doing a double
+    // lookup on the query. This map is used to lookup valid parents, and
+    // filter out effects with a declared parent but unresolved parent
+    // asset.
     let particle_layouts_and_parents: HashMap<Entity, (ParticleLayout, Option<Entity>)> = q_effects
         .iter()
         .filter_map(|(entity, effect, _, _, parent, _)| {
@@ -1825,8 +2220,9 @@ fn compile_effects(
         mut compiled_effect,
     ) in q_effects.iter_mut().filter_map(
         |(entity, effect, material, mesh, parent, compiled_effect)| {
-            // Check if asset is available, otherwise silently ignore as we can't check for
-            // changes, and conceptually it makes no sense to render a particle effect whose
+            // Check if asset is available, otherwise silently ignore as we
+            // can't check for changes, and conceptually it makes no
+            // sense to render a particle effect whose
             // asset was unloaded.
             let asset = effects.get(&effect.handle)?;
 
@@ -1834,10 +2230,12 @@ fn compile_effects(
             let (parent_entity, parent_layout) = if let Some(parent) = &parent {
                 let Some((parent_layout, _)) = particle_layouts_and_parents.get(&parent.entity)
                 else {
-                    // There's a parent declared, but not found. Skip the current asset.
+                    // There's a parent declared, but not found. Skip the
+                    // current asset.
                     return None;
                 };
-                // Declared parent with found parent asset, child asset is valid.
+                // Declared parent with found parent asset, child asset is
+                // valid.
                 (Some(parent.entity), Some(parent_layout.clone()))
             } else {
                 // No declared parent, asset is valid.
@@ -1861,8 +2259,8 @@ fn compile_effects(
             .map(std::mem::take)
             .unwrap_or_default();
 
-        // If the ParticleEffect didn't change, and the compiled one is for the correct
-        // asset, then there's nothing to do.
+        // If the ParticleEffect didn't change, and the compiled one is for the
+        // correct asset, then there's nothing to do.
         let material_changed = material.as_ref().is_some_and(|r| r.is_changed());
         let need_rebuild =
             effect.is_changed() || material_changed || compiled_effect.children != child_entities;
@@ -1885,10 +2283,11 @@ fn compile_effects(
                 &mut shader_cache,
             );
         } else {
-            // Update the PRNG seed. Unfortunately at the minute the "seed" (which
-            // really is the internal PRNG state rather) is not cached on GPU, and
-            // is re-uploaded each frame, so if it's not changed every frame then
-            // there's no randomness anymore, because the uses of the previous frame
+            // Update the PRNG seed. Unfortunately at the minute the "seed"
+            // (which really is the internal PRNG state rather) is
+            // not cached on GPU, and is re-uploaded each frame, so
+            // if it's not changed every frame then there's no
+            // randomness anymore, because the uses of the previous frame
             // are "forgotten".
             let mut rng = rand::rngs::StdRng::seed_from_u64(compiled_effect.prng_seed as u64);
             compiled_effect.prng_seed = rng.random();
@@ -1902,8 +2301,8 @@ fn compile_effects(
             compiled_effect.clear();
         }
 
-        // If the effect has a parent, and that parent has no asset, also clear the
-        // child's compilation.
+        // If the effect has a parent, and that parent has no asset, also clear
+        // the child's compilation.
         if let Some(parent) = parent {
             if particle_layouts_and_parents.get(&parent.entity).is_none() {
                 compiled_effect.clear();
@@ -1935,9 +2334,9 @@ fn update_properties_from_asset(
 
     // Loop over all existing effects, including invisible ones
     for (effect, properties) in q_effects.iter_mut() {
-        // Check if the asset is available, otherwise silently ignore as we can't check
-        // for changes, and conceptually it makes no sense to render a particle
-        // effect whose asset was unloaded.
+        // Check if the asset is available, otherwise silently ignore as we
+        // can't check for changes, and conceptually it makes no sense
+        // to render a particle effect whose asset was unloaded.
         let Some(asset) = assets.get(&effect.handle) else {
             continue;
         };
@@ -1959,10 +2358,8 @@ mod tests {
             AssetServerMode, LoadState, UnapprovedPathMode,
         },
         camera::visibility::{VisibilityPlugin, VisibilitySystems},
-        shader::ShaderLoader,
         tasks::{IoTaskPool, TaskPoolBuilder},
     };
-    use naga_oil::compose::{Composer, NagaModuleDescriptor, ShaderDefValue};
 
     use super::*;
     use crate::spawn::new_rng;
@@ -2132,42 +2529,81 @@ else { return c1; }
     fn test_simulation_space_eval() {
         let particle_layout = ParticleLayout::empty();
         let property_layout = PropertyLayout::default();
+        let texture_layout = TextureLayout::default();
         {
-            // Local is always available
-            let ctx =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+            // Global init requires storing the particle's position
+            let ctx = ShaderWriter::new(
+                ModifierContext::Init,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             assert!(SimulationSpace::Local.eval(&ctx).is_ok());
             assert!(SimulationSpace::Global.eval(&ctx).is_err());
 
-            // Global requires storing the particle's position
             let particle_layout = ParticleLayout::new().append(Attribute::POSITION).build();
-            let ctx =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+            let ctx = ShaderWriter::new(
+                ModifierContext::Init,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             assert!(SimulationSpace::Local.eval(&ctx).is_ok());
             assert!(SimulationSpace::Global.eval(&ctx).is_ok());
         }
         {
-            // Local is always available
-            let ctx =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
-            assert!(SimulationSpace::Local.eval(&ctx).is_ok());
-            assert!(SimulationSpace::Global.eval(&ctx).is_err());
+            let ctx = ShaderWriter::new(
+                ModifierContext::Update,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
+            assert_eq!(SimulationSpace::Local.eval(&ctx).unwrap(), "");
+            assert_eq!(SimulationSpace::Global.eval(&ctx).unwrap(), "");
 
-            // Global requires storing the particle's position
             let particle_layout = ParticleLayout::new().append(Attribute::POSITION).build();
-            let ctx =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
-            assert!(SimulationSpace::Local.eval(&ctx).is_ok());
-            assert!(SimulationSpace::Global.eval(&ctx).is_ok());
+            let ctx = ShaderWriter::new(
+                ModifierContext::Update,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
+            assert_eq!(SimulationSpace::Local.eval(&ctx).unwrap(), "");
+            assert_eq!(SimulationSpace::Global.eval(&ctx).unwrap(), "");
         }
         {
-            // In the render context, the particle position is always available (either
-            // stored or not), so the simulation space can always be evaluated.
+            // In the render context, the particle position is always available
+            // (either stored or not), so the simulation space can
+            // always be evaluated.
             let texture_layout = TextureLayout::default();
             let ctx = RenderContext::new(&property_layout, &particle_layout, &texture_layout);
             assert!(SimulationSpace::Local.eval(&ctx).is_ok());
             assert!(SimulationSpace::Global.eval(&ctx).is_ok());
         }
+    }
+
+    #[test]
+    fn test_simulation_space_init_spawn_to_sim() {
+        let property_layout = PropertyLayout::default();
+        let texture_layout = TextureLayout::default();
+        let particle_layout = ParticleLayout::new()
+            .append(Attribute::POSITION)
+            .append(Attribute::VELOCITY)
+            .build();
+        let ctx = ShaderWriter::new(
+            ModifierContext::Init,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
+
+        let global = SimulationSpace::Global.eval(&ctx).unwrap();
+        assert!(global.contains("vec4<f32>(particle.position, 1.0)"));
+        assert!(global.contains("vec4<f32>(particle.velocity, 0.0)"));
+        assert!(!global.contains("transform[3]"));
+
+        let local = SimulationSpace::Local.eval(&ctx).unwrap();
+        assert!(local.is_empty());
     }
 
     fn make_test_app() -> App {
@@ -2266,29 +2702,12 @@ else { return c1; }
         ] {
             println!("{} shader:\n\n{}", name, code);
 
-            let mut shader_defs = std::collections::HashMap::<String, ShaderDefValue>::new();
-            shader_defs.insert("LOCAL_SPACE_SIMULATION".into(), ShaderDefValue::Bool(true));
-            shader_defs.insert("NEEDS_UV".into(), ShaderDefValue::Bool(true));
-            shader_defs.insert("NEEDS_NORMAL".into(), ShaderDefValue::Bool(false));
-            shader_defs.insert(
-                "NEEDS_PARTICLE_FRAGMENT".into(),
-                ShaderDefValue::Bool(false),
-            );
-            shader_defs.insert(
-                "PARTICLE_SCREEN_SPACE_SIZE".into(),
-                ShaderDefValue::Bool(true),
-            );
-            if name == "Update" {
-                shader_defs.insert("EM_MAX_SPAWN_ATOMIC".into(), ShaderDefValue::Bool(true));
-            }
-            let mut composer = Composer::default();
+            let mut modules = Vec::<(String, String)>::new();
 
             // Import bevy_render::view for the render shader
             {
-                // It's reasonably hard to retrieve the source code for view.wgsl in
-                // bevy_render. We use a few tricks to get a Shader that we can
-                // then convert into a composable module (which is how imports work in Bevy
-                // itself).
+                // Load Bevy's actual view shader for the WESL resolver without
+                // creating a GPU device.
                 IoTaskPool::get_or_init(|| {
                     TaskPoolBuilder::default()
                         .num_threads(1)
@@ -2297,19 +2716,25 @@ else { return c1; }
                 });
                 let mut dummy_app = App::new();
                 dummy_app.add_plugins(bevy::asset::AssetPlugin::default());
-                dummy_app
-                    .init_asset::<Shader>()
-                    .init_asset_loader::<ShaderLoader>();
-                dummy_app.add_plugins(bevy::render::view::ViewPlugin);
+                dummy_app.add_plugins(bevy::render::RenderPlugin {
+                    render_creation: bevy::render::settings::WgpuSettings {
+                        backends: None,
+                        ..default()
+                    }
+                    .into(),
+                    ..default()
+                });
                 let asset_server = dummy_app.world().resource::<AssetServer>();
                 let view_shader_handle =
-                    asset_server.load::<Shader>("embedded://bevy_render/view/view.wgsl");
+                    asset_server.load::<Shader>("embedded://bevy_render/view.wesl");
 
-                // Need at least one frame tick for the loaded asset to send a message to the
-                // asset server to get registered
-                let mut max_frames = 10000; // it takes a decent amount of time to load async the asset, even if embedded
+                // Need at least one frame tick for the loaded asset to send a
+                // message to the asset server to get registered
+                let mut max_frames = 10000; // it takes a decent amount of time
+                                            // to load async the asset, even if
+                                            // embedded
                 while max_frames > 0 {
-                    dummy_app.update();
+                    dummy_app.world_mut().run_schedule(PreUpdate);
 
                     let asset_server = dummy_app.world().resource::<AssetServer>();
                     let load_state = asset_server.get_load_state(&view_shader_handle).unwrap();
@@ -2325,13 +2750,12 @@ else { return c1; }
                 assert!(max_frames > 0);
 
                 let shaders = dummy_app.world().get_resource::<Assets<Shader>>().unwrap();
-                for (id, shader) in shaders.iter() {
-                    println!("[{id:?}] {shader:?}");
-                }
                 let view_shader = shaders.get(&view_shader_handle).unwrap();
 
-                let res = composer.add_composable_module(view_shader.into());
-                assert!(res.is_ok());
+                modules.push((
+                    "bevy_render::view".into(),
+                    view_shader.source.as_str().into(),
+                ));
             }
 
             // Import bevy_hanabi::vfx_common
@@ -2339,47 +2763,89 @@ else { return c1; }
                 let min_storage_buffer_offset_alignment = 256;
                 let common_shader =
                     HanabiPlugin::make_common_shader(min_storage_buffer_offset_alignment);
-                let res = composer.add_composable_module((&common_shader).into());
-                assert!(res.is_ok());
+                modules.push((
+                    "bevy_hanabi::render::vfx_common".into(),
+                    common_shader.source.as_str().into(),
+                ));
             }
 
-            match composer.make_naga_module(NagaModuleDescriptor {
-                source: &code[..],
-                file_path: &format!("{}.wgsl", name),
-                shader_defs,
-                ..Default::default()
-            }) {
-                Ok(module) => {
-                    // println!("shader: {:#?}", module);
-                    let info = naga::valid::Validator::new(
-                        naga::valid::ValidationFlags::all(),
-                        naga::valid::Capabilities::default(),
-                    )
-                    .validate(&module)
-                    .unwrap();
-                    let wgsl = naga::back::wgsl::write_string(
-                        &module,
-                        &info,
-                        naga::back::wgsl::WriterFlags::EXPLICIT_TYPES,
-                    )
-                    .unwrap();
-                    println!("Final wgsl from naga:\n\n{}", wgsl);
-                    // Ok(module)
-                }
-                Err(e) => {
-                    panic!("{}", e.emit_to_string(&composer));
-                    // Err(e)
-                }
-            }
-
-            // let mut frontend = Frontend::new();
-            // let res = frontend.parse(code);
-            // if let Err(err) = &res {
-            //     println!("{} code: {}", name, code);
-            //     println!("Err: {:?}", err);
-            // }
-            // assert!(res.is_ok());
+            let wgsl = crate::test_utils::compile_wesl(
+                &code,
+                &[
+                    "LOCAL_SPACE_SIMULATION",
+                    "NEEDS_UV",
+                    "NEEDS_PARTICLE_FRAGMENT",
+                    "PARTICLE_SCREEN_SPACE_SIZE",
+                ],
+                &modules
+                    .iter()
+                    .map(|(path, source)| (path.as_str(), source.as_str()))
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap_or_else(|error| panic!("{}", error.diagnostic().render_plain()));
+            let module = naga::front::wgsl::parse_str(&wgsl).unwrap();
+            naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::default(),
+            )
+            .validate(&module)
+            .unwrap();
         }
+    }
+
+    #[test]
+    fn test_effect_shader_source_parent_attributes() {
+        // Parent effect storing only Attribute::POSITION
+        let mut module = Module::default();
+        let zero = module.lit(Vec3::ZERO);
+        let parent = EffectAsset::new(256, SpawnerSettings::rate(32.0.into()), module)
+            .init(SetAttributeModifier::new(Attribute::POSITION, zero));
+        let parent_layout = parent.particle_layout();
+        assert!(parent_layout.contains(Attribute::POSITION));
+        assert!(!parent_layout.contains(Attribute::COLOR));
+        assert!(!parent_layout.contains(Attribute::U32_0));
+
+        // Child inheriting an attribute stored by its parent
+        let child = EffectAsset::new(256, SpawnerSettings::default(), Module::default())
+            .init(InheritAttributeModifier::new(Attribute::POSITION));
+        let res = EffectShaderSources::generate(&child, Some(&parent_layout), 0);
+        assert!(res.is_ok());
+
+        // Child inheriting an attribute not stored by its parent
+        let child = EffectAsset::new(256, SpawnerSettings::default(), Module::default())
+            .with_name("child")
+            .init(InheritAttributeModifier::new(Attribute::POSITION))
+            .init(InheritAttributeModifier::new(Attribute::COLOR));
+        let res = EffectShaderSources::generate(&child, Some(&parent_layout), 0);
+        let Err(ShaderGenerateError::Validate(msg)) = res else {
+            panic!("Expected a validation error, got {:?}", res);
+        };
+        assert!(msg.contains("'child'"));
+        assert!(msg.contains("'COLOR'"));
+        assert!(!msg.contains("'POSITION'"));
+
+        // Child reading with an expression an attribute not stored by its parent
+        let writer = ExprWriter::new();
+        let color = writer.parent_attr(Attribute::U32_0).expr();
+        let child = EffectAsset::new(256, SpawnerSettings::default(), writer.finish())
+            .with_name("child")
+            .init(InheritAttributeModifier::new(Attribute::POSITION))
+            .init(SetAttributeModifier::new(Attribute::COLOR, color));
+        let res = EffectShaderSources::generate(&child, Some(&parent_layout), 0);
+        let Err(ShaderGenerateError::Validate(msg)) = res else {
+            panic!("Expected a validation error, got {:?}", res);
+        };
+        assert!(msg.contains("'child'"));
+        assert!(msg.contains("'U32_0'"));
+
+        // Pseudo-attributes are always available on the parent
+        let writer = ExprWriter::new();
+        let id = writer.parent_attr(Attribute::ID).expr();
+        let child = EffectAsset::new(256, SpawnerSettings::default(), writer.finish())
+            .init(InheritAttributeModifier::new(Attribute::POSITION))
+            .init(SetAttributeModifier::new(Attribute::U32_0, id));
+        let res = EffectShaderSources::generate(&child, Some(&parent_layout), 0);
+        assert!(res.is_ok());
     }
 
     // Regression test for #343
@@ -2414,8 +2880,8 @@ else { return c1; }
             assert_eq!(entity, effect_entity);
             assert_eq!(particle_effect.handle, Handle::<EffectAsset>::default());
 
-            // `compile_effects()` cannot update the CompiledParticleEffect because the
-            // asset is invalid
+            // `compile_effects()` cannot update the CompiledParticleEffect
+            // because the asset is invalid
             assert_eq!(
                 compiled_particle_effect.asset,
                 Handle::<EffectAsset>::default()
@@ -2539,8 +3005,8 @@ else { return c1; }
                 } else {
                     SimulationCondition::Always
                 };
-                // Use local simulation space so we don't need to store Attribute::POSITION for
-                // particles
+                // Use local simulation space so we don't need to store
+                // Attribute::POSITION for particles
                 asset.simulation_space = SimulationSpace::Local;
                 let handle = assets.add(asset);
 
@@ -2576,7 +3042,8 @@ else { return c1; }
 
             // Check the state of the components after `tick_spawners()` ran
             if let Some(test_visibility) = test_case.visibility {
-                // Simulated-when-visible effect (SimulationCondition::WhenVisible)
+                // Simulated-when-visible effect
+                // (SimulationCondition::WhenVisible)
 
                 let (
                     entity,
@@ -2603,13 +3070,14 @@ else { return c1; }
                 );
                 assert_eq!(particle_effect.handle, handle);
 
-                // `compile_effects()` always updates the CompiledParticleEffect of new effects,
-                // even if hidden
+                // `compile_effects()` always updates the CompiledParticleEffect
+                // of new effects, even if hidden
                 assert_eq!(compiled_particle_effect.asset, handle);
                 assert!(compiled_particle_effect.asset.is_strong());
                 assert!(compiled_particle_effect.effect_shader.is_some());
 
-                // Toggle visibility and tick once more; this shouldn't panic (regression; #182)
+                // Toggle visibility and tick once more; this shouldn't panic
+                // (regression; #182)
                 let (mut visibility, _) = world
                     .query::<(&mut Visibility, &ParticleEffect)>()
                     .iter_mut(world)
@@ -2637,6 +3105,213 @@ else { return c1; }
                 assert!(compiled_particle_effect.asset.is_strong());
                 assert!(compiled_particle_effect.effect_shader.is_some());
             }
+        }
+    }
+
+    bitflags::bitflags! {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub struct LayerMatchFlags: u8 {
+            const EXACTLY_ONE = (1u8 << 0);
+            const ONE_OR_MORE = (1u8 << 1);
+            const EXACTLY_SIX = (1u8 << 2);
+            const MULTIPLE_OF_SIX = (1u8 << 3);
+        }
+    }
+
+    impl LayerMatchFlags {
+        pub fn accepts(&self, layer: u32) -> bool {
+            match *self {
+                Self::EXACTLY_ONE => layer == 1,
+                Self::ONE_OR_MORE => layer >= 1,
+                Self::EXACTLY_SIX => layer == 6,
+                Self::MULTIPLE_OF_SIX => layer.is_multiple_of(6),
+                _ => panic!(),
+            }
+        }
+    }
+
+    fn check_texslot(slot: &TextureSlot, accepts: (TextureDimension, LayerMatchFlags, bool)) {
+        for dim in [
+            TextureDimension::D1,
+            TextureDimension::D2,
+            TextureDimension::D3,
+        ] {
+            for layer in [1, 2, 6, 14, 18] {
+                for is_depth in [true, false] {
+                    let is_matching =
+                        (dim == accepts.0) && (is_depth == accepts.2) && accepts.1.accepts(layer);
+                    assert_eq!(
+                        slot.accepts(dim, layer, is_depth),
+                        is_matching,
+                        "Expected slot {slot:?} to accept={is_matching} for dim={dim:?}, layer={layer}, is_depth={is_depth}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn texslot_accepts() {
+        let slot_1d = TextureSlot {
+            name: "D1".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::D1,
+        };
+        let accepts = (TextureDimension::D1, LayerMatchFlags::EXACTLY_ONE, false);
+        check_texslot(&slot_1d, accepts);
+
+        let slot_2d = TextureSlot {
+            name: "D2".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::D2,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::EXACTLY_ONE, false);
+        check_texslot(&slot_2d, accepts);
+
+        let slot_2d_array = TextureSlot {
+            name: "D2Array".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::D2Array,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::ONE_OR_MORE, false);
+        check_texslot(&slot_2d_array, accepts);
+
+        let slot_cube = TextureSlot {
+            name: "Cube".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::Cube,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::EXACTLY_SIX, false);
+        check_texslot(&slot_cube, accepts);
+
+        let slot_cube_array = TextureSlot {
+            name: "CubeArray".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::CubeArray,
+        };
+        let accepts = (
+            TextureDimension::D2,
+            LayerMatchFlags::MULTIPLE_OF_SIX,
+            false,
+        );
+        check_texslot(&slot_cube_array, accepts);
+
+        let slot_3d = TextureSlot {
+            name: "D3".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::D3,
+        };
+        let accepts = (TextureDimension::D3, LayerMatchFlags::EXACTLY_ONE, false);
+        check_texslot(&slot_3d, accepts);
+
+        let slot_depth_2d = TextureSlot {
+            name: "DepthD2".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::DepthD2,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::EXACTLY_ONE, true);
+        check_texslot(&slot_depth_2d, accepts);
+
+        let slot_depth_2d_array = TextureSlot {
+            name: "DepthD2Array".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::DepthD2Array,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::ONE_OR_MORE, true);
+        check_texslot(&slot_depth_2d_array, accepts);
+
+        let slot_depth_cube = TextureSlot {
+            name: "DepthCube".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::DepthCube,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::EXACTLY_SIX, true);
+        check_texslot(&slot_depth_cube, accepts);
+
+        let slot_depth_cube_array = TextureSlot {
+            name: "DepthCubeArray".to_string(),
+            clamp_linear: false,
+            dimension: SlotDimension::DepthCubeArray,
+        };
+        let accepts = (TextureDimension::D2, LayerMatchFlags::MULTIPLE_OF_SIX, true);
+        check_texslot(&slot_depth_cube_array, accepts);
+    }
+
+    #[test]
+    fn slotdim_is() {
+        for dim in [
+            SlotDimension::D1,
+            SlotDimension::D2,
+            SlotDimension::D2Array,
+            SlotDimension::Cube,
+            SlotDimension::CubeArray,
+            SlotDimension::D3,
+            SlotDimension::DepthD2,
+            SlotDimension::DepthD2Array,
+            SlotDimension::DepthCube,
+            SlotDimension::DepthCubeArray,
+        ] {
+            // The canonical WGSL name, which is what the SlotDimentions
+            // debug-format to, happens to always contain "array" if
+            // the texture is an array texture, "depth" if it's used
+            // for comparison, and "cube" if it's a cube texture. We use this
+            // as validation.
+            let name = format!("{:?}", dim).to_ascii_lowercase();
+
+            let is_array = name.contains("array");
+            assert_eq!(is_array, dim.is_array());
+
+            let is_depth = name.contains("depth");
+            assert_eq!(is_depth, dim.is_depth());
+
+            let is_cube = name.contains("cube");
+            assert_eq!(is_cube, dim.is_cube());
+        }
+    }
+
+    #[test]
+    fn slotdim_texture_type() {
+        for dim in [
+            SlotDimension::D1,
+            SlotDimension::D2,
+            SlotDimension::D2Array,
+            SlotDimension::Cube,
+            SlotDimension::CubeArray,
+            SlotDimension::D3,
+            SlotDimension::DepthD2,
+            SlotDimension::DepthD2Array,
+            SlotDimension::DepthCube,
+            SlotDimension::DepthCubeArray,
+        ] {
+            let tex = dim.to_wgsl_texture_type();
+
+            let slot_type = format!("{dim:?}")
+                .to_ascii_lowercase()
+                .replace("array", "_array")
+                .replace("depth", "depth_")
+                .replace("d1", "1d")
+                .replace("d2", "2d")
+                .replace("d3", "3d");
+
+            assert_eq!(tex, format!("texture_{slot_type}<f32>"));
+        }
+    }
+
+    #[test]
+    fn slotdim_sampler_type() {
+        for dim in [
+            SlotDimension::D1,
+            SlotDimension::D2,
+            SlotDimension::D2Array,
+            SlotDimension::Cube,
+            SlotDimension::CubeArray,
+            SlotDimension::D3,
+            SlotDimension::DepthD2,
+            SlotDimension::DepthD2Array,
+            SlotDimension::DepthCube,
+            SlotDimension::DepthCubeArray,
+        ] {
+            let sampler = dim.to_wgsl_sampler_type();
+            assert_eq!(sampler.contains("comparison"), dim.is_depth());
         }
     }
 }

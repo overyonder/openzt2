@@ -11,6 +11,7 @@ use openzt2_game_data::ui_document::{
     document::UiDocument, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
 };
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 use std::cell::RefCell;
 
@@ -411,7 +412,8 @@ fn locate_ui_node<'a>(
             lineage_visible: inherited.get(),
             selected: selected.is_some_and(|selected| selected.0),
             enabled: enabled.is_none_or(|enabled| enabled.0),
-            highlighted: interaction.is_some_and(|interaction| *interaction != Interaction::None),
+            highlighted: interaction
+                .is_some_and(|interaction| *interaction != UiPointerInteraction::None),
             size: if computed_size.min_element() > 0.0 {
                 computed_size.to_array()
             } else {

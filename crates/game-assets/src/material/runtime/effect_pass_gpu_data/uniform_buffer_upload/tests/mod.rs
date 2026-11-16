@@ -22,9 +22,8 @@ fn sparse_registers_upload_only_the_active_shader_block() {
     assert_eq!(packed.values[1], Vec4::splat(9.0));
     assert_eq!(
         shader_buffer_from_packed_registers(&packed)
-            .data
-            .as_ref()
-            .map(Vec::len),
+            .cast_slice::<u8>()
+            .map(<[u8]>::len),
         Some(32)
     );
 }
@@ -53,8 +52,7 @@ fn persistent_register_updates_match_encase_and_retain_storage() {
         let pointer = buffers
             .get(&handle)
             .unwrap()
-            .data
-            .as_ref()
+            .cast_slice::<u8>()
             .unwrap()
             .as_ptr();
         for _ in 0..2 {
@@ -66,8 +64,8 @@ fn persistent_register_updates_match_encase_and_retain_storage() {
                 order.as_ref(),
                 &mut buffers,
             );
-            let actual = buffers.get(&handle).unwrap().data.as_ref().unwrap();
-            assert_eq!(actual, expected.data.as_ref().unwrap());
+            let actual = buffers.get(&handle).unwrap().cast_slice::<u8>().unwrap();
+            assert_eq!(actual, expected.cast_slice::<u8>().unwrap());
             assert_eq!(actual.as_ptr(), pointer);
         }
     }
