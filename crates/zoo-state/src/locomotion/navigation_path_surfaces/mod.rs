@@ -96,7 +96,9 @@ impl TerrainDerivedNavigationGraph {
         terrain_tile_grid_dimensions: [u32; 2],
         navigation_nodes: Box<[TerrainDerivedNavigationGraphNode]>,
     ) -> Self {
-        Self {
+        let mut graph = Self {
+            terrain_neighbors: Box::default(),
+            terrain_centres_xz: Box::default(),
             terrain_cell_size_centimetres,
             terrain_cells_per_tile,
             terrain_tile_size_centimetres: u32::from(terrain_cell_size_centimetres)
@@ -107,7 +109,34 @@ impl TerrainDerivedNavigationGraph {
             path_surface_edges: Default::default(),
             path_surfaces_by_cell: Default::default(),
             ground_path_nodes: Vec::new(),
+        };
+        let mut neighbors = Vec::with_capacity(graph.navigation_nodes.len());
+        let mut centres = Vec::with_capacity(graph.navigation_nodes.len());
+        let size = i64::from(terrain_cell_size_centimetres);
+        for node in 0..graph.navigation_nodes.len() as u32 {
+            let [x, z] = graph
+                .calculate_terrain_cell_for_navigation_node(node)
+                .expect("terrain cell");
+            neighbors.push(
+                [
+                    [x.wrapping_sub(1), z],
+                    [x + 1, z],
+                    [x, z.wrapping_sub(1)],
+                    [x, z + 1],
+                ]
+                .map(|cell| {
+                    graph
+                        .calculate_navigation_node_for_terrain_cell(cell)
+                        .unwrap_or(u32::MAX)
+                }),
+            );
+            let coordinate =
+                |cell| i32::try_from(i64::from(cell) * size + size / 2).unwrap_or(i32::MIN);
+            centres.push([coordinate(x), coordinate(z).saturating_neg()]);
         }
+        graph.terrain_neighbors = neighbors.into_boxed_slice();
+        graph.terrain_centres_xz = centres.into_boxed_slice();
+        graph
     }
 
     pub fn terrain_cell_at_world_position(&self, position: Vec3) -> Option<[u32; 2]> {
@@ -332,9 +361,5 @@ impl TerrainDerivedNavigationGraph {
 fn path_edge_key(a: Vec3, b: Vec3) -> ([i32; 3], [i32; 3]) {
     let a = a.to_array().map(|value| (value * 100.0).round() as i32);
     let b = b.to_array().map(|value| (value * 100.0).round() as i32);
-    if a <= b {
-        (a, b)
-    } else {
-        (b, a)
-    }
+    if a <= b { (a, b) } else { (b, a) }
 }

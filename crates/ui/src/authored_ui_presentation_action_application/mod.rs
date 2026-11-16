@@ -794,9 +794,14 @@ pub(crate) fn apply_authored_ui_presentation_actions_to_projected_bevy_tree(
                         // Authored programmatic emphasis is presentation state;
                         // physical pointer ownership remains exclusively Bevy's
                         // `Interaction` component.
-                        commands
-                            .entity(target)
-                            .insert(UiFocusPresentation(*hover_presented));
+                        use super::authored_ui_focus_navigation_and_activation::AuthoredHoverPresentation;
+                        let mut target = commands.entity(target);
+                        target.insert(UiFocusPresentation(*hover_presented));
+                        if *hover_presented {
+                            target.insert(AuthoredHoverPresentation);
+                        } else {
+                            target.remove::<AuthoredHoverPresentation>();
+                        }
                     }
                 }
                 UiPresentationAction::ActivateSelectedChildOfTargetNode { target_node } => {

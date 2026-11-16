@@ -550,8 +550,6 @@ impl RouteScratch {
     pub fn begin(&mut self) {
         self.open.clear();
         self.reverse_path.clear();
-        self.closed.fill(false);
-        self.heap_positions.fill(u32::MAX);
         self.generation = self.generation.wrapping_add(1);
         if self.generation == 0 {
             self.marks.fill(0);

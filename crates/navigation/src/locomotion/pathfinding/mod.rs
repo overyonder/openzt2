@@ -12,6 +12,16 @@ use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::Terra
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphNode;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphTraversalKind;
 
+#[derive(Default)]
+pub(super) struct RouteSearch {
+    endpoints: Option<(u32, u32, [i32; 3])>,
+    expansions: usize,
+}
+pub(super) const SHORT_PATH_ITERATIONS: usize = 100;
+pub(super) const PRIORITY_PATH_ITERATIONS: usize = 250;
+pub(super) const ITERATIONS_PER_SLICE: usize = 2;
+pub(super) const LONG_PATH_ITERATIONS: usize = 1000;
+
 pub(crate) fn plan_route(
     navigation: &TerrainDerivedNavigationGraph,
     edge_is_blocked: impl Fn(u32, u32) -> bool,
@@ -23,51 +33,105 @@ pub(crate) fn plan_route(
     destination: Vec3,
     route: &mut Route,
     scratch: &mut RouteScratch,
+    iteration_limit: usize,
 ) -> Result<(), NavigationFailure> {
+    let mut search = RouteSearch::default();
+    if advance_route(
+        navigation,
+        edge_is_blocked,
+        world_segment_is_blocked,
+        agent,
+        mode,
+        maximum_ground_slope_radians,
+        start_world,
+        destination,
+        route,
+        scratch,
+        &mut search,
+        iteration_limit,
+        iteration_limit,
+    )? {
+        Ok(())
+    } else {
+        Err(NavigationFailure::NoRoute)
+    }
+}
+
+pub(super) fn advance_route(
+    navigation: &TerrainDerivedNavigationGraph,
+    edge_is_blocked: impl Fn(u32, u32) -> bool,
+    world_segment_is_blocked: impl Fn(Vec3, Vec3) -> bool,
+    agent: &NavAgent,
+    mode: LocomotionMode,
+    maximum_ground_slope_radians: Option<f32>,
+    start_world: Vec3,
+    destination: Vec3,
+    route: &mut Route,
+    scratch: &mut RouteScratch,
+    search: &mut RouteSearch,
+    slice: usize,
+    limit: usize,
+) -> Result<bool, NavigationFailure> {
     if !start_world.is_finite() || !destination.is_finite() {
         return Err(NavigationFailure::OutsideWorld);
     }
     let minimum_normal_y = minimum_ground_normal_y(agent, mode, maximum_ground_slope_radians)?;
-    let start = nearest_eligible(navigation, agent, mode, start_world, minimum_normal_y)
-        .ok_or(NavigationFailure::NoStartNode)?;
-    let goal = nearest_eligible(navigation, agent, mode, destination, minimum_normal_y)
-        .ok_or(NavigationFailure::OutsideWorld)?;
-    // Docking may deliberately snap a non-animal endpoint to a nearby node.
-    // Its final exact segment still cannot take a ground actor through water.
-    if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
-        && !agent.capabilities.contains(NavFlags::AMPHIBIOUS)
-        && navigation.path_surface_at_node(goal).is_none()
-        && !ground_endpoint_segment_is_dry(
-            navigation,
-            navigation_position(navigation, goal),
-            destination,
-        )
-    {
-        route.clear();
-        return Err(NavigationFailure::NoRoute);
-    }
-    if scratch.costs.len() != navigation.navigation_node_count()
-        || scratch.previous.len() != navigation.navigation_node_count()
-    {
-        return Err(NavigationFailure::NoRoute);
-    }
+    let (start, goal, goal_position) = if let Some(endpoints) = search.endpoints {
+        endpoints
+    } else {
+        let start = nearest_eligible(navigation, agent, mode, start_world, minimum_normal_y)
+            .ok_or(NavigationFailure::NoStartNode)?;
+        let goal = nearest_eligible(navigation, agent, mode, destination, minimum_normal_y)
+            .ok_or(NavigationFailure::OutsideWorld)?;
+        // Docking may deliberately snap a non-animal endpoint to a nearby node.
+        // Its final exact segment still cannot take a ground actor through water.
+        if matches!(mode, LocomotionMode::Ground | LocomotionMode::Vehicle)
+            && !agent.capabilities.contains(NavFlags::AMPHIBIOUS)
+            && navigation.path_surface_at_node(goal).is_none()
+            && !ground_endpoint_segment_is_dry(
+                navigation,
+                navigation_position(navigation, goal),
+                destination,
+            )
+        {
+            route.clear();
+            return Err(NavigationFailure::NoRoute);
+        }
+        if scratch.costs.len() != navigation.navigation_node_count()
+            || scratch.previous.len() != navigation.navigation_node_count()
+        {
+            return Err(NavigationFailure::NoRoute);
+        }
 
-    scratch.begin();
-    visit(scratch, start, 0, u32::MAX);
-    if !heap_push_or_decrease(
-        &mut scratch.open,
-        &mut scratch.heap_positions,
-        OpenNode {
-            node: start,
-            cost: 0,
-            estimate: heuristic(navigation, start, goal),
-        },
-    ) {
-        return Err(NavigationFailure::NoRoute);
-    }
+        let goal_position = navigation
+            .calculate_navigation_node_world_position_centimetres(goal)
+            .ok_or(NavigationFailure::OutsideWorld)?;
+        scratch.begin();
+        visit(scratch, start, 0, u32::MAX);
+        if !heap_push_or_decrease(
+            &mut scratch.open,
+            &mut scratch.heap_positions,
+            OpenNode {
+                node: start,
+                cost: 0,
+                estimate: heuristic(navigation, start, goal_position),
+            },
+        ) {
+            return Err(NavigationFailure::NoRoute);
+        }
+
+        let endpoints = (start, goal, goal_position);
+        search.endpoints = Some(endpoints);
+        endpoints
+    };
 
     let mut reached = false;
-    while let Some(current) = heap_pop(&mut scratch.open, &mut scratch.heap_positions) {
+    let stop = search.expansions.saturating_add(slice).min(limit);
+    while search.expansions < stop {
+        let Some(current) = heap_pop(&mut scratch.open, &mut scratch.heap_positions) else {
+            break;
+        };
+        search.expansions += 1;
         if scratch.marks[current.node as usize] != scratch.generation
             || scratch.costs[current.node as usize] != current.cost
         {
@@ -80,7 +144,7 @@ pub(crate) fn plan_route(
         scratch.closed[current.node as usize] = true;
         for edge in navigation.iterate_outgoing_navigation_graph_edges(current.node) {
             let next = edge.destination_node;
-            if scratch.closed[next as usize]
+            if (scratch.marks[next as usize] == scratch.generation && scratch.closed[next as usize])
                 || edge_is_blocked(current.node, next)
                 || edge.edge_flags.0 & NavigationGraphEdgeFlags::DISABLED_BY_DEFAULT.0 != 0
                 || !(agent.capabilities.contains(NavFlags::AMPHIBIOUS)
@@ -124,7 +188,7 @@ pub(crate) fn plan_route(
                     OpenNode {
                         node: next,
                         cost,
-                        estimate: cost.saturating_add(heuristic(navigation, next, goal)),
+                        estimate: cost.saturating_add(heuristic(navigation, next, goal_position)),
                     },
                 ) {
                     route.clear();
@@ -132,6 +196,9 @@ pub(crate) fn plan_route(
                 }
             }
         }
+    }
+    if !reached && !scratch.open.is_empty() && search.expansions < limit {
+        return Ok(false);
     }
     if !reached {
         route.clear();
@@ -175,7 +242,7 @@ pub(crate) fn plan_route(
         route.clear();
         return Err(NavigationFailure::NoRoute);
     }
-    Ok(())
+    Ok(true)
 }
 
 /// Follows connected navigation surfaces from the start and checks the
@@ -509,23 +576,28 @@ fn traversal_allowed(
 
 fn visit(scratch: &mut RouteScratch, node: u32, cost: u64, previous: u32) {
     let slot = node as usize;
+    if scratch.marks[slot] != scratch.generation {
+        scratch.heap_positions[slot] = u32::MAX;
+        scratch.closed[slot] = false;
+    }
     scratch.marks[slot] = scratch.generation;
     scratch.costs[slot] = cost;
     scratch.previous[slot] = previous;
 }
 
-fn heuristic(navigation: &TerrainDerivedNavigationGraph, a: u32, b: u32) -> u64 {
-    let Some((a, b)) = navigation
-        .calculate_navigation_node_world_position_centimetres(a)
-        .zip(navigation.calculate_navigation_node_world_position_centimetres(b))
+fn heuristic(navigation: &TerrainDerivedNavigationGraph, node: u32, goal: [i32; 3]) -> u64 {
+    let Some([x, _, z]) = navigation.calculate_navigation_node_world_position_centimetres(node)
     else {
         return u64::MAX;
     };
-    let squared = a.into_iter().zip(b).fold(0_u128, |sum, (a, b)| {
-        let delta = i128::from(a) - i128::from(b);
-        sum + (delta * delta) as u128
-    });
-    u64::try_from(squared.isqrt().saturating_mul(10)).unwrap_or(u64::MAX)
+    let dx = u64::from(x.abs_diff(goal[0]));
+    let dz = u64::from(z.abs_diff(goal[2]));
+    if navigation.navigation_node_count() == navigation.navigation_nodes.len() {
+        (dx + dz) * 10
+    } else {
+        // Elevated paths can connect diagonally across the terrain grid.
+        ((dx as f64).hypot(dz as f64) as u64) * 10
+    }
 }
 
 fn metres_to_cm(point: Vec3) -> Option<[i32; 3]> {
@@ -633,8 +705,9 @@ fn heap_pop(heap: &mut Vec<OpenNode>, positions: &mut [u32]) -> Option<OpenNode>
     Some(result)
 }
 
-fn open_key(node: OpenNode) -> (u64, u64, u32) {
-    (node.estimate, node.cost, node.node)
+fn open_key(node: OpenNode) -> (u64, std::cmp::Reverse<u64>, u32) {
+    // On equal estimates prefer the candidate closer to the goal.
+    (node.estimate, std::cmp::Reverse(node.cost), node.node)
 }
 
 #[cfg(test)]

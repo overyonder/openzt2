@@ -102,7 +102,7 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
     focus: Res<InputFocus>,
     text_edits: Query<(), With<EditableText>>,
 ) {
-    let active_modal = context.top_modal();
+    let mut active_modal = None;
     let control_is_pressed =
         keys.pressed(KeyCode::ControlLeft) || keys.pressed(KeyCode::ControlRight);
     for input in keyboard.read() {
@@ -119,14 +119,7 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         for (entity, binding, owner) in &bindings {
             // Escape dismisses one activity. The cancellation receiver selection
             // chooses it for keyboard and controller alike.
-            if binding.is_cancel_activation()
-                || !context.hotkey_receiver_is_eligible(
-                    owner.0,
-                    binding.receiver_index(),
-                    None,
-                    active_modal,
-                )
-            {
+            if binding.key != input.key_code || binding.is_cancel_activation() {
                 continue;
             }
             let control_state_matches = match binding.control_state {
@@ -136,10 +129,15 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
             };
             let input_edge_matches =
                 matches!(input.state, ButtonState::Released) == binding.activates_on_release;
-            if input.key_code == binding.key
-                && control_state_matches
+            if control_state_matches
                 && input_edge_matches
                 && (binding.allows_repeated_input || !input.repeat)
+                && context.hotkey_receiver_is_eligible(
+                    owner.0,
+                    binding.receiver_index(),
+                    None,
+                    *active_modal.get_or_insert_with(|| context.top_modal()),
+                )
             {
                 activated.write(UiNodeActivated {
                     source: ActionSource::KeyboardMouse,

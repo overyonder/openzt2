@@ -325,6 +325,7 @@ mod tests {
             .init_asset::<Image>()
             .init_asset::<MaterialAsset>()
             .init_asset::<EffectPassMaterial>()
+            .init_asset::<ShaderBuffer>()
             .init_resource::<GraphicsSettings>()
             .init_resource::<TerrainIndex>()
             .add_systems(Update, validate_index_and_project_loaded_terrain_chunks);

@@ -107,6 +107,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
                         reachability_test_request.destination,
                         reachability_test_route,
                         &mut pathfinding_scratch,
+                        crate::locomotion::pathfinding::SHORT_PATH_ITERATIONS,
                     )
                 },
             );

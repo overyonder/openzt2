@@ -22,7 +22,7 @@ use openzt2_world_state::{
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
-        locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
+        locomotion_root_motion::{ConsumedLocomotionRootMotion, clip_motion_velocity},
     },
     world_spawn::world_membership_types::WorldMember,
 };
@@ -244,6 +244,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
                 first,
                 &mut candidate_route,
                 &mut scratch,
+                crate::locomotion::pathfinding::PRIORITY_PATH_ITERATIONS,
             )
             .is_err()
             {

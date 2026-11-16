@@ -117,21 +117,14 @@ impl TerrainDerivedNavigationGraph {
                     .map(|value| (value * 100.0).round() as i32),
             );
         }
-        let terrain_cell = self.calculate_terrain_cell_for_navigation_node(navigation_node)?;
-        let height_centimetres = self
-            .find_navigation_node(navigation_node)?
-            .height_centimetres;
-        let size = i64::from(self.terrain_cell_size_centimetres);
-        let coordinate = |value: u32| {
-            i64::from(value)
-                .checked_mul(size)?
-                .checked_add(size / 2)
-                .and_then(|value| i32::try_from(value).ok())
-        };
+        let [x, z] = *self.terrain_centres_xz.get(navigation_node as usize)?;
+        if x < 0 || z > 0 {
+            return None;
+        }
         Some([
-            coordinate(terrain_cell[0])?,
-            height_centimetres,
-            coordinate(terrain_cell[1])?.checked_neg()?,
+            x,
+            self.navigation_nodes[navigation_node as usize].height_centimetres,
+            z,
         ])
     }
 

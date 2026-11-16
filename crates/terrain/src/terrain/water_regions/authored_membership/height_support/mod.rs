@@ -25,11 +25,53 @@ pub(in crate::terrain) struct TerrainHeightSupports<'w, 's> {
 }
 
 impl TerrainHeightSupports<'_, '_> {
+    fn endpoint_owner(&self, mut entity: Entity) -> Option<(Entity, &DefinitionId)> {
+        loop {
+            if let Ok(definition) = self.objects.get(entity) {
+                return Some((entity, definition));
+            }
+            entity = self.parents.get(entity).ok()?.parent();
+        }
+    }
+
+    pub(super) fn sky_supports(
+        &self,
+        definitions: WorldDefinitionsView<'_>,
+    ) -> Option<Vec<(Entity, openzt2_game_data::AssetId, Option<Transform>)>> {
+        let mut owners = Vec::new();
+        for track in &self.tracks {
+            if definitions.find_track(track.definition)?.kind == TransportationTrackKind::Sky {
+                owners.extend([track.from, track.to].into_iter().filter_map(|endpoint| {
+                    let (entity, definition) = self.endpoint_owner(endpoint)?;
+                    Some((entity, definition.0))
+                }));
+            }
+        }
+        owners.sort_unstable_by_key(|(entity, _)| *entity);
+        owners.dedup_by_key(|(entity, _)| *entity);
+        Some(
+            owners
+                .into_iter()
+                .map(|(entity, definition)| {
+                    (
+                        entity,
+                        definition,
+                        self.transforms
+                            .compute_global_transform(entity)
+                            .ok()
+                            .map(|value| value.compute_transform()),
+                    )
+                })
+                .collect(),
+        )
+    }
+
     pub(super) fn point_limits(
         &self,
         asset: &TerrainAsset,
         definitions: WorldDefinitionsView<'_>,
         topology: &TopologyGrid,
+        sky_supports: &[(Entity, openzt2_game_data::AssetId, Option<Transform>)],
     ) -> Option<Box<[[f32; 2]]>> {
         let grid = asset.canonical_terrain_grid();
         let spacing = grid.units.cell_size_metres;
@@ -110,36 +152,12 @@ impl TerrainHeightSupports<'_, '_> {
                 }
             }
         }
-        let mut endpoints = Vec::new();
-        for track in &self.tracks {
-            if definitions.find_track(track.definition)?.kind == TransportationTrackKind::Sky {
-                endpoints.extend([track.from, track.to]);
-            }
-        }
-        endpoints.sort_unstable();
-        endpoints.dedup();
         let mut cells = Vec::new();
-        for mut endpoint in endpoints {
-            let object = loop {
-                if let Ok(object) = self.objects.get(endpoint) {
-                    break Some(object);
-                }
-                let Ok(parent) = self.parents.get(endpoint) else {
-                    break None;
-                };
-                endpoint = parent.parent();
-            };
-            let Some(definition) = object else {
-                continue;
-            };
-            let definition = definitions.find_placeable(definition.0)?;
-            let transform = self
-                .transforms
-                .compute_global_transform(endpoint)
-                .ok()?
-                .compute_transform();
+        for (_, definition, transform) in sky_supports {
+            let definition = definitions.find_placeable(*definition)?;
+            let transform = transform.as_ref()?;
             for cell in
-                collect_occupied_placement_cells_for_transform(definition, &transform, &mut cells)?
+                collect_occupied_placement_cells_for_transform(definition, transform, &mut cells)?
             {
                 apply_rectangle(
                     &mut limits,

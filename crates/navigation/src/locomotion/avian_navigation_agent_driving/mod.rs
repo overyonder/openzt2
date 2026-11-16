@@ -148,7 +148,10 @@ pub(super) fn drive_avian_navigation_agent_velocities_and_complete_routes(
             destination.arrival_radius_m,
             navigation_agent.radius_m,
         );
-        if planned_route.cursor >= planned_route.points.len() && docking.is_none() {
+        if !planned_route.points.is_empty()
+            && planned_route.cursor >= planned_route.points.len()
+            && docking.is_none()
+        {
             if preserve_vertical_physics_velocity {
                 linear_velocity.x = 0.0;
                 linear_velocity.z = 0.0;
