@@ -71,6 +71,87 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
     }
 }
 
+/// Ranks an animal's candidates: each task keeps its best target, as
+/// [`BehaviorCandidateRanking`] does, and among the tasks of the highest
+/// priority one is drawn with a chance in proportion to its score. A task
+/// that always outscores another, as an elephant's `Lie` outscores its
+/// `Sleep`, then no longer shuts it out.
+pub struct WeightedBehaviorTaskRanking<K, T> {
+    minimum_score: f32,
+    /// The task whose candidates are being considered, and its best one.
+    current: Option<(K, BehaviorCandidateRanking<T>, f32)>,
+    selected: Option<(T, f32)>,
+    best_priority: f32,
+    total_score: f32,
+}
+
+impl<K: PartialEq + Copy, T: Copy> WeightedBehaviorTaskRanking<K, T> {
+    pub fn new(minimum_score: f32) -> Self {
+        Self {
+            minimum_score,
+            current: None,
+            selected: None,
+            best_priority: f32::NEG_INFINITY,
+            total_score: 0.0,
+        }
+    }
+
+    /// Considers one candidate of `task`; a task's candidates come together.
+    pub fn consider(
+        &mut self,
+        task: K,
+        candidate: T,
+        priority: f32,
+        score: f32,
+        mut random: impl FnMut(u32) -> Option<u32>,
+    ) {
+        if self
+            .current
+            .as_ref()
+            .is_none_or(|(current, ..)| *current != task)
+        {
+            self.draw(&mut random);
+            self.current = Some((
+                task,
+                BehaviorCandidateRanking::new(self.minimum_score),
+                priority,
+            ));
+        }
+        if let Some((_, best, _)) = &mut self.current {
+            best.consider(candidate, priority, score, &mut random);
+        }
+    }
+
+    /// Enters the finished task's best candidate into the draw.
+    fn draw(&mut self, random: &mut impl FnMut(u32) -> Option<u32>) {
+        let Some((_, best, priority)) = self.current.take() else {
+            return;
+        };
+        let Some((candidate, score)) = best.finish(false) else {
+            return;
+        };
+        if priority < self.best_priority {
+            return;
+        }
+        if priority > self.best_priority {
+            self.best_priority = priority;
+            self.total_score = 0.0;
+        }
+        self.total_score += score;
+        const SCALE: u32 = 1 << 24;
+        if random(SCALE)
+            .is_some_and(|sample| (sample as f32) < score / self.total_score * SCALE as f32)
+        {
+            self.selected = Some((candidate, score));
+        }
+    }
+
+    pub fn finish(mut self, mut random: impl FnMut(u32) -> Option<u32>) -> Option<(T, f32)> {
+        self.draw(&mut random);
+        self.selected
+    }
+}
+
 /// Applies authored type and qualifier conjunctions without copying live facts.
 pub fn candidate_requirements_are_satisfied(
     requirements: &[BehaviorCandidateEligibilityRequirements],
@@ -293,5 +374,37 @@ mod need_point_threshold_tests {
             ),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod weighted_ranking_tests {
+    use super::WeightedBehaviorTaskRanking;
+
+    #[test]
+    fn tasks_of_the_top_priority_are_drawn_in_proportion_to_their_scores() {
+        let mut state = 1_u64;
+        let mut random = |upper: u32| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            Some(((state >> 33) as u32) % upper)
+        };
+        let mut wins = [0_u32; 3];
+        for _ in 0..10_000 {
+            let mut ranking = WeightedBehaviorTaskRanking::new(0.0);
+            // Lie with two targets, the better one 40; Sleep 35; a
+            // lower-priority task that never runs.
+            ranking.consider("lie", 0, 0.0, 20.0, &mut random);
+            ranking.consider("lie", 0, 0.0, 40.0, &mut random);
+            ranking.consider("sleep", 1, 0.0, 35.0, &mut random);
+            ranking.consider("idle", 2, -1.0, 500.0, &mut random);
+            let (winner, _) = ranking.finish(&mut random).unwrap();
+            wins[winner] += 1;
+        }
+        // 40 / 75 and 35 / 75.
+        assert!((5_000..5_700).contains(&wins[0]), "{wins:?}");
+        assert!((4_300..5_000).contains(&wins[1]), "{wins:?}");
+        assert_eq!(wins[2], 0);
     }
 }

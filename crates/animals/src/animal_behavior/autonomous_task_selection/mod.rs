@@ -8,7 +8,7 @@ mod world_object_targets;
 
 use super::{
     behavior_candidate_selection::{
-        candidate_requirements_are_satisfied, BehaviorCandidateRanking,
+        candidate_requirements_are_satisfied, WeightedBehaviorTaskRanking,
     },
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_set_start_request_types::PendingBehaviorSet,
@@ -119,7 +119,7 @@ pub(super) fn select_idle_animal_tasks(
             .contains(&AssetId::from_key("b_generatestraversabilityinfo"))
             || authored_types.contains(&AssetId::from_key("unspecified"));
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
-        let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
+        let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
         for (document, declaration, task) in view.behavior_tasks() {
             if !subject_can_consider_task(task, &facts, authored_types) {
@@ -178,6 +178,7 @@ pub(super) fn select_idle_animal_tasks(
                     trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
                     ranking.consider(
+                        task.id,
                         (
                             document,
                             declaration,
@@ -288,6 +289,7 @@ pub(super) fn select_idle_animal_tasks(
                 debug!(?animal, task = %task.name, ?target, score, distance,
                     "animal task animal target scored");
                 ranking.consider(
+                    task.id,
                     (
                         document,
                         declaration,
@@ -413,6 +415,7 @@ pub(super) fn select_idle_animal_tasks(
                     };
                     considered_candidates += 1;
                     ranking.consider(
+                        task.id,
                         (document, declaration, task, shore.region, None, Some(shore)),
                         task.priority.unwrap_or_default(),
                         score,
@@ -501,6 +504,7 @@ pub(super) fn select_idle_animal_tasks(
                     debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
                     considered_candidates += 1;
                     ranking.consider(
+                        task.id,
                         (document, declaration, task, fence, None, None),
                         task.priority.unwrap_or_default(),
                         score,
@@ -620,6 +624,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
+                    task.id,
                     (document, declaration, task, target.entity, None, None),
                     task.priority.unwrap_or_default(),
                     score,
@@ -630,7 +635,7 @@ pub(super) fn select_idle_animal_tasks(
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
         let Some(((document, declaration, task, target, object, shore), score)) =
-            ranking.finish(false)
+            ranking.finish(|upper| random.range_u32(upper))
         else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
