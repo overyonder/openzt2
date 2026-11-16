@@ -41,11 +41,6 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
     ));
     let overlay_entity = overlay.id();
     overlay.with_children(|overlay_root| {
-        overlay_root.spawn((
-            Text::new("Z2F priority — highest first"),
-            TextFont::from_font_size(20.0),
-            TextColor(Color::WHITE),
-        ));
         overlay_root
             .spawn((
                 Name::new("Close Mods"),
@@ -67,6 +62,24 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
                 TextFont::from_font_size(17.0),
                 TextColor(Color::WHITE),
             ));
+        overlay_root.spawn((
+            super::redo_button::RedoButtonCheckbox,
+            Button,
+            UiInteractionEnabled(true),
+            Text::new("[x] Redo button (built-in)"),
+            TextFont::from_font_size(17.0),
+            TextColor(Color::WHITE),
+            Node {
+                padding: UiRect::axes(px(8), px(5)),
+                ..default()
+            },
+            BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
+        ));
+        overlay_root.spawn((
+            Text::new("Z2F priority — highest first"),
+            TextFont::from_font_size(20.0),
+            TextColor(Color::WHITE),
+        ));
         for (archive_status_index, archive_status) in asset_archives
             .enabled_archive_statuses()
             .into_iter()

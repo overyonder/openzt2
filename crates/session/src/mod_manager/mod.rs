@@ -1,5 +1,6 @@
 pub mod mod_manager_types;
 mod mod_manager_ui_presentation;
+mod redo_button;
 
 use bevy::prelude::*;
 
@@ -10,6 +11,7 @@ pub struct ModManagerPlugin;
 impl Plugin for ModManagerPlugin {
     fn build(&self, game_application: &mut App) {
         game_application
+            .add_plugins(redo_button::RedoButtonPlugin)
             .init_resource::<AssetArchiveReloadState>()
             .configure_sets(
                 Update,
