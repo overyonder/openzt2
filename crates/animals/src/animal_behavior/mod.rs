@@ -26,6 +26,7 @@ use openzt2_zoo_state::animal_behavior::behavior_candidate_selection;
 mod behavior_clothing_delivery;
 mod behavior_docking_execution;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution;
+pub(crate) mod behavior_building_smash_execution;
 mod behavior_face_target_execution;
 mod behavior_fact_modification;
 mod behavior_feedback_dispatch_execution;
@@ -90,6 +91,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_face_target_execution::register_face_target_execution(application);
         behavior_target_morph_execution::register_target_morph_execution(application);
         behavior_fence_crossing_execution::register_fence_crossing_execution(application);
+        behavior_building_smash_execution::register_building_smash_execution(application);
         behavior_token_execution::register_token_execution(application);
         behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);

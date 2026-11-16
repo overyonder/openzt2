@@ -70,6 +70,10 @@ pub struct WorldObjectDestructionDefinition {
     pub force_mps: [f32; 2],
     pub pitch_degrees: f32,
     pub start_height_cm: i32,
+    /// `f_BuildingStrength`: a rampaging animal smashes a building up to its
+    /// own limit and leaves this one's ruin.
+    #[serde(default)]
+    pub strength: Option<u16>,
 }
 
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.

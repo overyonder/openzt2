@@ -14,6 +14,7 @@ mod object_placement_preview_rotation;
 mod object_placement_preview_validation;
 mod object_placement_request_routing;
 mod placed_object_creation_edit_application;
+mod placed_object_destruction;
 mod placed_object_footprint_occupancy_index_synchronization;
 mod placed_object_relocation_edit_application;
 mod placed_object_removal_edit_application;
@@ -80,6 +81,15 @@ impl Plugin for ObjectPlacementPlugin {
                 .before(FixedConstructionSet::Apply)
                 .run_if(in_state(GamePhase::InGame)),
         );
+        app.add_message::<openzt2_zoo_state::placement::placement_transaction_types::DestroyPlacedObject>()
+            .add_systems(
+                FixedUpdate,
+                placed_object_destruction::ruin_destroyed_placed_objects
+                    .in_set(FixedGameSet::Act)
+                    .after(rebuild_placed_object_footprint_occupancy_index)
+                    .before(FixedConstructionSet::Apply)
+                    .run_if(in_state(GamePhase::InGame)),
+            );
         app.add_systems(
             FixedUpdate,
             crate::placement::behavior_target_placement_application::settle_behavior_target_placement_payments

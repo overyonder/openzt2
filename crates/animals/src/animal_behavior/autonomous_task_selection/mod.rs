@@ -548,6 +548,10 @@ pub(super) fn select_idle_animal_tasks(
                             })
                         },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
+                    distance: facts.transform.translation().distance(target_position),
+                    building_strength: object
+                        .destruction
+                        .and_then(|destruction| destruction.strength),
                 };
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
@@ -692,6 +696,14 @@ pub(super) fn select_idle_animal_tasks(
             started.insert(shore);
         } else {
             started.remove::<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>();
+        }
+        if super::behavior_building_smash_execution::task_smashes_building(
+            task.name.rsplit(':').next().unwrap_or_default(),
+        ) {
+            started.insert(super::behavior_building_smash_execution::SmashingBuilding {
+                execution_id,
+                building: target,
+            });
         }
         // A crossing ends with the animal on the fence's far side.
         if world_objects.fences.contains(target)

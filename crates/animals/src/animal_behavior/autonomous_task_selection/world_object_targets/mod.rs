@@ -134,6 +134,10 @@ pub(super) struct WorldObjectTargetLocation<OnLand: Fn() -> Option<bool>> {
     /// The target stands in the habitat that restricts the animal.
     pub(super) in_habitat: bool,
     pub(super) on_land: OnLand,
+    /// How far the target is from the animal, for `inSight`.
+    pub(super) distance: f32,
+    /// The target's `f_BuildingStrength`, if it can be destroyed.
+    pub(super) building_strength: Option<u16>,
 }
 
 impl WorldObjectTargetFactsItem<'_, '_> {
@@ -201,6 +205,17 @@ impl WorldObjectTargetFactsItem<'_, '_> {
             BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InHabitat) => {
                 truth(location.in_habitat)
             }
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InSight) => {
+                return location.distance < expected as f32 / 65_536.0;
+            }
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::BuildingStrength,
+            ) => {
+                let Some(strength) = location.building_strength else {
+                    return false;
+                };
+                i32::from(strength) << 16
+            }
             _ => return false,
         };
         compare_q16(value, expected, fact.comparison)
@@ -211,15 +226,15 @@ fn can_evaluate_world_object_fact(fact: &BehaviorCandidateEligibilityFact) -> bo
     matches!(fact.expected_value, BehaviorEligibilityFactValue::Q16(_))
         && matches!(
             fact.fact_input,
-            BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::FoodLevel)
-                | BehaviorEligibilityFactInput::Spatial(
-                    BehaviorSpatialEligibilityFact::SupportedSurface
-                        | BehaviorSpatialEligibilityFact::OnLand
-                        | BehaviorSpatialEligibilityFact::InWater
-                )
-                | BehaviorEligibilityFactInput::State(
-                    BehaviorEntityStateEligibilityFact::InHabitat
-                )
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::FoodLevel
+                    | BehaviorConditionEligibilityFact::BuildingStrength
+            ) | BehaviorEligibilityFactInput::Spatial(
+                BehaviorSpatialEligibilityFact::SupportedSurface
+                    | BehaviorSpatialEligibilityFact::OnLand
+                    | BehaviorSpatialEligibilityFact::InWater
+                    | BehaviorSpatialEligibilityFact::InSight
+            ) | BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InHabitat)
         )
 }
 
