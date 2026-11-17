@@ -49,6 +49,8 @@ pub enum BehaviorFact {
     Pregnancy,
     Rampage,
     Escaped,
+    /// A guest a rampaging animal has attacked (`b_Attacked`).
+    Attacked,
     Lifespan,
     Swimming,
     InWater,

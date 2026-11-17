@@ -127,6 +127,7 @@ pub(crate) struct WorldObjectTargetFacts {
     pub(super) world: &'static WorldMember,
     food: Option<&'static FoodContainer>,
     drink: Option<&'static DrinkContainer>,
+    attacked: Has<openzt2_zoo_state::guests::guest_simulation_types::GuestAttacked>,
 }
 
 /// Location facts about one target, read only when a qualifier needs them.
@@ -205,6 +206,9 @@ impl WorldObjectTargetFactsItem<'_, '_> {
             BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InHabitat) => {
                 truth(location.in_habitat)
             }
+            BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::Attacked) => {
+                truth(self.attacked)
+            }
             BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InSight) => {
                 return location.distance < expected as f32 / 65_536.0;
             }
@@ -234,7 +238,10 @@ fn can_evaluate_world_object_fact(fact: &BehaviorCandidateEligibilityFact) -> bo
                     | BehaviorSpatialEligibilityFact::OnLand
                     | BehaviorSpatialEligibilityFact::InWater
                     | BehaviorSpatialEligibilityFact::InSight
-            ) | BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InHabitat)
+            ) | BehaviorEligibilityFactInput::State(
+                BehaviorEntityStateEligibilityFact::InHabitat
+                    | BehaviorEntityStateEligibilityFact::Attacked
+            )
         )
 }
 

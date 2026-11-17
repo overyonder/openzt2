@@ -325,3 +325,18 @@ fn an_ankylosaur_destroying_a_building_plays_its_clip_then_destroys_it() {
     };
     assert_eq!(clip.animation_clip_asset_key, "Stand_GuestAttack");
 }
+
+#[test]
+fn a_rampaging_ankylosaur_s_guest_attack_lowers_whole() {
+    // As the shipped Ankylosaurus AttackGuest_Rampage hails and scares off its guest.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.tsk"),
+        br#"<BFAITaskTemplates><BFAITaskTemplate Name="AttackGuest_Rampage" UniqueID="Ankylosaurus:AttackGuest_Rampage"><BFAICreateData><Subjects><Ankylosaurus/></Subjects><Targets><Guest_Adult_M/><Qualifiers_AND inSight="15" b_Attacked="E false"/></Targets><Objects/></BFAICreateData><BFAIEvalData fixedScore="150"/><BFBehExecTask><BFBehSendToken><BFAITokenList><BFAIToken Name="t_InteractAnimal" GiveTo="target" Payload="subject" Radius="30" Timeout="30" Reconsider="true"/></BFAITokenList></BFBehSendToken></BFBehExecTask><BFAICompletionData invalidateTarget="true"><BFAISubjectData b_Escaped="true"/><BFAITargetData b_Attacked="true" f_departurePoints="-100" happiness="100"/></BFAICompletionData></BFAITaskTemplate></BFAITaskTemplates>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Tasks(tasks) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("tasks expected");
+    };
+    assert!(!tasks[0].execution.has_unsupported_suffix());
+    assert!(!tasks[0].completion.has_unsupported_suffix());
+}

@@ -126,6 +126,7 @@ fn lower_modifiable_behavior_fact(authored_fact_name: &str) -> io::Result<Behavi
         "b_Pregnant" => BehaviorFact::Pregnancy,
         "b_Rampage" => BehaviorFact::Rampage,
         "b_Escaped" => BehaviorFact::Escaped,
+        "b_Attacked" => BehaviorFact::Attacked,
         "lifespan" => BehaviorFact::Lifespan,
         "isSwimming" => BehaviorFact::Swimming,
         "inWater" => BehaviorFact::InWater,

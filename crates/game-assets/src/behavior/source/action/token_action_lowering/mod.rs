@@ -80,9 +80,11 @@ pub(super) fn lower_self_token_delivery(
             ));
         }
         let radius_m = read_optional_float_attribute(token, "Radius")?;
+        // A rampaging ankylosaur gives its target guest `t_InteractAnimal`
+        // with `Radius="30"`; for the subject or target the radius is moot.
         let (recipient, nearby) = match (token.attribute("GiveTo"), radius_m) {
-            (Some("subject"), None) => (BehaviorTokenRecipient::Subject, None),
-            (Some("target"), None) => (BehaviorTokenRecipient::Target, None),
+            (Some("subject"), _) => (BehaviorTokenRecipient::Subject, None),
+            (Some("target"), _) => (BehaviorTokenRecipient::Target, None),
             (Some(entity_type), Some(radius_m))
                 if !matches!(entity_type, "subject" | "target")
                     && radius_m.is_finite()
