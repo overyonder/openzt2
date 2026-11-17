@@ -40,6 +40,8 @@ impl SpeciesVariantFlags {
     pub const RARE: Self = Self(1 << 1);
     pub const ALBINO: Self = Self(1 << 2);
     pub const STERILE: Self = Self(1 << 3);
+    /// `b_Rampager`: the variant can go on a rampage.
+    pub const RAMPAGER: Self = Self(1 << 4);
 
     #[must_use]
     pub const fn contains(self, requested_flags: Self) -> bool {

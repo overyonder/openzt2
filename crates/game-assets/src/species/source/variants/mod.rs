@@ -202,6 +202,15 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
             SpeciesVariantFlags::RARE
         } else {
             SpeciesVariantFlags::DEFAULT
+        } | if super::source_queries::authored_optional_boolean_is_true(
+            super::source_queries::find_effective_authored_animal_shared_attribute(
+                candidate,
+                "b_Rampager",
+            ),
+        ) {
+            SpeciesVariantFlags::RAMPAGER
+        } else {
+            SpeciesVariantFlags::DEFAULT
         },
         adoption_count_range: lower_authored_animal_adoption_count_range(candidate, sex)?,
     }))
