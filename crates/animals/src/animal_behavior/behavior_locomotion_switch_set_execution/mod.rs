@@ -63,13 +63,14 @@ impl LocomotionMedium {
         }
     }
 
-    /// The row for this medium, or the ground row when that one is absent.
+    /// The row for this medium, else the `default` row, else the ground row.
     fn select(self, sets: &BehaviorLocomotionSwitchSetAction) -> Option<AssetId> {
         match self {
-            Self::Ground => None,
+            Self::Ground => sets.ground,
             Self::Water => sets.water,
             Self::Underwater => sets.underwater,
         }
+        .or(sets.default)
         .or(sets.ground)
     }
 }

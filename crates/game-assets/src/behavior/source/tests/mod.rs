@@ -340,3 +340,22 @@ fn a_rampaging_ankylosaur_s_guest_attack_lowers_whole() {
     assert!(!tasks[0].execution.has_unsupported_suffix());
     assert!(!tasks[0].completion.has_unsupported_suffix());
 }
+
+#[test]
+fn a_locomotion_switch_keeps_its_default_row_and_skips_carrying_rows() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped guest WaitAnimalInteraction and Ankylosaurus FailureSet author them.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/guests/attack/attack.beh"),
+        br#"<BehaviorSets><WaitAnimalInteraction><behaviors><BFBehLocoSwitchSet><behaviorTable><ground behSet="Wait_Land"/><water behSet="Wait_Water"/><groundcarry behSet="Wait_Carry"/><default behSet="Wait_Land"/></behaviorTable></BFBehLocoSwitchSet></behaviors></WaitAnimalInteraction></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::LocomotionSwitchSet(switch)] = sets[0].actions.lowered_actions() else {
+        panic!("locomotion switch expected");
+    };
+    assert_eq!(switch.default, Some(AssetId::from_key("wait_land")));
+    assert_eq!(switch.ground, Some(AssetId::from_key("wait_land")));
+}
