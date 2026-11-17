@@ -226,7 +226,7 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
         .init_state::<GamePhase>()
         .insert_resource(Time::<Fixed>::from_hz(30.0))
         .insert_resource(Time::<Virtual>::from_max_delta(
-            std::time::Duration::from_secs_f64(2.0 / 30.0),
+            std::time::Duration::from_millis(250),
         ))
         .configure_sets(
             Update,
