@@ -182,6 +182,14 @@ pub(super) async fn load_world_definition_source_documents(
                 AuthoredWorldDefinitionSourceReference::Document(reference) => archives
                     .resolve_source_reference(Path::new(&from), &reference)
                     .ok_or_else(|| unresolved_reference(&from, "source document", &reference))?,
+                AuthoredWorldDefinitionSourceReference::OptionalDocument(reference) => {
+                    let Some(dependency) =
+                        archives.resolve_source_reference(Path::new(&from), &reference)
+                    else {
+                        continue;
+                    };
+                    dependency
+                }
                 AuthoredWorldDefinitionSourceReference::GateCollisionType(actor_type) => {
                     // The context and selected binder remain load dependencies even
                     // when the loader's revision-scoped source-path index is warm.
