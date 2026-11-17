@@ -32,15 +32,28 @@ fn spawn_placed_object_virtual_nodes(
     world_definitions: Res<WorldDefinitions>,
     // Placed objects, guests and staff all carry their definition.
     objects: Query<(Entity, &DefinitionId), (Without<VirtualNodesSpawned>, Without<AnimalVariant>)>,
+    added: Query<(), Added<DefinitionId>>,
 ) {
+    // A guest's definition may load after the guest appears, so an object
+    // without one is tried again when definitions change.
+    if added.is_empty() && !world_assets.is_changed() && !world_definitions.is_changed() {
+        return;
+    }
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
     for (entity, reference) in &objects {
-        commands.entity(entity).insert(VirtualNodesSpawned);
         let Some(object) = definitions.find_object(reference.0) else {
             continue;
         };
+        commands.entity(entity).insert(VirtualNodesSpawned);
+        if !object.virtual_nodes.is_empty() {
+            debug!(
+                ?entity,
+                nodes = object.virtual_nodes.len(),
+                "virtual nodes spawned"
+            );
+        }
         spawn_virtual_nodes(&mut commands, entity, &object.virtual_nodes);
     }
 }
