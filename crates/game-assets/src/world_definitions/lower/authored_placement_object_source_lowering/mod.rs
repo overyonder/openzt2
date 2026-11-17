@@ -403,13 +403,14 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|data| data.attribute_named_any(&["icon3Dscale"]))
         .and_then(parse_blue_fang_source_numeric_lexeme)
         .unwrap_or(1.0);
-    // A building's ruin (`rubble_xt_1`) has no placement data of its own; an
-    // animal puts it down where the building stood, sized to its model.
-    // ponytail: tree stumps aren't placed yet.
-    let ruin = record
-        .type_tokens()
-        .iter()
-        .any(|token| source_document_names_are_semantically_equal(token, "Rubble"));
+    // A building's ruin (`rubble_xt_1`) or a tree's stump has no placement
+    // data of its own; an animal puts it down where the object stood, sized
+    // to its model.
+    let ruin = record.type_tokens().iter().any(|token| {
+        ["Rubble", "stump"]
+            .iter()
+            .any(|family| source_document_names_are_semantically_equal(token, family))
+    });
     if (purchase_button.is_some() && automatic_footprint) || (ruin && placement_bounds.is_none()) {
         bind_authored_placeable(record, None, true, price_cents, output)?;
     } else if let Some(footprint_bounds) = placement_bounds {

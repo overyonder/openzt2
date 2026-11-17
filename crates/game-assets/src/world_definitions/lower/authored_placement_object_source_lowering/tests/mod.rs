@@ -149,25 +149,31 @@ fn a_building_inherits_its_strength_and_docks_from_its_type_binders(
 }
 
 #[test]
-fn a_building_s_ruin_can_be_put_down_although_it_has_no_placement_data(
+fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // As the shipped rubble_xt_1 a smashed hot dog stand gives way to.
+    // As the shipped rubble_xt_1 a smashed hot dog stand gives way to, and a
+    // smashed tree's stump.
     let documents = [(
         "entities/rubble_xt_1.xml",
         r#"<BFTypedBinder binderType="rubble_xt_1"><types><entity><building><Rubble><rubble_xt><rubble_xt_1/></rubble_xt></Rubble></building></entity></types><shared/></BFTypedBinder>"#,
+    ), (
+        "entities/stump_1.xml",
+        r#"<BFTypedBinder binderType="ThinBrownLarge_Stump_1"><types><entity><tree><stump><ThinBrownLarge_Stump><ThinBrownLarge_Stump_1/></ThinBrownLarge_Stump></stump></tree></entity></types><shared/></BFTypedBinder>"#,
     )]
     .map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
     .into_iter()
     .collect::<Result<Vec<_>, _>>()?;
     let index = SourceIndex::build(&documents)?;
     let mut tables = WorldDefinitionLoweringTables::default();
-    bind_authored_placement_object(
-        &index.find("rubble_xt_1").ok_or("rubble_xt_1")?,
-        &[],
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-        &mut tables,
-    )?;
-    assert_eq!(tables.document.placeables.len(), 1);
+    for key in ["rubble_xt_1", "ThinBrownLarge_Stump_1"] {
+        bind_authored_placement_object(
+            &index.find(key).ok_or(key)?,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &mut tables,
+        )?;
+    }
+    assert_eq!(tables.document.placeables.len(), 2);
     Ok(())
 }

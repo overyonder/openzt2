@@ -91,18 +91,27 @@ pub(super) fn ruin_destroyed_placed_objects(
             .find_object(definition)
             .and_then(|object| object.destruction)
             .and_then(|destruction| {
-                // An abstract ruin (`rubble_xt`) stands for its concrete kinds.
-                // ponytail: the first concrete kind, not a random one.
-                let ruin = std::iter::once(destruction.ruin)
-                    .chain(
-                        catalogue
-                            .objects()
-                            .filter(|object| {
-                                object.behavior_type_identifiers.contains(&destruction.ruin)
-                            })
-                            .map(|object| object.id),
-                    )
-                    .find(|ruin| resolve_object_placeable_definition(catalogue, *ruin).is_some())?;
+                // An abstract ruin (`rubble_xt`) stands for its concrete kinds
+                // (`rubble_xt_1`, `rubble_xt_2`), one picked per building.
+                let placeable = |ruin: &AssetId| {
+                    resolve_object_placeable_definition(catalogue, *ruin).is_some()
+                };
+                let ruin = if placeable(&destruction.ruin) {
+                    destruction.ruin
+                } else {
+                    let mut kinds = catalogue
+                        .objects()
+                        .filter(|object| {
+                            object.behavior_type_identifiers.contains(&destruction.ruin)
+                        })
+                        .map(|object| object.id)
+                        .filter(placeable)
+                        .collect::<Vec<_>>();
+                    kinds.sort_unstable();
+                    // ponytail: picked by the building's entity, not a seeded
+                    // random stream; it stays the same while the ruin loads.
+                    *kinds.get(building.to_bits() as usize % kinds.len().max(1))?
+                };
                 Some((ruin, catalogue.find_object(ruin)?.prefab))
             });
         if let (Some((ruin, scene)), None) = (ruin, prefab.as_ref()) {
