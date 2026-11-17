@@ -90,6 +90,9 @@ pub enum BehaviorAction {
     /// `ZTBehMorph` on the target: it becomes the type its attribute names,
     /// as a fence an animal bashes becomes its `s_Broken` variant.
     MorphTarget(crate::AssetId),
+    /// `BFBehKill killUsingDestroyEntity` on the target: a fence breaks and a
+    /// building gives way to its ruin.
+    DestroyTarget,
     LocomotionSwitchSet(action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction),
     AnimationSwitchSet(action::locomotion_switch_set::BehaviorAnimationSwitchSetAction),
     AnimalShowEvent(action::show_event::BehaviorShowEventAction),

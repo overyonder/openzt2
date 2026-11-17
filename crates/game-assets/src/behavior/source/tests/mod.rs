@@ -305,3 +305,23 @@ fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
     assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
     assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
 }
+
+#[test]
+fn an_ankylosaur_destroying_a_building_plays_its_clip_then_destroys_it() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped Ankylosaurus DestroyBuilding set kills its building.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.beh"),
+        br#"<BehaviorSets><DestroyBuilding><behaviors><BFBehKill targetAnim="Stand_GuestAttack" killTarget="true" fadeOutPeriod="1" killUsingDestroyEntity="true"/></behaviors></DestroyBuilding></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::AnimationClip(clip), BehaviorAction::DestroyTarget] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("the attack clip, then the building's destruction expected");
+    };
+    assert_eq!(clip.animation_clip_asset_key, "Stand_GuestAttack");
+}
