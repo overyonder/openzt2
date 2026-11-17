@@ -147,8 +147,17 @@ fn lower_behavior_task_declaration(
 }
 
 fn lower_behavior_task_delay(node: &DataNode) -> io::Result<Option<[f32; 2]>> {
-    let minimum = node.attribute("TaskDelayMin");
-    let maximum = node.attribute("TaskDelayMax");
+    // Ankylosaurus `BashFence_Rampage` authors both delays twice; its rampage
+    // fence bash in `zt.exe` came 145 s in, as the later 90 to 180 s allows.
+    let last = |name: &str| {
+        node.attributes
+            .iter()
+            .rev()
+            .find(|attribute| attribute.name() == name)
+            .map(|attribute| attribute.value())
+    };
+    let minimum = last("TaskDelayMin");
+    let maximum = last("TaskDelayMax");
     match (minimum, maximum) {
         (None, None) => Ok(None),
         (minimum, maximum) => {

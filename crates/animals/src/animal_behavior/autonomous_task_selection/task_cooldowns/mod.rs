@@ -1,5 +1,7 @@
 //! Authored task delays. A delayed task can't be selected again by the same
-//! animal until its sampled delay has passed after the task ended.
+//! animal until its sampled delay has passed after the task ended. It also
+//! waits out a delay once it becomes possible for the animal, so a rampaging
+//! ankylosaur runs around before it bashes its fence, as in `zt.exe`.
 
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -12,6 +14,8 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
 #[derive(Component, Debug, Default)]
 pub(crate) struct AnimalTaskCooldowns {
     ready_ticks_by_task: Vec<(AssetId, u64)>,
+    /// Delayed tasks possible for the animal since it waited out their delay.
+    armed: Vec<AssetId>,
 }
 
 impl AnimalTaskCooldowns {
@@ -19,6 +23,25 @@ impl AnimalTaskCooldowns {
         self.ready_ticks_by_task
             .iter()
             .any(|(cooling_task, ready_tick)| *cooling_task == task && *ready_tick > tick)
+    }
+
+    pub(super) fn is_armed(&self, task: AssetId) -> bool {
+        self.armed.contains(&task)
+    }
+
+    /// The task has just become possible: it first waits out its delay.
+    pub(super) fn arm(&mut self, task: AssetId, tick: u64, delay_ticks: u64) {
+        self.armed.push(task);
+        self.start(task, tick, delay_ticks);
+    }
+
+    /// The task is no longer possible; its next chance waits again.
+    pub(super) fn disarm(&mut self, task: AssetId) {
+        if self.is_armed(task) {
+            self.armed.retain(|armed| *armed != task);
+            self.ready_ticks_by_task
+                .retain(|(cooling_task, _)| *cooling_task != task);
+        }
     }
 
     pub(super) fn start(&mut self, task: AssetId, tick: u64, delay_ticks: u64) {
@@ -80,5 +103,23 @@ pub(crate) fn start_animal_task_cooldowns_after_delayed_tasks_end(
             commands.entity(actor).insert(cooldowns);
         }
         commands.entity(actor).remove::<RunningDelayedAnimalTask>();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_task_waits_out_its_delay_each_time_it_becomes_possible() {
+        let task = AssetId::from_key("smashbuilding");
+        let mut cooldowns = AnimalTaskCooldowns::default();
+        cooldowns.arm(task, 100, 30);
+        assert!(cooldowns.is_cooling_down(task, 129));
+        assert!(!cooldowns.is_cooling_down(task, 130));
+        cooldowns.disarm(task);
+        assert!(!cooldowns.is_armed(task));
+        cooldowns.arm(task, 500, 30);
+        assert!(cooldowns.is_cooling_down(task, 510));
     }
 }
