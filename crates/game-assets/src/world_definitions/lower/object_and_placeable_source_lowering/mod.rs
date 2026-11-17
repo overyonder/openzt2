@@ -104,6 +104,31 @@ pub(crate) fn lower_world_object_virtual_nodes(
             }
         }
     }
+    // A position attribute such as a guest's `p_TalkOffset="0 -1 180"`
+    // (x, y, yaw) names a node too, where an animal docks to talk or attack.
+    for shared in super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "BFAIEntityDataShared",
+    ) {
+        for attribute in &shared.attributes {
+            let name = attribute.name();
+            if !name.starts_with("p_")
+                || nodes
+                    .iter()
+                    .any(|(known, _)| known.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let values = attribute
+                .value()
+                .split_whitespace()
+                .map(parse_blue_fang_source_numeric_lexeme::<f32>)
+                .collect::<Option<Vec<_>>>();
+            if let Some([x, y, yaw]) = values.as_deref() {
+                nodes.push((name.to_owned(), [Some(*x), Some(*y), None, Some(*yaw)]));
+            }
+        }
+    }
     nodes
         .into_iter()
         .map(|(name, values)| {

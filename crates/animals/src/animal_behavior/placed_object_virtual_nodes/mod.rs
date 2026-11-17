@@ -9,7 +9,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_game_data::world_definitions::world_objects::WorldObjectVirtualNode;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
-use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
+use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 /// Marks an object whose virtual nodes have been spawned.
 #[derive(Component)]
@@ -30,14 +30,15 @@ fn spawn_placed_object_virtual_nodes(
     mut commands: Commands,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    objects: Query<(Entity, &PlacedObjectDefinitionReference), Without<VirtualNodesSpawned>>,
+    // Placed objects, guests and staff all carry their definition.
+    objects: Query<(Entity, &DefinitionId), (Without<VirtualNodesSpawned>, Without<AnimalVariant>)>,
 ) {
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
     for (entity, reference) in &objects {
         commands.entity(entity).insert(VirtualNodesSpawned);
-        let Some(object) = definitions.find_object(reference.definition) else {
+        let Some(object) = definitions.find_object(reference.0) else {
             continue;
         };
         spawn_virtual_nodes(&mut commands, entity, &object.virtual_nodes);
