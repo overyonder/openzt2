@@ -89,6 +89,7 @@ fn species_document() -> SpeciesDocument {
                     id: AssetId::from_key(&format!("young_{index}")),
                     behavior_subject_type_identifiers: vec![],
                     navigation_collision_policy: None,
+                    virtual_nodes: Vec::new(),
                     ground_navigation_clip_asset_key: None,
                     medium_ground_navigation_clip_asset_key: None,
                     fast_ground_navigation_clip_asset_key: None,

@@ -66,6 +66,7 @@ pub(super) fn install_definitions(
                     .map(AssetId::from_key)
                     .to_vec(),
                 navigation_collision_policy: None,
+                virtual_nodes: Vec::new(),
                 ground_navigation_clip_asset_key: None,
                 medium_ground_navigation_clip_asset_key: None,
                 fast_ground_navigation_clip_asset_key: None,

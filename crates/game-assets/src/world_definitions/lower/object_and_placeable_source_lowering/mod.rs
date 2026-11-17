@@ -72,7 +72,7 @@ pub(super) fn lower_world_object_destruction(
 }
 
 /// Authored `virtualNodes`; the object's own entry overrides an ancestor's.
-pub(super) fn lower_world_object_virtual_nodes(
+pub(crate) fn lower_world_object_virtual_nodes(
     record: &RecordView<'_, '_>,
 ) -> Vec<WorldObjectVirtualNode> {
     let mut nodes: Vec<WorldObjectVirtualNode> = Vec::new();
