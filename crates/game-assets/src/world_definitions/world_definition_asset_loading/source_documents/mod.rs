@@ -226,15 +226,21 @@ pub(super) async fn load_world_definition_source_documents(
 /// of the file declaring it. Where the same-named file is another kind of
 /// document, such as `guests/YoungMale/Guest_Young_M.xml`, an animation graph
 /// beside the `Guest_Young_M` binder in `guests/ai/YoungMale.xml`, the binder
-/// index names the declaring file instead. Families with no same-named file,
-/// or that the index does not know, keep the file-name resolution.
+/// index names the declaring file instead, as it does for a family with no
+/// same-named file at all, such as `Guest_Adult` in `guests/ai/AdultGuest.xml`.
+/// Families that the index does not know keep the file-name resolution.
 fn resolve_typed_binder_family_source_path(
     archives: &AssetArchives,
     binder_source_paths: &AuthoredBinderSourcePathIndex,
     from: &str,
     family: &str,
 ) -> Option<(std::path::PathBuf, Option<u64>)> {
-    let by_name = archives.resolve_source_reference(Path::new(from), family)?;
+    let Some(by_name) = archives.resolve_source_reference(Path::new(from), family) else {
+        return binder_source_paths
+            .resolve_binder_type_source_path(archives, from, family)
+            .ok()
+            .map(|(path, revision)| (path, Some(revision)));
+    };
     let declares_family = archives.read_source(&by_name).ok().is_some_and(|bytes| {
         parse_blue_fang_source_document(AssetPath::new(&by_name.to_string_lossy()), &bytes)
             .is_ok_and(|document| {
