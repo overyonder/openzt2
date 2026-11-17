@@ -551,6 +551,7 @@ pub(super) fn select_idle_animal_tasks(
                     distance: facts.transform.translation().distance(target_position),
                     building_strength: object
                         .destruction
+                        .as_ref()
                         .and_then(|destruction| destruction.strength),
                 };
                 if !candidate_requirements_are_satisfied(

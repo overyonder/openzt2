@@ -43,7 +43,7 @@ pub(super) fn lower_world_object_destruction(
                     .ok_or_else(|| BindError::record(record, "invalid destruction secsToRemove"))?;
             let delay_ns = seconds_ns(delay_seconds, record)?;
             Ok(WorldObjectDestructionDefinition {
-                effect: id(&format!("particle/{effect}")),
+                effect_path: format!("particle/{}.psys", effect.trim().to_ascii_lowercase()),
                 audio_cue: AssetId::from_key(&format!("audio-cue:{sound}")),
                 rubble: id(rubble),
                 ruin: id(ruin),

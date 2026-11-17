@@ -58,9 +58,10 @@ pub struct WorldObjectAffordanceFlags(u64);
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
 )]
-#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectDestructionDefinition {
-    pub effect: AssetId,
+    /// The `explosionEffect` particle system, as `particle/destroy_building.psys`.
+    pub effect_path: String,
     pub audio_cue: AssetId,
     pub rubble: AssetId,
     pub ruin: AssetId,

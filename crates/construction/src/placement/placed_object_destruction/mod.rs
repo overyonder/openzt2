@@ -5,12 +5,14 @@ use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_game_assets::effect::SpawnCompleteParticleEffectDocument;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::audio::audio_playback_message_types::PlayPositionedAudioCue;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 use openzt2_zoo_state::placement::object_placement_definition_queries::{
     collect_occupied_placement_cells_for_transform, resolve_object_placeable_definition,
@@ -38,8 +40,6 @@ type PlacedObjects<'w, 's> = Query<
     ),
 >;
 
-// ponytail: the explosion effect, sound and flying rubble aren't played; the
-// building just gives way to its ruin.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn ruin_destroyed_placed_objects(
     mut commands: Commands,
@@ -58,6 +58,10 @@ pub(super) fn ruin_destroyed_placed_objects(
     ),
     placed: PlacedObjects,
     mut committed: MessageWriter<ObjectPlacementCommitted>,
+    (mut effects, mut sounds): (
+        MessageWriter<SpawnCompleteParticleEffectDocument>,
+        MessageWriter<PlayPositionedAudioCue>,
+    ),
 ) {
     pending.extend(requests.read().map(|request| (request.entity, None)));
     // A ruin's footprint comes from its model's bounds once that has loaded;
@@ -89,7 +93,7 @@ pub(super) fn ruin_destroyed_placed_objects(
         };
         let ruin = catalogue
             .find_object(definition)
-            .and_then(|object| object.destruction)
+            .and_then(|object| object.destruction.as_ref())
             .and_then(|destruction| {
                 // An abstract ruin (`rubble_xt`) stands for its concrete kinds
                 // (`rubble_xt_1`, `rubble_xt_2`), one picked per building.
@@ -157,6 +161,29 @@ pub(super) fn ruin_destroyed_placed_objects(
             }
         }
         commands.entity(*building).despawn();
+        // ponytail: the flying rubble (`rubbleBinderName`) isn't thrown.
+        if let Some(destruction) = catalogue
+            .find_object(definition)
+            .and_then(|object| object.destruction.as_ref())
+        {
+            effects.write(SpawnCompleteParticleEffectDocument {
+                particle_effect_asset: server.load(destruction.effect_path.clone()),
+                parent_entity: None,
+                inherit_parent_rotation: false,
+                effect_transform: Transform::from_translation(transform.translation),
+                manual_particle_count: 0,
+            });
+            sounds.write(PlayPositionedAudioCue {
+                cue: destruction.audio_cue,
+                world_position: transform.translation,
+                selection: building.to_bits(),
+                priority: 192,
+                force_looped: false,
+                listener_above_water: true,
+                listener_below_water: true,
+                admission: None,
+            });
+        }
         debug!(?building, ?definition, ruin = ?ruin.as_ref().map(|(ruin, _)| *ruin),
             "placed object destroyed");
         let Some((ruin, handle)) = ruin else {

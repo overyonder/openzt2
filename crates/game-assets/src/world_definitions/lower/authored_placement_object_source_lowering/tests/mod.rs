@@ -130,8 +130,10 @@ fn a_building_inherits_its_strength_and_docks_from_its_type_binders(
     )?;
     let destruction = tables.document.objects[0]
         .destruction
+        .as_ref()
         .ok_or("no destruction")?;
     assert_eq!(destruction.strength, Some(10));
+    assert_eq!(destruction.effect_path, "particle/e.psys");
     // The stand moves the building's dock closer but keeps its yaw, which
     // turns the Bevy way: the dock left of the building faces it, along +X.
     let nodes = &tables.document.objects[0].virtual_nodes;
