@@ -89,6 +89,11 @@ impl Plugin for ObjectPlacementPlugin {
                     .after(rebuild_placed_object_footprint_occupancy_index)
                     .before(FixedConstructionSet::Apply)
                     .run_if(in_state(GamePhase::InGame)),
+            )
+            .add_systems(
+                Update,
+                placed_object_destruction::fly_rubble_fragments
+                    .run_if(in_state(GamePhase::InGame)),
             );
         app.add_systems(
             FixedUpdate,

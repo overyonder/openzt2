@@ -62,6 +62,8 @@ pub(super) fn ruin_destroyed_placed_objects(
         MessageWriter<SpawnCompleteParticleEffectDocument>,
         MessageWriter<PlayPositionedAudioCue>,
     ),
+    // Fragment prefabs, requested as a building starts to fall.
+    mut fragment_prefabs: Local<HashMap<AssetId, Handle<ScenePrefabAsset>>>,
 ) {
     pending.extend(requests.read().map(|request| (request.entity, None)));
     // A ruin's footprint comes from its model's bounds once that has loaded;
@@ -88,6 +90,17 @@ pub(super) fn ruin_destroyed_placed_objects(
             return false;
         };
         let (definition, transform) = (reference.definition, *transform);
+        if let Some(fragments) = catalogue
+            .find_object(definition)
+            .and_then(|object| object.destruction.as_ref())
+            .map(|destruction| destruction.rubble)
+        {
+            if let Some(scene) = catalogue.find_object(fragments).map(|object| object.prefab) {
+                if let Some(handle) = catalogue.scene(scene) {
+                    fragment_prefabs.entry(fragments).or_insert(handle);
+                }
+            }
+        }
         let Ok(root) = members.get(*building).map(|member| member.root) else {
             return false;
         };
@@ -161,11 +174,22 @@ pub(super) fn ruin_destroyed_placed_objects(
             }
         }
         commands.entity(*building).despawn();
-        // ponytail: the flying rubble (`rubbleBinderName`) isn't thrown.
         if let Some(destruction) = catalogue
             .find_object(definition)
             .and_then(|object| object.destruction.as_ref())
         {
+            if let Some(prefab) = fragment_prefabs
+                .get(&destruction.rubble)
+                .and_then(|handle| prefabs.get(handle))
+            {
+                throw_fragments(
+                    &mut commands,
+                    prefab,
+                    destruction,
+                    &transform,
+                    building.to_bits(),
+                );
+            }
             effects.write(SpawnCompleteParticleEffectDocument {
                 particle_effect_asset: server.load(destruction.effect_path.clone()),
                 parent_entity: None,
@@ -249,4 +273,84 @@ pub(super) fn ruin_destroyed_placed_objects(
         }
         false
     });
+}
+
+/// A fragment a destroyed building throws up; it falls under gravity and is
+/// removed `secsToRemove` after it lands.
+#[derive(Component)]
+pub(super) struct FlyingRubbleFragment {
+    velocity: Vec3,
+    spin: Vec3,
+    ground: f32,
+    landed_for: f32,
+    remove_after: f32,
+}
+
+// ponytail: the fragments fly on their own, without the physics engine or
+// terrain; `rubblePitchAngle` is taken as their highest launch elevation.
+fn throw_fragments(
+    commands: &mut Commands,
+    prefab: &ScenePrefabAsset,
+    destruction: &openzt2_game_data::world_definitions::world_objects::WorldObjectDestructionDefinition,
+    transform: &Transform,
+    seed: u64,
+) {
+    // A small hash keeps each building's throw different without a random stream.
+    let mut state = seed | 1;
+    let mut next = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 40) as f32 / (1u64 << 24) as f32
+    };
+    let [force_min, force_max] = destruction.force_mps;
+    let start = transform.translation + Vec3::Y * destruction.start_height_cm as f32 / 100.0;
+    for _ in 0..destruction.rubble_count {
+        let yaw = next() * std::f32::consts::TAU;
+        let elevation = (45.0 + next() * (destruction.pitch_degrees - 45.0).max(0.0)).to_radians();
+        let speed = force_min + next() * (force_max - force_min).max(0.0);
+        let velocity = Vec3::new(
+            yaw.cos() * elevation.cos(),
+            elevation.sin(),
+            yaw.sin() * elevation.cos(),
+        ) * speed;
+        let fragment = commands
+            .spawn((
+                FlyingRubbleFragment {
+                    velocity,
+                    spin: Vec3::new(next(), next(), next()) * 8.0,
+                    ground: transform.translation.y,
+                    landed_for: 0.0,
+                    remove_after: destruction.delay_ns as f32 / 1e9,
+                },
+                Transform::from_translation(start),
+                Visibility::Inherited,
+            ))
+            .id();
+        openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree(
+            commands, prefab, fragment, false,
+        );
+    }
+}
+
+pub(super) fn fly_rubble_fragments(
+    mut commands: Commands,
+    time: Res<Time>,
+    mut fragments: Query<(Entity, &mut FlyingRubbleFragment, &mut Transform)>,
+) {
+    let delta = time.delta_secs();
+    for (entity, mut fragment, mut transform) in &mut fragments {
+        if transform.translation.y > fragment.ground {
+            fragment.velocity.y -= 9.81 * delta;
+            transform.translation += fragment.velocity * delta;
+            let spin = fragment.spin * delta;
+            transform.rotate(Quat::from_euler(EulerRot::XYZ, spin.x, spin.y, spin.z));
+            continue;
+        }
+        transform.translation.y = fragment.ground;
+        fragment.landed_for += delta;
+        if fragment.landed_for >= fragment.remove_after {
+            commands.entity(entity).despawn();
+        }
+    }
 }

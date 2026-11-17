@@ -344,14 +344,23 @@ pub(super) fn collect_authored_world_definition_source_document_dependency_refer
             }
         }
         // An abstract ruin (`rubble_xt`) stands for its concrete kinds,
-        // which the shipped data names `rubble_xt_1` and `rubble_xt_2`.
+        // which the shipped data names `rubble_xt_1` and `rubble_xt_2`; the
+        // fragments thrown up (`rubbleBinderName`) load with them.
         if source_node_local_name.eq_ignore_ascii_case("ZTEntityDestructionData") {
             if let Some(ruin) = source_node
                 .attribute_named_any(&["entityRuinBinderName"])
                 .map(str::trim)
                 .filter(|ruin| !ruin.is_empty())
             {
-                for reference in [ruin.to_owned(), format!("{ruin}_1"), format!("{ruin}_2")] {
+                let fragments = source_node
+                    .attribute_named_any(&["rubbleBinderName"])
+                    .map(str::trim)
+                    .filter(|fragments| !fragments.is_empty())
+                    .map(str::to_owned);
+                for reference in [ruin.to_owned(), format!("{ruin}_1"), format!("{ruin}_2")]
+                    .into_iter()
+                    .chain(fragments)
+                {
                     source_document_references.insert((
                         source_document_path.to_owned(),
                         AuthoredWorldDefinitionSourceReference::OptionalDocument(reference),
