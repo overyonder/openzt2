@@ -149,6 +149,8 @@ pub(crate) fn spawn_zoo_camera(
             projection,
             transform,
             ZooCamera,
+            // World sounds are heard from the camera, not the world origin.
+            bevy::audio::SpatialListener::default(),
             RenderLayers::from_layers(&[
                 0,
                 TERRAIN_RENDER_LAYER,
