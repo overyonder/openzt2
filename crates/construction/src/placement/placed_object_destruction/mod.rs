@@ -75,8 +75,18 @@ pub(super) fn ruin_destroyed_placed_objects(
             .find_object(definition)
             .and_then(|object| object.destruction)
             .and_then(|destruction| {
-                let ruin = destruction.ruin;
-                resolve_object_placeable_definition(catalogue, ruin)?;
+                // An abstract ruin (`rubble_xt`) stands for its concrete kinds.
+                // ponytail: the first concrete kind, not a random one.
+                let ruin = std::iter::once(destruction.ruin)
+                    .chain(
+                        catalogue
+                            .objects()
+                            .filter(|object| {
+                                object.behavior_type_identifiers.contains(&destruction.ruin)
+                            })
+                            .map(|object| object.id),
+                    )
+                    .find(|ruin| resolve_object_placeable_definition(catalogue, *ruin).is_some())?;
                 Some((ruin, catalogue.find_object(ruin)?.prefab))
             });
         if let (Some((_, scene)), None) = (ruin, prefab.as_ref()) {
