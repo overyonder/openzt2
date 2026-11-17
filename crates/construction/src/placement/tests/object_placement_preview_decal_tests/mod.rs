@@ -83,6 +83,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             properties: default(),
             affordances: default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         placeables: vec![placeable],
         ..default()

@@ -364,6 +364,18 @@ pub struct WorldObjectDefinition {
     pub properties: WorldObjectPropertyFlags,
     pub affordances: WorldObjectAffordanceFlags,
     pub destruction: Option<WorldObjectDestructionDefinition>,
+    /// Authored `virtualNodes`: named points the model itself lacks, such as
+    /// a building's rampage docks.
+    #[serde(default)]
+    pub virtual_nodes: Vec<WorldObjectVirtualNode>,
+}
+
+/// A `virtualNodes` entry in the object's own Bevy frame.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectVirtualNode {
+    pub name: String,
+    pub translation_m: [f32; 3],
+    pub yaw_degrees: f32,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

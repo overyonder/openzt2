@@ -44,6 +44,7 @@ mod behavior_random_animation_execution;
 mod behavior_random_choice_execution;
 mod behavior_random_stream_initialization;
 mod behavior_target_morph_execution;
+mod placed_object_virtual_nodes;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state;
 mod behavior_script_execution;
 mod behavior_set_start_request_handling;
@@ -92,6 +93,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_target_morph_execution::register_target_morph_execution(application);
         behavior_fence_crossing_execution::register_fence_crossing_execution(application);
         behavior_building_smash_execution::register_building_smash_execution(application);
+        placed_object_virtual_nodes::register_placed_object_virtual_nodes(application);
         behavior_token_execution::register_token_execution(application);
         behavior_trigger_execution::register_trigger_execution(application);
         behavior_water_docking_execution::register(application);

@@ -153,6 +153,7 @@ fn object(id: AssetId) -> WorldObjectDefinition {
         properties: Default::default(),
         affordances: Default::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     }
 }
 

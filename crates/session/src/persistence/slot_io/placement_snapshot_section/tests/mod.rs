@@ -99,6 +99,7 @@ fn document() -> WorldDefinitionDocument {
             properties: WorldObjectPropertyFlags::DONATION_ACCEPTOR,
             affordances: Default::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         placeables: vec![PlaceableDefinition {
             surface_policy: Default::default(),

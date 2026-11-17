@@ -109,11 +109,12 @@ fn price_comes_from_the_first_economy_component_with_a_cost(
 }
 
 #[test]
-fn a_building_inherits_its_strength_from_its_type_binder() -> Result<(), Box<dyn std::error::Error>>
-{
+fn a_building_inherits_its_strength_and_docks_from_its_type_binders(
+) -> Result<(), Box<dyn std::error::Error>> {
     // Shipped hot dog stands get strength 10 from the abstract Foodstand binder.
     let documents = [
-        ("entities/foodstand.xml", r#"<BFTypedBinder binderType="Foodstand" abstract="true"><types><entity><building><Foodstand/></building></entity></types><shared><BFAIEntityDataShared f_BuildingStrength="10"/></shared></BFTypedBinder>"#),
+        ("entities/foodstand.xml", r#"<BFTypedBinder binderType="Foodstand" abstract="true"><types><entity><building><Foodstand/></building></entity></types><shared><BFAIEntityDataShared f_BuildingStrength="10"/><BFSharedPhysVars><virtualNodes><Dock_Rampage1 y="-1.5"/></virtualNodes></BFSharedPhysVars></shared></BFTypedBinder>"#),
+        ("entities/building.xml", r#"<BFTypedBinder binderType="building" abstract="true"><types><entity><building/></entity></types><shared><BFSharedPhysVars><virtualNodes><Dock_Rampage1 y="-4"/><Dock_Rampage2 x="-4" yaw="-90"/></virtualNodes></BFSharedPhysVars></shared></BFTypedBinder>"#),
         ("entities/hotdog.xml", r#"<BFTypedBinder binderType="Hotdog"><types><entity><building><Foodstand><Hotdog/></Foodstand></building></entity></types><shared><ZTEntityDestructionData explosionEffect="e" explosionSound="s" rubbleBinderName="r" entityRuinBinderName="rubble_xt" secsToRemove="0.3f"/></shared></BFTypedBinder>"#),
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
     .into_iter()
@@ -131,5 +132,14 @@ fn a_building_inherits_its_strength_from_its_type_binder() -> Result<(), Box<dyn
         .destruction
         .ok_or("no destruction")?;
     assert_eq!(destruction.strength, Some(10));
+    // The stand's own dock overrides the generic building's.
+    let nodes = &tables.document.objects[0].virtual_nodes;
+    assert_eq!(nodes.len(), 2);
+    assert_eq!(nodes[0].name, "Dock_Rampage1");
+    assert_eq!(nodes[0].translation_m, [0.0, 0.0, 1.5]);
+    assert_eq!(
+        (nodes[1].translation_m, nodes[1].yaw_degrees),
+        ([-4.0, 0.0, -0.0], -90.0)
+    );
     Ok(())
 }

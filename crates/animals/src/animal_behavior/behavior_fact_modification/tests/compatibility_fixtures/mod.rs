@@ -171,6 +171,7 @@ pub(super) fn install_definitions(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     })
     .collect();
     let world_document = WorldDefinitionDocument {

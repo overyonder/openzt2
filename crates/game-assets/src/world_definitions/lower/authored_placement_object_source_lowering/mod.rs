@@ -558,6 +558,7 @@ pub(super) fn bind_authored_placement_object(
         properties: object_property_flags,
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: super::object_and_placeable_source_lowering::lower_world_object_destruction(record)?,
+        virtual_nodes: super::object_and_placeable_source_lowering::lower_world_object_virtual_nodes(record),
     });
     if purchase_button.is_some()
         && !authored_species_offer_owns_concrete_purchase_choice(

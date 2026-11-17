@@ -1073,6 +1073,7 @@ pub(super) fn bind_authored_staff_catalogue(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     });
     output.document.staff.push(StaffRoleDefinition {
         id: definition,
@@ -1310,6 +1311,7 @@ pub(super) fn bind_authored_animal_catalogue(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     });
     output.document.catalogue.push(CatalogueEntry {
         id: id(&format!("catalogue/{}", record.key)),

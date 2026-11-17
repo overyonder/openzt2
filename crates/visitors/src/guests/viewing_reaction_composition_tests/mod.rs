@@ -66,6 +66,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             properties: Default::default(),
             affordances: Default::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         guests: vec![GuestDefinition {
             donation: None,

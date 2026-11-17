@@ -175,6 +175,7 @@ pub(super) fn bind_authored_path(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     });
     if record
         .descendant_with_attribute("event", "msg", "ZT_SETPLACEMENTPATH")

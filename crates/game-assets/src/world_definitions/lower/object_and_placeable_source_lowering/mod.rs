@@ -20,7 +20,7 @@ use openzt2_game_data::world_definitions::object_placement::{
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectBiomeAutomaticPlacementClass, WorldObjectDefinition,
     WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
-    WorldObjectRealPhysicsWaterImpactDefinition,
+    WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
 use openzt2_game_data::AssetId;
 
@@ -69,6 +69,41 @@ pub(super) fn lower_world_object_destruction(
             })
         })
         .transpose()
+}
+
+/// Authored `virtualNodes`; the object's own entry overrides an ancestor's.
+pub(super) fn lower_world_object_virtual_nodes(
+    record: &RecordView<'_, '_>,
+) -> Vec<WorldObjectVirtualNode> {
+    let mut nodes: Vec<WorldObjectVirtualNode> = Vec::new();
+    for group in super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "virtualNodes",
+    ) {
+        for node in group.element_children() {
+            let name = node.name.as_str();
+            if nodes
+                .iter()
+                .any(|known| known.name.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let value = |key: &str| {
+                node.attribute_named_any(&[key])
+                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                    .filter(|value| value.is_finite())
+                    .unwrap_or(0.0)
+            };
+            nodes.push(WorldObjectVirtualNode {
+                name: name.to_owned(),
+                translation_m: crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                    [value("x"), value("y"), value("z")],
+                ),
+                yaw_degrees: value("yaw"),
+            });
+        }
+    }
+    nodes
 }
 
 pub(super) fn bind_object(
@@ -201,6 +236,7 @@ pub(super) fn bind_object(
         )?)
         .ok_or_else(|| BindError::record(record, "object affordances contain unknown flag bits"))?,
         destruction,
+        virtual_nodes: lower_world_object_virtual_nodes(record),
     });
     Ok(())
 }
