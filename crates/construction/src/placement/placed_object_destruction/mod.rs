@@ -156,6 +156,21 @@ pub(super) fn ruin_destroyed_placed_objects(
         {
             return true;
         }
+        // The fragments it throws load with it; wait for them too.
+        if catalogue
+            .find_object(definition)
+            .and_then(|object| object.destruction.as_ref())
+            .and_then(|destruction| fragment_prefabs.get(&destruction.rubble))
+            .is_some_and(|handle| {
+                !prefabs.contains(handle.id())
+                    && !matches!(
+                        server.get_load_state(handle.id()),
+                        Some(LoadState::Failed(_))
+                    )
+            })
+        {
+            return true;
+        }
         let ruin = ruin
             .zip(prefab.clone())
             .and_then(|((ruin, _), (_, handle))| {
@@ -178,10 +193,13 @@ pub(super) fn ruin_destroyed_placed_objects(
             .find_object(definition)
             .and_then(|object| object.destruction.as_ref())
         {
-            if let Some(prefab) = fragment_prefabs
+            let fragments = fragment_prefabs
                 .get(&destruction.rubble)
-                .and_then(|handle| prefabs.get(handle))
-            {
+                .and_then(|handle| prefabs.get(handle));
+            debug!(?building, fragments = destruction.rubble_count, loaded = fragments.is_some(),
+                effect = %destruction.effect_path, cue = ?destruction.audio_cue,
+                "destroyed object's effect, sound and fragments");
+            if let Some(prefab) = fragments {
                 throw_fragments(
                     &mut commands,
                     prefab,
