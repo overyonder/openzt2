@@ -71,39 +71,54 @@ pub(super) fn lower_world_object_destruction(
         .transpose()
 }
 
-/// Authored `virtualNodes`; the object's own entry overrides an ancestor's.
+/// Authored `virtualNodes`. A node's own attributes override an ancestor's
+/// one by one, as a food stand moves `building`'s rampage docks closer but
+/// keeps their yaw.
 pub(crate) fn lower_world_object_virtual_nodes(
     record: &RecordView<'_, '_>,
 ) -> Vec<WorldObjectVirtualNode> {
-    let mut nodes: Vec<WorldObjectVirtualNode> = Vec::new();
+    const KEYS: [&str; 4] = ["x", "y", "z", "yaw"];
+    let mut nodes: Vec<(String, [Option<f32>; 4])> = Vec::new();
     for group in super::source_element_tree_search::authored_type_family_elements_named(
         record,
         "virtualNodes",
     ) {
         for node in group.element_children() {
             let name = node.name.as_str();
-            if nodes
+            let index = match nodes
                 .iter()
-                .any(|known| known.name.eq_ignore_ascii_case(name))
+                .position(|(known, _)| known.eq_ignore_ascii_case(name))
             {
-                continue;
-            }
-            let value = |key: &str| {
-                node.attribute_named_any(&[key])
-                    .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
-                    .filter(|value| value.is_finite())
-                    .unwrap_or(0.0)
+                Some(index) => index,
+                None => {
+                    nodes.push((name.to_owned(), [None; 4]));
+                    nodes.len() - 1
+                }
             };
-            nodes.push(WorldObjectVirtualNode {
-                name: name.to_owned(),
-                translation_m: crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(
-                    [value("x"), value("y"), value("z")],
-                ),
-                yaw_degrees: value("yaw"),
-            });
+            for (value, key) in nodes[index].1.iter_mut().zip(KEYS) {
+                *value = value.or_else(|| {
+                    node.attribute_named_any(&[key])
+                        .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                        .filter(|value| value.is_finite())
+                });
+            }
         }
     }
     nodes
+        .into_iter()
+        .map(|(name, values)| {
+            let [x, y, z, yaw] = values.map(|value| value.unwrap_or(0.0));
+            WorldObjectVirtualNode {
+                name,
+                translation_m: crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                    [x, y, z],
+                ),
+                // Source yaw turns the other way about the up axis: a dock at
+                // `x="-4"` with `yaw="-90"` faces the building, along +X.
+                yaw_degrees: -yaw,
+            }
+        })
+        .collect()
 }
 
 pub(super) fn bind_object(

@@ -370,7 +370,8 @@ pub struct WorldObjectDefinition {
     pub virtual_nodes: Vec<WorldObjectVirtualNode>,
 }
 
-/// A `virtualNodes` entry in the object's own Bevy frame.
+/// A `virtualNodes` entry in the object's own Bevy frame; its yaw turns
+/// about Bevy's up axis.
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectVirtualNode {
     pub name: String,

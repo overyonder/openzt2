@@ -63,8 +63,6 @@ fn spawn_animal_virtual_nodes(
 
 fn spawn_virtual_nodes(commands: &mut Commands, parent: Entity, nodes: &[WorldObjectVirtualNode]) {
     for node in nodes {
-        // ponytail: yaw taken as a turn about Bevy's up axis; only docking
-        // positions are checked against the original so far.
         commands.spawn((
             Name::new(node.name.clone()),
             Transform::from_translation(Vec3::from_array(node.translation_m))
