@@ -557,7 +557,7 @@ pub(super) fn bind_authored_placement_object(
         upkeep_cents_per_month,
         properties: object_property_flags,
         affordances: WorldObjectAffordanceFlags::default(),
-        destruction: None,
+        destruction: super::object_and_placeable_source_lowering::lower_world_object_destruction(record)?,
     });
     if purchase_button.is_some()
         && !authored_species_offer_owns_concrete_purchase_choice(

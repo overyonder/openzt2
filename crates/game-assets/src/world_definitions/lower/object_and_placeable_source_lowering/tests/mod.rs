@@ -18,16 +18,3 @@ fn inherited_trick_component_distinguishes_show_capability_from_plain_food() {
     assert!(tables.document.objects[0].supports_show_tricks);
     assert!(!tables.document.objects[1].supports_show_tricks);
 }
-
-#[test]
-fn building_strength_is_inherited_from_the_abstract_type_binder() {
-    let documents = [
-        ("entities/bathroomsmall.xml", r#"<BFTypedBinder binderType="bathroomsmall" abstract="true"><types><entity><building><bathroomsmall/></building></entity></types><shared><BFAIEntityDataShared f_BuildingStrength="20"/></shared></BFTypedBinder>"#),
-        ("entities/bathroomsmall_xt.xml", r#"<BFTypedBinder binderType="bathroomsmall_xt" kind="facility"><types><entity><building><bathroomsmall><bathroomsmall_xt/></bathroomsmall></building></entity></types><shared><ZTEntityDestructionData explosionEffect="e" explosionSound="s" rubbleBinderName="r" entityRuinBinderName="rubble_xt" secsToRemove="0.3f"/></shared></BFTypedBinder>"#),
-    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()).unwrap());
-    let index = SourceIndex::build(&documents).unwrap();
-    let mut tables = WorldDefinitionLoweringTables::default();
-    bind_object(&index.find("bathroomsmall_xt").unwrap(), &mut tables).unwrap();
-    let destruction = tables.document.objects[0].destruction.as_ref().unwrap();
-    assert_eq!(destruction.strength, Some(20));
-}

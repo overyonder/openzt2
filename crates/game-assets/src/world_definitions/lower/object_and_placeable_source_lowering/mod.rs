@@ -27,11 +27,11 @@ use openzt2_game_data::AssetId;
 #[cfg(test)]
 mod tests;
 
-pub(super) fn bind_object(
+/// `ZTEntityDestructionData` plus the inherited `f_BuildingStrength`.
+pub(super) fn lower_world_object_destruction(
     record: &RecordView<'_, '_>,
-    output: &mut WorldDefinitionLoweringTables,
-) -> Result<(), BindError> {
-    let destruction = record
+) -> Result<Option<WorldObjectDestructionDefinition>, BindError> {
+    record
         .descendant_named("ZTEntityDestructionData")
         .map(|data| {
             let effect = required_element(&data, &["explosionEffect"])?;
@@ -68,7 +68,14 @@ pub(super) fn bind_object(
                     .map(|value| value.round() as u16),
             })
         })
-        .transpose()?;
+        .transpose()
+}
+
+pub(super) fn bind_object(
+    record: &RecordView<'_, '_>,
+    output: &mut WorldDefinitionLoweringTables,
+) -> Result<(), BindError> {
+    let destruction = lower_world_object_destruction(record)?;
     let biome_data = record.descendant_named("BFGBiomeData");
     let biomes = biome_data
         .into_iter()
