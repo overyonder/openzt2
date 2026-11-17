@@ -58,9 +58,11 @@ pub(super) fn bind_object(
                 start_height_cm: (element_number::<f32>(&data, &["rubbleStartHeight"], 0.0)?
                     * 100.0)
                     .round() as i32,
-                strength: record
-                    .descendant_named("BFAIEntityDataShared")
-                    .and_then(|shared| shared.attribute_named_any(&["f_BuildingStrength"]))
+                // Buildings inherit it from an abstract type binder (`bathroomsmall`).
+                strength: crate::species::source::source_queries::find_effective_authored_animal_shared_attribute(
+                    record,
+                    "f_BuildingStrength",
+                )
                     .and_then(|value| value.trim().parse::<f32>().ok())
                     .filter(|value| value.is_finite() && *value >= 0.0)
                     .map(|value| value.round() as u16),
