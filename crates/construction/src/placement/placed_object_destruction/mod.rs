@@ -6,6 +6,7 @@ use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_data::AssetId;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
@@ -44,8 +45,8 @@ pub(super) fn ruin_destroyed_placed_objects(
     mut commands: Commands,
     mut requests: MessageReader<DestroyPlacedObject>,
     // Smashed objects whose ruin prefab is still loading.
-    mut pending: Local<Vec<(Entity, Option<Handle<ScenePrefabAsset>>)>>,
-    world_assets: Res<Assets<WorldDefinitionAsset>>,
+    mut pending: Local<Vec<(Entity, Option<(AssetId, Handle<ScenePrefabAsset>)>)>>,
+    mut world_assets: ResMut<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     server: Res<AssetServer>,
     (prefabs, models): (Res<Assets<ScenePrefabAsset>>, Res<Assets<Gltf>>),
@@ -59,6 +60,21 @@ pub(super) fn ruin_destroyed_placed_objects(
     mut committed: MessageWriter<ObjectPlacementCommitted>,
 ) {
     pending.extend(requests.read().map(|request| (request.entity, None)));
+    // A ruin's footprint comes from its model's bounds once that has loaded;
+    // nothing else hydrates it before the ruin is put down.
+    for (ruin, handle) in pending.iter().filter_map(|(_, prefab)| prefab.as_ref()) {
+        if let Some(bounds) = prefabs.get(handle).and_then(|prefab| {
+            prefab
+                .canonical_scene_prefab_document()
+                .automatic_placement_bounds_xz
+        }) {
+            world_definitions.apply_source_lowered_automatic_placement_bounds(
+                &mut world_assets,
+                *ruin,
+                bounds,
+            );
+        }
+    }
     let Some(catalogue) = world_definitions.get(&world_assets) else {
         return;
     };
@@ -89,24 +105,36 @@ pub(super) fn ruin_destroyed_placed_objects(
                     .find(|ruin| resolve_object_placeable_definition(catalogue, *ruin).is_some())?;
                 Some((ruin, catalogue.find_object(ruin)?.prefab))
             });
-        if let (Some((_, scene)), None) = (ruin, prefab.as_ref()) {
-            *prefab = catalogue.scene(scene);
+        if let (Some((ruin, scene)), None) = (ruin, prefab.as_ref()) {
+            *prefab = catalogue.scene(scene).map(|handle| (ruin, handle));
         }
-        // Wait for the ruin's prefab; if it fails, the building still falls.
+        // Wait for the ruin's prefab, and for its footprint from the prefab's
+        // bounds; if either fails, the building still falls.
         if ruin.is_some()
-            && prefab.as_ref().is_some_and(|handle| {
-                !prefabs.contains(handle.id())
-                    && !matches!(
+            && prefab
+                .as_ref()
+                .is_some_and(|(ruin, handle)| match prefabs.get(handle) {
+                    None => !matches!(
                         server.get_load_state(handle.id()),
                         Some(LoadState::Failed(_))
-                    )
-            })
+                    ),
+                    Some(loaded) => {
+                        loaded
+                            .canonical_scene_prefab_document()
+                            .automatic_placement_bounds_xz
+                            .is_some()
+                            && resolve_object_placeable_definition(catalogue, *ruin)
+                                .is_some_and(|placeable| placeable.footprint.is_empty())
+                    }
+                })
         {
             return true;
         }
-        let ruin = ruin.zip(prefab.clone()).and_then(|((ruin, _), handle)| {
-            prefabs.contains(handle.id()).then_some((ruin, handle))
-        });
+        let ruin = ruin
+            .zip(prefab.clone())
+            .and_then(|((ruin, _), (_, handle))| {
+                prefabs.contains(handle.id()).then_some((ruin, handle))
+            });
         let Some(placeable) = resolve_object_placeable_definition(catalogue, definition) else {
             return false;
         };
@@ -134,9 +162,19 @@ pub(super) fn ruin_destroyed_placed_objects(
             &mut scratch.cells,
         )
         .map(|cells| cells.to_vec().into_boxed_slice()) else {
+            warn!(
+                ?building,
+                ?ruin,
+                "ruin of a destroyed object has no footprint"
+            );
             return false;
         };
         let Ok(id) = allocator.allocate(root) else {
+            warn!(
+                ?building,
+                ?ruin,
+                "ruin of a destroyed object has no persistent id"
+            );
             return false;
         };
         let mut edit = PreparedObjectPlacementMutation {
