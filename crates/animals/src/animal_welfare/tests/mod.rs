@@ -1,7 +1,7 @@
 use super::{
     calculations::{
-        animal_need_crossed_authored_threshold, calculate_mean_animal_welfare_with_habitat_limit,
-        clamp_animal_need_q16_after_delta,
+        animal_need_crossed_authored_threshold, clamp_animal_need_q16_after_delta,
+        welfare_from_need_points,
     },
     types::*,
 };
@@ -47,25 +47,35 @@ fn need_messages_are_threshold_edge_triggered() {
 }
 
 #[test]
-fn welfare_uses_canonical_need_mean_and_habitat_cap() {
-    let mut values = [800 * Q16_ONE; 10];
-    values[0] = 200 * Q16_ONE;
-    let habitat = HabitatSuitability {
-        space: 1000,
-        biome: 1000,
-        overall: 900,
+fn welfare_is_the_need_point_balance() {
+    let points = |good, bad| NeedPoints {
+        good,
+        bad,
+        seconds_until_update: 0.0,
     };
     assert_eq!(
-        calculate_mean_animal_welfare_with_habitat_limit(values, habitat),
-        740
+        welfare_from_need_points(&points(0.0, 0.0)),
+        (500, WelfareBand::Poor)
     );
-    let capped = HabitatSuitability {
-        overall: 300,
-        ..habitat
-    };
     assert_eq!(
-        calculate_mean_animal_welfare_with_habitat_limit(values, capped),
-        300
+        welfare_from_need_points(&points(10.0, 0.0)),
+        (550, WelfareBand::Good)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 49.8)),
+        (251, WelfareBand::Poor)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 50.0)),
+        (250, WelfareBand::Critical)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(100.0, 0.0)),
+        (1000, WelfareBand::Good)
+    );
+    assert_eq!(
+        welfare_from_need_points(&points(0.0, 100.0)),
+        (0, WelfareBand::Critical)
     );
 }
 
