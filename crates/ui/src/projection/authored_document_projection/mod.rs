@@ -466,6 +466,29 @@ pub fn project_document(
     }
 
     for (index, record) in data.nodes.iter().enumerate() {
+        if matches!(record.widget, UiWidgetRecord::CatalogueDetails { .. }) {
+            let dynamic_rows = [
+                "cost",
+                "gender",
+                "biome",
+                "biome_location_endangerment",
+                "Items Sold",
+            ]
+            .map(|name| {
+                data.nodes
+                    .iter()
+                    .zip(&entities)
+                    .filter_map(|(row, &entity)| {
+                        row.name.eq_ignore_ascii_case(name).then_some(entity)
+                    })
+                    .collect()
+            });
+            commands.entity(entities[index]).insert(
+                openzt2_interface_state::information::catalogue_types::CatalogueDetails {
+                    dynamic_rows,
+                },
+            );
+        }
         if !matches!(record.widget, UiWidgetRecord::TextEdit { .. }) {
             continue;
         }

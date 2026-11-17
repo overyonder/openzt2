@@ -77,44 +77,29 @@ pub(super) fn recompute_animal_welfare_rating(
     );
 }
 
-pub(super) fn recompute_guest_satisfaction_rating(
+pub(super) fn recompute_guest_ratings(
     mut arrived: MessageReader<GuestArrived>,
     mut departed: MessageReader<GuestDeparted>,
     mut reactions: MessageReader<GuestReaction>,
-    guests: Query<&GuestSatisfaction, With<Guest>>,
+    satisfaction: Query<&GuestSatisfaction, With<Guest>>,
+    education: Query<&GuestEducation, With<Guest>>,
     mut rating: ResMut<ZooRating>,
     mut changed: MessageWriter<ProgressionFactChanged>,
 ) {
-    if !message_reader_contains_any_unread_message(&mut arrived)
-        && !message_reader_contains_any_unread_message(&mut departed)
-        && !message_reader_contains_any_unread_message(&mut reactions)
-    {
+    if arrived.is_empty() && departed.is_empty() && reactions.is_empty() {
         return;
     }
+    arrived.clear();
+    departed.clear();
+    reactions.clear();
     update_zoo_rating_field_and_publish_change(
         &mut rating.guest_satisfaction_permille,
-        calculate_mean_permille(guests.iter().map(|value| value.0)),
+        calculate_mean_permille(satisfaction.iter().map(|value| value.0)),
         &mut changed,
     );
-}
-
-pub(super) fn recompute_education_rating(
-    mut arrived: MessageReader<GuestArrived>,
-    mut departed: MessageReader<GuestDeparted>,
-    mut reactions: MessageReader<GuestReaction>,
-    guests: Query<&GuestEducation, With<Guest>>,
-    mut rating: ResMut<ZooRating>,
-    mut changed: MessageWriter<ProgressionFactChanged>,
-) {
-    if !message_reader_contains_any_unread_message(&mut arrived)
-        && !message_reader_contains_any_unread_message(&mut departed)
-        && !message_reader_contains_any_unread_message(&mut reactions)
-    {
-        return;
-    }
     update_zoo_rating_field_and_publish_change(
         &mut rating.education_permille,
-        calculate_mean_permille(guests.iter().map(|value| value.0)),
+        calculate_mean_permille(education.iter().map(|value| value.0)),
         &mut changed,
     );
 }

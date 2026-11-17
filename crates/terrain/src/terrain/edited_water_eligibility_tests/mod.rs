@@ -214,3 +214,86 @@ fn saved_water_surface_stays_at_region_level_over_a_sloped_bed() {
         assert_eq!(point.water_height_m, Some(1.0));
     }
 }
+
+#[test]
+fn scene_caustic_target_follows_water_height_and_reparented_bounds() {
+    use super::terrain_water_caustics::scene_projection::project_scene_caustic_targets;
+    use openzt2_game_data::scene_prefab::PrefabBoundingSphere;
+    use openzt2_world_state::world_spawn::prefab_presentation_types::{
+        PrefabCausticPolicy, PrefabLocalRenderBound,
+    };
+    use openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticSceneTarget;
+    use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+        TerrainWaterMembershipIndex, TerrainWaterRegionEdit,
+    };
+
+    let mut app = App::new();
+    let mut assets = Assets::default();
+    let terrain = assets.add(saved_water_asset());
+    app.insert_resource(assets)
+        .add_message::<AssetEvent<TerrainAsset>>()
+        .add_systems(Update, project_scene_caustic_targets);
+    let owner = app
+        .world_mut()
+        .spawn(TerrainWaterRegionEdit {
+            terrain: terrain.clone(),
+            biome_index: 0,
+            surface_height_metres: 0.0,
+            depth_ratio: 1.0,
+            uses_tank_minimum_depth: false,
+        })
+        .id();
+    let index = TerrainWaterMembershipIndex::new(
+        terrain.id(),
+        17,
+        17,
+        vec![Some(owner); 17 * 17].into_boxed_slice(),
+        vec![[Some(owner); 4]; 16].into_boxed_slice(),
+        true,
+    )
+    .unwrap();
+    app.world_mut().spawn(index);
+    let mut spawn_model = || {
+        app.world_mut()
+            .spawn((
+                PrefabCausticPolicy { receives: true },
+                Transform::from_xyz(2.0, 4.0, -2.0),
+            ))
+            .id()
+    };
+    let first = spawn_model();
+    let second = spawn_model();
+    let geometry = app
+        .world_mut()
+        .spawn((
+            PrefabLocalRenderBound(PrefabBoundingSphere {
+                center: [0.0; 3],
+                radius: 1.0,
+            }),
+            Transform::IDENTITY,
+            ChildOf(first),
+        ))
+        .id();
+    let target = |app: &App, root| {
+        app.world()
+            .get::<TerrainWaterCausticSceneTarget>(root)
+            .map(|t| t.water_owner)
+    };
+    app.update();
+    assert_eq!(target(&app, first), None);
+    app.world_mut()
+        .get_mut::<TerrainWaterRegionEdit>(owner)
+        .unwrap()
+        .surface_height_metres = 3.5;
+    app.update();
+    assert_eq!(target(&app, first), Some(owner));
+    app.world_mut().entity_mut(geometry).insert(ChildOf(second));
+    app.update();
+    assert_eq!(target(&app, first), None);
+    assert_eq!(target(&app, second), Some(owner));
+    app.world_mut()
+        .entity_mut(second)
+        .remove::<PrefabCausticPolicy>();
+    app.update();
+    assert_eq!(target(&app, second), None);
+}

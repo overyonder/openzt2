@@ -11,8 +11,6 @@ use openzt2_game_assets::localization::localization_precedence_index::Localizati
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::progression::award_and_progression_fact_types::EarnedProgressionAward;
-use openzt2_zoo_state::progression::fame_types::Fame;
-use openzt2_zoo_state::progression::rating_types::ZooRating;
 use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_zoo_state::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
@@ -29,23 +27,19 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    zoo_fame: Res<Fame>,
-    zoo_rating: Res<ZooRating>,
     unlocked_catalogue_definitions: Res<UnlockedCatalogueDefinitionSet>,
     research_projects: Query<&ResearchProject>,
     earned_progression_awards: Query<&EarnedProgressionAward>,
     mut authored_text: Query<(&UiTextBinding, &mut Text)>,
-    mut authored_values_and_visibility: ParamSet<(
-        Query<(&UiVisibleBinding, &mut Visibility)>,
-        Query<(&UiValueBinding, &mut UiValue, &mut Visibility)>,
-    )>,
+    mut authored_visibility: Query<(&UiVisibleBinding, &mut Visibility)>,
+    mut authored_values: Query<(&UiValueBinding, &mut UiValue)>,
 ) {
     let active_research_project = research_projects.iter().next();
     let latest_earned_award = earned_progression_awards
         .iter()
         .max_by_key(|award| award.earned_tick);
 
-    for (property_binding, mut projected_visibility) in &mut authored_values_and_visibility.p0() {
+    for (property_binding, mut projected_visibility) in &mut authored_visibility {
         let should_be_visible = match &property_binding.0 {
             UiBooleanPropertyBindingSource::ResearchActive => active_research_project.is_some(),
             UiBooleanPropertyBindingSource::AwardEarned { award } => earned_progression_awards
@@ -56,8 +50,8 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
                     .get(&world_definition_assets)
                     .and_then(|world_definitions| {
                         world_definitions
-                            .catalogue()
-                            .position(|entry| entry.definition.0 == definition.0)
+                            .catalogue_entry_for_definition(*definition)
+                            .map(|(index, _)| index)
                     })
                     .is_some_and(|catalogue_index| {
                         catalogue_definition_is_unlocked(
@@ -68,17 +62,15 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
             }
             _ => continue,
         };
-        *projected_visibility = if should_be_visible {
+        projected_visibility.set_if_neq(if should_be_visible {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
 
-    for (property_binding, mut projected_value, mut visibility) in
-        &mut authored_values_and_visibility.p1()
-    {
-        projected_value.0 = match &property_binding.0 {
+    for (property_binding, mut projected_value) in &mut authored_values {
+        let value = match &property_binding.0 {
             UiIntegerPropertyBindingSource::ResearchElapsedTicks => active_research_project
                 .and_then(|project| i64::try_from(project.elapsed_ticks).ok())
                 .unwrap_or(0),
@@ -92,20 +84,9 @@ pub(crate) fn project_progression_status_to_authored_information_bindings(
                 .max()
                 .and_then(|earned_tick| i64::try_from(earned_tick).ok())
                 .unwrap_or(0),
-            UiIntegerPropertyBindingSource::ZooFameHalfStars => i64::from(zoo_fame.half_stars),
-            UiIntegerPropertyBindingSource::ZooRatingPermille => {
-                visibility.set_if_neq(if zoo_rating.overall_available {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
-                if !zoo_rating.overall_available {
-                    continue;
-                }
-                i64::from(zoo_rating.overall_permille)
-            }
             _ => continue,
         };
+        projected_value.set_if_neq(UiValue(value));
     }
 
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {

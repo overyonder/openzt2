@@ -2,16 +2,12 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 
-use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
+use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 
 pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers(
     cameras: Query<(Entity, &Camera, Option<&RenderLayers>), With<Camera3d>>,
-    hierarchy: Query<(
-        Option<&ChildOf>,
-        Option<&RenderLayers>,
-        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
-    )>,
+    mut inherited_layers: PrefabRenderLayers,
     parents: Query<&ChildOf>,
     mut transforms: ParamSet<(
         TransformHelper,
@@ -43,7 +39,7 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
             };
             (*mode, *transform, parent.map(ChildOf::parent))
         };
-        let layers = render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
+        let layers = inherited_layers.get(entity);
         let Some((camera, ..)) = cameras.iter().find(|(_, camera, camera_layers)| {
             camera.is_active && camera_layers.unwrap_or_default().intersects(&layers)
         }) else {

@@ -17,6 +17,61 @@ fn id(byte: u8) -> AssetId {
     AssetId([byte; 16])
 }
 
+#[test]
+fn nested_information_row_uses_its_own_subject_until_unbound() {
+    use crate::projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows;
+    use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
+    use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
+    use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
+    use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiValue, UiValueBinding};
+    use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+    use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
+
+    let mut app = App::new();
+    app.insert_resource(ZooClock {
+        tick: 0,
+        fractional_tick: default(),
+        absolute_day: 0,
+        tick_in_day: 0,
+    })
+    .add_systems(
+        Update,
+        project_live_world_subject_values_to_information_list_rows,
+    );
+    let world = app.world_mut();
+    let list = world.spawn_empty().id();
+    let happy = world.spawn(GuestSatisfaction(800, 0)).id();
+    let unhappy = world.spawn(GuestSatisfaction(100, 0)).id();
+    let row = world
+        .spawn((UiListRow { list, index: 0 }, InformationEntitySource(happy)))
+        .id();
+    let nested = world
+        .spawn((
+            ChildOf(row),
+            UiListRow {
+                list: row,
+                index: 0,
+            },
+            InformationEntitySource(unhappy),
+        ))
+        .id();
+    let binding = UiValueBinding(UiIntegerPropertyBindingSource::InformationListGuestHappinessIcon);
+    let unrelated = world.spawn((binding.clone(), UiValue(-1))).id();
+    let value = world
+        .spawn((ChildOf(nested), binding, UiValue(-1), Text::default()))
+        .id();
+    app.update();
+    assert_eq!(app.world().get::<UiValue>(value), Some(&UiValue(0)));
+    assert_eq!(app.world().get::<Text>(value).unwrap().0, "0");
+    app.world_mut()
+        .entity_mut(nested)
+        .remove::<InformationEntitySource>();
+    app.update();
+    assert_eq!(app.world().get::<UiValue>(value), Some(&UiValue(1)));
+    assert_eq!(app.world().get::<Text>(value).unwrap().0, "1");
+    assert_eq!(app.world().get::<UiValue>(unrelated), Some(&UiValue(-1)));
+}
+
 fn test_app() -> App {
     let mut app = App::new();
     app.init_resource::<SelectedEntity>()
@@ -30,6 +85,55 @@ fn test_app() -> App {
             (apply_selection_requests, clear_removed_selection).chain(),
         );
     app
+}
+
+#[test]
+fn reopening_editor_rebinds_rows_after_hidden_membership_changes() {
+    use crate::information_view_types::EntityEditorDataRootSurface;
+    use crate::projection::entity_editor_data_root_projection::*;
+    use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
+    use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::{
+        SetUiListRowCount, UiListRow,
+    };
+
+    let mut app = App::new();
+    app.init_resource::<InspectableMembership>()
+        .add_message::<SetUiListRowCount>()
+        .add_observer(inspectable_added)
+        .add_observer(inspectable_removed)
+        .add_systems(
+            Update,
+            project_inspectable_entities_to_visible_entity_editor_data_roots,
+        );
+    let world = app.world_mut();
+    let editor = world
+        .spawn((EntityEditorDataRootSurface, InheritedVisibility::VISIBLE))
+        .id();
+    let row = world
+        .spawn(UiListRow {
+            list: editor,
+            index: 0,
+        })
+        .id();
+    let original = world.spawn(Inspectable { definition: id(1) }).id();
+    app.update();
+    assert_eq!(
+        app.world().get::<InformationEntitySource>(row).unwrap().0,
+        original
+    );
+    let world = app.world_mut();
+    world.entity_mut(editor).insert(InheritedVisibility::HIDDEN);
+    world.entity_mut(original).remove::<Inspectable>();
+    let replacement = world.spawn(Inspectable { definition: id(2) }).id();
+    app.update();
+    app.world_mut()
+        .entity_mut(editor)
+        .insert(InheritedVisibility::VISIBLE);
+    app.update();
+    assert_eq!(
+        app.world().get::<InformationEntitySource>(row).unwrap().0,
+        replacement
+    );
 }
 
 #[test]

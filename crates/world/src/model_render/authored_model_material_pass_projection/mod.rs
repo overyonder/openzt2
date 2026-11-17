@@ -1,6 +1,11 @@
-use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
+use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
 use bevy::asset::AssetEvent;
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::visibility::{
+    CascadesVisibleEntities, CubemapVisibleEntities, NoCpuCulling, RenderLayers, VisibleEntities,
+    VisibleMeshEntities,
+};
+use bevy::ecs::entity::{EntityHashMap, EntityHashSet};
+use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMaterialName;
 use bevy::light::NotShadowCaster;
 use bevy::light::NotShadowReceiver;
@@ -15,10 +20,10 @@ use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_game_assets::material::runtime::resolved_effect_transform_bindings::EffectRenderViewTransforms;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
+use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderView;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::PRIMARY_EFFECT_PASS_RENDER_VIEW_LAYER;
-use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingTextures;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPrimitiveMaterial;
@@ -39,6 +44,7 @@ pub(super) fn project_authored_model_material_passes(
         ),
     >,
     children: Query<&Children>,
+    parents: Query<&ChildOf>,
     primitives: Query<(
         Entity,
         &GltfMaterialName,
@@ -65,24 +71,16 @@ pub(super) fn project_authored_model_material_passes(
         ),
         With<Camera3d>,
     >,
-    hierarchy: Query<(
-        Option<&ChildOf>,
-        Option<&RenderLayers>,
-        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
-    )>,
+    mut inherited_layers: PrefabRenderLayers,
 ) {
     for (root, overrides, clothing) in &roots {
-        let source_parent = hierarchy
-            .get(root)
-            .ok()
-            .and_then(|(parent, _, _)| parent.map(ChildOf::parent))
-            .unwrap_or(root);
+        let source_parent = parents.get(root).ok().map(ChildOf::parent).unwrap_or(root);
         let source_index = children
             .get(source_parent)
             .ok()
             .and_then(|children| children.iter().position(|child| child == root))
             .unwrap_or(0);
-        let render_layers = render_layers_for_prefab_entity_and_ancestor_chain(root, &hierarchy);
+        let render_layers = inherited_layers.get(root);
         let Some((view_entity, _, camera_transform, camera_projection, _, _)) = cameras
             .iter()
             .find(|(_, camera, _, _, camera_layers, additional_view)| {
@@ -257,6 +255,7 @@ pub(super) fn project_authored_model_material_passes(
                     mesh.clone(),
                     MeshMaterial3d::<EffectPassMaterial>(pass.clone()),
                     Transform::default(),
+                    *transform,
                     Visibility::Inherited,
                     ChildOf(entity),
                     AdditionalAuthoredModelMaterialPass,
@@ -294,10 +293,68 @@ pub(super) fn project_authored_model_material_passes(
     }
 }
 
+#[derive(SystemParam)]
+pub(super) struct VisibleMaterialMeshes<'w, 's> {
+    cameras: Query<'w, 's, (&'static Camera, &'static VisibleEntities)>,
+    cascades: Query<'w, 's, &'static CascadesVisibleEntities>,
+    cubemaps: Query<'w, 's, &'static CubemapVisibleEntities>,
+    spots: Query<'w, 's, &'static VisibleMeshEntities>,
+    gpu_culled: Query<
+        'w,
+        's,
+        (Entity, &'static ViewVisibility),
+        (With<NoCpuCulling>, With<DynamicEffectPassMaterial>),
+    >,
+    meshes: Local<'s, EntityHashSet>,
+}
+
+impl VisibleMaterialMeshes<'_, '_> {
+    fn collect(&mut self) -> &EntityHashSet {
+        self.meshes.clear();
+        for (_, visible) in self.cameras.iter().filter(|(camera, _)| camera.is_active) {
+            self.meshes
+                .extend(visible.iter(std::any::TypeId::of::<Mesh3d>()).copied());
+        }
+        // Shadow casters can be visible to a light outside every camera frustum.
+        for visible in self
+            .cascades
+            .iter()
+            .flat_map(|c| c.entities.values().flatten())
+            .chain(self.cubemaps.iter().flat_map(|c| c.iter()))
+            .chain(self.spots.iter())
+        {
+            self.meshes.extend(visible.entities.iter().copied());
+        }
+        // GPU-culled draws have ViewVisibility but no per-camera CPU list.
+        self.meshes.extend(
+            self.gpu_culled
+                .iter()
+                .filter(|(_, v)| v.get())
+                .map(|(e, _)| e),
+        );
+        &self.meshes
+    }
+}
+
+struct PreparedMaterialView {
+    transform: GlobalTransform,
+    clip_from_view: Mat4,
+    transforms: EffectRenderViewTransforms,
+    changed: bool,
+}
+
+#[derive(Default)]
+pub(super) struct MaterialViews {
+    cameras: EntityHashMap<PreparedMaterialView>,
+    previous: EntityHashMap<Entity>,
+    current: EntityHashMap<Entity>,
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_per_draw_effect_transform_semantics(
     mut hot_loop_measurements: Local<MaterialHotLoopMeasurements>,
-    mut prepared_views: Local<Vec<(Entity, EffectRenderViewTransforms)>>,
+    mut visible_meshes: VisibleMaterialMeshes,
+    mut views: Local<MaterialViews>,
     cameras: Query<
         (
             Entity,
@@ -311,11 +368,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         ),
         With<Camera3d>,
     >,
-    hierarchy: Query<(
-        Option<&ChildOf>,
-        Option<&RenderLayers>,
-        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
-    )>,
+    mut inherited_layers: PrefabRenderLayers,
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(
         Ref<DirectionalLight>,
@@ -356,18 +409,30 @@ pub(super) fn update_per_draw_effect_transform_semantics(
                     || visibility.is_changed()
                     || authored_light.is_changed()
             });
-    prepared_views.clear();
-    prepared_views.extend(
-        cameras
-            .iter()
-            .filter(|(_, camera, ..)| camera.is_active)
-            .map(|(entity, _, transform, projection, ..)| {
-                (
-                    entity,
-                    EffectRenderViewTransforms::from_camera(&transform, &projection),
-                )
-            }),
-    );
+    let views = &mut *views;
+    std::mem::swap(&mut views.previous, &mut views.current);
+    views.current.clear();
+    views
+        .cameras
+        .retain(|entity, _| cameras.get(*entity).is_ok_and(|(_, c, ..)| c.is_active));
+    for (entity, _, transform, projection, ..) in cameras.iter().filter(|(_, c, ..)| c.is_active) {
+        let clip_from_view = projection.get_clip_from_view();
+        if let Some(view) = views.cameras.get_mut(&entity) {
+            view.changed = view.transform != *transform || view.clip_from_view != clip_from_view;
+            if !view.changed {
+                continue;
+            }
+        }
+        views.cameras.insert(
+            entity,
+            PreparedMaterialView {
+                transform: *transform,
+                clip_from_view,
+                transforms: EffectRenderViewTransforms::from_camera(&transform, &projection),
+                changed: true,
+            },
+        );
+    }
     let world_fog = cameras
         .iter()
         .find(|(_, _, _, _, _, _, zoo, _)| *zoo)
@@ -393,7 +458,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
     light_rig[6].w = 1.0;
     let wind_registers = wind.shader_registers();
     for (entity, transform, material_handle, projected_marker, visibility, view_projection) in
-        &renderables
+        renderables.iter_many(visible_meshes.collect()).matched()
     {
         scanned += 1;
         if !visibility.get() {
@@ -409,7 +474,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
                 };
                 (source.1, camera)
             } else {
-                let layers = render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
+                let layers = inherited_layers.get(entity);
                 let Some(camera) = cameras.iter().find(
                     |(_, camera, _, _, camera_layers, _, _, additional_view)| {
                         camera.is_active
@@ -421,16 +486,11 @@ pub(super) fn update_per_draw_effect_transform_semantics(
                 };
                 (transform, camera)
             };
-        let (view_entity, camera, view_transform, projection, _, view_fog, _, _) = accepted_camera;
-        if !camera.is_active {
-            continue;
-        }
-        let Some((_, prepared_view)) = prepared_views
-            .iter()
-            .find(|(entity, _)| *entity == view_entity)
-        else {
+        let (view_entity, _, _, projection, _, view_fog, _, _) = accepted_camera;
+        let Some(view) = views.cameras.get(&view_entity) else {
             continue;
         };
+        let prepared_view = &view.transforms;
         // Additional world cameras share the world's authored fog settings, but
         // derive directional/depth inputs from their own accepted view. Preview
         // cameras keep their own environment instead of borrowing the zoo view.
@@ -439,13 +499,16 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         } else {
             view_fog
         };
-        let fog_changed = distance_fog.as_ref().is_some_and(|fog| fog.is_changed());
+        // Perspective far distance also feeds fog even when the clip matrix is unchanged.
+        let fog_changed = distance_fog
+            .as_ref()
+            .is_some_and(|fog| fog.is_changed() || projection.is_changed());
         let force = material_handle.is_changed()
             || visibility.is_changed()
-            || projected_marker.is_changed();
+            || projected_marker.is_changed()
+            || views.previous.get(&entity) != Some(&view_entity);
         let model_changed = force || transform.is_changed();
-        let view_changed =
-            force || camera.is_changed() || view_transform.is_changed() || projection.is_changed();
+        let view_changed = force || view.changed;
         // Only CPU register values change here. Buffer handles and pipeline
         // state stay fixed; ShaderBuffer assets publish the GPU updates.
         // Emitting Material::Modified would unnecessarily rebuild bind groups.
@@ -455,6 +518,7 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         else {
             continue;
         };
+        views.current.insert(entity, view_entity);
         if !force
             && !material.programmable_inputs_changed(
                 model_changed,
@@ -613,7 +677,7 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
         else {
             continue;
         };
-        if !needs_view_uniforms {
+        if !needs_view_uniforms || prepared_views.is_empty() {
             // Every world camera includes layer zero. Draws with no camera
             // uniforms use their existing model/global registers in every view,
             // without another mesh entity or bind group. Restore this path when
@@ -630,7 +694,7 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
                         .get(child)
                         .is_ok_and(|(_, projection)| projection.source == source)
                     {
-                        commands.entity(child).despawn();
+                        commands.entity(child).try_despawn();
                     }
                 }
             }
@@ -694,6 +758,7 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
                 mesh.clone(),
                 MeshMaterial3d(effect_materials.add(projected_material)),
                 Transform::default(),
+                *source_transform,
                 Visibility::Inherited,
                 ChildOf(source),
                 RenderLayers::layer(*render_layer),

@@ -41,6 +41,7 @@ pub struct AnimationPlaybackPlugin;
 
 impl Plugin for AnimationPlaybackPlugin {
     fn build(&self, application: &mut App) {
+        crate::model_render::model_projection_changes::register(application);
         application
             .add_systems(PostUpdate,
                 animation_water_effect_binding::update_animation_water_effect_planes

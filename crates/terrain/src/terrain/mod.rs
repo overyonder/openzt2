@@ -148,6 +148,12 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 Update,
+                terrain_water_renderer_targets::reconcile_water_material_render_views
+                    .after(project_changed_terrain_water_surfaces_and_waterfalls)
+                    .in_set(WaterPresentationSet::View),
+            )
+            .add_systems(
+                Update,
                 (
                     update_authored_terrain_water_renderer_inputs,
                     terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
@@ -198,16 +204,19 @@ impl Plugin for TerrainPlugin {
                 (
                     terrain_water_caustics::scene_projection::project_scene_caustic_targets
                         .after(openzt2_world_state::model_render::ModelRenderPresentationSet::LevelOfDetail),
-                    terrain_water_caustics::scene_projection::project_scene_caustic_passes,
-                    terrain_water_caustics::scene_projection::update_scene_caustic_bindings,
+                    terrain_water_caustics::scene_projection::project_scene_caustic_passes
+                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_targets)
+                        .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
+                        .after(openzt2_world_state::model_render::ModelRenderPresentationSet::SourceMaterials),
+                    terrain_water_caustics::scene_projection::update_scene_caustic_bindings
+                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)
+                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
                     bevy::transform::systems::propagate_transforms_for::<With<
                         openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticScenePass,
-                    >>,
-                )
-                    .chain()
-                    .after(openzt2_world_state::model_render::ModelRenderPresentationSet::MaterialProjection)
-                    .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
-                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+                    >>
+                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)
+                        .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+                ),
             )
             .add_systems(
                 Update,

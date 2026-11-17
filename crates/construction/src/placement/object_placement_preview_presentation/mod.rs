@@ -253,16 +253,26 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         Entity,
         &ConstructionPreview,
         &ObjectPlacementPreviewMaterials,
+        &Visibility,
         Option<&mut ObjectPlacementPreviewVisualState>,
     )>,
     decals: Query<(Entity, &ObjectPlacementPreviewOwner), With<ObjectPlacementPreviewDecal>>,
-    terrain: PreviewDecalTerrain,
+    mut terrain: PreviewDecalTerrain,
     arrow_nodes: DockArrowNodes,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, preview, materials, state) in &mut previews {
+    let edited = terrain.edits.read().count() != 0;
+    let restored = terrain.restores.read().count() != 0;
+    let terrain_changed = edited || restored;
+    for (entity, preview, materials, visibility, state) in &mut previews {
+        if *visibility == Visibility::Hidden {
+            if terrain_changed && state.is_some() {
+                commands.entity(entity).remove::<ObjectPlacementPreviewVisualState>();
+            }
+            continue;
+        }
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -313,14 +323,15 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
         // Compare the emitted draw inputs, not the change tick of the entire
         // definition catalogue. Unchanged previews allocate no new projection.
         if state.as_deref().is_some_and(|state| {
-            state.eighth_turns == turns
+            !terrain_changed
+                && state.eighth_turns == turns
                 && state.valid == valid
                 && state.decal_rotation == inverse_rotation
                 && state.footprint_material == *footprint_material
                 && state.grid_material == *grid_material
                 && state.grid_radius == grid_radius
                 && state.world_translation == preview.transform.translation
-                && !state.arrow_pending
+                && (!state.arrow_pending || arrow_nodes.model_bounds(entity).is_none())
                 && state
                     .footprint_translations
                     .iter()
@@ -391,8 +402,8 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             next.grid_radius * 2.0,
             &next.grid_material,
         );
-        // A model loads after its preview: until its meshes are bounded, a
-        // `special` arrow waits and the decals are laid again.
+        // The footprint and grid can be shown before the model has bounds
+        // for positioning its entrance arrow.
         let mut arrow_pending = false;
         let arrow = definition.dock_arrow.and_then(|arrow| {
             let Some((low, high)) = arrow_nodes.model_bounds(entity) else {
@@ -575,6 +586,8 @@ impl DockArrowNodes<'_, '_> {
 /// The ground placement decals are fitted to.
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct PreviewDecalTerrain<'w, 's> {
+    edits: MessageReader<'w, 's, openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
+    restores: MessageReader<'w, 's, openzt2_zoo_state::terrain::terrain_edit_types::TerrainPresentationRestored>,
     index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
     assets: Res<
         'w,

@@ -380,6 +380,17 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
                 Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
             )
     });
+    definitions.fame_documents = definitions
+        .handles
+        .iter()
+        .filter(|handle| {
+            assets.get(*handle).is_some_and(|asset| {
+                !asset.document.fame_thresholds.is_empty()
+                    || !asset.document.starting_fame.is_empty()
+            })
+        })
+        .cloned()
+        .collect();
     if definitions.catalogue_authored_purchase_order != catalogue_authored_purchase_order
         || definitions.unlock_definition_identifiers_by_target
             != unlock_definition_identifiers_by_target
@@ -387,6 +398,8 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         definitions.catalogue_revision = definitions.catalogue_revision.wrapping_add(1);
     }
     definitions.records = records;
+    definitions.catalogue_by_definition.take();
+    definitions.research_by_definition.take();
     definitions.singletons = singletons;
     definitions.unlock_definition_identifiers_by_target = unlock_definition_identifiers_by_target;
     definitions.catalogue_authored_purchase_order = catalogue_authored_purchase_order;

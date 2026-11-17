@@ -117,7 +117,6 @@ fn execute_short_main_world_systems_without_per_system_task_dispatch(app: &mut A
         First.intern(),
         PreUpdate.intern(),
         Update.intern(),
-        PostUpdate.intern(),
         Last.intern(),
         FixedFirst.intern(),
         FixedPreUpdate.intern(),

@@ -10,6 +10,6 @@ pub struct ModelExpanded;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelRenderPresentationSet {
     LevelOfDetail,
-    MaterialProjection,
-    PassTransforms,
+    /// The source effect materials and their per-model texture replacements are ready.
+    SourceMaterials,
 }

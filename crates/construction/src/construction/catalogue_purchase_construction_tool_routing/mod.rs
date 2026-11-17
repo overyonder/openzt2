@@ -41,9 +41,7 @@ pub(super) fn route_construction_purchase_choices(
     let world = worlds.iter().next();
     for purchase in purchases.read() {
         if catalogue
-            .catalogue()
-            .enumerate()
-            .find(|(_, entry)| entry.definition == purchase.definition)
+            .catalogue_entry_for_definition(purchase.definition)
             .is_some_and(|(index, entry)| {
                 !catalogue_entry_is_available(
                     catalogue,
@@ -73,8 +71,8 @@ pub(super) fn route_construction_purchase_choices(
         }
 
         if catalogue
-            .catalogue()
-            .find(|entry| openzt2_game_data::AssetId(entry.definition.0) == purchase.definition)
+            .catalogue_entry_for_definition(purchase.definition)
+            .map(|(_, entry)| entry)
             .is_some_and(|entry| {
                 matches!(
                     &entry.category,

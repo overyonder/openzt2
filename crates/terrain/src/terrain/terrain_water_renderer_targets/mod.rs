@@ -15,6 +15,7 @@ use openzt2_world_state::model_render::authored_model_material_pass_projection::
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
+use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfacePassKind;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_BUMP_COMBINATION_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFLECTION_TARGET_SIZE;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFRACTION_TARGET_SIZE;
@@ -183,9 +184,110 @@ fn spawn_water_scene_render_target_camera(
             },
             RenderTarget::Image(target.into()),
             RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER, effect_pass_render_layer]),
-            EffectPassMaterialRenderView {
-                render_layer: effect_pass_render_layer,
-            },
         ))
         .id()
+}
+
+/// A water camera needs model draws only while the zoo has a surface that
+/// samples the scene. Keep them across camera moves and visibility changes.
+pub(super) fn reconcile_water_material_render_views(
+    mut commands: Commands,
+    targets: Option<Res<AuthoredTerrainWaterRendererTargets>>,
+    passes: Query<&TerrainWaterSurfacePassKind>,
+    views: Query<(), With<EffectPassMaterialRenderView>>,
+) {
+    let Some(targets) = targets else { return };
+    let needs_capture = passes.iter().any(|pass| !pass.uses_stitch_geometry());
+    for (camera, render_layer) in [
+        (
+            targets.reflection_camera,
+            WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+        ),
+        (
+            targets.refraction_camera,
+            WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+        ),
+        (
+            targets.fallback_reflection_camera,
+            WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+        ),
+    ] {
+        if needs_capture != views.contains(camera) {
+            if needs_capture {
+                commands
+                    .entity(camera)
+                    .insert(EffectPassMaterialRenderView { render_layer });
+            } else {
+                commands
+                    .entity(camera)
+                    .remove::<EffectPassMaterialRenderView>();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scene_capture_views_follow_the_lifetime_of_water_that_samples_them() {
+        let mut app = App::new();
+        let [bump_camera, reflection_camera, refraction_camera, fallback_reflection_camera] =
+            std::array::from_fn(|_| app.world_mut().spawn_empty().id());
+        app.insert_resource(AuthoredTerrainWaterRendererTargets {
+            combined_bump_map: default(),
+            reflection: default(),
+            refraction: default(),
+            fallback_reflection: default(),
+            bump_camera,
+            reflection_camera,
+            refraction_camera,
+            fallback_reflection_camera,
+            water_bump_combination_materials: default(),
+            elapsed_seconds: 0.0,
+            active_water_plane_height: None,
+            reflection_world_extent: Vec2::ZERO,
+            refraction_world_extent: Vec2::ZERO,
+            fallback_reflection_world_extent: Vec2::ZERO,
+        })
+        .add_systems(Update, reconcile_water_material_render_views);
+        let pass = app
+            .world_mut()
+            .spawn(TerrainWaterSurfacePassKind::LowDetail)
+            .id();
+        for (kind, expected) in [
+            (TerrainWaterSurfacePassKind::LowDetail, false),
+            (TerrainWaterSurfacePassKind::Reflection, true),
+            (TerrainWaterSurfacePassKind::MediumEnvironment, false),
+        ] {
+            app.world_mut().entity_mut(pass).insert(kind);
+            app.update();
+            for (camera, layer) in [
+                (
+                    reflection_camera,
+                    WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+                ),
+                (
+                    refraction_camera,
+                    WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+                ),
+                (
+                    fallback_reflection_camera,
+                    WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+                ),
+            ] {
+                assert_eq!(
+                    app.world()
+                        .get::<EffectPassMaterialRenderView>(camera)
+                        .map(|v| v.render_layer),
+                    expected.then_some(layer)
+                );
+            }
+            assert!(!app
+                .world()
+                .entity(bump_camera)
+                .contains::<EffectPassMaterialRenderView>());
+        }
+    }
 }

@@ -374,9 +374,6 @@ pub(super) fn project_widget(
         }
         UiWidgetRecord::CatalogueDetails { grid } => {
             apply_authored_grid_record_to_bevy_node_layout(commands, entity, grid);
-            commands.entity(entity).insert(
-                openzt2_interface_state::information::catalogue_types::CatalogueDetails::default(),
-            );
         }
         UiWidgetRecord::WorldMap { .. } => {
             commands.entity(entity).insert(UiTablePolicy::WorldMap);

@@ -3,8 +3,9 @@
 use avian3d::prelude::*;
 use bevy::gltf::Gltf;
 use bevy::prelude::*;
-use openzt2_game_data::scene_prefab::PrefabColliderSource;
-use openzt2_game_data::scene_prefab::ScenePrefabColliderLayerFlags;
+use openzt2_game_data::scene_prefab::{
+    PrefabColliderSource, ScenePrefabColliderLayerFlags, ScenePrefabEntityFlags,
+};
 
 use openzt2_game_assets::model::model_asset_queries::loaded_gltf_model_mesh_asset_handles;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -52,8 +53,8 @@ fn convert_prefab_collision_layer_flags_to_avian_collision_layers(
 }
 
 /// Projects all collider rows for one prefab instance directly into Avian.
-/// Collider children are ordinary world members, so standard world teardown
-/// removes them and Avian owns all live shape/body/filter state.
+/// A single shape shares its body's transform. Compound shapes retain their
+/// own collision layers and events on separate children.
 pub fn hydrate_scene_prefab_colliders_into_avian_physics(
     commands: &mut Commands,
     prefab: &ScenePrefabAsset,
@@ -64,6 +65,21 @@ pub fn hydrate_scene_prefab_colliders_into_avian_physics(
     let document = prefab.canonical_scene_prefab_document();
     for (entity_index, entity) in document.entities.iter().enumerate() {
         let owner = entities[entity_index];
+        let on_body =
+            entity.colliders.len() == 1 && entity.flags.0 & ScenePrefabEntityFlags::ACTIVE.0 != 0;
+        let collider_entity = |commands: &mut Commands| {
+            if on_body {
+                owner
+            } else {
+                commands
+                    .spawn((
+                        Transform::IDENTITY,
+                        ChildOf(owner),
+                        WorldMember { root: world_root },
+                    ))
+                    .id()
+            }
+        };
         for row in &entity.colliders {
             let membership = ScenePrefabColliderLayerFlags(row.layer.0);
             let layers = convert_prefab_collision_layer_flags_to_avian_collision_layers(
@@ -89,15 +105,14 @@ pub fn hydrate_scene_prefab_colliders_into_avian_physics(
                         .loaded_model_asset_handle(*model)
                         .expect("resolved prefab collider model dependency")
                         .clone();
-                    let mut pending = commands.spawn((
+                    let target = collider_entity(commands);
+                    let mut pending = commands.entity(target);
+                    pending.insert((
                         PendingModelCollider {
                             model,
                             primitive: usize::from(*index),
                         },
                         layers,
-                        Transform::IDENTITY,
-                        ChildOf(owner),
-                        WorldMember { root: world_root },
                     ));
                     if membership.0 & ScenePrefabColliderLayerFlags::PROJECTILE.0 != 0 {
                         pending.insert(CollisionEventsEnabled);
@@ -107,13 +122,9 @@ pub fn hydrate_scene_prefab_colliders_into_avian_physics(
             };
             let projectile = membership.0 & ScenePrefabColliderLayerFlags::PROJECTILE.0 != 0;
             if let Some(collider) = collider {
-                let mut collider_commands = commands.spawn((
-                    collider,
-                    layers,
-                    Transform::IDENTITY,
-                    ChildOf(owner),
-                    WorldMember { root: world_root },
-                ));
+                let target = collider_entity(commands);
+                let mut collider_commands = commands.entity(target);
+                collider_commands.insert((collider, layers));
                 if projectile {
                     collider_commands.insert(CollisionEventsEnabled);
                 }
@@ -135,12 +146,12 @@ pub(super) struct PendingModelCollider {
 
 pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
     mut commands: Commands,
-    pending: Query<(Entity, &PendingModelCollider)>,
+    pending: Query<(Entity, &PendingModelCollider, Has<RigidBody>)>,
     models: Res<Assets<Gltf>>,
     gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
     meshes: Res<Assets<Mesh>>,
 ) {
-    for (entity, pending) in &pending {
+    for (entity, pending, on_body) in &pending {
         let Some(model) = models.get(&pending.model) else {
             continue;
         };
@@ -151,7 +162,15 @@ pub(super) fn replace_loaded_model_collider_requests_with_avian_triangle_meshes(
             continue;
         };
         let Some(collider) = Collider::trimesh_from_mesh(mesh) else {
-            commands.entity(entity).despawn();
+            if on_body {
+                commands.entity(entity).remove::<(
+                    PendingModelCollider,
+                    CollisionEventsEnabled,
+                    CollisionLayers,
+                )>();
+            } else {
+                commands.entity(entity).despawn();
+            }
             continue;
         };
         commands

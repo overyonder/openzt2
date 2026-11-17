@@ -22,8 +22,10 @@ pub struct RememberedCatalogueEntry(pub AssetId);
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SelectedCareAnimal(pub Option<AssetId>);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CatalogueDetails;
+#[derive(Component, Debug, Default)]
+pub struct CatalogueDetails {
+    pub dynamic_rows: [Vec<Entity>; 5],
+}
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CatalogueRowEntry {

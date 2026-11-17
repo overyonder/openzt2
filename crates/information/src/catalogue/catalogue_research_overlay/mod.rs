@@ -27,30 +27,36 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 // The fragment belongs to the reusable row, never to the current selection.
 #[derive(Component)]
-pub(crate) struct CatalogueResearchOverlay;
+#[relationship(relationship_target = RowResearchOverlays)]
+pub(crate) struct ResearchOverlayOf(Entity);
+
+#[derive(Component, Default)]
+#[relationship_target(relationship = ResearchOverlayOf)]
+pub(crate) struct RowResearchOverlays(Vec<Entity>);
+
+#[derive(Component, Default)]
+pub(crate) struct CatalogueResearchOverlay {
+    progress: Vec<Entity>,
+    projected_row: Option<Option<AssetId>>,
+}
 
 pub(crate) fn attach_authored_catalogue_research_overlays(
     mut commands: Commands,
-    rows: Query<Entity, With<CatalogueRowEntry>>,
+    rows: Query<Entity, (With<CatalogueRowEntry>, Without<RowResearchOverlays>)>,
     parents: Query<&ChildOf>,
-    children: Query<&Children>,
-    overlays: Query<(), With<CatalogueResearchOverlay>>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
     localization_index: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
 ) {
+    if rows.is_empty() {
+        return;
+    }
     let Some(localization) = localization_index.borrow_loaded_localization_view(&localizations)
     else {
         return;
     };
     for row in &rows {
-        if children
-            .get(row)
-            .is_ok_and(|children| children.iter().any(|child| overlays.contains(child)))
-        {
-            continue;
-        }
         let Some(handle) = std::iter::successors(Some(row), |entity| {
             parents.get(*entity).ok().map(ChildOf::parent)
         })
@@ -77,9 +83,10 @@ pub(crate) fn attach_authored_catalogue_research_overlays(
             None,
             false,
         );
-        commands.entity(overlay).insert(CatalogueResearchOverlay);
+        commands.entity(overlay).insert(ResearchOverlayOf(row));
         commands.queue(move |world: &mut World| {
             let mut descendants = vec![overlay];
+            let mut state = CatalogueResearchOverlay::default();
             while let Some(entity) = descendants.pop() {
                 if let Some(children) = world.get::<Children>(entity) {
                     descendants.extend(children.iter());
@@ -96,7 +103,33 @@ pub(crate) fn attach_authored_catalogue_research_overlays(
                 {
                     picking.0 = false;
                 }
+                if world.get::<UiNodeId>(entity).is_none() {
+                    continue;
+                }
+                let name = world.get::<Name>(entity).map(Name::as_str);
+                let (beaker, fullcolor, progress) = (name == Some("beaker"), name == Some("fullcolor"), name == Some("progress"));
+                if let Some(mut enabled) = world.get_mut::<UiInteractionEnabled>(entity) {
+                    enabled.set_if_neq(UiInteractionEnabled(beaker));
+                }
+                if entity == overlay {
+                    if let Some(mut node) = world.get_mut::<Node>(entity) {
+                        node.position_type = PositionType::Absolute;
+                        node.left = px(0.);
+                        node.top = px(0.);
+                    }
+                } else if fullcolor {
+                    world.entity_mut(entity).insert(Visibility::Hidden);
+                } else if progress {
+                    state.progress.push(entity);
+                    if let Some(mut minimum) = world.get_mut::<UiMinimum>(entity) {
+                        minimum.set_if_neq(UiMinimum(0));
+                    }
+                    if let Some(mut maximum) = world.get_mut::<UiMaximum>(entity) {
+                        maximum.set_if_neq(UiMaximum(10_000));
+                    }
+                }
             }
+            world.entity_mut(overlay).insert(state);
         });
     }
 }
@@ -105,77 +138,73 @@ pub(crate) fn project_catalogue_research_overlays(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     unlocks: Res<UnlockedCatalogueDefinitionSet>,
-    worlds: Query<(&SelectedWorldIdentity, Option<&ScenarioContentAvailability>), With<WorldRoot>>,
-    availability: Query<&ResearchProjectAvailability>,
-    projects: Query<&ResearchProject>,
-    payments: Query<&PendingResearchProjectPayment>,
-    overlays: Query<(Entity, &ChildOf), With<CatalogueResearchOverlay>>,
-    children: Query<&Children>,
+    worlds: Query<
+        (
+            Entity,
+            Ref<SelectedWorldIdentity>,
+            Option<Ref<ScenarioContentAvailability>>,
+        ),
+        With<WorldRoot>,
+    >,
+    availability: Query<Ref<ResearchProjectAvailability>>,
+    projects: Query<Ref<ResearchProject>>,
+    payments: Query<Ref<PendingResearchProjectPayment>>,
+    mut removals: (
+        RemovedComponents<ResearchProjectAvailability>,
+        RemovedComponents<ResearchProject>,
+        RemovedComponents<PendingResearchProjectPayment>,
+    ),
+    mut overlays: Query<(Entity, &ResearchOverlayOf, &mut CatalogueResearchOverlay)>,
     rows: Query<&CatalogueRowEntry>,
-    mut nodes: Query<(
-        &UiNodeId,
-        &Name,
-        &mut Node,
-        &mut Visibility,
-        &mut Pickable,
-        Option<&mut UiInteractionEnabled>,
-        Option<&mut UiValue>,
-        Option<&mut UiMinimum>,
-        Option<&mut UiMaximum>,
-    )>,
+    mut nodes: Query<(&mut Visibility, Option<&mut UiValue>)>,
+    mut previous_world: Local<Option<(Entity, bool)>>,
 ) {
     if overlays.is_empty() {
         return;
     }
+    let reindex = active_definitions.is_changed() || definitions.is_changed();
     let definitions = active_definitions.get(&definitions);
     let world = worlds.iter().next();
-    // One catalogue pass per run; each row takes its definition's first entry.
-    let mut catalogue_by_definition = std::collections::HashMap::new();
-    for (index, entry) in definitions
-        .into_iter()
-        .flat_map(|definitions| definitions.catalogue().enumerate())
-    {
-        catalogue_by_definition
-            .entry(entry.definition)
-            .or_insert((index, entry));
-    }
-    // The first research, in catalogue order, that is or unlocks each definition.
-    let mut research_by_definition = std::collections::HashMap::new();
-    for research in definitions
-        .into_iter()
-        .flat_map(|definitions| definitions.research())
-    {
-        for definition in std::iter::once(&research.id).chain(&research.unlocks) {
-            research_by_definition
-                .entry(*definition)
-                .or_insert(research);
+    let world_key = world
+        .as_ref()
+        .map(|(entity, _, scenario)| (*entity, scenario.is_some()));
+    let inputs_changed = reindex
+        || unlocks.is_changed()
+        || *previous_world != world_key
+        || world.as_ref().is_some_and(|(_, identity, scenario)| {
+            identity.is_changed() || scenario.as_ref().is_some_and(Ref::is_changed)
+        })
+        || availability.iter().any(|value| value.is_changed())
+        || projects.iter().any(|value| value.is_changed())
+        || payments.iter().any(|value| value.is_changed())
+        || !removals.0.is_empty()
+        || !removals.1.is_empty()
+        || !removals.2.is_empty();
+    removals.0.clear();
+    removals.1.clear();
+    removals.2.clear();
+    *previous_world = world_key;
+    for (overlay, owner, mut state) in &mut overlays {
+        let row = rows.get(owner.0).ok().map(|row| row.definition);
+        if !inputs_changed && state.projected_row == Some(row) {
+            continue;
         }
-    }
-    for (overlay, parent) in &overlays {
-        let entry = rows
-            .get(parent.parent())
-            .ok()
-            .and_then(|row| catalogue_by_definition.get(&row.definition).copied());
+        state.projected_row = Some(row);
+        let entry = row.and_then(|id| definitions?.catalogue_entry_for_definition(id));
         let research =
-            entry.and_then(|(_, entry)| research_by_definition.get(&entry.definition).copied());
-        let project = research.and_then(|research| {
-            projects
-                .iter()
-                .find(|project| project.definition == research.id)
-        });
-        let pending = research.is_some_and(|research| {
-            payments
-                .iter()
-                .any(|payment| payment.definition == research.id)
-        });
-        let requires_research = entry.is_some_and(|(index, entry)| {
-            let definitions = definitions.expect("catalogue entry belongs to loaded definitions");
+            entry.and_then(|(_, entry)| definitions?.research_for_definition(entry.definition));
+        let project = research.and_then(|id| projects.iter().find(|p| p.definition == id));
+        let pending = research.is_some_and(|id| payments.iter().any(|p| p.definition == id));
+        let requires_research = entry.is_some_and(|(order, entry)| {
+            let definitions = definitions.expect("entry belongs to loaded definitions");
             !catalogue_entry_is_available(
                 definitions,
-                index,
+                order,
                 entry,
-                world.map(|(identity, _)| identity.mode),
-                world.and_then(|(_, scenario)| scenario),
+                world.as_ref().map(|(_, identity, _)| identity.mode),
+                world
+                    .as_ref()
+                    .and_then(|(_, _, scenario)| scenario.as_deref()),
                 &unlocks,
             ) && (project.is_some()
                 || pending
@@ -185,56 +214,28 @@ pub(crate) fn project_catalogue_research_overlays(
                     availability.iter().map(|item| (item.item, item.available)),
                 ))
         });
-        for entity in std::iter::once(overlay).chain(children.iter_descendants(overlay)) {
-            let Ok((
-                id,
-                name,
-                mut node,
-                mut visibility,
-                mut pickable,
-                enabled,
-                value,
-                minimum,
-                maximum,
-            )) = nodes.get_mut(entity)
-            else {
-                continue;
-            };
-            *pickable = Pickable::IGNORE;
-            if let Some(mut enabled) = enabled {
-                enabled.0 = name.as_str() == "beaker";
-            }
-            let visible = if id.index == 0 {
-                node.position_type = PositionType::Absolute;
-                node.left = Val::Px(0.0);
-                node.top = Val::Px(0.0);
-                requires_research
-            } else if name.as_str() == "fullcolor" {
-                // The purchase row already owns the catalogue texture and its states.
-                false
-            } else if name.as_str() == "progress" {
-                if let Some(mut value) = value {
-                    value.0 = project.map_or(0, |project| {
-                        ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
-                            / u128::from(project.required_ticks.max(1)))
-                            as i64
-                    });
-                }
-                if let Some(mut minimum) = minimum {
-                    minimum.0 = 0;
-                }
-                if let Some(mut maximum) = maximum {
-                    maximum.0 = 10_000;
-                }
-                requires_research && (pending || project.is_some())
-            } else {
-                continue;
-            };
-            visibility.set_if_neq(if visible {
+        if let Ok((mut visibility, _)) = nodes.get_mut(overlay) {
+            visibility.set_if_neq(if requires_research {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
             });
+        }
+        for &progress in &state.progress {
+            if let Ok((mut visibility, value)) = nodes.get_mut(progress) {
+                visibility.set_if_neq(if requires_research && (pending || project.is_some()) {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+                if let Some(mut value) = value {
+                    value.set_if_neq(UiValue(project.as_ref().map_or(0, |project| {
+                        ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
+                            / u128::from(project.required_ticks.max(1)))
+                            as i64
+                    })));
+                }
+            }
         }
     }
 }

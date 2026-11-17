@@ -37,6 +37,11 @@ pub struct InformationPlugin;
 impl Plugin for InformationPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<SelectedEntity>()
+            .init_resource::<projection::information_list_row_identity_projection::InformationRowStructure>()
+            .add_observer(projection::information_list_row_identity_projection::invalidate_row_structure)
+            .init_resource::<projection::entity_editor_data_root_projection::InspectableMembership>()
+            .add_observer(projection::entity_editor_data_root_projection::inspectable_added)
+            .add_observer(projection::entity_editor_data_root_projection::inspectable_removed)
             .init_resource::<SelectedCatalogueEntry>()
             .init_resource::<SelectedCareAnimal>()
             .init_resource::<InformationViewFilters>()
@@ -143,12 +148,13 @@ impl Plugin for InformationPlugin {
                     projection::staff_status_projection::project_maintenance_worker_duties_to_information_panel_controls,
                     projection::staff_status_projection::project_live_staff_status_to_visible_information_panels,
                     projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings,
-                    projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,
-                    projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,
-                    projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows,
-                    projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots,
+                    (
+                        projection::information_list_projection::project_live_world_entities_to_visible_information_list_rows,
+                        projection::information_list_row_identity_projection::project_world_subject_identity_to_information_list_rows,
+                        projection::information_list_row_value_projection::project_live_world_subject_values_to_information_list_rows,
+                        projection::entity_editor_data_root_projection::project_inspectable_entities_to_visible_entity_editor_data_roots,
+                    ).chain(),
                 )
-                    .chain()
                     .after(projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels)
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
@@ -166,7 +172,7 @@ impl Plugin for InformationPlugin {
                     zoopedia::zoopedia_page_projection::project_localized_zoopedia_page_to_authored_information_document,
                 )
                     .chain()
-                    .after(projection::zoo_status_projection::project_live_zoo_status_to_authored_information_bindings)
+                    .after(openzt2_interface_state::ui::UiSet::Projection)
                     .in_set(GameSet::Ui)
                     .run_if(in_state(GamePhase::InGame)),
             )

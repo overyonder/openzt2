@@ -1,4 +1,5 @@
 use bevy::core_pipeline::core_3d::Transparent3d;
+use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::query::QueryItem;
 use bevy::extract::extract_instances::{ExtractInstance, ExtractedInstances};
 use bevy::prelude::*;
@@ -25,39 +26,70 @@ impl ExtractInstance<bevy::render::RenderApp> for EnvironmentPrimitiveLayer {
 
 pub(super) fn project_environment_layers_to_model_primitives(
     mut commands: Commands,
-    changed_layers: Query<(), Changed<EnvironmentRenderLayer>>,
-    added_meshes: Query<(), Added<Mesh3d>>,
-    changed_parents: Query<(), Changed<ChildOf>>,
-    primitives: Query<(Entity, Option<&EnvironmentPrimitiveLayer>), With<Mesh3d>>,
+    changed_roots: Query<Entity, Changed<EnvironmentRenderLayer>>,
+    mut branches: MessageReader<super::model_projection_changes::ModelBranchChanged>,
+    mut removed_layers: RemovedComponents<EnvironmentRenderLayer>,
+    added_meshes: Query<Entity, Added<Mesh3d>>,
+    primitives: Query<Option<&EnvironmentPrimitiveLayer>, With<Mesh3d>>,
     hierarchy: Query<(Option<&ChildOf>, Option<&EnvironmentRenderLayer>)>,
+    children: Query<&Children>,
+    mut visited: Local<EntityHashSet>,
+    mut pending: Local<Vec<(Entity, Option<EnvironmentRenderLayer>)>>,
 ) {
-    if changed_layers.is_empty() && added_meshes.is_empty() && changed_parents.is_empty() {
-        return;
-    }
-    for (entity, previous) in &primitives {
-        let mut ancestor = entity;
-        let mut layer = None;
-        while let Ok((parent, candidate)) = hierarchy.get(ancestor) {
-            if let Some(candidate) = candidate {
-                layer = Some(*candidate);
-                break;
-            }
-            let Some(parent) = parent else { break };
-            ancestor = parent.parent();
+    visited.clear();
+    for root in changed_roots
+        .iter()
+        .chain(removed_layers.read())
+        .chain(branches.read().map(|branch| branch.0))
+        .chain(added_meshes.iter())
+    {
+        if visited.contains(&root) {
+            continue;
         }
-        match layer {
-            Some(layer) if previous.is_none_or(|previous| previous.0 != layer) => {
-                // Preserve individual layer boundaries through GPU preparation.
-                commands
-                    .entity(entity)
-                    .insert((EnvironmentPrimitiveLayer(layer), NoAutomaticBatching));
+        let Ok((parent, layer)) = hierarchy.get(root) else {
+            continue;
+        };
+        let mut inherited = layer.copied();
+        let mut ancestor = parent.map(ChildOf::parent);
+        while inherited.is_none() {
+            let Some(entity) = ancestor else { break };
+            let Ok((parent, layer)) = hierarchy.get(entity) else {
+                break;
+            };
+            inherited = layer.copied();
+            ancestor = parent.map(ChildOf::parent);
+        }
+        pending.push((root, inherited));
+        while let Some((entity, layer)) = pending.pop() {
+            if !visited.insert(entity) {
+                continue;
             }
-            None if previous.is_some() => {
-                commands
-                    .entity(entity)
-                    .remove::<EnvironmentPrimitiveLayer>();
+            if let Ok(descendants) = children.get(entity) {
+                pending.extend(descendants.iter().map(|child| {
+                    let own_layer = hierarchy
+                        .get(child)
+                        .ok()
+                        .and_then(|(_, layer)| layer.copied());
+                    (child, own_layer.or(layer))
+                }));
             }
-            _ => {}
+            let Ok(previous) = primitives.get(entity) else {
+                continue;
+            };
+            match layer {
+                Some(layer) if previous.is_none_or(|previous| previous.0 != layer) => {
+                    // Preserve individual layer boundaries through GPU preparation.
+                    commands
+                        .entity(entity)
+                        .insert((EnvironmentPrimitiveLayer(layer), NoAutomaticBatching));
+                }
+                None if previous.is_some() => {
+                    commands
+                        .entity(entity)
+                        .remove::<EnvironmentPrimitiveLayer>();
+                }
+                _ => {}
+            }
         }
     }
 }

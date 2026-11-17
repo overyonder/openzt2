@@ -50,12 +50,9 @@ pub(super) fn project_selected_catalogue_research_panels(
         return;
     };
     let world = roots.iter().next();
-    let entry = selected.0.and_then(|selected| {
-        definitions
-            .catalogue()
-            .enumerate()
-            .find(|(_, entry)| entry.definition == selected)
-    });
+    let entry = selected
+        .0
+        .and_then(|selected| definitions.catalogue_entry_for_definition(selected));
     let available = entry.is_some_and(|(index, entry)| {
         catalogue_entry_is_available(
             definitions,
@@ -76,12 +73,9 @@ pub(super) fn project_selected_catalogue_research_panels(
                     .map(|item| (item.item, item.available)),
             )
         });
-    let research_definition = selected.0.and_then(|selected| {
-        definitions
-            .research()
-            .find(|research| research.id == selected || research.unlocks.contains(&selected))
-            .map(|research| research.id)
-    });
+    let research_definition = selected
+        .0
+        .and_then(|id| definitions.research_for_definition(id));
     let started = research_definition.is_some_and(|definition| {
         projects
             .iter()
@@ -92,9 +86,9 @@ pub(super) fn project_selected_catalogue_research_panels(
     });
     for (mut selected, mut previous, mut enabled) in &mut buttons {
         // Rejected payments and catalogue changes must release the sticky toggle.
-        selected.0 = started;
-        previous.synchronize_with_non_authored_selection_change(started);
-        enabled.0 = research_required && !started;
+        selected.set_if_neq(UiSelected(started));
+        previous.set_if_neq(UiPreviousSelection::from_current_selection(started));
+        enabled.set_if_neq(UiInteractionEnabled(research_required && !started));
     }
     for (binding, mut visibility) in &mut panels {
         let visible = match binding.0 {
@@ -141,14 +135,14 @@ pub(super) fn project_selected_catalogue_research_progress(
         ) {
             continue;
         }
-        minimum.0 = 0;
-        maximum.0 = 10_000;
-        value.0 = project.map_or(0, |project| {
+        minimum.set_if_neq(UiMinimum(0));
+        maximum.set_if_neq(UiMaximum(10_000));
+        value.set_if_neq(UiValue(project.map_or(0, |project| {
             ((u128::from(project.elapsed_ticks.min(project.required_ticks)) * 10_000)
                 / u128::from(project.required_ticks.max(1))) as i64
-        });
+        })));
         if let Some(mut enabled) = enabled {
-            enabled.0 = false;
+            enabled.set_if_neq(UiInteractionEnabled(false));
         }
     }
 }

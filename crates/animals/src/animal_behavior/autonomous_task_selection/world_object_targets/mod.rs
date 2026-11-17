@@ -62,9 +62,12 @@ impl WorldObjectTargetSources<'_, '_> {
     /// Marks the type index stale when objects change type, appear or disappear. Runs
     /// every update so removals don't accumulate while no animal is idle.
     pub(super) fn note_object_changes(&mut self) {
-        if self.removed_objects.read().count() > 0 || !self.changed_objects.is_empty() {
+        if self.index.current
+            && (!self.removed_objects.is_empty() || !self.changed_objects.is_empty())
+        {
             self.index.mark_stale();
         }
+        self.removed_objects.clear();
     }
 
     pub(super) fn refresh_index(&mut self, definitions: WorldDefinitionsView<'_>) {

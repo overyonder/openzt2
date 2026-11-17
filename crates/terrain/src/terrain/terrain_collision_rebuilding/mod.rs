@@ -26,7 +26,6 @@ pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
             Option<&EditedTerrainSamples>,
             Option<&TerrainDirty>,
             Option<&mut TerrainCollisionRevision>,
-            Option<&RigidBody>,
             Option<&Children>,
         ),
         With<TerrainCollisionPending>,
@@ -34,7 +33,7 @@ pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
     mut collision_surfaces: Query<&mut Collider, With<TerrainChunkCollisionSurface>>,
 ) {
     let mut rebuilt = 0;
-    for (entity, chunk, edited, dirty, applied, body, children) in &mut chunks {
+    for (entity, chunk, edited, dirty, applied, children) in &mut chunks {
         if rebuilt >= budget.max_rebuilds_per_tick {
             break;
         }
@@ -76,6 +75,7 @@ pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
         } else {
             commands.spawn((
                 TerrainChunkCollisionSurface,
+                RigidBody::Static,
                 ChildOf(entity),
                 Transform::from_xyz(span * 0.5, 0.0, span * 0.5),
                 next,
@@ -87,9 +87,6 @@ pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
             commands
                 .entity(entity)
                 .insert(TerrainCollisionRevision(target));
-        }
-        if body.is_none() {
-            commands.entity(entity).insert(RigidBody::Static);
         }
         commands.entity(entity).remove::<Collider>();
         commands.entity(entity).remove::<TerrainCollisionPending>();

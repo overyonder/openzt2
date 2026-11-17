@@ -102,11 +102,7 @@ pub fn object_placeable_definition_is_unlocked(
     scenario: Option<&ScenarioContentAvailability>,
     unlocks: &UnlockedCatalogueDefinitionSet,
 ) -> bool {
-    let Some((index, entry)) = asset
-        .catalogue()
-        .enumerate()
-        .find(|(_, entry)| entry.definition.0 == object.0)
-    else {
+    let Some((index, entry)) = asset.catalogue_entry_for_definition(object) else {
         return false;
     };
     catalogue_entry_is_available(asset, index, entry, mode, scenario, unlocks)
