@@ -53,6 +53,7 @@ pub(super) fn lower_locomotion_switch_set_action(
         ground: None,
         water: None,
         underwater: None,
+        default: None,
         follows_medium_changes,
     };
     for entry in node
@@ -63,6 +64,10 @@ pub(super) fn lower_locomotion_switch_set_action(
             "ground" => &mut action.ground,
             "water" => &mut action.water,
             "underwater" => &mut action.underwater,
+            "default" => &mut action.default,
+            // ponytail: an actor carrying something isn't tracked, so the
+            // `groundcarry`, `watercarry` and `underwatercarry` rows go unused.
+            "groundcarry" | "watercarry" | "underwatercarry" => continue,
             _ => {
                 return Err(invalid_behavior_source_data(
                     "BFBehLocoSwitchSet has an unmapped locomotion medium",

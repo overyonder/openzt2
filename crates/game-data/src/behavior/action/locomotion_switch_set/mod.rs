@@ -9,6 +9,9 @@ pub struct BehaviorLocomotionSwitchSetAction {
     pub ground: Option<AssetId>,
     pub water: Option<AssetId>,
     pub underwater: Option<AssetId>,
+    /// The `default` row, for a medium without a row of its own.
+    #[serde(default)]
+    pub default: Option<AssetId>,
     /// Without `switch="false"` the set follows the subject's medium while it
     /// plays, switching to the other medium's set when that medium changes.
     #[serde(default)]

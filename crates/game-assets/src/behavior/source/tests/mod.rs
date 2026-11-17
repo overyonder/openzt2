@@ -251,6 +251,7 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             ground: Some(AssetId::from_key("placefood_land")),
             water: Some(AssetId::from_key("placefood_water")),
             underwater: Some(AssetId::from_key("placefood_underwater")),
+            default: None,
             follows_medium_changes: false,
         }
     );
@@ -304,4 +305,23 @@ fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
     };
     assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
     assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
+
+#[test]
+fn a_locomotion_switch_keeps_its_default_row_and_skips_carrying_rows() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped guest WaitAnimalInteraction and Ankylosaurus FailureSet author them.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/guests/attack/attack.beh"),
+        br#"<BehaviorSets><WaitAnimalInteraction><behaviors><BFBehLocoSwitchSet><behaviorTable><ground behSet="Wait_Land"/><water behSet="Wait_Water"/><groundcarry behSet="Wait_Carry"/><default behSet="Wait_Land"/></behaviorTable></BFBehLocoSwitchSet></behaviors></WaitAnimalInteraction></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::LocomotionSwitchSet(switch)] = sets[0].actions.lowered_actions() else {
+        panic!("locomotion switch expected");
+    };
+    assert_eq!(switch.default, Some(AssetId::from_key("wait_land")));
+    assert_eq!(switch.ground, Some(AssetId::from_key("wait_land")));
 }
