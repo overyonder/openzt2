@@ -162,10 +162,20 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         }
         let docking_action = docking_action.expect("a dock or a queue approach");
         // A path holds any number of guests, and a fence any number of
-        // animals; their reservation tags name no slot.
+        // animals; their reservation tags name no slot. Nor does a tag such as
+        // `General` on a target without a slot of that tag, like the guest a
+        // rampaging ankylosaur attacks.
         if let Some(reservation_tag) = behavior_task
             .reservation_tag(&behavior_document_assets)
             .filter(|_| !path_tiles.contains(target) && !fences.contains(target))
+            .filter(|tag| {
+                target_definition.is_none_or(|definition| {
+                    definition
+                        .interaction_slots
+                        .iter()
+                        .any(|slot| slot.reservation_tag == *tag)
+                })
+            })
         {
             let Some(definition) = target_definition else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
