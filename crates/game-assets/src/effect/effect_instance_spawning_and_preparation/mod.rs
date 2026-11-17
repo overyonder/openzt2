@@ -84,6 +84,9 @@ fn spawn_pending_effect_instance(
             collision_spawn_context: None,
         },
         effect_transform,
+        // An effect with several root emitters keeps this entity as their
+        // parent; without visibility of its own, they are never shown.
+        Visibility::default(),
     ));
     if let Some(parent_entity) = parent_entity {
         pending_effect_entity.insert(ChildOf(parent_entity));
