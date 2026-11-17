@@ -101,6 +101,10 @@ fn execute_current_self_token_deliveries(
     animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     held_tokens: Query<(&BehaviorSelfToken, &ChildOf)>,
+    staff: Query<
+        (Entity, &GlobalTransform),
+        With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+    >,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -178,6 +182,22 @@ fn execute_current_self_token_deliveries(
                         });
                     if drawn {
                         delivered_to.push(animal);
+                    }
+                }
+                // An attacking animal warns staff nearby (`GiveTo="Staff"`).
+                if nearby.entity_type == AssetId::from_key("staff") {
+                    for (member, transform) in &staff {
+                        if transform.translation().distance(origin.translation()) > nearby.radius_m
+                        {
+                            continue;
+                        }
+                        let drawn = nearby.chance_percent >= 100.0
+                            || random.as_deref_mut().is_some_and(|random| {
+                                random.0.unit_f32() * 100.0 < nearby.chance_percent
+                            });
+                        if drawn {
+                            delivered_to.push(member);
+                        }
                     }
                 }
             } else {
