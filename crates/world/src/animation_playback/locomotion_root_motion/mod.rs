@@ -15,15 +15,20 @@ pub(crate) fn remove_consumed_root_trajectory(
     )>,
     mut joints: Query<(&AnimationJointTarget, &mut Transform)>,
     mut last_owned: Local<bevy::platform::collections::HashMap<Entity, Option<usize>>>,
+    owners: Query<&openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner>,
+    animals: Query<(), With<openzt2_zoo_state::animal_lifecycle::types::Animal>>,
 ) {
     // A new locomotion request takes the root motion at once, but its clip
     // starts a frame or more later, after a load if it never played. Until
     // then the previous walk keeps playing and keeps its root pinned too;
     // released, its root's authored turn shows as a sudden quarter turn.
-    for (entity, (controller, consumed)) in
-        controllers.iter().map(|item| (item.0, (item.1, item.2)))
-    {
-        if consumed.owns_playback(controller) {
+    // People step out of their walk on purpose, for a stop or a turn, so only
+    // animals keep the previous walk pinned.
+    for (entity, controller, consumed) in &controllers {
+        let animal = owners
+            .get(entity)
+            .is_ok_and(|owner| animals.contains(owner.gameplay_entity));
+        if animal && consumed.owns_playback(controller) {
             last_owned.insert(entity, controller.explicit_clip_request_id);
         }
     }
