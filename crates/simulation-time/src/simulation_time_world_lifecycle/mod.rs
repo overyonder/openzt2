@@ -16,6 +16,10 @@ use super::{
     zoo_calendar_calculation::calculate_zoo_calendar_for_absolute_day,
 };
 
+/// The most game time one frame advances; slower frames slow the game.
+const MAXIMUM_FRAME_CATCH_UP: std::time::Duration =
+    std::time::Duration::from_millis(250);
+
 pub fn initialize_simulation_time_from_selected_world(
     mut commands: Commands,
     selected_worlds: Query<(
@@ -44,9 +48,10 @@ pub fn initialize_simulation_time_from_selected_world(
     let timing = definitions.timing();
     let fixed_updates_per_second = f64::from(timing.fixed_hz);
     fixed_time.set_timestep_hz(fixed_updates_per_second);
-    virtual_time.set_max_delta(std::time::Duration::from_secs_f64(
-        2.0 / fixed_updates_per_second,
-    ));
+    // A frame catches up to a quarter second of game time. With the authored
+    // 100 Hz simulation tick, two ticks a frame slowed the whole zoo to half
+    // speed below 50 frames a second.
+    virtual_time.set_max_delta(MAXIMUM_FRAME_CATCH_UP);
     let calendar_policy = &timing.calendar;
 
     for (selected_world, documents) in &selected_worlds {
