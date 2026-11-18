@@ -287,9 +287,16 @@ pub(super) fn retire_effect_instances_after_calculated_finite_lifetime(
         Entity,
         &LiveParticleEffectInstance,
         &mut FiniteEffectInstanceLifetime,
+        Option<&ChildOf>,
     )>,
+    pending_parents: Query<(), With<super::effect_runtime_types::PendingEffectInstance>>,
 ) {
-    for (effect_entity, effect_instance, mut finite_lifetime) in &mut effect_instances {
+    for (effect_entity, effect_instance, mut finite_lifetime, parent) in &mut effect_instances {
+        // A collision-spawn child is prepared before its parent, which waits
+        // for it; its lifetime starts with the parent's.
+        if parent.is_some_and(|parent| pending_parents.contains(parent.parent())) {
+            continue;
+        }
         let elapsed_frame_duration = match effect_instance.simulation_clock {
             EffectClock::Presentation => presentation_time.delta(),
             EffectClock::ZooSimulation => zoo_simulation_time.delta(),
@@ -297,5 +304,59 @@ pub(super) fn retire_effect_instances_after_calculated_finite_lifetime(
         if finite_lifetime.0.tick(elapsed_frame_duration).is_finished() {
             commands.entity(effect_entity).despawn();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::effect::effect_runtime_types::PendingEffectInstance;
+    use openzt2_game_data::particle::authored_particle_system::ParticleEffectSimulationClock;
+    use openzt2_game_data::AssetId;
+    use std::time::Duration;
+
+    #[test]
+    fn a_child_lifetime_waits_for_its_pending_parent() {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<Time<Virtual>>()
+            .add_systems(
+                Update,
+                retire_effect_instances_after_calculated_finite_lifetime,
+            );
+        let parent = app
+            .world_mut()
+            .spawn(PendingEffectInstance {
+                effect_asset: Handle::default(),
+                requested_emitter: None,
+                manual_particle_count: 0,
+                collision_spawn_context: None,
+            })
+            .id();
+        let child = app
+            .world_mut()
+            .spawn((
+                LiveParticleEffectInstance {
+                    simulation_clock: ParticleEffectSimulationClock::Presentation,
+                    effect_asset: Handle::default(),
+                    emitter_id: AssetId::from_key("child"),
+                },
+                FiniteEffectInstanceLifetime(Timer::from_seconds(0.1, TimerMode::Once)),
+                ChildOf(parent),
+            ))
+            .id();
+        let advance = |app: &mut App| {
+            app.world_mut()
+                .resource_mut::<Time<Real>>()
+                .advance_by(Duration::from_secs(1));
+            app.update();
+        };
+        advance(&mut app);
+        assert!(app.world().get_entity(child).is_ok());
+        app.world_mut()
+            .entity_mut(parent)
+            .remove::<PendingEffectInstance>();
+        advance(&mut app);
+        assert!(app.world().get_entity(child).is_err());
     }
 }
