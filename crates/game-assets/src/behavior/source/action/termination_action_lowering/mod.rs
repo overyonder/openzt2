@@ -59,7 +59,7 @@ pub(super) fn lower_termination_action_source_node(
 /// smashes (`radiusKillType="fence"`) becomes its broken variant, as
 /// `ZTBehMorph` makes it for an elephant, and a building an ankylosaur bashes
 /// (`killUsingDestroyEntity`) gives way to its ruin.
-// ponytail: only the target breaks; the authored `radius` would also break
+// Only the target breaks; the authored `radius` would also break
 // fences beside it.
 pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[BehaviorAction; 2]>> {
     if node.name != "BFBehKill" {

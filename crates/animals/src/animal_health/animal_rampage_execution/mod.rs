@@ -35,9 +35,15 @@ pub(crate) struct RampageSchedule {
 }
 
 /// The chance, in percent, that an animal starts a rampage at one check.
-// ponytail: the formula is a guess from `rampage.xml`'s names; `zt.exe`'s
-// needs digging out with Ghidra. `rampagingAnimalFactor` is read as applying
-// to an animal that has rampaged before.
+///
+/// `rampage.xml` names a base and a maximum chance, and the good and bad need
+/// points at which they apply. Read that way, bad points up to
+/// `maxBadPoints` raise the chance from the base towards the maximum, and
+/// good points up to `maxGoodPoints` take that rise away again: an animal
+/// with 10 good points is content whatever its bad ones. An animal with no
+/// bad points doesn't rampage. `rampagingAnimalFactor` (1.2) is read as
+/// making a repeat rampager more likely to go again, still capped at the
+/// maximum.
 pub(crate) fn rampage_chance_percent(points: &NeedPoints, rampaged_before: bool) -> f32 {
     let pressure = (points.bad / MAX_BAD_POINTS).clamp(0.0, 1.0)
         * (1.0 - (points.good / MAX_GOOD_POINTS).clamp(0.0, 1.0));

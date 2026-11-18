@@ -41,7 +41,7 @@ pub(super) fn register_target_morph_execution(application: &mut App) {
     );
 }
 
-// ponytail: only a fence's `s_Broken` morph is applied; the shipped tasks
+// Only a fence's `s_Broken` morph is applied; the shipped tasks
 // morph nothing else, and any other target keeps its type.
 fn morph_current_behavior_targets(
     clock: Res<ZooClock>,
@@ -80,7 +80,7 @@ fn morph_current_behavior_targets(
                     debug!(?target, "building destroyed by an animal");
                     destroyed.write(DestroyPlacedObject { entity: target });
                 }
-                // ponytail: a guest or staff target isn't killed yet.
+                // A guest or staff target isn't killed yet.
                 true
             }
             _ => continue,

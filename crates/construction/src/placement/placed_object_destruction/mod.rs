@@ -5,6 +5,7 @@ use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_game_assets::effect::SpawnCompleteParticleEffectDocument;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_data::AssetId;
@@ -65,7 +66,15 @@ pub(super) fn ruin_destroyed_placed_objects(
     // Fragment prefabs, requested as a building starts to fall.
     mut fragment_prefabs: Local<HashMap<AssetId, Handle<ScenePrefabAsset>>>,
 ) {
-    pending.extend(requests.read().map(|request| (request.entity, None)));
+    // Two animals can smash the same building while its ruin loads; it falls once.
+    for request in requests.read() {
+        if !pending
+            .iter()
+            .any(|(building, _)| *building == request.entity)
+        {
+            pending.push((request.entity, None));
+        }
+    }
     // A ruin's footprint comes from its model's bounds once that has loaded;
     // nothing else hydrates it before the ruin is put down.
     for (ruin, handle) in pending.iter().filter_map(|(_, prefab)| prefab.as_ref()) {
@@ -125,7 +134,7 @@ pub(super) fn ruin_destroyed_placed_objects(
                         .filter(placeable)
                         .collect::<Vec<_>>();
                     kinds.sort_unstable();
-                    // ponytail: picked by the building's entity, not a seeded
+                    // Picked by the building's entity, not a seeded
                     // random stream; it stays the same while the ruin loads.
                     *kinds.get(building.to_bits() as usize % kinds.len().max(1))?
                 };
@@ -134,8 +143,8 @@ pub(super) fn ruin_destroyed_placed_objects(
         if let (Some((ruin, scene)), None) = (ruin, prefab.as_ref()) {
             *prefab = catalogue.scene(scene).map(|handle| (ruin, handle));
         }
-        // Wait for the ruin's prefab, and for its footprint from the prefab's
-        // bounds; if either fails, the building still falls.
+        // Wait for the ruin's prefab, its footprint from the prefab's bounds
+        // and its collider models; if any fails, the building still falls.
         if ruin.is_some()
             && prefab
                 .as_ref()
@@ -145,12 +154,23 @@ pub(super) fn ruin_destroyed_placed_objects(
                         Some(LoadState::Failed(_))
                     ),
                     Some(loaded) => {
-                        loaded
+                        (loaded
                             .canonical_scene_prefab_document()
                             .automatic_placement_bounds_xz
                             .is_some()
                             && resolve_object_placeable_definition(catalogue, *ruin)
-                                .is_some_and(|placeable| placeable.footprint.is_empty())
+                                .is_some_and(|placeable| placeable.footprint.is_empty()))
+                            || first_missing_prefab_collider_model_asset_id(loaded, &models)
+                                .is_some_and(|model| {
+                                    loaded
+                                        .loaded_model_asset_handle(model)
+                                        .is_some_and(|model| {
+                                            !matches!(
+                                                server.get_load_state(model.id()),
+                                                Some(LoadState::Failed(_))
+                                            )
+                                        })
+                                })
                     }
                 })
         {
@@ -304,7 +324,7 @@ pub(super) struct FlyingRubbleFragment {
     remove_after: f32,
 }
 
-// ponytail: the fragments fly on their own, without the physics engine or
+// The fragments fly on their own, without the physics engine or
 // terrain; `rubblePitchAngle` is taken as their highest launch elevation.
 fn throw_fragments(
     commands: &mut Commands,
