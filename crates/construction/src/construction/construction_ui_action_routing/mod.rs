@@ -137,16 +137,23 @@ pub(super) fn route_construction_ui_actions(
                         intents.animal_moves.write(openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation(animal));
                         continue;
                     }
-                    if let Some((entity, placeable)) = selected.0.and_then(|entity| {
-                        let entity = intents
-                            .animal_crates
-                            .get(entity)
-                            .map_or(entity, |link| link.0);
-                        placeables
-                            .get(entity)
-                            .ok()
-                            .map(|placeable| (entity, placeable))
-                    }) {
+                    // A purchase preview takes the keys before the inspected
+                    // object: choosing an item from the catalogue keeps the
+                    // selection, so a tree could otherwise start moving.
+                    let purchasing = matches!(*selected_tool, ConstructionTool::Place(_))
+                        && relocating.is_empty();
+                    if let Some((entity, placeable)) =
+                        selected.0.filter(|_| !purchasing).and_then(|entity| {
+                            let entity = intents
+                                .animal_crates
+                                .get(entity)
+                                .map_or(entity, |link| link.0);
+                            placeables
+                                .get(entity)
+                                .ok()
+                                .map(|placeable| (entity, placeable))
+                        })
+                    {
                         for previous in &relocating {
                             if previous != entity {
                                 commands
