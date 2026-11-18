@@ -133,6 +133,7 @@ impl Plugin for LocomotionPlugin {
                         project_avian_contacts_into_navigation_steering,
                     local_steering_calculation::
                         calculate_route_following_and_separation_steering,
+                    local_steering_calculation::separate_overlapping_idle_guests,
                     crate::locomotion::direct_locomotion_execution::calculate_direct_locomotion_steering,
                 )
                     .chain()
