@@ -102,6 +102,7 @@ impl Plugin for StaffPlugin {
                     staff_job_claiming::claim_highest_ranked_compatible_jobs_for_available_staff,
                     idle_staff_task_selection::interrupt_idle_staff_tasks_for_claimed_jobs,
                     staff_job_behavior_start_and_completion::start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs,
+                    idle_staff_task_selection::start_staff_token_tasks,
                     idle_staff_task_selection::start_authored_idle_staff_tasks,
                     idle_staff_task_selection::execute_staff_exit_tank_gate_actions,
                 )

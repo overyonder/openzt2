@@ -30,6 +30,9 @@ use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::{
     BehaviorCandidateRanking,
 };
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::{
+    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+};
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
@@ -481,5 +484,143 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
             origin: task.create_return_frame_after_action(task.action),
             depth: task.stack.len(),
         });
+    }
+}
+
+/// Starts a staff task its delivered token calls for, such as `Scared_Staff`
+/// when an attacking animal gives nearby staff `t_Attack`. The token's payload,
+/// the animal, is the `fromToken` target.
+// Only staff without a job or task react; a frightened keeper on a
+// job finishes it first.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn start_staff_token_tasks(
+    mut commands: Commands,
+    documents: Res<LoadedBehaviorDocumentCollection>,
+    assets: Res<Assets<BehaviorDocumentAsset>>,
+    definitions: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    clock: Res<ZooClock>,
+    mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    surfaces: DrySurfaceEligibility,
+    tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
+    staff: Query<
+        (&StaffRole, &GlobalTransform, Option<&LocomotionMode>),
+        (
+            With<Staff>,
+            With<NavAgent>,
+            Without<CurrentJob>,
+            Without<BehaviorTaskExecutionState>,
+            Without<SynchronizedBehaviorParticipant>,
+        ),
+    >,
+) {
+    if tokens.is_empty() {
+        return;
+    }
+    let (Some(view), Some(catalogue)) = (
+        documents.create_declaration_index_view(&assets),
+        active_definitions.get(&definitions),
+    ) else {
+        return;
+    };
+    let mut started = Vec::new();
+    for (token_entity, token, holder) in &tokens {
+        let member = holder.parent();
+        if clock.tick < token.available_at
+            || clock.tick >= token.expires_at
+            || started.contains(&member)
+        {
+            continue;
+        }
+        let (Ok((role, transform, mode)), Some(payload)) = (staff.get(member), token.payload)
+        else {
+            continue;
+        };
+        let Some(role) = catalogue.find_staff(role.0) else {
+            continue;
+        };
+        let subject_types = authored_staff_role_subject_names(role.role);
+        let position = transform.translation();
+        let mut chosen = None;
+        for (document, declaration, task) in view.behavior_tasks() {
+            if task.targets.len() != 1
+                || !task.targets[0].eq_ignore_ascii_case("fromtoken")
+                || !task
+                    .objects
+                    .iter()
+                    .any(|object| AssetId::from_key(&object.to_ascii_lowercase()) == token.name)
+                || task.execution.has_unsupported_suffix()
+            {
+                continue;
+            }
+            let satisfied = candidate_requirements_are_satisfied(
+                &task.candidate_eligibility_requirements,
+                |candidate_role, required| match candidate_role {
+                    // A flag such as `b_FearDinosaur` comes with the role's object.
+                    BehaviorCandidateRole::Subject => {
+                        required == AssetId::from_key("staff")
+                            || subject_types
+                                .iter()
+                                .any(|name| required == AssetId::from_key(name))
+                            || catalogue.find_object(role.object).is_some_and(|object| {
+                                object.behavior_type_identifiers.contains(&required)
+                            })
+                    }
+                    BehaviorCandidateRole::Target => required == AssetId::from_key("fromtoken"),
+                    BehaviorCandidateRole::Object => required == token.name,
+                },
+                |candidate_role, fact| {
+                    candidate_role == BehaviorCandidateRole::Subject
+                        && satisfies_idle_staff_fact(
+                            fact,
+                            position,
+                            position,
+                            mode == Some(&LocomotionMode::Swim),
+                            &surfaces,
+                        )
+                },
+            );
+            let priority = task.priority.unwrap_or_default();
+            if satisfied
+                && chosen
+                    .as_ref()
+                    .is_none_or(|(_, _, best): &(_, _, &BehaviorTask)| {
+                        priority > best.priority.unwrap_or_default()
+                    })
+            {
+                chosen = Some((document, declaration, task));
+            }
+        }
+        let Some((document, declaration, task)) = chosen else {
+            continue;
+        };
+        let execution_id = sequence.next();
+        debug!(staff = ?member, task = %task.name, animal = ?payload, "staff started a token task");
+        commands
+            .entity(token_entity)
+            .insert(ClaimedBehaviorSelfToken { execution_id });
+        commands.entity(member).insert((
+            BehaviorTaskEffectiveScore {
+                execution_id,
+                template_score: Some(task.priority.unwrap_or_default()),
+                linked_score: None,
+                selected_candidate_score: None,
+            },
+            BehaviorTaskExecutionState {
+                execution_id,
+                program: task.id,
+                target: Some(payload),
+                document: document.clone(),
+                declaration,
+                phase: BehaviorTaskExecutionPhase::Execution,
+                action: 0,
+                repetitions: 0,
+                next_action_tick: 0,
+                object: Some(token_entity),
+                interaction_slot: None,
+                stack: ArrayVec::new(),
+            },
+        ));
+        started.push(member);
     }
 }
