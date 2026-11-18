@@ -264,14 +264,14 @@ fn an_emitted_view_event_reaches_every_current_viewer_once() {
     );
     emit(&mut app, subject, 1);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 25);
-    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 25);
+    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 30);
+    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 30);
     // A guest who stopped watching is not reached by the next event.
     app.world_mut().entity_mut(second).remove::<Viewing>();
     emit(&mut app, subject, 2);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 50);
-    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 25);
+    assert_eq!(app.world().get::<GuestEducation>(first).unwrap().0, 60);
+    assert_eq!(app.world().get::<GuestEducation>(second).unwrap().0, 30);
 }
 
 #[test]
@@ -333,7 +333,7 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
     app.world_mut().entity_mut(guest).insert(viewing);
     emit(&mut app, subject, 1);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 25);
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);
     app.world_mut()
         .get_mut::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>(
             guest,
@@ -342,7 +342,7 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
         .execution_id = 2;
     emit(&mut app, subject, 2);
     app.update();
-    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 25);
+    assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);
     let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
     viewing.task_execution_id = Some(2);
     app.world_mut().entity_mut(guest).insert(viewing);
