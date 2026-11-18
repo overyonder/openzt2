@@ -251,7 +251,6 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             ground: Some(AssetId::from_key("placefood_land")),
             water: Some(AssetId::from_key("placefood_water")),
             underwater: Some(AssetId::from_key("placefood_underwater")),
-            default: None,
             follows_medium_changes: false,
         }
     );
@@ -305,6 +304,41 @@ fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
     };
     assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
     assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
+
+#[test]
+fn an_ankylosaur_destroying_a_building_plays_its_clip_then_destroys_it() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped Ankylosaurus DestroyBuilding set kills its building.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.beh"),
+        br#"<BehaviorSets><DestroyBuilding><behaviors><BFBehKill targetAnim="Stand_GuestAttack" killTarget="true" fadeOutPeriod="1" killUsingDestroyEntity="true"/></behaviors></DestroyBuilding></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::AnimationClip(clip), BehaviorAction::DestroyTarget] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("the attack clip, then the building's destruction expected");
+    };
+    assert_eq!(clip.animation_clip_asset_key, "Stand_GuestAttack");
+}
+
+#[test]
+fn a_rampaging_ankylosaur_s_guest_attack_lowers_whole() {
+    // As the shipped Ankylosaurus AttackGuest_Rampage hails and scares off its guest.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.tsk"),
+        br#"<BFAITaskTemplateList><BFAITaskTemplate Name="AttackGuest_Rampage" UniqueID="Ankylosaurus:AttackGuest_Rampage"><BFAICreateData><Subjects><Ankylosaurus/></Subjects><Targets><Guest_Adult_M/><Qualifiers_AND inSight="15" b_Attacked="E false"/></Targets><Objects/></BFAICreateData><BFAIEvalData fixedScore="150"/><BFBehExecTask><BFBehSendToken><BFAITokenList><BFAIToken Name="t_InteractAnimal" GiveTo="target" Payload="subject" Radius="30" Timeout="30" Reconsider="true"/></BFAITokenList></BFBehSendToken></BFBehExecTask><BFAICompletionData invalidateTarget="true"><BFAISubjectData b_Escaped="true"/><BFAITargetData b_Attacked="true" f_departurePoints="-100" happiness="100"/></BFAICompletionData></BFAITaskTemplate></BFAITaskTemplateList>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Tasks(tasks) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("tasks expected");
+    };
+    assert!(!tasks[0].execution.has_unsupported_suffix());
+    assert!(!tasks[0].completion.has_unsupported_suffix());
 }
 
 #[test]

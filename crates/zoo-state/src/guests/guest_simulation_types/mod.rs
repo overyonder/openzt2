@@ -102,6 +102,11 @@ pub struct AdjustGuestSatisfaction {
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GuestEducation(pub u16);
 
+/// A guest a rampaging animal has attacked (`b_Attacked`); no animal attacks
+/// it again.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GuestAttacked;
+
 /// Authored f_departurePoints, in source units rather than wellness permille.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GuestDeparturePoints(pub i32);

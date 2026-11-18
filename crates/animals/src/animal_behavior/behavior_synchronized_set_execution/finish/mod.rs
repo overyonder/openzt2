@@ -114,6 +114,10 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
         {
             continue;
         }
+        if failed {
+            debug!(?actor, target = ?owner.target, own_failure = failure.is_some(), owns_partner,
+                target_outcome = ?owner.target_outcome, "synchronized behavior failed");
+        }
         if owns_task {
             if let Some(task) = task.as_deref_mut() {
                 task.restore_suspended_instruction(&owner.origin, owner.depth, clock.tick);

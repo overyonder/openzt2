@@ -50,6 +50,7 @@ pub(super) fn lower_species_root_actor_to_fallback_canonical_variant(
         ))),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(species),
         navigation_collision_policy: lower_animal_navigation_collision_policy(species)?,
+        virtual_nodes: crate::world_definitions::lower::object_and_placeable_source_lowering::lower_world_object_virtual_nodes(&species),
         surface_water_locomotion: super::locomotion::lower_animal_surface_water_locomotion(species),
         ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip(species),
         medium_ground_navigation_clip_asset_key: lower_animal_ground_navigation_clip_for_speed(
@@ -176,6 +177,7 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         id: AssetId::from_key(&canonicalize_source_document_record_key(candidate.key)),
         behavior_subject_type_identifiers: authored_behavior_type_identifiers(candidate),
         navigation_collision_policy: lower_animal_navigation_collision_policy(candidate)?,
+        virtual_nodes: crate::world_definitions::lower::object_and_placeable_source_lowering::lower_world_object_virtual_nodes(&candidate),
         surface_water_locomotion: super::locomotion::lower_animal_surface_water_locomotion(
             candidate,
         ),
@@ -200,6 +202,15 @@ pub(super) fn lower_species_variant_source_record_to_canonical_variant(
         probability,
         flags: if candidate.key.ends_with('2') {
             SpeciesVariantFlags::RARE
+        } else {
+            SpeciesVariantFlags::DEFAULT
+        } | if super::source_queries::authored_optional_boolean_is_true(
+            super::source_queries::find_effective_authored_animal_shared_attribute(
+                candidate,
+                "b_Rampager",
+            ),
+        ) {
+            SpeciesVariantFlags::RAMPAGER
         } else {
             SpeciesVariantFlags::DEFAULT
         },

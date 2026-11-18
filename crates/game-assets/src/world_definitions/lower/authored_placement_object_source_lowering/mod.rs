@@ -403,7 +403,15 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|data| data.attribute_named_any(&["icon3Dscale"]))
         .and_then(parse_blue_fang_source_numeric_lexeme)
         .unwrap_or(1.0);
-    if purchase_button.is_some() && automatic_footprint {
+    // A building's ruin (`rubble_xt_1`) or a tree's stump has no placement
+    // data of its own; an animal puts it down where the object stood, sized
+    // to its model.
+    let ruin = record.type_tokens().iter().any(|token| {
+        ["Rubble", "stump"]
+            .iter()
+            .any(|family| source_document_names_are_semantically_equal(token, family))
+    });
+    if (purchase_button.is_some() && automatic_footprint) || (ruin && placement_bounds.is_none()) {
         bind_authored_placeable(record, None, true, price_cents, output)?;
     } else if let Some(footprint_bounds) = placement_bounds {
         bind_authored_placeable(record, Some(footprint_bounds), false, price_cents, output)?;
@@ -557,7 +565,8 @@ pub(super) fn bind_authored_placement_object(
         upkeep_cents_per_month,
         properties: object_property_flags,
         affordances: WorldObjectAffordanceFlags::default(),
-        destruction: None,
+        destruction: super::object_and_placeable_source_lowering::lower_world_object_destruction(record)?,
+        virtual_nodes: super::object_and_placeable_source_lowering::lower_world_object_virtual_nodes(record),
     });
     if purchase_button.is_some()
         && !authored_species_offer_owns_concrete_purchase_choice(

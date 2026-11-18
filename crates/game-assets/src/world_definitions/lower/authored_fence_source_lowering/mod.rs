@@ -333,6 +333,7 @@ pub(super) fn bind_authored_fence(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     });
     if let Some(button) = purchase_button {
         bind_authored_fence_catalogue_entry(record, button, object_id, output);

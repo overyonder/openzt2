@@ -8,7 +8,7 @@ mod world_object_targets;
 
 use super::{
     behavior_candidate_selection::{
-        candidate_requirements_are_satisfied, BehaviorCandidateRanking,
+        candidate_requirements_are_satisfied, WeightedBehaviorTaskRanking,
     },
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_set_start_request_types::PendingBehaviorSet,
@@ -104,7 +104,7 @@ pub(super) fn select_idle_animal_tasks(
     world_objects.refresh_index(definitions);
     // The scratch list returns to its owner below, keeping its allocation.
     let mut candidates = std::mem::take(&mut *world_objects.candidates);
-    for (animal, facts, mut random, mut cooldowns) in &mut animals {
+    for (animal, facts, mut random, cooldowns) in &mut animals {
         let Some((definition, variant)) = species.find_variant_with_species(facts.variant_id())
         else {
             continue;
@@ -119,16 +119,36 @@ pub(super) fn select_idle_animal_tasks(
             .contains(&AssetId::from_key("b_generatestraversabilityinfo"))
             || authored_types.contains(&AssetId::from_key("unspecified"));
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
-        let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
+        let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
+        let Some(mut cooldowns) = cooldowns else {
+            // Delays are kept from the animal's first selection on.
+            commands
+                .entity(animal)
+                .insert(task_cooldowns::AnimalTaskCooldowns::default());
+            continue;
+        };
         for (document, declaration, task) in view.behavior_tasks() {
             if !subject_can_consider_task(task, &facts, authored_types) {
+                cooldowns.disarm(task.id);
                 continue;
             }
-            if cooldowns
-                .as_deref()
-                .is_some_and(|cooldowns| cooldowns.is_cooling_down(task.id, clock.tick))
+            if let Some(delay) = task
+                .task_delay_seconds
+                .filter(|delay| *delay != [0.0, 0.0])
+                .filter(|_| !cooldowns.is_armed(task.id))
             {
+                let delay_ticks = task_cooldowns::sample_task_delay_ticks(
+                    delay,
+                    random.0.unit_f32(),
+                    definitions.timing().fixed_hz,
+                );
+                debug!(?animal, task = %task.name, delay_ticks,
+                    "animal task became possible and waits out its delay");
+                cooldowns.arm(task.id, clock.tick, delay_ticks);
+                continue;
+            }
+            if cooldowns.is_cooling_down(task.id, clock.tick) {
                 debug!(?animal, task = %task.name, id = ?task.id, "animal task cooling down");
                 continue;
             }
@@ -178,6 +198,7 @@ pub(super) fn select_idle_animal_tasks(
                     trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
                     ranking.consider(
+                        task.id,
                         (
                             document,
                             declaration,
@@ -288,6 +309,7 @@ pub(super) fn select_idle_animal_tasks(
                 debug!(?animal, task = %task.name, ?target, score, distance,
                     "animal task animal target scored");
                 ranking.consider(
+                    task.id,
                     (
                         document,
                         declaration,
@@ -413,6 +435,7 @@ pub(super) fn select_idle_animal_tasks(
                     };
                     considered_candidates += 1;
                     ranking.consider(
+                        task.id,
                         (document, declaration, task, shore.region, None, Some(shore)),
                         task.priority.unwrap_or_default(),
                         score,
@@ -451,6 +474,11 @@ pub(super) fn select_idle_animal_tasks(
                         .iter()
                         .any(|fence_type| object.behavior_type_identifiers.contains(fence_type))
                     {
+                        continue;
+                    }
+                    // Only a fence that can break is worth bashing; a broken
+                    // segment has no broken variant of its own.
+                    if task_name.contains("Bash") && definition.broken.is_none() {
                         continue;
                     }
                     let distance = facts.transform.translation().distance(
@@ -501,6 +529,7 @@ pub(super) fn select_idle_animal_tasks(
                     debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
                     considered_candidates += 1;
                     ranking.consider(
+                        task.id,
                         (document, declaration, task, fence, None, None),
                         task.priority.unwrap_or_default(),
                         score,
@@ -548,6 +577,11 @@ pub(super) fn select_idle_animal_tasks(
                             })
                         },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
+                    distance: facts.transform.translation().distance(target_position),
+                    building_strength: object
+                        .destruction
+                        .as_ref()
+                        .and_then(|destruction| destruction.strength),
                 };
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
@@ -620,6 +654,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
+                    task.id,
                     (document, declaration, task, target.entity, None, None),
                     task.priority.unwrap_or_default(),
                     score,
@@ -630,7 +665,7 @@ pub(super) fn select_idle_animal_tasks(
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
         let Some(((document, declaration, task, target, object, shore), score)) =
-            ranking.finish(false)
+            ranking.finish(|upper| random.range_u32(upper))
         else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
@@ -663,13 +698,7 @@ pub(super) fn select_idle_animal_tasks(
                 cooldown_ticks = ?delay_ticks,
                 "animal's chosen task has unsupported actions; no task starts");
             if let Some(delay_ticks) = delay_ticks {
-                if let Some(cooldowns) = cooldowns.as_deref_mut() {
-                    cooldowns.start(task.id, clock.tick, delay_ticks);
-                } else {
-                    let mut started = AnimalTaskCooldowns::default();
-                    started.start(task.id, clock.tick, delay_ticks);
-                    commands.entity(animal).insert(started);
-                }
+                cooldowns.start(task.id, clock.tick, delay_ticks);
             }
             continue;
         }

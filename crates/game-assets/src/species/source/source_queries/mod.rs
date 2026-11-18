@@ -2,7 +2,7 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 use crate::source_document::resolved_source_record_index::RecordView;
 use crate::source_document::source_document_semantic_name::source_document_names_are_semantically_equal;
 
-pub(super) fn find_effective_authored_animal_shared_attribute<'a>(
+pub(crate) fn find_effective_authored_animal_shared_attribute<'a>(
     record: &RecordView<'_, 'a>,
     attribute: &str,
 ) -> Option<&'a str> {

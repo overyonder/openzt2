@@ -101,6 +101,11 @@ fn execute_current_self_token_deliveries(
     animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     held_tokens: Query<(&BehaviorSelfToken, &ChildOf)>,
+    staff: Query<
+        (Entity, &GlobalTransform),
+        With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+    >,
+    staff_on_job: Query<(), With<openzt2_zoo_state::staff::staff_job_types::CurrentJob>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -180,6 +185,22 @@ fn execute_current_self_token_deliveries(
                         delivered_to.push(animal);
                     }
                 }
+                // An attacking animal warns staff nearby (`GiveTo="Staff"`).
+                if nearby.entity_type == AssetId::from_key("staff") {
+                    for (member, transform) in &staff {
+                        if transform.translation().distance(origin.translation()) > nearby.radius_m
+                        {
+                            continue;
+                        }
+                        let drawn = nearby.chance_percent >= 100.0
+                            || random.as_deref_mut().is_some_and(|random| {
+                                random.0.unit_f32() * 100.0 < nearby.chance_percent
+                            });
+                        if drawn {
+                            delivered_to.push(member);
+                        }
+                    }
+                }
             } else {
                 delivered_to.push(match delivery.recipient {
                     BehaviorTokenRecipient::Subject => actor,
@@ -216,9 +237,11 @@ fn execute_current_self_token_deliveries(
                 // Reconsideration drops the recipient's current task before it
                 // chooses again with the delivered token. A sender's own task
                 // is kept: it chooses again when the task ends, after its
-                // completion.
+                // completion. Staff on a claimed job finish it first; the
+                // job's task would otherwise end while the job stays claimed.
                 if delivery.reconsider
                     && recipient != actor
+                    && !staff_on_job.contains(recipient)
                     && recipients.get(recipient).is_ok_and(|busy| busy)
                 {
                     abandon_behavior_task_for_reconsideration(recipient, &mut commands);

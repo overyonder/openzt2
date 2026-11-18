@@ -136,7 +136,8 @@ impl TerrainDerivedNavigationGraph {
                         navigation_nodes.push(TerrainDerivedNavigationGraphNode {
                             height_centimetres,
                             minimum_triangle_normal_y,
-                            clearance_centimetres: terrain_cell_size_centimetres,
+                            // Open terrain does not narrow; fences and objects block separately.
+                            clearance_centimetres: u16::MAX,
                             water_depth_centimetres,
                             eligibility_flags,
                         });

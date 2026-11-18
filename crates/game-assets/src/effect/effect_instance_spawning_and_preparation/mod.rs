@@ -84,6 +84,9 @@ fn spawn_pending_effect_instance(
             collision_spawn_context: None,
         },
         effect_transform,
+        // An effect with several root emitters keeps this entity as their
+        // parent; without visibility of its own, they are never shown.
+        Visibility::default(),
     ));
     if let Some(parent_entity) = parent_entity {
         pending_effect_entity.insert(ChildOf(parent_entity));
@@ -104,9 +107,20 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
         Entity,
         &PendingEffectInstance,
         Option<&super::particle_wave_surface::ParticleEffectWaveSurface>,
+        Has<CollisionSpawnChildrenRequested>,
     )>,
+    effect_children: Query<&Children>,
+    prepared_child_effects: Query<
+        (),
+        (
+            With<ParticleEffect>,
+            With<bevy_hanabi::prelude::EffectParent>,
+        ),
+    >,
 ) {
-    for (effect_entity, pending_effect_instance, wave_surface) in &pending_effect_instances {
+    for (effect_entity, pending_effect_instance, wave_surface, children_requested) in
+        &pending_effect_instances
+    {
         let Some(effect_asset) = effect_assets.get(&pending_effect_instance.effect_asset) else {
             continue;
         };
@@ -184,10 +198,40 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
             commands.entity(effect_entity).despawn();
             continue;
         };
+        // A collision-spawn emitter's shader appends events for its child
+        // effects only if they exist when it compiles; a one-shot burst
+        // compiled without them is lost. Its children are prepared first.
+        let collision_spawn_children =
+            count_collision_spawn_children(&effect_asset.particle_document, authored_emitter_id);
+        if collision_spawn_children > 0 {
+            if !children_requested {
+                add_authored_particle_system_material_and_collision_spawn_bindings(
+                    &mut commands,
+                    &asset_server,
+                    &effect_asset.particle_document,
+                    &pending_effect_instance.effect_asset,
+                    effect_entity,
+                    authored_emitter_id,
+                );
+                commands
+                    .entity(effect_entity)
+                    .insert(CollisionSpawnChildrenRequested);
+                continue;
+            }
+            let prepared_children = effect_children.get(effect_entity).map_or(0, |children| {
+                children
+                    .iter()
+                    .filter(|child| prepared_child_effects.contains(*child))
+                    .count()
+            });
+            if prepared_children < collision_spawn_children {
+                continue;
+            }
+        }
         {
             let mut prepared_effect_entity = commands.entity(effect_entity);
             prepared_effect_entity
-                .remove::<PendingEffectInstance>()
+                .remove::<(PendingEffectInstance, CollisionSpawnChildrenRequested)>()
                 .insert((
                     ParticleEffect::new(hanabi_effect_handle),
                     LiveParticleEffectInstance {
@@ -221,15 +265,50 @@ pub(super) fn prepare_pending_effect_instances_from_loaded_authored_assets(
             &effect_asset.particle_document,
             effect_entity,
         );
-        add_authored_particle_system_material_and_collision_spawn_bindings(
-            &mut commands,
-            &asset_server,
-            &effect_asset.particle_document,
-            &pending_effect_instance.effect_asset,
-            effect_entity,
-            authored_emitter_id,
-        );
+        if collision_spawn_children == 0 {
+            add_authored_particle_system_material_and_collision_spawn_bindings(
+                &mut commands,
+                &asset_server,
+                &effect_asset.particle_document,
+                &pending_effect_instance.effect_asset,
+                effect_entity,
+                authored_emitter_id,
+            );
+        }
     }
+}
+
+/// An effect whose collision-spawn children have been requested; it waits
+/// for them before it starts.
+#[derive(Component)]
+pub(super) struct CollisionSpawnChildrenRequested;
+
+fn count_collision_spawn_children(
+    particle_document: &ParticleDocument,
+    authored_emitter_id: AssetId,
+) -> usize {
+    let ParticleDocument::Effect(effect_document) = particle_document else {
+        return 0;
+    };
+    effect_document
+        .emitters
+        .iter()
+        .find(|emitter| emitter.emitter_id == authored_emitter_id)
+        .map_or(0, |emitter| {
+            emitter
+                .modifiers
+                .iter()
+                .enumerate()
+                .filter(|(modifier_index, modifier)| {
+                    create_collision_spawn_initialization(
+                        authored_emitter_id,
+                        *modifier_index,
+                        modifier,
+                    )
+                    .is_some()
+                })
+                .count()
+        })
 }
 
 pub(super) fn add_legacy_nif_particle_mesh_binding(
