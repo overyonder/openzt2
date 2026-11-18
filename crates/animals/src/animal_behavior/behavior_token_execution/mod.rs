@@ -105,6 +105,7 @@ fn execute_current_self_token_deliveries(
         (Entity, &GlobalTransform),
         With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
     >,
+    staff_on_job: Query<(), With<openzt2_zoo_state::staff::staff_job_types::CurrentJob>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -236,9 +237,11 @@ fn execute_current_self_token_deliveries(
                 // Reconsideration drops the recipient's current task before it
                 // chooses again with the delivered token. A sender's own task
                 // is kept: it chooses again when the task ends, after its
-                // completion.
+                // completion. Staff on a claimed job finish it first; the
+                // job's task would otherwise end while the job stays claimed.
                 if delivery.reconsider
                     && recipient != actor
+                    && !staff_on_job.contains(recipient)
                     && recipients.get(recipient).is_ok_and(|busy| busy)
                 {
                     abandon_behavior_task_for_reconsideration(recipient, &mut commands);

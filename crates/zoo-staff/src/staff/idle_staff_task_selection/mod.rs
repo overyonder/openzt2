@@ -490,7 +490,7 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
 /// Starts a staff task its delivered token calls for, such as `Scared_Staff`
 /// when an attacking animal gives nearby staff `t_Attack`. The token's payload,
 /// the animal, is the `fromToken` target.
-// ponytail: only staff without a job or task react; a frightened keeper on a
+// Only staff without a job or task react; a frightened keeper on a
 // job finishes it first.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn start_staff_token_tasks(
