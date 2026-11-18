@@ -53,7 +53,13 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     rating: Res<ZooRating>,
-    animals: Query<&SpeciesHandle, (With<Animal>, Without<Dead>)>,
+    animals: Query<
+        (
+            &SpeciesHandle,
+            Option<&openzt2_zoo_state::animal_welfare::types::NeedPoints>,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
     guests: Query<(), With<Guest>>,
     survey: Option<Res<GuestSurvey>>,
     scenario_award_points: Res<ScenarioAwardPointTotal>,
@@ -87,8 +93,10 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
     } else {
         let mut unique_species = BTreeSet::new();
         let mut animal_count = 0_u32;
-        for handle in &animals {
+        let mut good_points = 0.0_f32;
+        for (handle, points) in &animals {
             animal_count = animal_count.saturating_add(1);
+            good_points += points.map_or(0.0, |points| points.good);
             unique_species.insert(handle.species);
         }
         let award_and_scenario_points = scenario_award_points
@@ -110,7 +118,15 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         calculate_authentic_zoo_fame(&ZooFameCalculationInputs {
             animal_count,
             species_count: unique_species.len() as u32,
-            animal_happiness_permille: rating.animal_welfare_permille,
+            // `ZooFame.lua` averages the animals' `f_needPointsGood`, 0 to
+            // 100, as their happiness.
+            animal_happiness_permille: if animal_count == 0 {
+                0
+            } else {
+                (good_points / animal_count as f32 * 10.0)
+                    .round()
+                    .clamp(0.0, 1000.0) as u16
+            },
             guest_count,
             guest_happiness_permille: rating.guest_satisfaction_permille,
             education_view_rate_permille: education_view_rate,
