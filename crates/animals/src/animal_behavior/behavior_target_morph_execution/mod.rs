@@ -44,6 +44,7 @@ pub(super) fn register_target_morph_execution(application: &mut App) {
 // Only a fence's `s_Broken` morph is applied; the shipped tasks
 // morph nothing else, and any other target keeps its type.
 fn morph_current_behavior_targets(
+    mut commands: Commands,
     clock: Res<ZooClock>,
     documents: Res<Assets<BehaviorDocumentAsset>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -99,6 +100,14 @@ fn morph_current_behavior_targets(
                         second = %grid.cell_translation(second.cell),
                         "fence broken by an animal");
                     edge.definition = broken;
+                    // A broken gate segment is no longer a gate.
+                    if let Some(target) = task.target() {
+                        commands.entity(target).remove::<(
+                            openzt2_zoo_state::topology::gate_operation_types::Gate,
+                            openzt2_zoo_state::topology::gate_operation_types::GateMechanism,
+                            openzt2_zoo_state::topology::gate_operation_types::GateAutoClose,
+                        )>();
+                    }
                     // The segment's model follows the topology index.
                     topology.set_changed();
                     changed.write(TopologyChanged {
