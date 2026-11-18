@@ -28,6 +28,9 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
     mut animation_clip_requests: MessageReader<AnimationClipPlaybackRequest>,
     mut rejected_animation_clip_requests: MessageWriter<AnimationClipPlaybackRequestRejected>,
     mut started_animation_clip_requests: MessageWriter<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>,
+    mut skipped_transitions: MessageWriter<
+        crate::animation_playback::SkippedAnimationGraphTransition,
+    >,
     mut deferred_requests: Local<Vec<DeferredAnimationClipPlaybackRequest>>,
     mut cancellations: MessageReader<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>,
     subjects: Query<()>,
@@ -219,6 +222,33 @@ pub(crate) fn execute_explicit_animation_clip_playback_requests(
             animation_playback_controller.playback_repetition_policy =
                 animation_clip_request.playback_repetition_policy;
             *animation_graph_playback_state = replacement_animation_graph_playback_state;
+            // The clip is entered directly; the tools its transition clips
+            // would create or destroy are still handed over.
+            if let (Some(from), Some(to)) = (
+                previous_graph_node.clone(),
+                animation_set_assets
+                    .get(&animation_playback_controller.animation_set_asset)
+                    .and_then(|set| {
+                        set.animation_graph_nodes.get(
+                            animation_graph_playback_state.current_animation_graph_node_index
+                                as usize,
+                        )
+                    })
+                    .map(|node| node.animation_graph_node_asset_key.clone()),
+            ) {
+                if from != to {
+                    skipped_transitions.write(
+                        crate::animation_playback::SkippedAnimationGraphTransition {
+                            controller: animation_playback_controller_entity,
+                            animation_set: animation_playback_controller
+                                .animation_set_asset
+                                .clone(),
+                            from,
+                            to,
+                        },
+                    );
+                }
+            }
             started_animation_clip_requests.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted {
                 animation_subject_entity: animation_clip_request.animation_subject_entity,
                 request_id,

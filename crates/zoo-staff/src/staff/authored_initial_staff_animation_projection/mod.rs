@@ -29,6 +29,10 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
     staff_roles: Query<&StaffRole>,
     drawn_animation_sets: Query<&StaffModelAnimationSet>,
     attached_heads: Query<(), With<StaffAttachedHead>>,
+    held_props: Query<
+        (),
+        With<openzt2_world_state::animation_playback::animation_joint_target_types::HeldPropPresentation>,
+    >,
     definition_identifiers: Query<(
         Option<&DefinitionId>,
         Option<&PrefabObjectPresentationAttachmentProjection>,
@@ -43,7 +47,7 @@ pub(crate) fn request_authored_initial_staff_animation_for_newly_resolved_prefab
         let mut ancestor = prefab_model_entity;
         let mut drawn_animation_set = None;
         let staff_role_definition = loop {
-            if attached_heads.contains(ancestor) {
+            if attached_heads.contains(ancestor) || held_props.contains(ancestor) {
                 break None;
             }
             drawn_animation_set = drawn_animation_set
