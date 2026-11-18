@@ -89,7 +89,8 @@ pub(super) async fn load_world_definition_source_documents(
             binder_source_paths,
             &from,
             &reference,
-        ) else {
+        )?
+        else {
             continue;
         };
         if let Some(revision) = revision {
@@ -228,18 +229,21 @@ pub(super) async fn load_world_definition_source_documents(
 /// beside the `Guest_Young_M` binder in `guests/ai/YoungMale.xml`, the binder
 /// index names the declaring file instead, as it does for a family with no
 /// same-named file at all, such as `Guest_Adult` in `guests/ai/AdultGuest.xml`.
-/// Families that the index does not know keep the file-name resolution.
+/// Families that the index does not know keep the file-name resolution. A
+/// family with no file at all is skipped, but one that two files declare is
+/// an error.
 fn resolve_typed_binder_family_source_path(
     archives: &AssetArchives,
     binder_source_paths: &AuthoredBinderSourcePathIndex,
     from: &str,
     family: &str,
-) -> Option<(std::path::PathBuf, Option<u64>)> {
+) -> std::io::Result<Option<(std::path::PathBuf, Option<u64>)>> {
     let Some(by_name) = archives.resolve_source_reference(Path::new(from), family) else {
-        return binder_source_paths
-            .resolve_binder_type_source_path(archives, from, family)
-            .ok()
-            .map(|(path, revision)| (path, Some(revision)));
+        return match binder_source_paths.resolve_binder_type_source_path(archives, from, family) {
+            Ok((path, revision)) => Ok(Some((path, Some(revision)))),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(error),
+        };
     };
     let declares_family = archives.read_source(&by_name).ok().is_some_and(|bytes| {
         parse_blue_fang_source_document(AssetPath::new(&by_name.to_string_lossy()), &bytes)
@@ -252,12 +256,14 @@ fn resolve_typed_binder_family_source_path(
             })
     });
     if declares_family {
-        return Some((by_name, None));
+        return Ok(Some((by_name, None)));
     }
-    match binder_source_paths.resolve_binder_type_source_path(archives, from, family) {
-        Ok((path, revision)) => Some((path, Some(revision))),
-        Err(_) => Some((by_name, None)),
-    }
+    Ok(Some(
+        match binder_source_paths.resolve_binder_type_source_path(archives, from, family) {
+            Ok((path, revision)) => (path, Some(revision)),
+            Err(_) => (by_name, None),
+        },
+    ))
 }
 
 pub(super) async fn read_source_document(
