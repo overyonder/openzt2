@@ -6,7 +6,6 @@ use openzt2_game_data::{
     },
     AssetId,
 };
-use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 
@@ -14,7 +13,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 fn docking_events_respect_request_frame_and_failure_precedence() {
     let mut app = App::new();
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
-        .init_resource::<InteractionContainerOccupancy>()
         .insert_resource(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
@@ -75,7 +73,17 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         stack_depth: 0,
         request_id: 2,
     };
-    let actor = app.world_mut().spawn((task.clone(), pending.clone())).id();
+    let actor = app
+        .world_mut()
+        .spawn((
+            task.clone(),
+            pending.clone(),
+            InteractionContainerMember {
+                container: target,
+                slot: 0,
+            },
+        ))
+        .id();
     app.world_mut().write_message(NavigationFailed {
         entity: actor,
         request_id: 1,
@@ -118,6 +126,20 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
     assert!(app
         .world()
         .get::<PendingBehaviorDockingCompletion>(actor)
+        .is_none());
+    assert!(app
+        .world()
+        .get::<DockedAtInteractionContainer>(actor)
+        .is_some());
+    app.world_mut()
+        .entity_mut(actor)
+        .insert(InteractionContainerMember {
+            container: target,
+            slot: 1,
+        });
+    assert!(app
+        .world()
+        .get::<DockedAtInteractionContainer>(actor)
         .is_none());
 
     app.world_mut()

@@ -7,6 +7,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_message_types
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
+use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 
 fn object(id: AssetId) -> WorldObjectDefinition {
     WorldObjectDefinition {
@@ -59,6 +60,8 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
     let item_id = AssetId::from_key("fruitcup");
     let inventory = AssetId::from_key("inventory");
     let kill = AssetId::from_key("killitem");
+    let replace = AssetId::from_key("replaceitem");
+    let replacement_id = AssetId::from_key("replacement");
     let mut holder = object(holder_id);
     holder.interaction_slots = [AssetId::default(), inventory]
         .into_iter()
@@ -87,21 +90,30 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             destination: WorldObjectDetachDestination::Kill,
             created_objects: vec![],
         },
+        WorldObjectDetachActionDefinition {
+            name: replace,
+            destination: WorldObjectDetachDestination::Kill,
+            created_objects: vec![(
+                replacement_id,
+                WorldObjectDetachDestination::Container(AssetId::default()),
+            )],
+        },
     ];
     let document = WorldDefinitionDocument {
-        objects: vec![holder, item],
+        objects: vec![holder, item, object(replacement_id)],
         ..Default::default()
     };
     let mut app = App::new();
+    events::register_attachment_animation_observers(&mut app);
     app.insert_resource(PersistentIdAllocator::new(Entity::PLACEHOLDER))
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
-        .init_resource::<InteractionContainerOccupancy>()
+        .add_observer(detach::record_slots_of_destroyed_holders)
         .add_message::<AnimationObjectCommand>()
         .add_message::<AnimationCompleted>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
         .add_systems(
-            Update,
+            FixedUpdate,
             (
                 events::receive_object_animation_commands,
                 detach::release_objects_from_destroyed_holders,
@@ -115,7 +127,10 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
     app.world_mut()
         .resource_mut::<WorldDefinitions>()
         .index_test_document(handle, &document);
-    let actor = app.world_mut().spawn(DefinitionId(holder_id)).id();
+    let actor = app
+        .world_mut()
+        .spawn((DefinitionId(holder_id), GlobalTransform::IDENTITY))
+        .id();
     let controller = app
         .world_mut()
         .spawn((AnimationPresentationOwner {
@@ -147,22 +162,24 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             },
         ))
         .id();
-    assert!(app
-        .world_mut()
-        .resource_mut::<InteractionContainerOccupancy>()
-        .admit(actor, carried, 0, 1));
+    app.world_mut()
+        .entity_mut(carried)
+        .insert(InteractionContainerMember {
+            container: actor,
+            slot: 0,
+        });
     app.world_mut().write_message(AnimationCompleted {
         animation_playback_controller_entity: controller,
         playback_generation: 1,
         explicit_clip_request_id: Some(0),
     });
-    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
     assert!(app.world().get_entity(carried).is_ok());
     assert_eq!(
         app.world()
-            .resource::<InteractionContainerOccupancy>()
-            .actor_slot(actor, carried),
-        Some(0)
+            .get::<InteractionContainerMember>(carried)
+            .map(|membership| (membership.container, membership.slot)),
+        Some((actor, 0))
     );
     let detach = || AnimationObjectCommand {
         controller,
@@ -172,12 +189,12 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         action: AuthoredAnimationTextAction::DetachObject,
     };
     app.world_mut().write_message(detach());
-    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
     assert_eq!(
         app.world()
-            .resource::<InteractionContainerOccupancy>()
-            .actor_slot(actor, carried),
-        Some(1)
+            .get::<InteractionContainerMember>(carried)
+            .map(|membership| (membership.container, membership.slot)),
+        Some((actor, 1))
     );
     assert_eq!(
         *app.world().get::<Visibility>(carried).unwrap(),
@@ -196,21 +213,23 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             },
         ))
         .id();
-    assert!(app
-        .world_mut()
-        .resource_mut::<InteractionContainerOccupancy>()
-        .admit(actor, overflow, 0, 1));
+    app.world_mut()
+        .entity_mut(overflow)
+        .insert(InteractionContainerMember {
+            container: actor,
+            slot: 0,
+        });
     app.world_mut().write_message(detach());
-    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
     assert!(
         app.world().get_entity(overflow).is_err(),
         "native detach removes an item rejected by a full destination"
     );
     assert_eq!(
         app.world()
-            .resource::<InteractionContainerOccupancy>()
-            .actor_slot(actor, carried),
-        Some(1),
+            .get::<InteractionContainerMember>(carried)
+            .map(|membership| (membership.container, membership.slot)),
+        Some((actor, 1)),
         "existing inventory survives overflow"
     );
     let money = app
@@ -226,12 +245,14 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             },
         ))
         .id();
-    assert!(app
-        .world_mut()
-        .resource_mut::<InteractionContainerOccupancy>()
-        .admit(actor, money, 0, 1));
+    app.world_mut()
+        .entity_mut(money)
+        .insert(InteractionContainerMember {
+            container: actor,
+            slot: 0,
+        });
     app.world_mut().write_message(detach());
-    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
     assert!(app.world().get_entity(money).is_err());
     assert!(app.world().get_entity(carried).is_ok());
     for (rule, survives) in [
@@ -251,12 +272,14 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
                 },
             ))
             .id();
-        assert!(app
-            .world_mut()
-            .resource_mut::<InteractionContainerOccupancy>()
-            .admit(actor, item, 0, 1));
+        app.world_mut()
+            .entity_mut(item)
+            .insert(InteractionContainerMember {
+                container: actor,
+                slot: 0,
+            });
         app.world_mut().write_message(detach());
-        app.update();
+        app.world_mut().run_schedule(FixedUpdate);
         assert_eq!(
             app.world().get_entity(item).is_ok(),
             survives,
@@ -264,12 +287,46 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
         );
         assert!(app
             .world()
-            .resource::<InteractionContainerOccupancy>()
-            .container_for_member(item)
+            .get::<InteractionContainerMember>(item)
             .is_none());
         assert!(app.world().get::<ContainedObject>(item).is_none());
         assert!(app.world().get_entity(carried).is_ok());
     }
+    let replaceable = app
+        .world_mut()
+        .spawn((
+            DefinitionId(item_id),
+            WorldMember {
+                root: Entity::PLACEHOLDER,
+            },
+            ContainedObject {
+                holder_definition: holder_id,
+                detach_rule: replace,
+                joint: Some(actor),
+                relative_transform: Transform::IDENTITY,
+                attachment_request: None,
+            },
+            InteractionContainerMember {
+                container: actor,
+                slot: 0,
+            },
+        ))
+        .id();
+    app.world_mut().write_message(detach());
+    app.world_mut().write_message(detach());
+    app.world_mut().run_schedule(FixedUpdate);
+    assert!(app.world().get_entity(replaceable).is_err());
+    let world = app.world_mut();
+    let mut created = world.query::<(Entity, &PersistentId, &DefinitionId)>();
+    let (replacement, _, definition) = created
+        .single(world)
+        .expect("the first key should create exactly one replacement");
+    assert_eq!(definition.0, replacement_id);
+    assert!(world
+        .get::<InteractionContainerMember>(replacement)
+        .is_none());
+    assert!(world.get::<ContainedObject>(replacement).is_none());
+
     let unowned = app
         .world_mut()
         .spawn((
@@ -284,12 +341,14 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
             },
         ))
         .id();
-    assert!(app
-        .world_mut()
-        .resource_mut::<InteractionContainerOccupancy>()
-        .admit(actor, unowned, 0, 1));
+    app.world_mut()
+        .entity_mut(unowned)
+        .insert(InteractionContainerMember {
+            container: actor,
+            slot: 0,
+        });
     app.world_mut().entity_mut(actor).despawn();
-    app.update();
+    app.world_mut().run_schedule(FixedUpdate);
     assert!(
         app.world().get_entity(carried).is_err(),
         "owned inventory follows holder lifetime"
@@ -301,7 +360,6 @@ fn detach_transfers_inventory_and_kills_only_on_the_later_detach_event() {
     assert!(app.world().get::<ContainedObject>(unowned).is_none());
     assert!(app
         .world()
-        .resource::<InteractionContainerOccupancy>()
-        .container_for_member(unowned)
+        .get::<InteractionContainerMember>(unowned)
         .is_none());
 }

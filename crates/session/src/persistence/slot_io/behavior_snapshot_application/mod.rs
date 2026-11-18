@@ -18,6 +18,9 @@ use openzt2_zoo_state::{
     animal_behavior::{
         behavior_synchronized_set_types::SynchronizedBehaviorOwner,
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
+        interaction_container_membership::{
+            DockedAtInteractionContainer, InteractionContainerMember,
+        },
     },
     behavior_task_execution_types::{BehaviorTaskExecutionPhase, SynchronizedBehaviorParticipant},
     staff::staff_job_types::TankCleaningRequestSite,
@@ -229,9 +232,11 @@ pub(super) fn restore_behavior_actor_snapshots(
     }
     // The complete plan is valid. Auxiliary task objects are created only now.
     for actor in &prepared {
-        commands
-            .entity(actor.actor)
-            .remove::<(SynchronizedBehaviorOwner, SynchronizedBehaviorParticipant)>();
+        commands.entity(actor.actor).remove::<(
+            SynchronizedBehaviorOwner,
+            SynchronizedBehaviorParticipant,
+            InteractionContainerMember,
+        )>();
     }
     for record in records {
         for reference in actor_references(record) {
@@ -288,7 +293,13 @@ pub(super) fn restore_behavior_actor_snapshots(
             identities.insert(reference.clone(), entity);
         }
     }
-    *application.occupancy = restored_membership;
+    for (actor, membership, docked) in restored_membership {
+        let mut actor = commands.entity(actor);
+        actor.insert(membership);
+        if docked {
+            actor.insert(DockedAtInteractionContainer);
+        }
+    }
     for (record, prepared) in records.iter().zip(prepared) {
         apply_prepared_behavior_actor(commands, record, prepared, &identities, application);
     }

@@ -11,10 +11,13 @@ use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, As
 use crate::asset_source::AssetArchives;
 
 use super::{
+    ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
         kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
     },
-    world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
+    world_definition_document_asset_and_demand_loaded_dependency_paths::{
+        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+    },
     world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,
 };
 
@@ -413,6 +416,32 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     });
     definitions.dirty = false;
     definitions.complete = true;
+    refresh_ground_path_surface_image_dependencies(&mut definitions, &assets, &server);
+}
+
+fn refresh_ground_path_surface_image_dependencies(
+    definitions: &mut WorldDefinitions,
+    assets: &Assets<WorldDefinitionAsset>,
+    server: &AssetServer,
+) {
+    definitions.ground_path_surface_images =
+        definitions.get(assets).map_or_else(BTreeMap::new, |view| {
+            view.paths()
+                .filter(|definition| !definition.elevated)
+                .map(|definition| definition.surface_texture)
+                .chain(
+                    AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS
+                        .into_iter()
+                        .map(AssetId::from_virtual_path),
+                )
+                .filter_map(|identifier| {
+                    let path = view.texture_path(identifier)?;
+                    let image =
+                        server.load(format!("{path}.{GROUND_PATH_SURFACE_IMAGE_EXTENSION}"));
+                    Some((identifier, image))
+                })
+                .collect()
+        });
 }
 
 /// Later documents in precedence order replace earlier winners for the same key.

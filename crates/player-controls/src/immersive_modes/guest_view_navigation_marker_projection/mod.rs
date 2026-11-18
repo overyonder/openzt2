@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 
 use super::guest_view_navigation_marker_types::GuestViewNavigationMarkerPresentation;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
@@ -15,14 +14,12 @@ use crate::immersive_modes::immersive_control_execution_types::GuestViewTileCoun
 const MAXIMUM_GUEST_VIEW_NAVIGATION_MARKER_COUNT: usize = 4;
 
 /// Rebuilds the original guest-view tile markers from the terrain-derived
-/// navigation topology when the picked target or sparse closure overlay
-/// changes. Only the selected entity and asset handle are retained.
+/// navigation topology when the picked target or navigation graph changes.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     pointer_ray: Res<WorldPointerRay>,
     spatial_query: SpatialQuery,
     active_navigation: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    overlay: Option<Res<NavigationOverlay>>,
     mut active: Query<
         (Entity, &ActiveImmersiveMode, &mut GuestViewTileCount),
         With<GuestViewControl>,
@@ -66,11 +63,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     let Ok(target_transform) = transforms.get(hit.entity) else {
         return;
     };
-    let revision = overlay.as_deref().map_or(0, |overlay| overlay.revision);
     if marker_presentations.iter().any(|(_, presentation)| {
         presentation.controller_entity == controller_entity
             && presentation.targeted_entity == hit.entity
-            && presentation.navigation_revision == revision
             && !active_navigation.is_changed()
     }) {
         return;
@@ -126,7 +121,6 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
         GuestViewNavigationMarkerPresentation {
             controller_entity,
             targeted_entity: hit.entity,
-            navigation_revision: revision,
             gizmo_asset: asset.clone(),
         },
         Transform::IDENTITY,

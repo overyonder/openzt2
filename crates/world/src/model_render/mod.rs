@@ -154,11 +154,10 @@ impl Plugin for ModelRenderPlugin {
                     .after(project_model_scene_visibility_and_shadow_policy)
                     .before(project_authored_model_material_passes),
                 mirrored_model_primitive_winding::project_mirrored_model_primitive_winding
-                    .after(TransformSystems::Propagate)
+                    .after(bevy::app::AnimationSystems)
                     .before(project_authored_model_material_passes)
                     .before(project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors),
                 project_authored_model_material_passes
-                    .after(TransformSystems::Propagate)
                     .after(project_model_scene_visibility_and_shadow_policy)
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
                 crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression

@@ -19,13 +19,11 @@ use crate::terrain::terrain_biome_detail_types::TerrainDetailProjectionState;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainChunkRejected;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurfaceImage;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionPending;
-use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionRevision;
 
 #[derive(Component)]
 pub(super) struct AdditionalAuthoredTerrainEffectPass;
@@ -188,8 +186,6 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
             Transform::from_xyz(chunk.origin.x, 0.0, chunk.origin.y),
             Visibility::Inherited,
             RenderLayers::layer(TERRAIN_RENDER_LAYER),
-            TerrainCollisionRevision(0),
-            TerrainRenderRevision(0),
             TerrainDetailProjectionState::default(),
             TerrainCollisionPending,
             AuthoredEffectTechniquePassSubmissionOrder::new(entity, 0)

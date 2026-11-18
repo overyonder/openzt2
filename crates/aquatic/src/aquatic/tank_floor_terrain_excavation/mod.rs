@@ -1,7 +1,6 @@
 //! Keeps the terrain inside each tank's walls at the tank floor, so the floor
 //! is the ground seen through the glass and under the water.
 
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -25,6 +24,30 @@ use super::tank_presentation::inside_walls;
 #[derive(Component)]
 pub(super) struct TankFloorExcavation;
 
+/// The excavation's footprint and fill height survive demolition of its walls.
+#[derive(Component, Default)]
+pub(super) struct TankFloorTerrainFootprint {
+    walls: Vec<[Vec2; 2]>,
+    fill_height_cm: i16,
+}
+
+#[derive(Message)]
+pub(super) struct RestoreTankFloorTerrain(TankFloorTerrainFootprint);
+
+pub(super) fn queue_terrain_restoration_after_tank_removal(
+    removal: On<Remove<Tank>>,
+    mut commands: Commands,
+    mut footprints: Query<&mut TankFloorTerrainFootprint>,
+    mut restorations: MessageWriter<RestoreTankFloorTerrain>,
+) {
+    if let Ok(mut footprint) = footprints.get_mut(removal.entity) {
+        restorations.write(RestoreTankFloorTerrain(std::mem::take(&mut *footprint)));
+        commands
+            .entity(removal.entity)
+            .try_remove::<TankFloorTerrainFootprint>();
+    }
+}
+
 /// Whether `point` lies inside the walls and more than `margin` from each.
 /// Samples within one terrain spacing of a wall keep the outside ground:
 /// walls and samples lie on different grids, so the terrain triangles crossing
@@ -46,8 +69,7 @@ pub(super) fn excavate_changed_tank_floors(
     mut commands: Commands,
     grid: Res<TopologyGrid>,
     tanks: Query<(Entity, &TankGeometry, &HabitatRegion), (With<Tank>, Changed<TankGeometry>)>,
-    mut removed: RemovedComponents<Tank>,
-    mut dug: Local<HashMap<Entity, (Vec<[Vec2; 2]>, i16)>>,
+    mut restorations: MessageReader<RestoreTankFloorTerrain>,
     ground: TankWallGroundSampling,
     fences: Query<&FenceEdge>,
     nodes: Query<&TopologyNode>,
@@ -58,34 +80,45 @@ pub(super) fn excavate_changed_tank_floors(
     )>,
     assets: Res<Assets<TerrainAsset>>,
 ) {
-    let mut floors = removed
-        .read()
-        .filter_map(|tank| dug.remove(&tank))
+    let restorations = restorations.read().collect::<Vec<_>>();
+    let excavations = tanks
+        .iter()
+        .filter_map(|(tank, geometry, region)| {
+            let mut wall_ground_sum = 0.0;
+            let walls = region
+                .boundary_fence_entities
+                .iter()
+                .map(|fence| {
+                    let edge = fences.get(*fence).ok()?;
+                    let a = nodes.get(edge.a).ok()?.cell;
+                    let b = nodes.get(edge.b).ok()?.cell;
+                    wall_ground_sum += ground.ground_height_at_topology_cell(a)?;
+                    Some([a, b].map(|cell| grid.cell_translation(cell).xz()))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            let mean_ground = wall_ground_sum / walls.len().max(1) as f32;
+            let footprint = TankFloorTerrainFootprint {
+                walls,
+                fill_height_cm: (mean_ground * 100.0).round() as i16,
+            };
+            Some((
+                tank,
+                footprint,
+                (geometry.floor_height * 100.0).round() as i16,
+            ))
+        })
         .collect::<Vec<_>>();
-    for (tank, geometry, region) in &tanks {
-        let Some((walls, wall_ground)) = region
-            .boundary_fence_entities
-            .iter()
-            .map(|fence| {
-                let edge = fences.get(*fence).ok()?;
-                let [a, b] = [edge.a, edge.b].map(|node| nodes.get(node).map(|node| node.cell));
-                let [a, b] = [a.ok()?, b.ok()?];
-                Some((
-                    [a, b].map(|cell| grid.cell_translation(cell).xz()),
-                    ground.ground_height_at_topology_cell(a)?,
-                ))
-            })
-            .collect::<Option<(Vec<_>, Vec<_>)>>()
-        else {
-            continue;
-        };
-        let mean_ground = wall_ground.iter().sum::<f32>() / wall_ground.len().max(1) as f32;
-        dug.insert(tank, (walls.clone(), (mean_ground * 100.0).round() as i16));
-        floors.push((walls, (geometry.floor_height * 100.0).round() as i16));
-    }
-    if floors.is_empty() {
+    if restorations.is_empty() && excavations.is_empty() {
         return;
     }
+    let floors = restorations
+        .iter()
+        .map(|restoration| (&restoration.0.walls, restoration.0.fill_height_cm))
+        .chain(
+            excavations
+                .iter()
+                .map(|(_, footprint, height_cm)| (&footprint.walls, *height_cm)),
+        );
     let mut deltas = Vec::new();
     for (chunk, edited, id) in &chunks {
         let Some(asset) = assets.get(&chunk.asset) else {
@@ -97,7 +130,7 @@ pub(super) fn excavate_changed_tank_floors(
         // One delta per chunk for every changed tank, so tanks sharing a
         // chunk cannot overwrite each other's floors.
         let mut targets = Vec::new();
-        for (walls, height_cm) in &floors {
+        for (walls, height_cm) in floors.clone() {
             let (minimum, maximum) = walls.iter().flatten().fold(
                 (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)),
                 |(minimum, maximum), point| (minimum.min(*point), maximum.max(*point)),
@@ -113,7 +146,7 @@ pub(super) fn excavate_changed_tank_floors(
                 for x in first.x as u32..=end.x as u32 {
                     let point = chunk.origin + UVec2::new(x, z).as_vec2() * chunk.spacing_m;
                     if inside_walls_beyond(point, walls, chunk.spacing_m) {
-                        targets.push((UVec2::new(x, z), *height_cm));
+                        targets.push((UVec2::new(x, z), height_cm));
                     }
                 }
             }
@@ -156,6 +189,9 @@ pub(super) fn excavate_changed_tank_floors(
                 after: after.into_boxed_slice(),
             });
         }
+    }
+    for (tank, footprint, _) in excavations {
+        commands.entity(tank).try_insert(footprint);
     }
     if !deltas.is_empty() {
         commands.spawn((

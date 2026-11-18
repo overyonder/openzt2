@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use bevy::prelude::*;
-use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use bevy::{ecs::entity::EntityHashSet, prelude::*};
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMember;
 
 use super::{
     super::behavior_snapshot_types::{BehaviorActorSnapshot, BehaviorSnapshotEntityReference},
@@ -49,13 +49,13 @@ pub(super) fn prepare_behavior_membership_restoration(
     records: &[BehaviorActorSnapshot],
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
     application: &BehaviorSnapshotApplication,
-) -> Result<InteractionContainerOccupancy, Failure> {
-    let mut restored = (*application.occupancy).clone();
-    for record in records {
-        restored.remove_actor(
-            identities[&BehaviorSnapshotEntityReference::Persistent(record.persistent_identifier)],
-        );
-    }
+) -> Result<Vec<(Entity, InteractionContainerMember, bool)>, Failure> {
+    let restored_actors: EntityHashSet = records
+        .iter()
+        .map(|record| {
+            identities[&BehaviorSnapshotEntityReference::Persistent(record.persistent_identifier)]
+        })
+        .collect();
     let mut memberships = records
         .iter()
         .filter_map(|record| {
@@ -70,6 +70,8 @@ pub(super) fn prepare_behavior_membership_restoration(
             .cmp(&right.container)
             .then_with(|| left.admission_order.cmp(&right.admission_order))
     });
+    let mut restored = Vec::with_capacity(memberships.len());
+    let mut occupied = BTreeMap::new();
     for (actor, membership) in memberships {
         let actor = identities[&BehaviorSnapshotEntityReference::Persistent(actor)];
         let target = *identities
@@ -89,12 +91,27 @@ pub(super) fn prepare_behavior_membership_restoration(
             .and_then(|object| object.interaction_slots.get(membership.slot))
             .map(|slot| slot.capacity)
             .ok_or(Failure::UnknownAssetIdentifier)?;
-        if !restored.admit(target, actor, membership.slot, capacity) {
+        let count = occupied
+            .entry((target, membership.slot))
+            .or_insert_with(|| {
+                application
+                    .memberships
+                    .members_in_slot(target, membership.slot)
+                    .filter(|member| !restored_actors.contains(member))
+                    .count()
+            });
+        if *count >= usize::from(capacity) {
             return Err(Failure::CapacityExceeded);
         }
-        if membership.docked {
-            restored.mark_docked(target, actor);
-        }
+        *count += 1;
+        restored.push((
+            actor,
+            InteractionContainerMember {
+                container: target,
+                slot: membership.slot,
+            },
+            membership.docked,
+        ));
     }
     Ok(restored)
 }

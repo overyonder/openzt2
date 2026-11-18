@@ -5,13 +5,13 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
+use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
 use crate::terrain::terrain_sample_change_calculations::changed_terrain_sample_bounds;
 use crate::terrain::terrain_sample_change_calculations::determine_terrain_dirty_flags_from_changed_samples;
-use crate::terrain::terrain_sample_change_calculations::merge_terrain_dirty_sample_rectangle_and_advance_revision;
+use crate::terrain::terrain_sample_change_calculations::queue_terrain_render_refresh;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionPending;
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainEditDelta;
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::apply_terrain_sample_rectangle;
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::materialize_complete_edited_terrain_sample_overlay;
@@ -42,7 +42,6 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
         Entity,
         &TerrainChunk,
         Option<&mut EditedTerrainSamples>,
-        Option<&mut TerrainDirty>,
         &TerrainChunkId,
     )>,
     assets: Res<Assets<TerrainAsset>>,
@@ -82,9 +81,8 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
                     })
         });
         for delta in edit.deltas.iter() {
-            let Some((entity, chunk, edited, _, _)) = chunks
-                .iter_mut()
-                .find(|(_, _, _, _, id)| **id == delta.chunk)
+            let Some((entity, chunk, edited, _)) =
+                chunks.iter_mut().find(|(_, _, _, id)| **id == delta.chunk)
             else {
                 valid = false;
                 break;
@@ -193,7 +191,9 @@ pub(super) fn apply_water_region_edit_changes(
             use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
                 TerrainWaterRegionEdit, TerrainWaterRegionRetired,
             };
-            let Ok(mut entity) = world.get_entity_mut(owner) else { continue; };
+            let Ok(mut entity) = world.get_entity_mut(owner) else {
+                continue;
+            };
             // Held dabs restate an unchanged region on every step; inserting
             // it again would mark the region changed.
             if let Some(state) = state {
@@ -219,7 +219,6 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
         Entity,
         &TerrainChunk,
         Option<&mut EditedTerrainSamples>,
-        Option<&mut TerrainDirty>,
         &TerrainChunkId,
     )>,
     assets: &Assets<TerrainAsset>,
@@ -231,7 +230,7 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     navigation_changed: &mut MessageWriter<TerrainNavigationChanged>,
     water_changed: &mut MessageWriter<TerrainWaterChanged>,
 ) {
-    let Ok((_, chunk, existing, dirty, _)) = chunks.get_mut(entity) else {
+    let Ok((_, chunk, existing, _)) = chunks.get_mut(entity) else {
         return;
     };
     let Some(asset) = assets.get(&chunk.asset) else {
@@ -253,25 +252,17 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
         apply_terrain_sample_rectangle(&mut overlay, chunk.side, delta.min, delta.max, samples);
         commands.entity(entity).insert(overlay);
     }
-    if let Some(mut dirty) = dirty {
-        *dirty = merge_terrain_dirty_sample_rectangle_and_advance_revision(
-            Some(*dirty),
-            changed_min,
-            changed_max,
+    queue_terrain_render_refresh(
+        commands,
+        entity,
+        TerrainDirtyRegion {
+            min: changed_min,
+            max: changed_max,
             flags,
-        );
-    } else {
-        commands
-            .entity(entity)
-            .insert(merge_terrain_dirty_sample_rectangle_and_advance_revision(
-                None,
-                changed_min,
-                changed_max,
-                flags,
-            ));
-    }
+        },
+    );
     if flags.contains(TerrainDirtyFlags::COLLISION) {
-        commands.entity(entity).insert(TerrainCollisionPending);
+        commands.entity(entity).insert(TerrainDirty);
     }
     changed.write(TerrainChanged {
         transaction,

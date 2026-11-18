@@ -2,16 +2,19 @@
 //! demand-loaded presentation arrives.
 
 use super::*;
+use super::admission::{DetachAdmission, DetachMembershipRequest, DetachMembershipRequests};
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
 
-#[derive(Component)]
+#[derive(Component, Default)]
 pub(super) struct PendingDetachCreatedObject {
     prefab: Option<Handle<ScenePrefabAsset>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn reserve_detach_created_objects(
     holder: Entity,
     holder_definition: AssetId,
@@ -20,9 +23,8 @@ pub(super) fn reserve_detach_created_objects(
     relative_transform: Transform,
     created: &[(AssetId, WorldObjectDetachDestination)],
     definitions: &WorldDefinitionsView<'_>,
-    ids: &mut PersistentIdAllocator,
-    occupancy: &mut InteractionContainerOccupancy,
     commands: &mut Commands,
+    requests: &mut DetachMembershipRequests,
 ) {
     let Some(holder_policy) = super::holder::AttachmentHolder::find(definitions, holder_definition)
     else {
@@ -38,44 +40,37 @@ pub(super) fn reserve_detach_created_objects(
         else {
             continue;
         };
-        if occupancy.occupied_places(holder, slot) >= usize::from(policy.capacity) {
-            continue;
-        }
-        let Ok(id) = ids.allocate(world.root) else {
-            warn!(
-                ?holder,
-                "cannot allocate persistent identity for detach-created object"
-            );
-            continue;
-        };
-        let item = commands
-            .spawn((
-                PendingDetachCreatedObject { prefab: None },
-                DefinitionId(definition),
-                world,
-                id,
-                joint_transform.compute_transform(),
-                joint_transform,
-                ContainedObject {
-                    holder_definition,
-                    detach_rule: AssetId::default(),
-                    joint: None,
-                    relative_transform,
-                    attachment_request: None,
+        requests.submit(
+            DetachMembershipRequest::Admit(
+                InteractionContainerAdmissionRequest::AdmitNew {
+                    container: holder,
+                    slot,
+                    capacity: policy.capacity,
+                    world_root: world.root,
                 },
-                Visibility::Hidden,
-            ))
-            .id();
-        if !occupancy.admit(holder, item, slot, policy.capacity) {
-            commands.entity(item).despawn();
-        }
+                DetachAdmission::Create {
+                    holder,
+                    definition,
+                    world,
+                    transform: joint_transform,
+                    attachment: ContainedObject {
+                        holder_definition,
+                        detach_rule: AssetId::default(),
+                        joint: None,
+                        relative_transform,
+                        attachment_request: None,
+                    },
+                },
+            ),
+            commands,
+        );
     }
 }
 
 pub(super) fn hydrate_detach_created_objects(
     mut commands: Commands,
     assets: AttachmentAssets,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     mut pending: Query<
         (
             Entity,
@@ -94,7 +89,7 @@ pub(super) fn hydrate_detach_created_objects(
         return;
     };
     for (pending_entity, mut loading, definition, world, id, transform, contained) in &mut pending {
-        let membership = occupancy.container_for_member(pending_entity);
+        let membership = memberships.container_for_member(pending_entity);
         if contained.is_some() && membership.is_none() {
             continue;
         }
@@ -112,7 +107,6 @@ pub(super) fn hydrate_detach_created_objects(
             };
         let Some(object) = definitions.find_object(definition.0) else {
             if assets.definitions.is_complete() {
-                occupancy.remove_actor(pending_entity);
                 commands.entity(pending_entity).despawn();
             }
             continue;
@@ -126,7 +120,6 @@ pub(super) fn hydrate_detach_created_objects(
                 .or_else(|| definitions.scene(object.prefab))
             else {
                 if assets.definitions.is_complete() {
-                    occupancy.remove_actor(pending_entity);
                     commands.entity(pending_entity).despawn();
                 }
                 continue;
@@ -139,7 +132,6 @@ pub(super) fn hydrate_detach_created_objects(
                     assets.server.get_load_state(prefab_handle.id()),
                     Some(LoadState::Failed(_))
                 ) {
-                    occupancy.remove_actor(pending_entity);
                     commands.entity(pending_entity).despawn();
                 }
                 continue;

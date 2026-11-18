@@ -1,4 +1,9 @@
+use super::behavior_container_admission::{
+    behavior_container_admission_selection, request_behavior_container_admission,
+    BehaviorContainerAdmissions,
+};
 use bevy::prelude::*;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRecipient;
 
 #[cfg(test)]
 mod navigation_event_tests;
@@ -7,6 +12,9 @@ use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::{
+    DockedAtInteractionContainer, InteractionContainerMember, InteractionContainerMemberships,
+};
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -23,21 +31,32 @@ use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::Pre
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 pub(super) fn start_current_supported_behavior_docking_actions(
+    In(apply_admissions): In<bool>,
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
-    mut behavior_tasks: Query<
-        (
+    (task_entities, mut behavior_tasks): (
+        Query<
             Entity,
-            Option<&NavAgent>,
-            Option<&LocomotionMode>,
-            &mut BehaviorTaskExecutionState,
-        ),
-        (
-            Without<PendingBehaviorDockingCompletion>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
-    >,
+            (
+                With<BehaviorTaskExecutionState>,
+                Without<PendingBehaviorDockingCompletion>,
+                Without<PendingBehaviorTaskFailure>,
+            ),
+        >,
+        Query<
+            (
+                Entity,
+                Option<&NavAgent>,
+                Option<&LocomotionMode>,
+                &mut BehaviorTaskExecutionState,
+            ),
+            (
+                Without<PendingBehaviorDockingCompletion>,
+                Without<PendingBehaviorTaskFailure>,
+            ),
+        >,
+    ),
     target_entrances: Query<&PlacedObjectAuthoredEntrance>,
     target_definition_references: Query<&DefinitionId>,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
@@ -56,10 +75,35 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence,
     >,
     mut docking_requests: MessageWriter<DockAt>,
-    mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
+    (memberships, admissions): (InteractionContainerMemberships, BehaviorContainerAdmissions),
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    for (actor, navigation_agent, locomotion_mode, mut behavior_task) in &mut behavior_tasks {
+    let BehaviorContainerAdmissions {
+        mut requests,
+        mut outcomes,
+    } = admissions;
+    let replies = if apply_admissions {
+        Some(outcomes.read())
+    } else {
+        None
+    };
+    let replies = replies.into_iter().flatten().filter_map(|outcome| {
+        let InteractionContainerAdmissionRecipient::Docking(actor) = outcome.reply_to else {
+            return None;
+        };
+        Some((actor, Some(behavior_container_admission_selection(outcome))))
+    });
+    let ready = (!apply_admissions)
+        .then(|| task_entities.iter())
+        .into_iter()
+        .flatten()
+        .map(|actor| (actor, None));
+    for (actor, admission) in replies.chain(ready) {
+        let Ok((actor, navigation_agent, locomotion_mode, mut behavior_task)) =
+            behavior_tasks.get_mut(actor)
+        else {
+            continue;
+        };
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
@@ -186,47 +230,46 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             let Ok(actor_transform) = entity_global_transforms.get(actor) else {
                 continue;
             };
-            let selected = occupancy.nearest_available_service_slot(
-                target,
-                actor,
-                &definition.interaction_slots,
-                Some(reservation_tag),
-                |name| {
-                    let position = if name.is_empty() {
-                        entity_global_transforms.get(target).ok()?.translation()
-                    } else {
-                        find_named_descendant_global_transform(
-                            target,
-                            name,
-                            &children,
-                            &authored_attachment_transforms,
-                        )?
-                        .translation()
-                    };
-                    let offset = position - actor_transform.translation();
-                    Some(Vec2::new(offset.x, offset.z))
-                },
-            );
-            let Some(slot_index) = selected else {
+            let Some(selected) = admission else {
+                let slots = memberships.service_slot_candidates(
+                    target,
+                    actor,
+                    &definition.interaction_slots,
+                    Some(reservation_tag),
+                    |name| {
+                        let position = if name.is_empty() {
+                            entity_global_transforms.get(target).ok()?.translation()
+                        } else {
+                            find_named_descendant_global_transform(
+                                target,
+                                name,
+                                &children,
+                                &authored_attachment_transforms,
+                            )?
+                            .translation()
+                        };
+                        Some((position - actor_transform.translation()).xz())
+                    },
+                );
+                request_behavior_container_admission(
+                    actor,
+                    target,
+                    slots,
+                    Vec::new(),
+                    InteractionContainerAdmissionRecipient::Docking(actor),
+                    &mut requests,
+                );
+                continue;
+            };
+            let Some(slot_index) = selected.map(|slot| slot.index) else {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
                     actor, &mut commands,
                 );
                 continue;
             };
-            if !occupancy.admit(
-                target,
-                actor,
-                slot_index,
-                definition.interaction_slots[slot_index].capacity,
-            ) {
-                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
-                    actor, &mut commands,
-                );
-                continue;
-            }
             behavior_task.interaction_slot = Some(slot_index);
         }
-        if !docking_action.redock && occupancy.is_docked(target, actor) {
+        if !docking_action.redock && memberships.is_docked(target, actor) {
             advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
             continue;
         }
@@ -258,7 +301,7 @@ pub(super) fn start_current_supported_behavior_docking_actions(
         } else {
             let interaction_slot_target_node_name = target_definition
                 .and_then(|definition| {
-                    occupancy
+                    memberships
                         .actor_slot(target, actor)
                         .and_then(|slot| definition.interaction_slots.get(slot))
                 })
@@ -341,7 +384,9 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 locomotion_mode.copied().unwrap_or_default(),
             );
         }
-        occupancy.begin_redocking(actor);
+        commands
+            .entity(actor)
+            .try_remove::<DockedAtInteractionContainer>();
         let request_id = navigation_request_sequence.next();
         debug!(?actor, ?target, request_id, ?local_point, slot = ?behavior_task.interaction_slot,
             "dock requested");
@@ -565,7 +610,7 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     mut arrivals: MessageReader<Arrived>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
-    mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
+    memberships: Query<&InteractionContainerMember>,
     mut behavior_tasks: Query<
         (
             &mut BehaviorTaskExecutionState,
@@ -603,8 +648,13 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
             .get(&behavior_task.document)
             .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
             .is_some_and(|action| matches!(action, BehaviorAction::Dock(_)))
+            && memberships
+                .get(arrival.entity)
+                .is_ok_and(|membership| membership.container == pending_docking.target)
         {
-            occupancy.mark_docked(pending_docking.target, arrival.entity);
+            commands
+                .entity(arrival.entity)
+                .try_insert(DockedAtInteractionContainer);
         }
         advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
         commands

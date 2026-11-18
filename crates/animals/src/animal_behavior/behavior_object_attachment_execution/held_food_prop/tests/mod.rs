@@ -18,8 +18,7 @@ fn authored_food_prop_action_keeps_its_detach_continuation() {
 #[test]
 fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task() {
     let mut app = App::new();
-    app.init_resource::<InteractionContainerOccupancy>()
-        .add_message::<AnimationObjectCommand>()
+    app.add_message::<AnimationObjectCommand>()
         .add_message::<AnimationCompleted>()
         .add_message::<AnimationClipPlaybackRequestRejected>()
         .add_systems(
@@ -73,10 +72,12 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
             completed: false,
         },
     ));
-    assert!(app
-        .world_mut()
-        .resource_mut::<InteractionContainerOccupancy>()
-        .admit(actor, item, 3, 1));
+    app.world_mut()
+        .entity_mut(item)
+        .insert(InteractionContainerMember {
+            container: actor,
+            slot: 3,
+        });
     let controller = app
         .world_mut()
         .spawn((
@@ -138,7 +139,6 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
     assert!(app.world().get::<HeldFoodPropAttachment>(actor).is_none());
     assert!(app
         .world()
-        .resource::<InteractionContainerOccupancy>()
-        .container_for_member(item)
+        .get::<InteractionContainerMember>(item)
         .is_none());
 }

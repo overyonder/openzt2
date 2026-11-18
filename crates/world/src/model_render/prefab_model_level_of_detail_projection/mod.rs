@@ -1,33 +1,39 @@
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
     PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
 };
 
-use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
+use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
 
 #[derive(Default)]
 pub(super) struct LodSelection {
-    layer_revision: u64,
-    cameras: Vec<(Entity, Vec3, Dir3, RenderLayers)>,
+    previous_cameras: Vec<(Entity, Vec3, Dir3, RenderLayers)>,
+    current_cameras: Vec<(Entity, Vec3, Dir3, RenderLayers)>,
+    changed_groups: EntityHashSet,
 }
 
 pub(super) fn project_prefab_model_level_of_detail_visibility(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
     graphics: Res<GraphicsSettings>,
-    groups: Query<(Ref<PrefabLodRanges>, Option<Ref<GlobalTransform>>)>,
-    mut inherited_layers: PrefabRenderLayers,
+    groups: Query<(Entity, Ref<PrefabLodRanges>, Option<Ref<GlobalTransform>>)>,
+    changed_layers: Query<
+        &PrefabModelLevelOfDetailVisibilityRange,
+        Changed<PrefabCameraRenderLayers>,
+    >,
+    mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
     mut lods: Query<(
         &GlobalTransform,
         &PrefabModelLevelOfDetailVisibilityRange,
+        Option<&PrefabCameraRenderLayers>,
         &mut Visibility,
     )>,
     mut selection: Local<LodSelection>,
-    mut current_cameras: Local<Vec<(Entity, Vec3, Dir3, RenderLayers)>>,
 ) {
     let selection = &mut *selection;
-    current_cameras.clear();
+    selection.current_cameras.clear();
     // Water reflection and refraction captures also see the world's layers,
     // but render to textures before the view that shows them. List the views
     // drawn last first, so a model's level of detail follows the screen.
@@ -36,32 +42,51 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         .filter(|(_, camera, ..)| camera.is_active)
         .collect::<Vec<_>>();
     active_cameras.sort_by_key(|(entity, camera, ..)| (std::cmp::Reverse(camera.order), *entity));
-    current_cameras.extend(
-        active_cameras
-            .into_iter()
-            .map(|(entity, _, transform, layers)| {
-                (
-                    entity,
-                    transform.translation(),
-                    transform.forward(),
-                    layers.cloned().unwrap_or_default(),
-                )
-            }),
-    );
-    let layers_changed = selection.layer_revision != inherited_layers.revision();
-    selection.layer_revision = inherited_layers.revision();
+    selection
+        .current_cameras
+        .extend(
+            active_cameras
+                .into_iter()
+                .map(|(entity, _, transform, layers)| {
+                    (
+                        entity,
+                        transform.translation(),
+                        transform.forward(),
+                        layers.cloned().unwrap_or_default(),
+                    )
+                }),
+        );
     let refresh_all =
-        layers_changed || graphics.is_changed() || *current_cameras != selection.cameras;
-    std::mem::swap(&mut *current_cameras, &mut selection.cameras);
+        graphics.is_changed() || selection.current_cameras != selection.previous_cameras;
+    std::mem::swap(
+        &mut selection.current_cameras,
+        &mut selection.previous_cameras,
+    );
+    selection.changed_groups.clear();
+    if refresh_all {
+        removed_layers.clear();
+    } else {
+        // The ranges in a group share a selected ordinal. A changed member
+        // only invalidates its own group's selection.
+        selection
+            .changed_groups
+            .extend(changed_layers.iter().map(|range| range.group));
+        selection.changed_groups.extend(
+            removed_layers
+                .read()
+                .filter_map(|entity| lods.get(entity).ok().map(|(_, range, ..)| range.group)),
+        );
+    }
     let detail_scale = match graphics.object_detail {
         ThreeLevelGraphicsDetail::Low => 0.5,
         ThreeLevelGraphicsDetail::Medium => 1.0,
         ThreeLevelGraphicsDetail::High => 1.5,
     };
-    for (members, transform) in &groups {
+    for (group, members, transform) in &groups {
         if !refresh_all
             && !members.is_changed()
             && transform.as_ref().is_some_and(|t| !t.is_changed())
+            && !selection.changed_groups.contains(&group)
         {
             continue;
         }
@@ -76,15 +101,15 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         let mut previous_depth = None;
         let mut selected = None;
         for member in members.iter() {
-            let Ok((fallback, range, _)) = lods.get(member) else {
+            let Ok((fallback, range, layers, _)) = lods.get(member) else {
                 continue;
             };
             let matches = range.active_without_range || {
-                let layers = inherited_layers.get(member);
+                let layers = layers.map(|layers| &layers.0).unwrap_or_default();
                 selection
-                    .cameras
+                    .previous_cameras
                     .iter()
-                    .find(|(_, _, _, camera_layers)| camera_layers.intersects(&layers))
+                    .find(|(_, _, _, camera_layers)| camera_layers.intersects(layers))
                     .is_some_and(|(camera, position, forward, _)| {
                         let origin = transform.map_or_else(
                             || fallback.translation(),
@@ -107,7 +132,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
             }
         }
         for member in members.iter() {
-            if let Ok((_, range, mut visibility)) = lods.get_mut(member) {
+            if let Ok((_, range, _, mut visibility)) = lods.get_mut(member) {
                 visibility.set_if_neq(if Some(range.ordinal) == selected {
                     Visibility::Inherited
                 } else {

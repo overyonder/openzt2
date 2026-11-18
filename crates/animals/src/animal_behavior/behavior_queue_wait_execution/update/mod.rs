@@ -1,9 +1,6 @@
 //! Service readiness and timeout cancel the nested wait through the task owner.
 
-use super::super::{
-    behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    interaction_container_occupancy::InteractionContainerOccupancy,
-};
+use super::super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use super::{ActiveQueueWait, QueueWaitSources};
 use bevy::prelude::*;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
@@ -16,13 +13,14 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationCl
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::locomotion::locomotion_types::Docking;
 
 pub(super) fn update_queue_wait_deadlines_and_service_readiness(
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
-    occupancy: Res<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     mut actors: Query<(
         Entity,
         &mut BehaviorTaskExecutionState,
@@ -53,14 +51,14 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
             .ok()
             .and_then(|id| definitions.find_object(id.0));
         let ready = object.is_some_and(|object| {
-            occupancy.queue_front_can_enter_service(
+            memberships.queue_front_can_enter_service(
                 wait.target,
                 actor,
                 wait.queue_slot,
                 &object.interaction_slots,
             )
         });
-        let lost_membership = occupancy.actor_slot(wait.target, actor) != Some(wait.queue_slot);
+        let lost_membership = memberships.actor_slot(wait.target, actor) != Some(wait.queue_slot);
         if !ready && object.is_some() && !lost_membership && clock.tick < wait.deadline_tick {
             continue;
         }

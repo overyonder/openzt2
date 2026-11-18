@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
+use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::plan_route;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
@@ -9,7 +10,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::ReachabilityTested;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
@@ -19,7 +19,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_requests: MessageReader<TestReachability>,
     mut reachability_test_results: MessageWriter<ReachabilityTested>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    navigation_edge_overlay: Res<NavigationOverlay>,
+    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     navigation_agents: Query<(
         &NavAgent,
@@ -77,8 +77,8 @@ pub(super) fn test_requested_navigation_destination_reachability(
                     plan_route(
                         terrain_derived_navigation_graph,
                         |from, to| {
-                            navigation_edge_overlay
-                                .fence_crossings(from, to)
+                            fence_crossing_index
+                                .crossing_fences(from, to)
                                 .iter()
                                 .any(|fence| {
                                     fence_policy.fence_blocks_actor(

@@ -1,94 +1,73 @@
+use bevy::app::{AnimationSystems, HierarchyPropagatePlugin, Propagate, PropagateSet};
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::entity::EntityHashMap;
-use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_world_state::model_render::ModelRenderPresentationSet;
+use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabBillboardProjection;
 
-use crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers;
+use super::authored_model_material_pass_projection::project_authored_model_material_passes;
+use super::model_scene_visibility_and_shadow_projection::project_model_scene_visibility_and_shadow_policy_onto_late_primitives;
+use super::prefab_fixed_function_world_lighting_projection::project_prefab_fixed_function_world_lighting_policies;
+use super::world_entity_model_suppression::project_world_entity_model_suppression;
+use super::world_entity_model_suppression::SuppressedModelRenderLayers;
 
-#[derive(SystemParam)]
-pub(super) struct PrefabRenderLayers<'w, 's> {
-    hierarchy: Query<
-        'w,
-        's,
-        (
-            Option<&'static ChildOf>,
-            Option<&'static RenderLayers>,
-            Option<&'static SuppressedModelRenderLayers>,
-        ),
-    >,
-    cache: ResMut<'w, InheritedLayerCache>,
-    path: Local<'s, Vec<Entity>>,
-}
+#[cfg(test)]
+mod tests;
 
-#[derive(Resource, Default)]
-struct InheritedLayerCache {
-    resolved: EntityHashMap<RenderLayers>,
-    revision: u64,
-}
-
-impl InheritedLayerCache {
-    fn invalidate(&mut self, entity: Entity, children: &Query<&Children>) {
-        if self.resolved.remove(&entity).is_none() {
-            return;
-        }
-        self.revision = self.revision.wrapping_add(1);
-        if let Ok(descendants) = children.get(entity) {
-            for child in descendants.iter() {
-                self.invalidate(child, children);
-            }
-        }
-    }
-}
+#[derive(Component, Clone, PartialEq)]
+pub(super) struct PrefabCameraRenderLayers(pub(super) RenderLayers);
 
 pub(super) fn register_inherited_render_layers(app: &mut App) {
-    app.init_resource::<InheritedLayerCache>()
-        .add_observer(|event: On<Insert<(ChildOf, RenderLayers, SuppressedModelRenderLayers)>>, mut cache: ResMut<InheritedLayerCache>, children: Query<&Children>| {
-            cache.invalidate(event.entity, &children);
-        })
-        .add_observer(|event: On<Remove<(ChildOf, RenderLayers, SuppressedModelRenderLayers, GlobalTransform)>>, mut cache: ResMut<InheritedLayerCache>, children: Query<&Children>| {
-            cache.invalidate(event.entity, &children);
-        })
-        .add_systems(PostUpdate, invalidate_edited_layers.before(super::orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers));
+    app.add_plugins(HierarchyPropagatePlugin::<PrefabCameraRenderLayers>::new(
+        PostUpdate,
+    ))
+    .configure_sets(
+        PostUpdate,
+        PropagateSet::<PrefabCameraRenderLayers>::default()
+            .before(PrefabBillboardProjection)
+            .before(ModelRenderPresentationSet::LevelOfDetail)
+            .before(project_prefab_fixed_function_world_lighting_policies),
+    )
+    .add_systems(
+        PostUpdate,
+        project_prefab_camera_layer_sources
+            .after(AnimationSystems)
+            .after(project_model_scene_visibility_and_shadow_policy_onto_late_primitives)
+            .after(project_authored_model_material_passes)
+            .after(project_world_entity_model_suppression)
+            .before(PropagateSet::<PrefabCameraRenderLayers>::default()),
+    );
 }
 
-// Inserts, removals and reparenting are visible immediately, including between
-// presentation systems. Also catch edits made in place by simulation systems.
-fn invalidate_edited_layers(
+fn project_prefab_camera_layer_sources(
+    mut commands: Commands,
     changed: Query<Entity, Or<(Changed<RenderLayers>, Changed<SuppressedModelRenderLayers>)>>,
-    mut cache: ResMut<InheritedLayerCache>,
-    children: Query<&Children>,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut removed_suppression: RemovedComponents<SuppressedModelRenderLayers>,
+    sources: Query<(
+        Option<&RenderLayers>,
+        Option<&SuppressedModelRenderLayers>,
+        Option<&Propagate<PrefabCameraRenderLayers>>,
+    )>,
 ) {
-    for entity in &changed {
-        cache.invalidate(entity, &children);
-    }
-}
-
-impl PrefabRenderLayers<'_, '_> {
-    pub(super) fn revision(&self) -> u64 {
-        self.cache.revision
-    }
-
-    pub(super) fn get(&mut self, mut entity: Entity) -> RenderLayers {
-        let result = loop {
-            if let Some(layers) = self.cache.resolved.get(&entity) {
-                break layers.clone();
-            }
-            let Ok((parent, layers, saved)) = self.hierarchy.get(entity) else {
-                break RenderLayers::default();
-            };
-            self.path.push(entity);
-            // Suppressed draws still use the original camera policy for LOD and lighting.
-            if let Some(layers) = saved.map_or(layers, |saved| saved.0.as_ref()) {
-                break layers.clone();
-            }
-            let Some(parent) = parent else {
-                break RenderLayers::default();
-            };
-            entity = parent.parent();
+    for entity in changed
+        .iter()
+        .chain(removed_layers.read())
+        .chain(removed_suppression.read())
+    {
+        let Ok((layers, saved, propagation)) = sources.get(entity) else {
+            continue;
         };
-        for visited in self.path.drain(..) {
-            self.cache.resolved.insert(visited, result.clone());
+        // Suppressed draws still use their ordinary camera policy. A saved
+        // absence of layers must continue to inherit a parent's policy.
+        let layers = saved.map_or(layers, |saved| saved.0.as_ref());
+        if layers == propagation.map(|Propagate(PrefabCameraRenderLayers(layers))| layers) {
+            continue;
         }
-        result
+        let mut target = commands.entity(entity);
+        if let Some(layers) = layers {
+            target.insert(Propagate(PrefabCameraRenderLayers(layers.clone())));
+        } else {
+            target.remove::<Propagate<PrefabCameraRenderLayers>>();
+        }
     }
 }

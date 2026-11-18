@@ -148,35 +148,40 @@ impl Plugin for PersistencePlugin {
                     initial_profile_activation::
                         select_persisted_profile_or_create_localized_first_profile,
                     profile_request_execution::begin_persisting_changed_active_profile_options,
-                    persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests,
+                    persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests
+                        .after(openzt2_interface_state::ui::UiSet::Interaction),
                     save_slot_catalogue_ui_presentation::project_original_save_delete_control_state,
                     save_slot_catalogue_ui_presentation::load_save_slot_from_submitted_row,
                     save_slot_catalogue_ui_presentation::request_save_slot_catalogue_list_row_count_updates,
                     save_slot_catalogue_ui_presentation::project_save_slot_catalogue_records_onto_saved_game_list_rows,
-                    persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor,
-                    persistence_ui_operation_presentation::present_original_saved_game_failures,
-                    persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save
-                        .after(openzt2_interface_state::ui::UiSet::Projection),
-                    persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save,
                 )
                     .chain(),
             )
             .add_systems(
                 Update,
                 (
-                    photo_album_html_and_bmp_export::begin_photo_album_html_and_bmp_exports,
-                    photo_album_html_and_bmp_export::complete_photo_album_html_and_bmp_exports,
-                    overview_map_html_and_jpeg_export::begin_overview_map_html_and_jpeg_exports,
-                    overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports,
-                    screenshot_export::begin_full_frame_screenshot_bmp_exports,
-                    screenshot_export::complete_full_frame_screenshot_bmp_exports,
-                    generated_photo_file_persistence::begin_challenge_photo_writes,
-                    generated_photo_file_persistence::complete_challenge_photo_writes,
-                    generated_photo_file_persistence::begin_generated_image_deletes,
-                    generated_photo_file_persistence::complete_generated_image_deletes,
+                    (
+                        photo_album_html_and_bmp_export::begin_photo_album_html_and_bmp_exports,
+                        photo_album_html_and_bmp_export::complete_photo_album_html_and_bmp_exports,
+                    ).chain(),
+                    (
+                        overview_map_html_and_jpeg_export::begin_overview_map_html_and_jpeg_exports,
+                        overview_map_html_and_jpeg_export::complete_overview_map_html_and_jpeg_exports,
+                    ).chain(),
+                    (
+                        screenshot_export::begin_full_frame_screenshot_bmp_exports,
+                        screenshot_export::complete_full_frame_screenshot_bmp_exports,
+                    ).chain(),
+                    (
+                        generated_photo_file_persistence::begin_challenge_photo_writes,
+                        generated_photo_file_persistence::complete_challenge_photo_writes,
+                        generated_photo_file_persistence::begin_generated_image_deletes,
+                        generated_photo_file_persistence::complete_generated_image_deletes,
+                    ).chain()
+                        .after_ignore_deferred(photo_album_html_and_bmp_export::begin_photo_album_html_and_bmp_exports)
+                        .after_ignore_deferred(screenshot_export::begin_full_frame_screenshot_bmp_exports),
                 )
-                    .chain()
-                    .after(persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save),
+                    .after(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests),
             )
             .add_systems(
                 Update,
@@ -197,10 +202,23 @@ impl Plugin for PersistencePlugin {
                         apply_completed_persistence_slot_filesystem_tasks,
                 )
                     .chain()
-                    .after(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests)
-                    .after(
-                        photo_album_html_and_bmp_export::complete_photo_album_html_and_bmp_exports,
-                    ),
+                    .after(persistence_ui_action_routing::route_authored_persistence_ui_actions_to_domain_requests),
+            )
+            .add_systems(
+                Update,
+                (
+                    persistence_ui_operation_presentation::project_outstanding_world_snapshot_operations_onto_ui_wait_cursor
+                        .before(GameSet::Presentation),
+                    persistence_ui_operation_presentation::present_original_saved_game_failures
+                        .before(openzt2_interface_state::ui::UiSet::Notifications),
+                    (
+                        persistence_ui_operation_presentation::continue_to_load_slot_catalogue_after_world_snapshot_save
+                            .after(openzt2_interface_state::ui::UiSet::Projection),
+                        persistence_ui_operation_presentation::close_save_dialogs_after_world_snapshot_save
+                            .before(openzt2_interface_state::ui::UiSet::Commands),
+                    ).chain(),
+                )
+                    .after(slot_io::filesystem_task_completion_application::apply_completed_persistence_slot_filesystem_tasks),
             )
             .add_systems(
                 Update,

@@ -1,15 +1,21 @@
 //! Admit once, then repeat the authored waiting set without renewing its deadline.
 
+use super::super::behavior_container_admission::{
+    behavior_container_admission_selection, request_behavior_container_admission,
+    BehaviorContainerAdmissions,
+};
 use super::super::{
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_subject_type_resolution::behavior_subject_type_identifiers,
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    interaction_container_occupancy::InteractionContainerOccupancy,
 };
 use super::{ActiveQueueWait, QueueWaitSources};
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRecipient;
+
 use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
@@ -52,12 +58,21 @@ pub(super) struct QueueWaitActors<'w, 's> {
 }
 
 pub(super) fn start_or_repeat_authored_queue_wait(
+    In(apply_admissions): In<bool>,
+    task_entities: Query<
+        Entity,
+        (
+            With<BehaviorTaskExecutionState>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
+    >,
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
     animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     mut actors: QueueWaitActors,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
+    admissions: BehaviorContainerAdmissions,
 ) {
     let (Some(definitions), Some(declarations)) = (
         sources.definitions.get(&sources.definition_assets),
@@ -67,7 +82,30 @@ pub(super) fn start_or_repeat_authored_queue_wait(
     ) else {
         return;
     };
-    for (actor, mut task, active_wait) in &mut actors.tasks {
+    let BehaviorContainerAdmissions {
+        mut requests,
+        mut outcomes,
+    } = admissions;
+    let replies = if apply_admissions {
+        Some(outcomes.read())
+    } else {
+        None
+    };
+    let replies = replies.into_iter().flatten().filter_map(|outcome| {
+        let InteractionContainerAdmissionRecipient::QueueWait(actor) = outcome.reply_to else {
+            return None;
+        };
+        Some((actor, Some(behavior_container_admission_selection(outcome))))
+    });
+    let ready = (!apply_admissions)
+        .then(|| task_entities.iter())
+        .into_iter()
+        .flatten()
+        .map(|actor| (actor, None));
+    for (actor, admission) in replies.chain(ready) {
+        let Ok((actor, mut task, active_wait)) = actors.tasks.get_mut(actor) else {
+            continue;
+        };
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -94,7 +132,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
         let tag = action
             .container
             .or_else(|| task.reservation_tag(&sources.behaviors));
-        if occupancy
+        if memberships
             .actor_slot(target, actor)
             .and_then(|index| object.interaction_slots.get(index))
             .is_some_and(|slot| !slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
@@ -111,17 +149,30 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        if !occupancy.admit(target, actor, queue_index, queue.capacity) {
+        let Some(selected) = admission else {
+            let service_slots = object
+                .interaction_slots
+                .iter()
+                .enumerate()
+                .filter(|(_, slot)| !slot.is_queue && slot.reservation_tag == queue.reservation_tag)
+                .map(|(index, slot)| (index, slot.capacity))
+                .collect();
+            request_behavior_container_admission(
+                actor,
+                target,
+                vec![(queue_index, queue.capacity)],
+                service_slots,
+                InteractionContainerAdmissionRecipient::QueueWait(actor),
+                &mut requests,
+            );
+            continue;
+        };
+        let Some(selected) = selected else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
-        }
-        task.interaction_slot = Some(queue_index);
-        if occupancy.queue_front_can_enter_service(
-            target,
-            actor,
-            queue_index,
-            &object.interaction_slots,
-        ) {
+        };
+        task.interaction_slot = Some(selected.index);
+        if selected.queue_service_available {
             advance_behavior_task_to_next_action(&mut task, clock.tick);
             commands.entity(actor).remove::<ActiveQueueWait>();
             continue;

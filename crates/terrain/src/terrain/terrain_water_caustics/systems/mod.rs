@@ -15,7 +15,7 @@ use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVis
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
 use openzt2_zoo_state::terrain::terrain_water_caustic_types::{
-    TerrainWaterCausticAnimation, TerrainWaterCausticPass, TerrainWaterCausticProjectionRevision,
+    TerrainWaterCausticAnimation, TerrainWaterCausticPass,
 };
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterMembershipIndex, TerrainWaterRegionQuery, TerrainWaterRegionSource,
@@ -28,6 +28,9 @@ use super::{
     caustic_world_projection_matrices, initialize_caustic_animation,
 };
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
+
+#[derive(Component)]
+pub(in crate::terrain) struct TerrainCausticGroundProjectionPending;
 
 pub(in crate::terrain) fn advance_terrain_caustic_animation(
     mut commands: Commands,
@@ -104,12 +107,12 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
             Entity,
             &TerrainChunk,
             Option<&EditedTerrainSamples>,
-            Option<&TerrainDirty>,
-            Option<&TerrainWaterCausticProjectionRevision>,
+            Has<TerrainCausticGroundProjectionPending>,
             Option<&Children>,
         ),
         With<TerrainRenderChunk>,
     >,
+    changed_chunks: Query<(), Or<(Added<TerrainRenderChunk>, Changed<TerrainDirty>)>>,
     indexes: Query<Ref<TerrainWaterMembershipIndex>>,
     regions: TerrainWaterRegionQuery,
     caustic_passes: Query<(), With<TerrainWaterCausticPass>>,
@@ -131,13 +134,13 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
         })
         .collect::<Vec<_>>();
     let new_camera = cameras.iter().any(|(_, camera, _, _)| camera.is_added());
-    for (chunk_entity, chunk, edited, dirty, revision, children) in &chunks {
+    for (chunk_entity, chunk, edited, pending, children) in &chunks {
         let membership = indexes
             .iter()
             .find(|index| index.terrain() == chunk.asset.id());
-        let target_revision = dirty.map_or(0, |dirty| dirty.revision);
         let unchanged = membership.as_ref().is_some_and(|index| !index.is_changed())
-            && revision.is_some_and(|revision| revision.0 >= target_revision)
+            && !pending
+            && !changed_chunks.contains(chunk_entity)
             && !graphics.is_changed()
             && !assets.is_changed()
             && !new_camera;
@@ -149,9 +152,11 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
                 commands.entity(child).despawn();
             }
         }
-        commands
-            .entity(chunk_entity)
-            .remove::<TerrainWaterCausticProjectionRevision>();
+        if !pending {
+            commands
+                .entity(chunk_entity)
+                .insert(TerrainCausticGroundProjectionPending);
+        }
         // An absent index is unresolved; no saved membership is substituted.
         let (Some(index), Some(asset)) = (membership, assets.get(&chunk.asset)) else {
             continue;
@@ -229,7 +234,7 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
         }
         commands
             .entity(chunk_entity)
-            .insert(TerrainWaterCausticProjectionRevision(target_revision));
+            .remove::<TerrainCausticGroundProjectionPending>();
     }
 }
 

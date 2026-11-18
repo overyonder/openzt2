@@ -1,4 +1,3 @@
-use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -490,32 +489,6 @@ impl SpatialGrid {
         self.entities
             .get(start as usize..end as usize)
             .unwrap_or(&[])
-    }
-}
-
-/// Sparse references to canonical fence entities crossed by terrain graph edges.
-/// Collision policy and gate state remain owned by their definitions and entities.
-#[derive(Resource, Debug, Default)]
-pub struct NavigationOverlay {
-    fence_crossings: HashMap<(u32, u32), Vec<Entity>>,
-    pub revision: u64,
-}
-
-impl NavigationOverlay {
-    pub fn replace_fence_crossings(&mut self, mut crossings: HashMap<(u32, u32), Vec<Entity>>) {
-        for fences in crossings.values_mut() {
-            fences.sort_unstable();
-        }
-        if self.fence_crossings != crossings {
-            self.fence_crossings = crossings;
-            self.revision = self.revision.wrapping_add(1);
-        }
-    }
-
-    pub fn fence_crossings(&self, from: u32, to: u32) -> &[Entity] {
-        self.fence_crossings
-            .get(&(from, to))
-            .map_or(&[], Vec::as_slice)
     }
 }
 

@@ -4,6 +4,7 @@ use bevy::prelude::*;
 /// rig. Ordinary zoo objects remain on layer zero.
 pub const TERRAIN_RENDER_LAYER: usize = 2;
 
+/// Marks an initialized render chunk and changes when its base projection is refreshed.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainRenderChunk;
 
@@ -15,16 +16,14 @@ pub struct TerrainSurfaceImage(pub Handle<Image>);
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainChunkRejected;
 
-/// Last edit revision applied to the mesh and blend image.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TerrainRenderRevision(pub u64);
-
 /// A texture painted into the terrain surface image.
 ///
 /// The original paints a road (`paintTexture`) into the ground. It covers the square of `size_m`
 /// around `centre` (world XZ) with the `uv_min`..`uv_max` part of `texture`,
 /// U along +X (east) and V along -Z (north), blended by twice the texture's alpha.
+/// Replacing the component lets the terrain invalidate both footprints.
 #[derive(Component, Debug, Clone, PartialEq)]
+#[component(immutable)]
 pub struct TerrainPaintedTexture {
     pub centre: Vec2,
     pub size_m: f32,

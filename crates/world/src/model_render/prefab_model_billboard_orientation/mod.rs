@@ -2,12 +2,12 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 
-use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
+use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 
 pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers(
     cameras: Query<(Entity, &Camera, Option<&RenderLayers>), With<Camera3d>>,
-    mut inherited_layers: PrefabRenderLayers,
+    camera_layers: Query<&PrefabCameraRenderLayers>,
     parents: Query<&ChildOf>,
     mut transforms: ParamSet<(
         TransformHelper,
@@ -39,14 +39,17 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
             };
             (*mode, *transform, parent.map(ChildOf::parent))
         };
-        let layers = inherited_layers.get(entity);
+        let layers = camera_layers
+            .get(entity)
+            .map(|layers| &layers.0)
+            .unwrap_or_default();
         // Water reflection and refraction captures also see the world's layers,
         // but render to textures before the view that shows them. Face the
         // view drawn last, which is the one on screen.
         let Some((camera, ..)) = cameras
             .iter()
             .filter(|(_, camera, camera_layers)| {
-                camera.is_active && camera_layers.unwrap_or_default().intersects(&layers)
+                camera.is_active && camera_layers.unwrap_or_default().intersects(layers)
             })
             .max_by_key(|(_, camera, _)| camera.order)
         else {

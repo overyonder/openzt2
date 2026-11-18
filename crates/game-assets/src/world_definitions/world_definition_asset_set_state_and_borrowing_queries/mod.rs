@@ -44,6 +44,7 @@ use openzt2_game_data::{
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
 
+use super::ground_path_surface_images::GroundPathSurfaceImage;
 use super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -159,6 +160,7 @@ pub struct WorldDefinitions {
     pub(super) total_loads: usize,
     pub(super) records: BTreeMap<(DefinitionKind, AssetId), Handle<WorldDefinitionAsset>>,
     pub(super) singletons: BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
+    pub(super) ground_path_surface_images: BTreeMap<AssetId, Handle<GroundPathSurfaceImage>>,
     pub(super) unlock_definition_identifiers_by_target: BTreeMap<AssetId, Vec<AssetId>>,
     pub(super) catalogue_authored_purchase_order: Vec<(usize, AssetId)>,
     pub(super) catalogue_by_definition: std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
@@ -204,6 +206,24 @@ impl WorldDefinitions {
 
     pub const fn catalogue_revision(&self) -> u64 {
         self.catalogue_revision
+    }
+
+    #[must_use]
+    pub fn ground_path_surface_image(
+        &self,
+        id: AssetId,
+    ) -> Option<&Handle<GroundPathSurfaceImage>> {
+        self.ground_path_surface_images.get(&id)
+    }
+
+    #[must_use]
+    pub fn owns_ground_path_surface_image(
+        &self,
+        id: bevy::asset::AssetId<GroundPathSurfaceImage>,
+    ) -> bool {
+        self.ground_path_surface_images
+            .values()
+            .any(|handle| handle.id() == id)
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -1072,6 +1092,12 @@ impl<'a> WorldDefinitionsView<'a> {
         self.assets
             .get(self.records.get(&(DefinitionKind::TextureDependency, id))?)?
             .texture(server, id)
+    }
+
+    pub(super) fn texture_path(self, id: AssetId) -> Option<&'a str> {
+        self.assets
+            .get(self.records.get(&(DefinitionKind::TextureDependency, id))?)?
+            .texture_path(id)
     }
 
     pub fn model(self, id: AssetId) -> Option<Handle<Gltf>> {

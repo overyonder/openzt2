@@ -118,7 +118,6 @@ pub(crate) fn loading_app() -> (App, Entity) {
     .add_message::<openzt2_zoo_state::topology::topology_edit_types::TopologyChanged>()
     .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
     .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
-    .init_resource::<openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::Arrived>()
     .add_message::<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>()
     .init_resource::<openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence>()

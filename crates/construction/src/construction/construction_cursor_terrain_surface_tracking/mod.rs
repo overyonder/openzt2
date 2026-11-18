@@ -16,7 +16,6 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
 
 #[derive(Default)]
 pub(crate) struct TerrainCursorHit {
@@ -69,13 +68,12 @@ pub(crate) fn update_construction_cursor(
         (
             With<TerrainRenderChunk>,
             Or<(
-                Added<TerrainRenderChunk>,
+                Changed<TerrainRenderChunk>,
                 Changed<Mesh3d>,
                 AssetChanged<Mesh3d>,
                 Changed<Aabb>,
                 Changed<GlobalTransform>,
                 Changed<InheritedVisibility>,
-                Changed<TerrainRenderRevision>,
             )>,
         ),
     >,

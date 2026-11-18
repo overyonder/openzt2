@@ -1,8 +1,7 @@
 use bevy::prelude::*;
 
-use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
-use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
+use crate::terrain::terrain_change_tracking_types::{TerrainDirtyRegion, TerrainRenderPending};
 use openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainSample;
 
 pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
@@ -60,31 +59,28 @@ pub(super) fn changed_terrain_sample_bounds(
         })
 }
 
-pub(super) fn merge_terrain_dirty_sample_rectangle_and_advance_revision(
-    current: Option<TerrainDirty>,
-    min: UVec2,
-    max: UVec2,
-    flags: TerrainDirtyFlags,
-) -> TerrainDirty {
-    let region = TerrainDirtyRegion { min, max, flags };
-    match current {
-        Some(current) => TerrainDirty {
-            flags: current.flags | flags,
-            render: Some(match current.render {
-                Some(pending) => TerrainDirtyRegion {
-                    min: pending.min.min(min),
-                    max: pending.max.max(max),
-                    flags: pending.flags | flags,
-                },
-                None => region,
-            }),
-            revision: current.revision.checked_add(1).unwrap_or(u64::MAX),
-        },
-        None => TerrainDirty {
-            flags,
-            render: Some(region),
-            revision: 1,
-        },
+pub(super) fn queue_terrain_render_refresh(
+    commands: &mut Commands,
+    chunk: Entity,
+    region: TerrainDirtyRegion,
+) {
+    commands
+        .entity(chunk)
+        .entry::<TerrainRenderPending>()
+        .and_modify(move |mut pending| {
+            pending.0 = merge_terrain_dirty_sample_rectangles(pending.0, region);
+        })
+        .or_insert(TerrainRenderPending(region));
+}
+
+pub(super) fn merge_terrain_dirty_sample_rectangles(
+    pending: TerrainDirtyRegion,
+    next: TerrainDirtyRegion,
+) -> TerrainDirtyRegion {
+    TerrainDirtyRegion {
+        min: pending.min.min(next.min),
+        max: pending.max.max(next.max),
+        flags: pending.flags | next.flags,
     }
 }
 

@@ -8,6 +8,7 @@ use openzt2_interface_state::immersive_modes::immersive_mode_state_types::Equipp
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveMode;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMember;
 
 use super::{
     fossil_collection_and_assembly_types::{CollectedFossilPiece, CollectedFossilPieceInventory},
@@ -26,9 +27,6 @@ use super::{
 
 pub(super) fn update_active_fossil_search_sonar_tracking(
     mut commands: Commands,
-    occupancy: Res<
-        openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy,
-    >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     controllers: Query<(Entity, &ActiveImmersiveMode)>,
@@ -36,7 +34,14 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
         &GlobalTransform,
         With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
     >,
-    artifacts: Query<(Entity, &GlobalTransform), With<ActiveFossilSearchMarker>>,
+    artifacts: Query<
+        (
+            Entity,
+            &GlobalTransform,
+            Option<&InteractionContainerMember>,
+        ),
+        With<ActiveFossilSearchMarker>,
+    >,
 ) {
     let Some(policy) = active_definitions
         .get(&definitions)
@@ -51,11 +56,9 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
         let Ok(camera) = cameras.get(active.camera) else {
             continue;
         };
-        let retained = artifacts.iter().find_map(|(entity, _)| {
-            occupancy
-                .container_for_member(entity)
-                .filter(|(holder, _)| *holder == controller || Some(*holder) == active.subject)
-                .map(|_| entity)
+        let retained = artifacts.iter().find_map(|(entity, _, membership)| {
+            let holder = membership?.container;
+            (holder == controller || Some(holder) == active.subject).then_some(entity)
         });
         let result = select_highest_scoring_fossil_sonar_candidate(
             camera.translation(),
@@ -66,7 +69,7 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
             f32::from(policy.minimum_sonar_view_dot),
             artifacts
                 .iter()
-                .map(|(entity, transform)| (entity, transform.translation())),
+                .map(|(entity, transform, _)| (entity, transform.translation())),
         );
         commands.entity(controller).insert(result.map_or_else(
             ActiveFossilSonarArtifactTracking::default,

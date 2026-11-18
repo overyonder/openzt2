@@ -2,7 +2,8 @@ use bevy::prelude::*;
 
 use super::locomotion_types::NavFlags;
 use super::terrain_derived_navigation_graph_types::{
-    NavigationPathSurface, TerrainDerivedNavigationGraph, TerrainDerivedNavigationGraphNode,
+    NavigationPathSurface, NavigationPathSurfaceChanges, TerrainDerivedNavigationGraph,
+    TerrainDerivedNavigationGraphNode,
 };
 
 impl NavigationPathSurface {
@@ -223,7 +224,7 @@ impl TerrainDerivedNavigationGraph {
         mut elevated: Vec<NavigationPathSurface>,
         ground_paths: Vec<NavigationPathSurface>,
         terrain_height: impl Fn(Vec2) -> Option<f32>,
-    ) -> bool {
+    ) -> NavigationPathSurfaceChanges {
         let previous_ground = self.ground_path_nodes.clone();
         for node in self.ground_path_nodes.drain(..) {
             self.navigation_nodes[node as usize].eligibility_flags.0 &= !NavFlags::PATH.0;
@@ -352,9 +353,11 @@ impl TerrainDerivedNavigationGraph {
                 self.path_surface_edges.entry(from).or_default().push(edge);
             }
         }
-        previous_surfaces != self.path_surfaces
-            || previous_edges != self.path_surface_edges
-            || previous_ground != self.ground_path_nodes
+        NavigationPathSurfaceChanges {
+            ground: previous_ground != self.ground_path_nodes,
+            elevated: previous_surfaces != self.path_surfaces
+                || previous_edges != self.path_surface_edges,
+        }
     }
 }
 

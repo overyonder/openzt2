@@ -126,9 +126,9 @@ impl Plugin for GuestsPlugin {
                     spawn_arriving_guests,
                     // Release old observations before consuming replacement arrivals;
                     // validate newly registered observations before advancing them.
-                    guest_viewing_lifecycle::revoke_unowned_guest_observations,
+                    guest_viewing_lifecycle::revoke_unowned_guest_observations::<()>,
                     begin_viewing.in_set(GuestViewingBegin),
-                    guest_viewing_lifecycle::revoke_unowned_guest_observations,
+                    guest_viewing_lifecycle::revoke_unowned_guest_observations::<Added<Viewing>>,
                     advance_viewing,
                     view_event_execution::deliver_view_events_to_current_viewers,
                     apply_guest_reactions.in_set(GuestReactionApplication),

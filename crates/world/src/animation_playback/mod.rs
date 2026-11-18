@@ -27,14 +27,15 @@ use openzt2_world_state::application_schedule::GameSet;
 use crate::animation_playback::animation_playback_time_advancement::advance_real_time_clock_animation_playback_controllers;
 use crate::animation_playback::animation_playback_time_advancement::advance_simulation_clock_animation_playback_controllers;
 use crate::animation_playback::animation_traversal_transition_request_projection::project_authored_animation_traversal_transitions_to_graph_node_playback_requests;
+use crate::animation_playback::authored_animation_event_cursor_types::AuthoredAnimationEventCursor;
 use crate::animation_playback::authored_animation_event_execution::execute_crossed_authored_animation_events;
-use crate::animation_playback::authored_animation_event_execution::initialize_authored_animation_event_cursors_for_new_playback_controllers;
 use crate::animation_playback::named_model_animation_joint_target_binding::bind_new_named_model_entities_and_new_animation_playback_controller_descendants;
 use crate::animation_playback::standard_bevy_animation_graph_cache_invalidation::invalidate_standard_bevy_animation_graphs_and_player_bindings_after_asset_changes;
 use crate::animation_playback::standard_bevy_animation_player_projection::project_animation_playback_controller_state_to_standard_bevy_animation_players;
 use crate::animation_playback::standard_bevy_animation_player_projection_types::StandardBevyAnimationGraphsByAnimationSetAsset;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationTraversalTransitionRequested;
+use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
 #[derive(Default)]
 pub struct AnimationPlaybackPlugin;
@@ -43,6 +44,12 @@ impl Plugin for AnimationPlaybackPlugin {
     fn build(&self, application: &mut App) {
         crate::model_render::model_projection_changes::register(application);
         application
+            .register_required_components_with::<AnimationPlaybackController, AuthoredAnimationEventCursor>(|| {
+                AuthoredAnimationEventCursor {
+                    requires_initial_event_sample: true,
+                    ..default()
+                }
+            })
             .add_systems(PostUpdate,
                 animation_water_effect_binding::update_animation_water_effect_planes
                     .after(bevy::app::AnimationSystems)
@@ -62,7 +69,6 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_systems(
                 FixedUpdate,
                 (
-                    initialize_authored_animation_event_cursors_for_new_playback_controllers,
                     advance_simulation_clock_animation_playback_controllers,
                     execute_crossed_authored_animation_events,
                 ).chain()
@@ -74,7 +80,6 @@ impl Plugin for AnimationPlaybackPlugin {
                 Update,
                 (
                     advance_real_time_clock_animation_playback_controllers,
-                    initialize_authored_animation_event_cursors_for_new_playback_controllers,
                     execute_crossed_authored_animation_events,
                     project_authored_animation_traversal_transitions_to_graph_node_playback_requests,
                     invalidate_standard_bevy_animation_graphs_and_player_bindings_after_asset_changes,

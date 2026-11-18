@@ -1,4 +1,4 @@
-use bevy::platform::collections::HashMap;
+use bevy::ecs::{entity::EntityHashSet, system::SystemParam};
 use bevy::prelude::*;
 
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
@@ -9,30 +9,22 @@ use openzt2_zoo_state::topology::topology_grid_geometry::horizontal_world_segmen
 
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 
-/// Projects references to crossed fences into the sparse edge overlay and dirties only
-/// routes whose remaining polyline intersects a changed topology rectangle.
-pub(super) fn synchronize_navigation_edge_blocking_and_invalidate_routes_after_topology_changes(
+use super::fence_navigation_crossing_types::{DirectedNavigationEdge, FenceNavigationCrossings};
+
+/// Dirties routes whose remaining polyline intersects a changed topology rectangle.
+pub(super) fn invalidate_routes_after_topology_changes(
     mut topology_changes: MessageReader<TopologyChanged>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    mut navigation_edge_overlay: ResMut<NavigationOverlay>,
-    fence_edges: Query<(Entity, &FenceEdge)>,
     topology_grid: Res<TopologyGrid>,
-    topology_nodes: Query<&TopologyNode>,
     mut active_routes: Query<(&GlobalTransform, &Route, &mut Destination)>,
 ) {
-    let Some(active_navigation_graph) = active_navigation_graph else {
-        for _ in topology_changes.read() {}
-        return;
-    };
-    let terrain_derived_navigation_graph =
-        active_navigation_graph.terrain_derived_navigation_graph();
-    let mut rebuild_crossings = active_navigation_graph.is_changed();
     for topology_change in topology_changes.read() {
-        rebuild_crossings = true;
+        if active_navigation_graph.is_none() {
+            continue;
+        }
         let changed_world_bounds =
             calculate_topology_rectangle_world_cell_bounds(topology_change.bounds, *topology_grid);
         for (route_start_transform, route, mut destination) in &mut active_routes {
@@ -45,99 +37,164 @@ pub(super) fn synchronize_navigation_edge_blocking_and_invalidate_routes_after_t
             }
         }
     }
-    if rebuild_crossings {
-        synchronize_fence_crossings_in_navigation_edge_overlay(
-            terrain_derived_navigation_graph,
-            &fence_edges,
-            &topology_nodes,
-            *topology_grid,
-            &mut navigation_edge_overlay,
-        );
+}
+
+#[derive(SystemParam)]
+pub(super) struct FenceNavigationCrossingSources<'w, 's> {
+    fences: Query<
+        'w,
+        's,
+        (
+            Entity,
+            Ref<'static, FenceEdge>,
+            Option<&'static FenceNavigationCrossings>,
+        ),
+    >,
+    indexed_fences: Query<'w, 's, Entity, With<FenceNavigationCrossings>>,
+    changed_fences: Query<'w, 's, Entity, Changed<FenceEdge>>,
+    detached_crossings: Query<'w, 's, Entity, (With<FenceNavigationCrossings>, Without<FenceEdge>)>,
+    nodes: Query<'w, 's, &'static TopologyNode>,
+    changed_nodes: Query<'w, 's, Entity, Changed<TopologyNode>>,
+    removed_nodes: RemovedComponents<'w, 's, TopologyNode>,
+}
+
+pub(super) fn synchronize_fence_navigation_crossings(
+    mut commands: Commands,
+    active_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    grid: Res<TopologyGrid>,
+    mut sources: FenceNavigationCrossingSources,
+    mut changed_endpoints: Local<EntityHashSet>,
+    mut crossed_edges: Local<Vec<DirectedNavigationEdge>>,
+) {
+    for entity in &sources.detached_crossings {
+        commands
+            .entity(entity)
+            .try_remove::<FenceNavigationCrossings>();
+    }
+    changed_endpoints.clear();
+    changed_endpoints.extend(sources.changed_nodes.iter());
+    changed_endpoints.extend(sources.removed_nodes.read());
+
+    let Some((graph, refresh_all_fences, cell_size, maximum_cell)) =
+        active_graph.and_then(|active| {
+            let refresh_all_fences = active.is_changed() || grid.is_changed();
+            let graph = active.into_inner().terrain_derived_navigation_graph();
+            let (cell_size, maximum_cell) = navigation_cell_bounds(graph)?;
+            Some((graph, refresh_all_fences, cell_size, maximum_cell))
+        })
+    else {
+        for entity in &sources.indexed_fences {
+            commands
+                .entity(entity)
+                .try_remove::<FenceNavigationCrossings>();
+        }
+        return;
+    };
+
+    let mut refresh_fence =
+        |entity: Entity, fence: &FenceEdge, previous: Option<&FenceNavigationCrossings>| {
+            crossed_edges.clear();
+            if let (Ok(a), Ok(b)) = (sources.nodes.get(fence.a), sources.nodes.get(fence.b)) {
+                collect_crossed_navigation_edges(
+                    graph,
+                    cell_size,
+                    maximum_cell,
+                    grid.cell_translation(a.cell).xz(),
+                    grid.cell_translation(b.cell).xz(),
+                    &mut crossed_edges,
+                );
+            }
+            if previous.map_or(&[][..], |previous| previous.0.as_slice())
+                == crossed_edges.as_slice()
+            {
+                return;
+            }
+            if crossed_edges.is_empty() {
+                commands
+                    .entity(entity)
+                    .try_remove::<FenceNavigationCrossings>();
+            } else {
+                commands
+                    .entity(entity)
+                    .try_insert(FenceNavigationCrossings(crossed_edges.clone()));
+            }
+        };
+    if refresh_all_fences || !changed_endpoints.is_empty() {
+        for (entity, fence, previous) in &sources.fences {
+            if refresh_all_fences
+                || fence.is_changed()
+                || changed_endpoints.contains(&fence.a)
+                || changed_endpoints.contains(&fence.b)
+            {
+                refresh_fence(entity, &fence, previous);
+            }
+        }
+    } else {
+        for entity in &sources.changed_fences {
+            if let Ok((_, fence, previous)) = sources.fences.get(entity) {
+                refresh_fence(entity, &fence, previous);
+            }
+        }
     }
 }
 
-fn synchronize_fence_crossings_in_navigation_edge_overlay(
-    terrain_derived_navigation_graph: &TerrainDerivedNavigationGraph,
-    fence_edges: &Query<(Entity, &FenceEdge)>,
-    topology_nodes: &Query<&TopologyNode>,
-    topology_grid: TopologyGrid,
-    navigation_edge_overlay: &mut NavigationOverlay,
-) {
-    let cell_size =
-        f32::from(terrain_derived_navigation_graph.terrain_cell_size_centimetres) * 0.01;
+fn navigation_cell_bounds(graph: &TerrainDerivedNavigationGraph) -> Option<(f32, IVec2)> {
+    let cell_size = f32::from(graph.terrain_cell_size_centimetres) * 0.01;
     if cell_size <= 0.0 {
-        return;
+        return None;
     }
-    let dimensions = terrain_derived_navigation_graph.terrain_tile_grid_dimensions;
-    let cells_per_tile = u32::from(terrain_derived_navigation_graph.terrain_cells_per_tile);
-    let Some(maximum_cell) = dimensions[0]
-        .checked_mul(cells_per_tile)
-        .and_then(|count| count.checked_sub(1))
-        .and_then(|cell| i32::try_from(cell).ok())
-        .zip(
-            dimensions[1]
-                .checked_mul(cells_per_tile)
-                .and_then(|count| count.checked_sub(1))
-                .and_then(|cell| i32::try_from(cell).ok()),
-        )
-        .map(|(x, y)| IVec2::new(x, y))
-    else {
-        return;
+    let [columns, rows] = graph.terrain_tile_grid_dimensions;
+    let cells_per_tile = u32::from(graph.terrain_cells_per_tile);
+    let last_cell = |tiles: u32| {
+        tiles
+            .checked_mul(cells_per_tile)
+            .and_then(|count| count.checked_sub(1))
+            .and_then(|cell| i32::try_from(cell).ok())
     };
-    let mut crossings = HashMap::<(u32, u32), Vec<Entity>>::new();
-    // Graph edges join adjacent terrain cells. Visit only each fence's small
-    // cell rectangle, rather than comparing every graph edge to every fence.
-    for (entity, fence) in fence_edges.iter() {
-        let (Ok(a), Ok(b)) = (topology_nodes.get(fence.a), topology_nodes.get(fence.b)) else {
-            continue;
-        };
-        let a = topology_grid.cell_translation(a.cell).xz();
-        let b = topology_grid.cell_translation(b.cell).xz();
-        let a_cell = Vec2::new(a.x, -a.y) / cell_size;
-        let b_cell = Vec2::new(b.x, -b.y) / cell_size;
-        let minimum = (a_cell.min(b_cell).floor().as_ivec2() - IVec2::ONE).max(IVec2::ZERO);
-        let maximum = (a_cell.max(b_cell).floor().as_ivec2() + IVec2::ONE).min(maximum_cell);
-        for y in minimum.y..=maximum.y {
-            for x in minimum.x..=maximum.x {
-                let Some(source_navigation_node) = terrain_derived_navigation_graph
-                    .calculate_navigation_node_for_terrain_cell([
-                        u32::try_from(x).expect("clamped terrain column"),
-                        u32::try_from(y).expect("clamped terrain row"),
-                    ])
+    Some((cell_size, IVec2::new(last_cell(columns)?, last_cell(rows)?)))
+}
+
+fn collect_crossed_navigation_edges(
+    graph: &TerrainDerivedNavigationGraph,
+    cell_size: f32,
+    maximum_cell: IVec2,
+    a: Vec2,
+    b: Vec2,
+    crossings: &mut Vec<DirectedNavigationEdge>,
+) {
+    let a_cell = Vec2::new(a.x, -a.y) / cell_size;
+    let b_cell = Vec2::new(b.x, -b.y) / cell_size;
+    let minimum = (a_cell.min(b_cell).floor().as_ivec2() - IVec2::ONE).max(IVec2::ZERO);
+    let maximum = (a_cell.max(b_cell).floor().as_ivec2() + IVec2::ONE).min(maximum_cell);
+    for y in minimum.y..=maximum.y {
+        for x in minimum.x..=maximum.x {
+            let Some(from) = graph.calculate_navigation_node_for_terrain_cell([
+                u32::try_from(x).expect("clamped terrain column"),
+                u32::try_from(y).expect("clamped terrain row"),
+            ]) else {
+                continue;
+            };
+            let Some(source) = graph.calculate_navigation_node_world_position_centimetres(from)
+            else {
+                continue;
+            };
+            let source = Vec2::new(source[0] as f32, source[2] as f32) * 0.01;
+            for edge in graph.iterate_outgoing_navigation_graph_edges(from) {
+                let to = edge.destination_node;
+                let Some(destination) =
+                    graph.calculate_navigation_node_world_position_centimetres(to)
                 else {
                     continue;
                 };
-                for edge in terrain_derived_navigation_graph
-                    .iterate_outgoing_navigation_graph_edges(source_navigation_node)
-                {
-                    let destination_navigation_node = edge.destination_node;
-                    let Some((source, destination)) = terrain_derived_navigation_graph
-                        .calculate_navigation_node_world_position_centimetres(
-                            source_navigation_node,
-                        )
-                        .zip(
-                            terrain_derived_navigation_graph
-                                .calculate_navigation_node_world_position_centimetres(
-                                    destination_navigation_node,
-                                ),
-                        )
-                    else {
-                        continue;
-                    };
-                    let source = Vec2::new(source[0] as f32, source[2] as f32) * 0.01;
-                    let destination =
-                        Vec2::new(destination[0] as f32, destination[2] as f32) * 0.01;
-                    if horizontal_world_segments_intersect(source, destination, a, b) {
-                        crossings
-                            .entry((source_navigation_node, destination_navigation_node))
-                            .or_default()
-                            .push(entity);
-                    }
+                let destination = Vec2::new(destination[0] as f32, destination[2] as f32) * 0.01;
+                if horizontal_world_segments_intersect(source, destination, a, b) {
+                    crossings.push((from, to));
                 }
             }
         }
     }
-    navigation_edge_overlay.replace_fence_crossings(crossings);
+    crossings.sort_unstable();
+    crossings.dedup();
 }
 
 fn calculate_topology_rectangle_world_cell_bounds(bounds: IRect, grid: TopologyGrid) -> IRect {

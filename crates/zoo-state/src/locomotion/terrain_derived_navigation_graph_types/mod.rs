@@ -29,6 +29,11 @@ pub struct NavigationPathSurface {
     pub(super) node: TerrainDerivedNavigationGraphNode,
 }
 
+pub struct NavigationPathSurfaceChanges {
+    pub ground: bool,
+    pub elevated: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainDerivedNavigationGraphNode {
     pub height_centimetres: i32,

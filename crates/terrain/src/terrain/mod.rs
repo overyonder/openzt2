@@ -16,7 +16,7 @@ mod terrain_chunk_render_refresh;
 mod terrain_collision_rebuilding;
 mod terrain_edit_application;
 mod terrain_edit_preparation;
-pub mod terrain_ground_path_surface_projection;
+mod terrain_ground_path_surface_projection;
 mod terrain_live_brush_application;
 mod terrain_object_placement_flattening_preparation;
 mod terrain_presentation_restoration;
@@ -50,14 +50,17 @@ use crate::terrain::terrain_chunk_index_cleanup::remove_despawned_terrain_chunks
 use crate::terrain::terrain_chunk_initial_projection::apply_changed_effect_quality_to_projected_terrain_chunks;
 use crate::terrain::terrain_chunk_initial_projection::validate_index_and_project_loaded_terrain_chunks;
 use crate::terrain::terrain_chunk_render_refresh::refresh_changed_terrain_chunk_meshes_and_surface_images;
-use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_collisions_within_tick_budget;
+use crate::terrain::terrain_collision_rebuilding::{
+    mark_changed_terrain_chunk_collisions_pending,
+    rebuild_pending_terrain_chunk_collisions_within_tick_budget,
+};
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_under_changed_painted_textures;
 use crate::terrain::terrain_ground_path_surface_projection::recompose_ground_path_surfaces_into_terrain_chunk_images;
-use crate::terrain::terrain_ground_path_surface_projection::retain_ground_path_surface_image_dependencies;
-use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
+use crate::terrain::terrain_ground_path_surface_projection::record_discarded_terrain_paint_area;
+use crate::terrain::terrain_ground_path_surface_projection::DiscardedTerrainPaintArea;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
 use crate::terrain::terrain_live_brush_application::roll_back_cancelled_live_terrain_brush_edit;
 use crate::terrain::terrain_object_placement_flattening_preparation::prepare_authored_object_placement_terrain_flattening;
@@ -103,7 +106,8 @@ impl Plugin for TerrainPlugin {
             .add_plugins(terrain_water_rays::view_occlusion::WaterRayOcclusionPlugin)
             .init_resource::<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>()
             .init_resource::<TerrainCollisionBudget>()
-            .init_resource::<GroundPathSurfaceImageDependencies>()
+            .add_message::<DiscardedTerrainPaintArea>()
+            .add_observer(record_discarded_terrain_paint_area)
             .add_message::<TerrainStroke>()
             .add_message::<DefinedTerrainStroke>()
             .add_message::<TerrainChanged>()
@@ -188,10 +192,9 @@ impl Plugin for TerrainPlugin {
                         terrain_water_underwater_particles::runtime::update_underwater_particle_visibility,
                     ).chain(),
                     advance_authored_terrain_waterfall_decal_detail_texture_coordinates,
+                    refresh_changed_terrain_chunk_meshes_and_surface_images,
                     project_terrain_biome_details_after_source_or_setting_changes,
                     materialize_terrain_biome_detail_render_trees_within_overhead_camera_range,
-                    refresh_changed_terrain_chunk_meshes_and_surface_images,
-                    retain_ground_path_surface_image_dependencies,
                     mark_terrain_chunks_requiring_ground_path_surface_recomposition,
                     mark_terrain_chunks_under_changed_painted_textures,
                     recompose_ground_path_surfaces_into_terrain_chunk_images,
@@ -262,7 +265,7 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                rebuild_pending_terrain_chunk_collisions_within_tick_budget
+                (mark_changed_terrain_chunk_collisions_pending, rebuild_pending_terrain_chunk_collisions_within_tick_budget).chain()
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(OnExit(GamePhase::InGame), reset_terrain_index);

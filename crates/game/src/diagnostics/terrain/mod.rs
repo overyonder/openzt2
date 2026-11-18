@@ -5,7 +5,6 @@ use bevy::{
     prelude::*,
 };
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
 use std::collections::HashSet;
 
 #[derive(Component)]
@@ -31,10 +30,7 @@ pub(super) fn synchronize_retained_terrain_wireframe_gizmo_assets(
             Without<RetainedTerrainWireframeGizmo>,
         ),
     >,
-    changed_terrain: Query<
-        (&Mesh3d, &RetainedTerrainWireframeGizmo),
-        Changed<TerrainRenderRevision>,
-    >,
+    changed_terrain: Query<(&Mesh3d, &RetainedTerrainWireframeGizmo), Changed<TerrainRenderChunk>>,
 ) {
     let enabled = views.physics_wireframes_are_visible();
 

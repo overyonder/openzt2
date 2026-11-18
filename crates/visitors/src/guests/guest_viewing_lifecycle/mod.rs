@@ -1,6 +1,6 @@
 //! Destination observations have no authority over a replacement activity.
 
-use bevy::prelude::*;
+use bevy::{ecs::query::QueryFilter, prelude::*};
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 
 use super::guest_simulation_types::{
@@ -12,8 +12,8 @@ use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 
@@ -31,7 +31,7 @@ pub(super) fn viewing_owned_by_current_view_action(
             .is_some_and(|action| matches!(action, BehaviorAction::ViewAnimals(_)))
 }
 
-pub(super) fn revoke_unowned_guest_observations(
+pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
     mut commands: Commands,
     guests: Query<
         (
@@ -46,6 +46,7 @@ pub(super) fn revoke_unowned_guest_observations(
         ),
         (
             With<Guest>,
+            Filter,
             Or<(
                 With<Viewing>,
                 With<GuestDestination>,

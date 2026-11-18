@@ -815,10 +815,6 @@ impl TerrainWaterMembershipIndex {
     }
 }
 
-/// Last terrain revision applied to the water meshes.
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TerrainWaterRevision(pub u64);
-
 /// One material-homogeneous Bevy water mesh parented to its terrain chunk.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TerrainWaterSurface;

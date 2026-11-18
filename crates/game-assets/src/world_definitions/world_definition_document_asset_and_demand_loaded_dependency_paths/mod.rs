@@ -44,14 +44,6 @@ pub struct WorldDefinitionAsset {
 }
 
 impl WorldDefinitionAsset {
-    pub fn affects_ground_path_surface_projection(&self) -> bool {
-        self.document
-            .paths
-            .iter()
-            .any(|definition| !definition.elevated)
-            || !self.document.fences.is_empty()
-    }
-
     pub fn automatic_placement_definition_needs_source_lowered_bounds(
         &self,
         definition: AssetId,
@@ -125,19 +117,27 @@ impl WorldDefinitionAsset {
         self
     }
 
+    fn dependency_path(paths: &[DemandLoadedDependencyPath], id: AssetId) -> Option<&str> {
+        paths
+            .binary_search_by_key(&id, |candidate| candidate.id)
+            .ok()
+            .map(|index| &*paths[index].path)
+    }
+
     fn load<T: Asset>(
         server: &AssetServer,
         paths: &[DemandLoadedDependencyPath],
         id: AssetId,
     ) -> Option<Handle<T>> {
-        paths
-            .binary_search_by_key(&id, |candidate| candidate.id)
-            .ok()
-            .map(|index| server.load(paths[index].path.to_string()))
+        Some(server.load(Self::dependency_path(paths, id)?.to_owned()))
     }
 
     pub(super) fn texture(&self, server: &AssetServer, id: AssetId) -> Option<Handle<Image>> {
         Self::load(server, &self.textures, id)
+    }
+
+    pub(super) fn texture_path(&self, id: AssetId) -> Option<&str> {
+        Self::dependency_path(&self.textures, id)
     }
 
     pub(super) fn model<T: Asset>(&self, server: &AssetServer, id: AssetId) -> Option<Handle<T>> {

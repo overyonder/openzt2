@@ -90,7 +90,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
             ground.push(projected);
         }
     }
-    let changed = graph
+    let changes = graph
         .bypass_change_detection()
         .terrain_derived_navigation_graph_mut()
         .replace_navigation_path_surfaces(elevated, ground, |point| {
@@ -100,7 +100,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
             let terrain = terrain_assets.get(&chunk.asset)?;
             Some(sample_terrain(chunk, terrain, edited, point)?.height_m)
         });
-    if !changed {
+    if !changes.ground && !changes.elevated {
         return;
     }
     graph.set_changed();

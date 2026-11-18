@@ -1,6 +1,10 @@
 use super::*;
+use super::admission::{DetachAdmission, DetachMembershipRequest, DetachMembershipRequests};
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
+use bevy::ecs::relationship::RelationshipTarget;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectDetachDestination;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMembers;
 
 pub(super) fn detach_slot_objects(
     holder: Entity,
@@ -8,12 +12,11 @@ pub(super) fn detach_slot_objects(
     definitions: &WorldDefinitionsView<'_>,
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
-    ids: &mut PersistentIdAllocator,
-    occupancy: &mut InteractionContainerOccupancy,
+    memberships: &InteractionContainerMemberships,
     commands: &mut Commands,
+    requests: &mut DetachMembershipRequests,
 ) -> bool {
-    let members: Vec<_> = occupancy.members_in_slot(holder, slot).collect();
-    members.into_iter().all(|item| {
+    memberships.members_in_slot(holder, slot).all(|item| {
         detach_object(
             holder,
             item,
@@ -21,9 +24,8 @@ pub(super) fn detach_slot_objects(
             definitions,
             objects,
             transforms,
-            ids,
-            occupancy,
             commands,
+            requests,
         )
     })
 }
@@ -37,16 +39,21 @@ pub(super) fn detach_object(
     definitions: &WorldDefinitionsView<'_>,
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
-    ids: &mut PersistentIdAllocator,
-    occupancy: &mut InteractionContainerOccupancy,
     commands: &mut Commands,
+    requests: &mut DetachMembershipRequests,
 ) -> bool {
     let Ok((contained, definition, world)) = objects.get(item) else {
         return false;
     };
     let detach_rule = rule.unwrap_or(contained.detach_rule);
     if detach_rule == AssetId::default() {
-        occupancy.remove_actor(item);
+        requests.submit(
+            DetachMembershipRequest::Release {
+                member: item,
+                despawn: false,
+            },
+            commands,
+        );
         commands
             .entity(item)
             .remove::<ContainedObject>()
@@ -61,8 +68,13 @@ pub(super) fn detach_object(
         .iter()
         .find(|rule| rule.name == detach_rule)
     else {
-        occupancy.remove_actor(item);
-        commands.entity(item).despawn();
+        requests.submit(
+            DetachMembershipRequest::Release {
+                member: item,
+                despawn: true,
+            },
+            commands,
+        );
         return true;
     };
     // Do not partially execute an unsupported authored outcome. Official
@@ -92,8 +104,13 @@ pub(super) fn detach_object(
     let detached = (|| {
         match rule.destination {
             WorldObjectDetachDestination::Kill => {
-                occupancy.remove_actor(item);
-                commands.entity(item).despawn();
+                requests.submit(
+                    DetachMembershipRequest::Release {
+                        member: item,
+                        despawn: true,
+                    },
+                    commands,
+                );
             }
             WorldObjectDetachDestination::Container(destination) => {
                 let Some(holder_definition) =
@@ -105,29 +122,40 @@ pub(super) fn detach_object(
                     .place_for(destination)
                     .and_then(|slot| Some((slot, holder_definition.place(slot)?)))
                 else {
-                    occupancy.remove_actor(item);
-                    commands.entity(item).despawn();
+                    requests.submit(
+                        DetachMembershipRequest::Release {
+                            member: item,
+                            despawn: true,
+                        },
+                        commands,
+                    );
                     return true;
                 };
-                if !occupancy.admit(holder, item, target_slot, target.capacity) {
-                    occupancy.remove_actor(item);
-                    commands.entity(item).despawn();
-                    return true;
-                }
-                commands.entity(item).insert((
-                    ContainedObject {
-                        holder_definition: contained.holder_definition,
-                        detach_rule,
-                        joint: None,
-                        relative_transform: Transform::IDENTITY,
-                        attachment_request: None,
-                    },
-                    if target.hides_contents {
-                        Visibility::Hidden
-                    } else {
-                        Visibility::Inherited
-                    },
-                ));
+                let attachment = ContainedObject {
+                    holder_definition: contained.holder_definition,
+                    detach_rule,
+                    joint: None,
+                    relative_transform: Transform::IDENTITY,
+                    attachment_request: None,
+                };
+                let visibility = if target.hides_contents {
+                    Visibility::Hidden
+                } else {
+                    Visibility::Inherited
+                };
+                requests.submit(
+                    DetachMembershipRequest::Admit(
+                        InteractionContainerAdmissionRequest::Admit {
+                            container: holder,
+                            member: item,
+                            slots: vec![(target_slot, target.capacity)],
+                            despawn_on_refusal: true,
+                            queue_service_slots: Vec::new(),
+                        },
+                        DetachAdmission::Transfer(attachment, visibility),
+                    ),
+                    commands,
+                );
             }
             // Drop/fall need the native placement/physics handoff, not a guessed
             // gravity switch or terrain snap.
@@ -149,49 +177,66 @@ pub(super) fn detach_object(
             relative_transform,
             &rule.created_objects,
             definitions,
-            ids,
-            occupancy,
             commands,
+            requests,
         );
     }
     true
+}
+
+#[derive(Component)]
+pub(super) struct DestroyedHolderSlot(pub(super) usize);
+
+pub(super) fn record_slots_of_destroyed_holders(
+    despawn: On<Despawn<InteractionContainerMembers>>,
+    containers: Query<&InteractionContainerMembers>,
+    carried: Query<&InteractionContainerMember, With<ContainedObject>>,
+    mut commands: Commands,
+) {
+    let Ok(members) = containers.get(despawn.entity) else {
+        return;
+    };
+    // Bevy removes the relationships during despawn. The slot's ownership
+    // policy may have to wait for definitions to finish loading.
+    for member in members.iter() {
+        if let Ok(membership) = carried.get(member) {
+            commands
+                .entity(member)
+                .try_insert(DestroyedHolderSlot(membership.slot));
+        }
+    }
 }
 
 pub(super) fn release_objects_from_destroyed_holders(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
-    objects: Query<(Entity, &ContainedObject)>,
-    entities: Query<()>,
+    objects: Query<
+        (Entity, &ContainedObject, Option<&DestroyedHolderSlot>),
+        Without<InteractionContainerMember>,
+    >,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (item, contained) in &objects {
-        let Some((holder, slot)) = occupancy.container_for_member(item) else {
-            commands
-                .entity(item)
-                .remove::<ContainedObject>()
-                .insert(Visibility::Inherited);
-            continue;
+    for (item, contained, destroyed_slot) in &objects {
+        let owned = if let Some(slot) = destroyed_slot {
+            let Some(policy) =
+                super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
+                    .and_then(|holder| holder.place(slot.0))
+            else {
+                continue;
+            };
+            policy.owns_contents
+        } else {
+            false
         };
-        if entities.contains(holder) {
-            continue;
-        }
-        let Some(policy) =
-            super::holder::AttachmentHolder::find(&definitions, contained.holder_definition)
-                .and_then(|holder| holder.place(slot))
-        else {
-            continue;
-        };
-        occupancy.remove_actor(item);
-        if policy.owns_contents {
+        if owned {
             commands.entity(item).despawn();
         } else {
             commands
                 .entity(item)
-                .remove::<ContainedObject>()
+                .remove::<(ContainedObject, DestroyedHolderSlot)>()
                 .insert(Visibility::Inherited);
         }
     }
@@ -207,8 +252,7 @@ pub(super) fn apply_delivered_detach_after_object_admission(
     delivered: Query<Entity, With<DeliveredAttachmentDetach>>,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: Query<&GlobalTransform>,
-    mut ids: ResMut<PersistentIdAllocator>,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     mut delivered_slots: Local<Vec<(Entity, usize)>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
@@ -220,7 +264,7 @@ pub(super) fn apply_delivered_detach_after_object_admission(
     delivered_slots.clear();
     for item in &delivered {
         commands.entity(item).remove::<DeliveredAttachmentDetach>();
-        if let Some(slot) = occupancy.container_for_member(item) {
+        if let Some(slot) = memberships.container_for_member(item) {
             if !delivered_slots.contains(&slot) {
                 delivered_slots.push(slot);
             }
@@ -233,9 +277,9 @@ pub(super) fn apply_delivered_detach_after_object_admission(
             &definitions,
             &objects,
             &transforms,
-            &mut ids,
-            &mut occupancy,
+            &memberships,
             &mut commands,
+            &mut DetachMembershipRequests::Queued,
         ) {
             mark_behavior_task_for_failure_and_stop_navigation(holder, &mut commands);
         }

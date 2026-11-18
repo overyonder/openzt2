@@ -33,18 +33,6 @@ impl Plugin for SimulationTimePlugin {
             .add_message::<SimulationControlChanged>()
             .add_message::<ZooDayAdvanced>()
             .add_message::<ZooYearAdvanced>()
-            .configure_sets(
-                FixedUpdate,
-                (
-                    FixedGameSet::Clock,
-                    FixedGameSet::Think,
-                    FixedGameSet::Navigate,
-                    FixedGameSet::Act,
-                    FixedGameSet::Economy,
-                    FixedGameSet::Cleanup,
-                )
-                    .chain(),
-            )
             .add_systems(
                 Update,
                 simulation_control_application::apply_requested_simulation_control_changes

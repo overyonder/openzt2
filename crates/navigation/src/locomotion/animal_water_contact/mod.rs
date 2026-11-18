@@ -16,7 +16,8 @@ pub(super) fn project_animal_water_contact(
             Entity,
             &AnimalVariant,
             &mut Transform,
-            Option<&LocomotionMode>,
+            Option<&mut LocomotionMode>,
+            Option<&mut AnimalTerrainWaterContact>,
         ),
         (
             Without<openzt2_zoo_state::animal_health::types::Dead>,
@@ -27,23 +28,27 @@ pub(super) fn project_animal_water_contact(
     let Some(species) = species_index.get(&species_assets) else {
         return;
     };
-    for (entity, variant, mut transform, current_mode) in &mut animals {
+    for (entity, variant, mut transform, current_mode, contact) in &mut animals {
         let position = transform.translation.xz();
         let Some(ground) = surfaces.ground_height(position) else {
             continue;
         };
         let surface = surfaces.water_surface_height(position);
         let depth_m = surface.map(|height| height - ground);
-        commands
-            .entity(entity)
-            .insert(AnimalTerrainWaterContact { depth_m });
+        if let Some(mut contact) = contact {
+            contact.depth_m = depth_m;
+        } else {
+            commands
+                .entity(entity)
+                .insert(AnimalTerrainWaterContact { depth_m });
+        }
         let Some(policy) = species
             .find_variant(variant.0)
             .and_then(|variant| variant.surface_water_locomotion.as_ref())
         else {
             continue;
         };
-        let current = current_mode.copied().unwrap_or_default();
+        let current = current_mode.as_deref().copied().unwrap_or_default();
         if !matches!(current, LocomotionMode::Ground | LocomotionMode::Swim) {
             continue;
         }
@@ -65,7 +70,11 @@ pub(super) fn project_animal_water_contact(
             }
         }
         if current_mode.is_none() || next != current {
-            commands.entity(entity).insert(next);
+            if let Some(mut mode) = current_mode {
+                *mode = next;
+            } else {
+                commands.entity(entity).insert(next);
+            }
             if next == LocomotionMode::Swim {
                 commands.entity(entity).insert(SwimLayer::Surface);
             } else {

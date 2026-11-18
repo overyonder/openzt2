@@ -5,7 +5,6 @@ use openzt2_zoo_state::construction::construction_interaction_types::CancelConst
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 
 use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_delta_from_brush_dabs;
-use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_edit_application::apply_validated_terrain_edit_delta_and_publish_changed_region;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::TerrainBrushDab;
@@ -36,7 +35,6 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         Entity,
         &TerrainChunk,
         Option<&mut EditedTerrainSamples>,
-        Option<&mut TerrainDirty>,
         &TerrainChunkId,
     )>,
     mut previews: Query<Option<&mut TerrainEdit>, Or<(With<ActiveTerrainBrush>, With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit>)>>,
@@ -91,7 +89,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 &preview,
                 &dab,
                 candidate_entities.iter().filter_map(|entity| {
-                    let (_, chunk, edited, _, _) = chunks.get(*entity).ok()?;
+                    let (_, chunk, edited, _) = chunks.get(*entity).ok()?;
                     Some((chunk, assets.get(&chunk.asset)?, edited))
                 }),
             );
@@ -102,9 +100,9 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::AddWater
                 | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::RemoveWater
         ) {
-            let Some((root, chunk, _, _, _)) = chunks
+            let Some((root, chunk, _, _)) = chunks
                 .iter()
-                .find(|(_, chunk, _, _, _)| chunk.source_coord == IVec2::ZERO)
+                .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
             else {
                 continue;
             };
@@ -120,7 +118,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 continue;
             };
             *missing_membership = None;
-            let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _, _)| {
+            let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _)| {
                 (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
                     Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
                 }))
@@ -133,7 +131,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 continue;
             };
             water_surface_height_cm = plan.ground_reference_height_cm(asset);
-            candidate_entities.extend(chunks.iter().filter_map(|(entity, candidate, _, _, _)| {
+            candidate_entities.extend(chunks.iter().filter_map(|(entity, candidate, _, _)| {
                 (candidate.asset == chunk.asset && plan.affects_chunk(candidate, membership))
                     .then_some(entity)
             }));
@@ -147,7 +145,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         let mut applied_deltas = Vec::with_capacity(candidate_entities.len());
         for entity in candidate_entities {
             let delta = {
-                let Ok((_, chunk, edited, _, persistent)) = chunks.get_mut(entity) else {
+                let Ok((_, chunk, edited, persistent)) = chunks.get_mut(entity) else {
                     continue;
                 };
                 let Some(asset) = assets.get(&chunk.asset) else {
@@ -180,19 +178,19 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
             let Some(asset) = assets.get(membership.terrain()) else {
                 continue;
             };
-            let Some((parent, _, _, _, _)) = chunks.iter().find(|(_, chunk, _, _, _)| {
+            let Some((parent, _, _, _)) = chunks.iter().find(|(_, chunk, _, _)| {
                 chunk.source_coord == IVec2::ZERO && chunk.asset.id() == membership.terrain()
             }) else {
                 continue;
             };
             if crate::terrain::terrain_brush_sample_mutation::water_affiliation::splitting::split_disconnected_water_affiliations(
                 &mut commands, asset, parent, membership, &water_regions,
-                chunks.iter().map(|(_, chunk, edited, _, persistent)| (chunk, edited, *persistent)),
+                chunks.iter().map(|(_, chunk, edited, persistent)| (chunk, edited, *persistent)),
                 &mut applied_deltas, &mut owner_changes,
             ).is_none() { continue; }
         }
         for delta in &applied_deltas {
-            let Some(entity) = chunks.iter().find_map(|(entity, _, _, _, persistent)| {
+            let Some(entity) = chunks.iter().find_map(|(entity, _, _, persistent)| {
                 (*persistent == delta.chunk).then_some(entity)
             }) else {
                 continue;
@@ -241,7 +239,6 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
         Entity,
         &TerrainChunk,
         Option<&mut EditedTerrainSamples>,
-        Option<&mut TerrainDirty>,
         &TerrainChunkId,
     )>,
     mut changed: MessageWriter<TerrainChanged>,
@@ -261,7 +258,7 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
                 .collect(),
         );
         for delta in edit.deltas.iter().rev() {
-            let Some(chunk_entity) = chunks.iter_mut().find_map(|(entity, _, _, _, persistent)| {
+            let Some(chunk_entity) = chunks.iter_mut().find_map(|(entity, _, _, persistent)| {
                 (*persistent == delta.chunk).then_some(entity)
             }) else {
                 continue;

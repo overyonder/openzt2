@@ -60,6 +60,8 @@ impl Plugin for AquaticPlugin {
             .add_message::<TankGeometryEditPrepared>()
             .add_message::<TankGeometryEditPreparationRejected>()
             .add_message::<tank_geometry_edit_types::SetTankWallHeights>()
+            .add_message::<tank_floor_terrain_excavation::RestoreTankFloorTerrain>()
+            .add_observer(tank_floor_terrain_excavation::queue_terrain_restoration_after_tank_removal)
             .add_systems(
                 Update,
                 tank_scripted_wall_height::apply_scripted_tank_wall_heights

@@ -15,10 +15,14 @@ use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_re
 use crate::terrain::terrain_biome_detail_types::TerrainDetail;
 use crate::terrain::terrain_biome_detail_types::TerrainDetailProjectionState;
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres;
+
+#[derive(Component)]
+pub(in crate::terrain) struct TerrainBiomeDetailProjectionPending;
 
 pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
     mut commands: Commands,
@@ -28,26 +32,35 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
     >,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
+    (definitions, active_definitions): (Res<Assets<WorldDefinitionAsset>>, Res<WorldDefinitions>),
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
         Option<&EditedTerrainSamples>,
         Option<&Children>,
-        Option<&TerrainDirty>,
+        Has<TerrainBiomeDetailProjectionPending>,
         &mut TerrainDetailProjectionState,
     )>,
     details: Query<&TerrainDetail>,
+    changed_chunks: Query<(), Or<(Changed<TerrainDirty>, Changed<TerrainRenderChunk>)>>,
 ) {
-    let definition_assets_changed = definitions.is_changed();
-    let Some(definitions) = active_definitions.get(&definitions) else {
+    let all_sources_changed = settings.is_changed()
+        || terrain_assets.is_changed()
+        || definitions.is_changed()
+        || active_definitions.is_changed();
+    let project = active_definitions
+        .get(&definitions)
+        .and_then(|definitions| Some((definitions, definitions.biome_detail_placement()?)));
+    let (Some((definitions, placement)), Ok(camera)) = (project, cameras.single()) else {
+        for (entity, _, _, _, pending, _) in &chunks {
+            if !pending && (all_sources_changed || changed_chunks.contains(entity)) {
+                commands
+                    .entity(entity)
+                    .insert(TerrainBiomeDetailProjectionPending);
+            }
+        }
         return;
     };
-    let Some(placement) = definitions.biome_detail_placement() else {
-        return;
-    };
-    let Ok(camera) = cameras.single() else { return };
     let authored_visibility_range_m =
         (f32::from(placement.solid_distance_cm) + f32::from(placement.fade_distance_cm)) * 0.01;
     let retained_materialization_range_m = authored_visibility_range_m * 2.0;
@@ -57,21 +70,34 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         EnvironmentalDetailObjectDensity::High => Some(BiomeDetailLevel::High),
     };
 
-    for (entity, chunk, edited, children, dirty, mut projection_state) in &mut chunks {
-        let revision = dirty.map_or(0, |dirty| dirty.revision);
-        let source_changed = projection_state.source_revision != revision
-            || settings.is_changed()
-            || terrain_assets.is_changed()
-            || definition_assets_changed
-            || active_definitions.is_changed();
+    for (entity, chunk, edited, children, pending, mut projection_state) in &mut chunks {
+        let source_changed = pending
+            || projection_state.retained_camera_focus.is_none()
+            || all_sources_changed
+            || changed_chunks.contains(entity);
         if !source_changed
-            && projection_state.retained_camera_focus.is_finite()
-            && projection_state
-                .retained_camera_focus
-                .distance(camera.focus)
-                <= authored_visibility_range_m
+            && projection_state.retained_camera_focus.is_some_and(|focus| {
+                focus.is_finite() && focus.distance(camera.focus) <= authored_visibility_range_m
+            })
         {
             continue;
+        }
+        let region_m = f32::from(placement.region_size_cm) * 0.01;
+        let asset = level
+            .as_ref()
+            .and_then(|_| terrain_assets.get(&chunk.asset));
+        if level.is_some() && (asset.is_none() || !region_m.is_finite() || region_m <= 0.0) {
+            if source_changed && !pending {
+                commands
+                    .entity(entity)
+                    .insert(TerrainBiomeDetailProjectionPending);
+            }
+            continue;
+        }
+        if pending {
+            commands
+                .entity(entity)
+                .remove::<TerrainBiomeDetailProjectionPending>();
         }
         let mut retained_detail_entities_by_placement_key = HashMap::new();
         for detail_entity in children
@@ -86,18 +112,10 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
                     .insert(detail_entity.1.placement_key, detail_entity.0);
             }
         }
-        let Some(level) = level.as_ref() else {
-            projection_state.source_revision = revision;
-            projection_state.retained_camera_focus = camera.focus;
+        let (Some(level), Some(asset)) = (level.as_ref(), asset) else {
+            projection_state.retained_camera_focus = Some(camera.focus);
             continue;
         };
-        let Some(asset) = terrain_assets.get(&chunk.asset) else {
-            continue;
-        };
-        let region_m = f32::from(placement.region_size_cm) * 0.01;
-        if !region_m.is_finite() || region_m <= 0.0 {
-            continue;
-        }
         let span_m = chunk.spacing_m * f32::from(chunk.side.saturating_sub(1));
         let regions = (span_m / region_m).ceil() as u32;
         for rz in 0..regions {
@@ -228,8 +246,7 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         for detail_entity in retained_detail_entities_by_placement_key.into_values() {
             commands.entity(detail_entity).despawn();
         }
-        projection_state.source_revision = revision;
-        projection_state.retained_camera_focus = camera.focus;
+        projection_state.retained_camera_focus = Some(camera.focus);
     }
 }
 

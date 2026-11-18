@@ -2,6 +2,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_zoo_state::{
     animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind,
+    animal_behavior::interaction_container_membership::InteractionContainerMemberships,
     behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame},
     locomotion::locomotion_types::{Route, Velocity},
 };
@@ -11,7 +12,7 @@ pub(in crate::persistence) struct BehaviorSnapshotCapture<'w, 's> {
     entities: BehaviorSnapshotEntities<'w, 's>,
     arrivals: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::Arrived>>,
     failures: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>>,
-    occupancy: Res<'w, openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships<'w, 's>,
     documents: Res<'w, Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
     finished: Res<'w, Messages<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished>>,
     failed: Res<'w, Messages<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed>>,
@@ -22,7 +23,7 @@ impl BehaviorSnapshotCapture<'_, '_> {
         &self,
     ) -> Result<Vec<BehaviorActorSnapshot>, WorldSnapshotPersistenceFailure> {
         let mut records =
-            capture_behavior_actor_snapshots(&self.entities, &self.documents, &self.occupancy)?;
+            capture_behavior_actor_snapshots(&self.entities, &self.documents, &self.memberships)?;
         let mut arrivals = self.arrivals.get_cursor();
         let mut failures = self.failures.get_cursor();
         let arrivals = arrivals.read(&self.arrivals).copied().collect::<Vec<_>>();
@@ -169,7 +170,7 @@ fn capture_behavior_frame(
 fn capture_behavior_actor_snapshots(
     entities: &BehaviorSnapshotEntities,
     documents: &Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
-    occupancy: &openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy,
+    memberships: &InteractionContainerMemberships,
 ) -> Result<Vec<BehaviorActorSnapshot>, WorldSnapshotPersistenceFailure> {
     let mut records = Vec::new();
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
@@ -280,15 +281,15 @@ fn capture_behavior_actor_snapshots(
                     next_transaction: pending.next_transaction,
                 })
             }).transpose()?,
-            membership: occupancy.container_for_member(actor.entity).map(|(container, slot)| -> Result<_, WorldSnapshotPersistenceFailure> {
+            membership: memberships.container_for_member(actor.entity).map(|(container, slot)| -> Result<_, WorldSnapshotPersistenceFailure> {
                 let definition = entities.get(container).ok()
                     .and_then(|container| container.definition_id.copied())
                     .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
                 Ok(super::behavior_snapshot_types::BehaviorInteractionMembershipSnapshot {
                     container: reference(container)?, definition: definition.0, slot,
-                    admission_order: occupancy.members_of_container(container).position(|member| member == actor.entity)
+                    admission_order: memberships.members_of_container(container).position(|member| member == actor.entity)
                         .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?,
-                    docked: occupancy.is_docked(container, actor.entity),
+                    docked: memberships.is_docked(container, actor.entity),
                 })
             }).transpose()?,
             random: actor.behavior_random_stream.map(|random| random.0.to_raw()),

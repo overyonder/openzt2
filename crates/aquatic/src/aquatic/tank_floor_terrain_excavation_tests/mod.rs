@@ -14,7 +14,8 @@ use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid,
 
 use super::aquatic_simulation_types::{Tank, TankGeometry};
 use super::tank_floor_terrain_excavation::{
-    excavate_changed_tank_floors, inside_walls_beyond, TankFloorExcavation,
+    excavate_changed_tank_floors, inside_walls_beyond,
+    queue_terrain_restoration_after_tank_removal, RestoreTankFloorTerrain, TankFloorExcavation,
 };
 use super::tank_geometry_edit_tests::install_flat_terrain;
 
@@ -93,6 +94,8 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
         openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     >>()
     .init_resource::<TopologyGrid>()
+    .add_message::<RestoreTankFloorTerrain>()
+    .add_observer(queue_terrain_restoration_after_tank_removal)
     .add_systems(Update, excavate_changed_tank_floors);
     install_flat_terrain(&mut app, 7);
     let chunk = app.world().resource::<TerrainIndex>().chunks[&IVec2::ZERO];
@@ -115,6 +118,7 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
                 .id()
         })
         .collect::<Box<[_]>>();
+    let demolished_wall = walls[0];
     let tank = app
         .world_mut()
         .spawn((
@@ -141,6 +145,7 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
     // Walls stay inside the one test chunk, whose far edge belongs to the
     // next chunk. Samples 2..=3 lie more than one spacing inside the walls.
     assert_eq!(apply_excavation(&mut app, "digging"), [-200; 4]);
+    app.world_mut().despawn(demolished_wall);
     app.world_mut().entity_mut(tank).remove::<Tank>();
     app.update();
     // The flat test ground lies at zero.

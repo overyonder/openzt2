@@ -2,6 +2,7 @@
 
 pub mod behavior_auxiliary_source_document_lowering;
 pub mod behavior_auxiliary_source_types;
+pub mod ground_path_surface_images;
 pub mod lower;
 pub mod path_placement_highlight_asset;
 mod path_placement_highlight_loading;
@@ -33,6 +34,8 @@ pub struct WorldDefinitionAssetPlugin;
 impl Plugin for WorldDefinitionAssetPlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<WorldDefinitionAsset>()
+            .init_asset::<ground_path_surface_images::GroundPathSurfaceImage>()
+            .init_asset_loader::<ground_path_surface_images::GroundPathSurfaceImageLoader>()
             .init_asset::<path_placement_highlight_asset::PathPlacementHighlightAsset>()
             .init_asset_loader::<path_placement_highlight_loading::PathPlacementHighlightLoader>()
             .init_asset_loader::<WorldDefinitionAssetLoader>()

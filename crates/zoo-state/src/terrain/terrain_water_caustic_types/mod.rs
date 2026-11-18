@@ -24,9 +24,6 @@ pub struct TerrainWaterCausticPass {
     pub render_view: Entity,
 }
 
-#[derive(Component)]
-pub struct TerrainWaterCausticProjectionRevision(pub u64);
-
 /// Derived from the physical presentation's authored render hierarchy.
 #[derive(Component, Clone, Copy, PartialEq)]
 pub struct TerrainWaterCausticSceneTarget {

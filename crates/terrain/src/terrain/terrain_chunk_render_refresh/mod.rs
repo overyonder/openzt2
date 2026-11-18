@@ -2,12 +2,12 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
-use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
+use crate::terrain::terrain_change_tracking_types::TerrainRenderPending;
 use crate::terrain::terrain_chunk_mesh_construction::construct_terrain_chunk_mesh;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::recompose_terrain_surface_image_region;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurfaceImage;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
@@ -17,46 +17,44 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 /// as well as ground paint, so it is recomposed only where those samples reach.
 #[allow(clippy::type_complexity)]
 pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
+    mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut images: ResMut<Assets<Image>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut chunks: Query<(
+        Entity,
         &TerrainChunk,
         Option<&EditedTerrainSamples>,
-        &mut TerrainDirty,
+        &TerrainRenderPending,
         &Mesh3d,
         &TerrainSurfaceImage,
-        &mut TerrainRenderRevision,
+        &mut TerrainRenderChunk,
     )>,
+    edited: Query<(&TerrainChunk, &EditedTerrainSamples)>,
 ) {
+    if chunks.is_empty() {
+        return;
+    }
     let surface_flags =
         TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::SURFACE | TerrainDirtyFlags::WATER;
     let surface_targets = chunks
         .iter()
-        .filter_map(|(chunk, _, dirty, _, _, _)| {
-            dirty
-                .render
-                .is_some_and(|render| render.flags.intersects(surface_flags))
-                .then(|| (chunk.asset.clone(), chunk.coord))
-        })
+        .filter(|(_, _, _, render, ..)| render.0.flags.intersects(surface_flags))
+        .map(|(_, chunk, ..)| (chunk.asset.clone(), chunk.coord))
         .collect::<Vec<_>>();
     let collect_span = info_span!("collect_neighbour_terrain_edits").entered();
-    let edited_chunks = chunks
+    let edited_chunks = edited
         .iter()
-        .filter(|(chunk, _, _, _, _, _)| {
+        .filter(|(chunk, _)| {
             surface_targets.iter().any(|(asset, coord)| {
                 asset == &chunk.asset && (chunk.coord - *coord).abs().cmple(IVec2::ONE).all()
             })
         })
-        .filter_map(|(chunk, edited, _, _, _, _)| {
-            edited.map(|edited| (chunk.asset.clone(), chunk.coord, edited.clone()))
-        })
+        .map(|(chunk, edited)| (chunk.asset.clone(), chunk.coord, edited.clone()))
         .collect::<Vec<_>>();
     drop(collect_span);
-    for (chunk, edited, mut dirty, mesh_handle, surface_handle, mut applied) in &mut chunks {
-        let Some(render) = dirty.render else {
-            continue;
-        };
+    for (entity, chunk, edited, render, mesh_handle, surface_handle, mut rendered) in &mut chunks {
+        let render = render.0;
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
             continue;
         };
@@ -92,7 +90,7 @@ pub(super) fn refresh_changed_terrain_chunk_meshes_and_surface_images(
             };
             *image = surface;
         }
-        dirty.render = None;
-        applied.0 = dirty.revision;
+        commands.entity(entity).remove::<TerrainRenderPending>();
+        rendered.set_changed();
     }
 }

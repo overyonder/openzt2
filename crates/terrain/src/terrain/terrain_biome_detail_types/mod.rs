@@ -12,17 +12,7 @@ pub(super) struct TerrainDetail {
     pub(super) materialized_render_tree_root: Option<Entity>,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq)]
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
 pub(super) struct TerrainDetailProjectionState {
-    pub(super) source_revision: u64,
-    pub(super) retained_camera_focus: Vec2,
-}
-
-impl Default for TerrainDetailProjectionState {
-    fn default() -> Self {
-        Self {
-            source_revision: u64::MAX,
-            retained_camera_focus: Vec2::splat(f32::NAN),
-        }
-    }
+    pub(super) retained_camera_focus: Option<Vec2>,
 }

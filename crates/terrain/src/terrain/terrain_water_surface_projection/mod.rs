@@ -1,5 +1,4 @@
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
-use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
 use crate::terrain::terrain_water_material_binding::bind_authored_water_material_values;
 use crate::terrain::terrain_water_material_binding::bind_authored_water_surface_textures;
 use crate::terrain::terrain_water_mesh_construction::construct_terrain_water_low_detail_mesh_groups;
@@ -23,7 +22,6 @@ use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioClip;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
-use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRevision;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterSurface;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterfallSurface;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
@@ -39,12 +37,12 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfac
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterWaveStateKey;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
 
+#[derive(Component)]
+pub(in crate::terrain) struct TerrainWaterSurfaceProjectionPending;
+
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct WaterRegionMaterialProjectionQueries<'w, 's> {
-    projection_status: Local<'s, bevy::platform::collections::HashMap<Entity, &'static str>>,
     membership_changes: MessageReader<'w, 's, TerrainWaterMembershipChanged>,
-    /// Chunks whose water inputs changed and have not been rebuilt since.
-    pending: Local<'s, bevy::platform::collections::HashSet<Entity>>,
     scrolls: Query<'w, 's, &'static TerrainWaterScumScroll>,
     low_textures: Query<'w, 's, &'static TerrainWaterLowDetailTextureState>,
     changed: Query<
@@ -69,27 +67,26 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     scene_prefabs: Res<Assets<ScenePrefabAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    renderer_targets: Option<ResMut<AuthoredTerrainWaterRendererTargets>>,
+    renderer_targets: Option<Res<AuthoredTerrainWaterRendererTargets>>,
     terrain_chunks: Query<
         (
             Entity,
             &TerrainChunk,
             Option<&EditedTerrainSamples>,
-            Option<&TerrainDirty>,
             Option<&Children>,
-            Option<&TerrainWaterRevision>,
+            Has<TerrainWaterSurfaceProjectionPending>,
         ),
         With<TerrainRenderChunk>,
     >,
-    projected_water: Query<(), Or<(With<TerrainWaterSurface>, With<TerrainWaterfallSurface>)>>,
+    (changed_chunks, projected_water): (
+        Query<(), Or<(Added<TerrainRenderChunk>, Changed<TerrainDirty>)>>,
+        Query<(), Or<(With<TerrainWaterSurface>, With<TerrainWaterfallSurface>)>>,
+    ),
     memberships: Query<Ref<TerrainWaterMembershipIndex>>,
     region_sources: TerrainWaterRegionQuery,
     mut region_state: WaterRegionMaterialProjectionQueries,
     transforms: TransformHelper,
 ) {
-    let Some(renderer_targets) = renderer_targets else {
-        return;
-    };
     // A chunk's surfaces depend only on the water within it, so only chunks
     // holding changed points or changed regions are rebuilt.
     let mut changed_points = bevy::platform::collections::HashMap::<
@@ -123,6 +120,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             }
         }
     }
+    let mut membership_changed_chunks = bevy::ecs::entity::EntityHashSet::default();
     for (terrain, points) in changed_points {
         let chunks = terrain_chunks
             .iter()
@@ -130,9 +128,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             .map(|(entity, chunk, ..)| (entity, chunk.source_coord, chunk.side))
             .collect::<Vec<_>>();
         let Some(points) = points else {
-            region_state
-                .pending
-                .extend(chunks.iter().map(|(entity, ..)| *entity));
+            membership_changed_chunks.extend(chunks.iter().map(|(entity, ..)| *entity));
             continue;
         };
         let Some(cells) = chunks
@@ -151,65 +147,48 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 }
             }
         }
-        region_state.pending.extend(
+        membership_changed_chunks.extend(
             chunks
                 .iter()
                 .filter(|(_, coord, _)| coords.contains(coord))
                 .map(|(entity, ..)| *entity),
         );
     }
-    for (chunk_entity, chunk, edited_samples, dirty, children, projected_revision) in
-        &terrain_chunks
-    {
-        let mut report = |status| {
-            if region_state.projection_status.insert(chunk_entity, status) != Some(status) {
-                info!(target: "openzt2_water_projection", ?chunk_entity, ?status,
-                    "water surface projection status changed");
-            }
-        };
+    for (chunk_entity, chunk, edited_samples, children, pending) in &terrain_chunks {
         let membership = memberships
             .iter()
             .find(|index| index.terrain() == chunk.asset.id());
+        if !pending
+            && !graphics_settings.is_changed()
+            && !changed_chunks.contains(chunk_entity)
+            && !membership_changed_chunks.contains(&chunk_entity)
+            && membership.is_some()
+        {
+            continue;
+        }
+        if !pending {
+            commands
+                .entity(chunk_entity)
+                .insert(TerrainWaterSurfaceProjectionPending);
+        }
         let Some(membership) = membership else {
-            report("membership pending");
             for child in children.into_iter().flat_map(|children| children.iter()) {
                 if projected_water.contains(child) {
                     commands.entity(child).despawn();
                 }
             }
-            commands
-                .entity(chunk_entity)
-                .remove::<TerrainWaterRevision>();
             continue;
         };
-        let target_revision = dirty.map_or(0, |dirty| dirty.revision);
-        let current = projected_revision.is_some_and(|revision| revision.0 >= target_revision);
-        let pending = region_state.pending.contains(&chunk_entity);
-        if !pending && !graphics_settings.is_changed() && current {
+        let Some(renderer_targets) = renderer_targets.as_deref() else {
             continue;
-        }
-        if !pending
-            && !graphics_settings.is_changed()
-            && projected_revision.is_some()
-            && dirty.is_some_and(|dirty| {
-                !dirty.flags.contains(TerrainDirtyFlags::HEIGHT)
-                    && !dirty.flags.contains(TerrainDirtyFlags::WATER)
-            })
-        {
-            commands
-                .entity(chunk_entity)
-                .insert(TerrainWaterRevision(target_revision));
-            continue;
-        }
+        };
         let _rebuild_span = info_span!("rebuild_chunk_water_surfaces").entered();
         let Some(terrain_asset) = terrain_assets.get(&chunk.asset) else {
-            report("terrain pending");
             continue;
         };
         let Some(water_material) =
             authored_materials.get(terrain_asset.water_surface_effect_material())
         else {
-            report("surface material pending");
             continue;
         };
         let Some(water_pass_templates) = water_material
@@ -218,7 +197,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             .map(|handle| effect_pass_materials.get(handle).cloned())
             .collect::<Option<Vec<_>>>()
         else {
-            report("surface passes pending");
             continue;
         };
         let scum_required = terrain_asset
@@ -254,7 +232,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                         .collect::<Option<Vec<_>>>()
                 })
             else {
-                report("scum passes pending");
                 continue;
             };
             Some(templates)
@@ -275,7 +252,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                             .collect::<Option<Vec<_>>>()
                     })
                 else {
-                    report("waterfall passes pending");
                     continue;
                 };
                 Some(templates)
@@ -293,7 +269,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             .waterfall_scene_prefab()
             .is_some_and(|handle| scene_prefabs.get(handle).is_none())
         {
-            report("waterfall scene pending");
             continue;
         }
         for child in children.into_iter().flat_map(|children| children.iter()) {
@@ -312,17 +287,8 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             &membership,
             &sources,
         ) else {
-            report("surface geometry unresolved");
-            commands
-                .entity(chunk_entity)
-                .remove::<TerrainWaterRevision>();
             continue;
         };
-        report(if mesh_groups.is_empty() {
-            "no surface geometry"
-        } else {
-            "surface geometry ready"
-        });
         let medium_detail = graphics_settings.water_detail == FourLevelGraphicsDetail::Medium;
         let low_detail =
             graphics_settings.water_detail == FourLevelGraphicsDetail::Low || medium_detail;
@@ -334,9 +300,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 &membership,
                 &sources,
             ) else {
-                commands
-                    .entity(chunk_entity)
-                    .remove::<TerrainWaterRevision>();
                 continue;
             };
             let Ok(chunk_transform) = transforms.compute_global_transform(chunk_entity) else {
@@ -445,9 +408,6 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 }
             }
             if !ready {
-                commands
-                    .entity(chunk_entity)
-                    .remove::<TerrainWaterRevision>();
                 continue;
             }
         }
@@ -543,7 +503,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 let mut pass = pass_template.clone();
                 if !bind_authored_water_surface_textures(
                     &mut pass,
-                    &renderer_targets,
+                    renderer_targets,
                     terrain_asset,
                     presentation,
                 ) {
@@ -600,9 +560,8 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
                 mesh_group.waterfall_mesh_groups,
             );
         }
-        region_state.pending.remove(&chunk_entity);
         commands
             .entity(chunk_entity)
-            .insert(TerrainWaterRevision(target_revision));
+            .remove::<TerrainWaterSurfaceProjectionPending>();
     }
 }

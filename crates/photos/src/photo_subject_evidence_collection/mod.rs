@@ -12,7 +12,7 @@ use openzt2_world_state::animation_graph::animation_graph_playback_state_types::
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
-use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_health::types::Disease;
 use openzt2_zoo_state::animal_health::types::Vitality;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalLifeStage;
@@ -130,7 +130,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
     collider_bounds: Query<&ColliderAabb>,
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
-    occupancy: Res<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     semantic_queries: PhotographableSemanticFactQueries,
 ) {
     for (camera_entity, camera, camera_transform, mut pending, mut evidence, mut semantics) in
@@ -295,7 +295,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                 ),
                 contained_entities: capture_photo_subject_contained_entities(
                     entity,
-                    &occupancy,
+                    &memberships,
                     &semantic_queries.entity_kinds,
                 ),
             });
@@ -309,7 +309,7 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
 /// Records docked occupants, excluding queue waiters.
 fn capture_photo_subject_contained_entities<'w, 's>(
     container: Entity,
-    occupancy: &InteractionContainerOccupancy,
+    memberships: &InteractionContainerMemberships,
     entity_kinds: &Query<
         'w,
         's,
@@ -322,7 +322,7 @@ fn capture_photo_subject_contained_entities<'w, 's>(
     >,
 ) -> PhotoSubjectContainedEntitiesEvidence {
     let mut contained = Vec::new();
-    for entity in occupancy.docked_member_entities_in_container(container) {
+    for entity in memberships.docked_member_entities_in_container(container) {
         let Ok((species, guest, definition, inspectable)) = entity_kinds.get(entity) else {
             return PhotoSubjectContainedEntitiesEvidence::UnsupportedAtCapture;
         };

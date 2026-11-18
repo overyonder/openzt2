@@ -1,13 +1,15 @@
 use crate::terrain::ground_path_surface_mask_selection::ground_path_surface_origin_from_source_direction_cell;
 use crate::terrain::ground_path_surface_mask_selection::select_authored_ground_path_surface_mask_textures;
+use bevy::asset::AssetId as BevyAssetId;
+use bevy::ecs::query::QueryData;
 use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_game_assets::world_definitions::ground_path_surface_images::GroundPathSurfaceImage;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::topology::ground_path_layout_calculation::calculate_snapped_ground_path_layout;
 use openzt2_zoo_state::topology::ground_path_boundary_queries::ground_path_tile_triangles;
@@ -24,176 +26,45 @@ use crate::terrain::terrain_surface_image_composition::blend_ground_path_surface
 use crate::terrain::terrain_surface_image_composition::blend_terrain_surface_paint_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurfaceImage;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 
-#[derive(Resource, Default)]
-pub struct GroundPathSurfaceImageDependencies {
-    images: HashMap<AssetId, Handle<Image>>,
-    used_by_projected_paths: HashSet<AssetId>,
-    definition_assets_affecting_ground_path_surfaces:
-        HashSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
-}
-
-impl GroundPathSurfaceImageDependencies {
-    pub fn projected_images(&self) -> impl Iterator<Item = (AssetId, Option<&Handle<Image>>)> {
-        self.used_by_projected_paths
-            .iter()
-            .map(|identifier| (*identifier, self.images.get(identifier)))
-    }
-
-    pub fn missing_projected_images<'a>(
-        &'a self,
-        images: &'a Assets<Image>,
-    ) -> impl Iterator<Item = (AssetId, Option<&'a Handle<Image>>)> + 'a {
-        self.used_by_projected_paths
-            .iter()
-            .filter_map(move |identifier| {
-                let handle = self.images.get(identifier);
-                handle
-                    .is_none_or(|handle| images.get(handle).is_none())
-                    .then_some((*identifier, handle))
-            })
-    }
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GroundPathSurfaceProjectionRevision(u64);
-
-impl GroundPathSurfaceProjectionRevision {
-    pub fn matches_render_revision(&self, revision: &TerrainRenderRevision) -> bool {
-        self.0 == revision.0
-    }
-}
+#[derive(Message)]
+pub(super) struct DiscardedTerrainPaintArea(Rect);
 
 #[derive(Component)]
-pub struct GroundPathSurfaceProjectionDirty;
+pub(super) struct GroundPathSurfaceProjectionPending;
 
 #[derive(Clone, Copy)]
 struct GroundPathSurfaceOverlay {
     cell: IVec3,
-    texture: AssetId,
-    mask: AssetId,
+    texture: BevyAssetId<Image>,
+    mask: BevyAssetId<Image>,
     mirror_x: bool,
     mirror_y: bool,
 }
 
-/// Keeps path masks and surface textures loaded while terrain images use them.
-pub(super) fn retain_ground_path_surface_image_dependencies(
-    active_definitions: Res<WorldDefinitions>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    mut dependencies: ResMut<GroundPathSurfaceImageDependencies>,
-) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    let identifiers = AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS
-        .into_iter()
-        .map(AssetId::from_virtual_path)
-        .chain(
-            definitions
-                .paths()
-                .filter(|definition| !definition.elevated)
-                .map(|definition| AssetId(definition.surface_texture.0)),
-        );
-    for identifier in identifiers {
-        if dependencies.images.contains_key(&identifier) {
-            continue;
-        }
-        if let Some(image) = definitions.texture_image(identifier) {
-            dependencies.images.insert(identifier, image);
-        }
-    }
-}
-
 /// Invalidates only terrain chunks whose composed image can contain a changed
-/// path surface. Asset reloads invalidate all chunks because an existing mask
-/// or path texture may have changed without topology changing.
+/// path surface. Source reloads also invalidate chunks near existing paths.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
     mut commands: Commands,
     mut topology_changed: MessageReader<TopologyChanged>,
     added_paths: Query<&PathTile, Added<PathTile>>,
-    mut image_events: MessageReader<AssetEvent<Image>>,
-    mut definition_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    mut dependencies: ResMut<GroundPathSurfaceImageDependencies>,
+    mut image_events: MessageReader<AssetEvent<GroundPathSurfaceImage>>,
+    active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
     paths: Query<&PathTile>,
-    chunks: Query<(
-        Entity,
-        &TerrainChunk,
-        Option<&GroundPathSurfaceProjectionRevision>,
-    )>,
+    chunks: Query<(Entity, &TerrainChunk), With<TerrainRenderChunk>>,
 ) {
-    let dependency_image_changed = image_events.read().fold(false, |changed, event| {
-        let event_id = match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::Removed { id }
-            | AssetEvent::Unused { id }
-            | AssetEvent::LoadedWithDependencies { id } => *id,
-        };
-        changed
-            || dependencies
-                .used_by_projected_paths
-                .iter()
-                .filter_map(|identifier| dependencies.images.get(identifier))
-                .any(|handle| handle.id() == event_id)
+    let dependency_image_changed = image_events.read().any(|event| {
+        matches!(*event, AssetEvent::LoadedWithDependencies { id }
+            if active_definitions.owns_ground_path_surface_image(id))
     });
-    let definition_changed = definition_events.read().fold(false, |changed, event| {
-        let relevant_definition_changed = match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id } => {
-                if definitions
-                    .get(*id)
-                    .is_some_and(WorldDefinitionAsset::affects_ground_path_surface_projection)
-                {
-                    dependencies
-                        .definition_assets_affecting_ground_path_surfaces
-                        .insert(*id);
-                    true
-                } else {
-                    dependencies
-                        .definition_assets_affecting_ground_path_surfaces
-                        .remove(id)
-                }
-            }
-            AssetEvent::Removed { id } | AssetEvent::Unused { id } => dependencies
-                .definition_assets_affecting_ground_path_surfaces
-                .remove(id),
-        };
-        changed || relevant_definition_changed
-    });
-    if dependency_image_changed || definition_changed {
-        let surface_patch_margin = grid.spacing_m * 5.0;
-        for (entity, chunk, projected) in &chunks {
-            if projected.is_none() {
-                continue;
-            }
-            let chunk_cells = f32::from(chunk.side.saturating_sub(1));
-            let chunk_min = chunk.origin;
-            let chunk_max = chunk.origin + Vec2::splat(chunk_cells * chunk.spacing_m);
-            if !paths.iter().any(|path| {
-                let path_origin = grid.cell_translation(path.cell).xz();
-                path_origin
-                    .cmple(chunk_max + Vec2::splat(surface_patch_margin))
-                    .all()
-                    && path_origin
-                        .cmpge(chunk_min - Vec2::splat(surface_patch_margin))
-                        .all()
-            }) {
-                continue;
-            }
-            commands
-                .entity(entity)
-                .insert(GroundPathSurfaceProjectionDirty);
-        }
-        return;
-    }
+    image_events.clear();
+    let source_changed = dependency_image_changed || active_definitions.is_changed();
 
     let changed_bounds = topology_changed
         .read()
@@ -204,58 +75,69 @@ pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
                 .map(|path| IRect::from_corners(path.cell.xy(), path.cell.xy())),
         )
         .reduce(|current, next| current.union(next));
-    let Some(changed_bounds) = changed_bounds else {
+    if changed_bounds.is_none() && !source_changed {
         return;
-    };
-    let surface_patch_margin = grid.spacing_m * 5.0;
-    let world_min = grid.cell_translation(changed_bounds.min.extend(0)).xz()
-        - Vec2::splat(surface_patch_margin);
-    let world_max = grid.cell_translation(changed_bounds.max.extend(0)).xz()
-        + Vec2::splat(surface_patch_margin);
-    for (entity, chunk, projected) in &chunks {
-        if projected.is_none() {
-            continue;
-        }
+    }
+    let surface_patch_margin = Vec2::splat(grid.spacing_m * 5.0);
+    let changed_world_bounds = changed_bounds.map(|bounds| {
+        (
+            grid.cell_translation(bounds.min.extend(0)).xz() - surface_patch_margin,
+            grid.cell_translation(bounds.max.extend(0)).xz() + surface_patch_margin,
+        )
+    });
+    for (entity, chunk) in &chunks {
         let chunk_cells = f32::from(chunk.side.saturating_sub(1));
         let chunk_min = chunk.origin;
         let chunk_max = chunk.origin + Vec2::splat(chunk_cells * chunk.spacing_m);
-        if chunk_min.cmple(world_max).all() && chunk_max.cmpge(world_min).all() {
+        let topology_changed = changed_world_bounds.is_some_and(|(world_min, world_max)| {
+            chunk_min.cmple(world_max).all() && chunk_max.cmpge(world_min).all()
+        });
+        if topology_changed
+            || (source_changed
+                && paths.iter().any(|path| {
+                    let path_origin = grid.cell_translation(path.cell).xz();
+                    path_origin.cmple(chunk_max + surface_patch_margin).all()
+                        && path_origin.cmpge(chunk_min - surface_patch_margin).all()
+                }))
+        {
             commands
                 .entity(entity)
-                .insert(GroundPathSurfaceProjectionDirty);
+                .insert(GroundPathSurfaceProjectionPending);
         }
     }
+}
+
+pub(super) fn record_discarded_terrain_paint_area(
+    discard: On<Discard<TerrainPaintedTexture>>,
+    paints: Query<&TerrainPaintedTexture>,
+    mut discarded: MessageWriter<DiscardedTerrainPaintArea>,
+) {
+    if let Ok(paint) = paints.get(discard.entity) {
+        discarded.write(DiscardedTerrainPaintArea(terrain_paint_area(paint)));
+    }
+}
+
+fn terrain_paint_area(paint: &TerrainPaintedTexture) -> Rect {
+    Rect::from_center_size(paint.centre, Vec2::splat(paint.size_m))
 }
 
 /// Invalidates the terrain chunks under a painted texture that was added,
 /// changed or removed (a road piece built or demolished).
 pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
     mut commands: Commands,
-    changed: Query<(Entity, &TerrainPaintedTexture), Changed<TerrainPaintedTexture>>,
-    mut removed: RemovedComponents<TerrainPaintedTexture>,
-    mut painted: Local<HashMap<Entity, Rect>>,
-    chunks: Query<(
-        Entity,
-        &TerrainChunk,
-        Option<&GroundPathSurfaceProjectionRevision>,
-    )>,
+    changed: Query<&TerrainPaintedTexture, Changed<TerrainPaintedTexture>>,
+    mut discarded: MessageReader<DiscardedTerrainPaintArea>,
+    chunks: Query<(Entity, &TerrainChunk), With<TerrainRenderChunk>>,
 ) {
-    let mut changed_areas = removed
+    let changed_areas = discarded
         .read()
-        .filter_map(|entity| painted.remove(&entity))
+        .map(|discarded| discarded.0)
+        .chain(changed.iter().map(terrain_paint_area))
         .collect::<Vec<_>>();
-    for (entity, paint) in &changed {
-        let area = Rect::from_center_size(paint.centre, Vec2::splat(paint.size_m));
-        changed_areas.extend(painted.insert(entity, area));
-        changed_areas.push(area);
-    }
     if changed_areas.is_empty() {
         return;
     }
-    for (entity, chunk, projected) in &chunks {
-        if projected.is_none() {
-            continue;
-        }
+    for (entity, chunk) in &chunks {
         // The chunk image reaches a few cells past the chunk.
         let chunk_area = Rect::from_corners(
             chunk.origin,
@@ -268,9 +150,16 @@ pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
         {
             commands
                 .entity(entity)
-                .insert(GroundPathSurfaceProjectionDirty);
+                .insert(GroundPathSurfaceProjectionPending);
         }
     }
+}
+
+#[derive(QueryData)]
+pub(super) struct GroundPathSurfaceChunk {
+    chunk: &'static TerrainChunk,
+    edited: Option<&'static EditedTerrainSamples>,
+    surface: &'static TerrainSurfaceImage,
 }
 
 /// Rebuilds a terrain chunk's base image and applies the
@@ -278,36 +167,41 @@ pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
 #[allow(clippy::too_many_arguments)]
 pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     mut commands: Commands,
-    mut reported_surface_readiness: Local<Option<(usize, usize, usize)>>,
     mut images: ResMut<Assets<Image>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
-    mut dependencies: ResMut<GroundPathSurfaceImageDependencies>,
     grid: Res<TopologyGrid>,
     paths: Query<(Entity, &PathTile)>,
     paints: Query<&TerrainPaintedTexture>,
-    chunks: Query<(
+    chunks: Query<GroundPathSurfaceChunk, With<TerrainRenderChunk>>,
+    changed_chunks: Query<Entity, (With<TerrainSurfaceImage>, Changed<TerrainRenderChunk>)>,
+    pending_chunks: Query<
         Entity,
-        &TerrainChunk,
-        Option<&EditedTerrainSamples>,
-        &TerrainSurfaceImage,
-        &TerrainRenderRevision,
-        Option<&GroundPathSurfaceProjectionRevision>,
-        Option<&GroundPathSurfaceProjectionDirty>,
-    )>,
+        (
+            With<TerrainSurfaceImage>,
+            With<GroundPathSurfaceProjectionPending>,
+        ),
+    >,
+    surface_images: Res<Assets<GroundPathSurfaceImage>>,
+    server: Res<AssetServer>,
 ) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    if chunks
-        .iter()
-        .all(|(_, _, _, _, render_revision, projected, dirty)| {
-            dirty.is_none() && projected.is_some_and(|projected| projected.0 == render_revision.0)
-        })
-    {
+    if changed_chunks.is_empty() && pending_chunks.is_empty() {
         return;
     }
+    let mut retain_changed_chunks = || {
+        for entity in &changed_chunks {
+            if !pending_chunks.contains(entity) {
+                commands
+                    .entity(entity)
+                    .insert(GroundPathSurfaceProjectionPending);
+            }
+        }
+    };
+    let Some(definitions) = active_definitions.get(&definitions) else {
+        retain_changed_chunks();
+        return;
+    };
     let source_grid_offset = (Vec2::new(grid.origin.x, -grid.origin.y) / grid.spacing_m)
         .round()
         .as_ivec2()
@@ -336,6 +230,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
         .iter()
         .any(|&(curb, ..)| curb != AssetId::default() && definitions.find_fence(curb).is_none())
     {
+        retain_changed_chunks();
         return;
     }
     let mut segments = path_layouts
@@ -372,7 +267,18 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             })
         })
         .collect::<HashMap<_, _>>();
-    let mut overlays = paths
+    // Resolve each source once per composition pass. The path asset owns the handles.
+    let mut resolved_images = HashMap::new();
+    let mut resolve_image = |identifier| {
+        *resolved_images.entry(identifier).or_insert_with(|| {
+            let source = active_definitions.ground_path_surface_image(identifier)?;
+            if !server.is_loaded_with_dependencies(source.id()) {
+                return None;
+            }
+            Some(surface_images.get(source)?.image.id())
+        })
+    };
+    let overlays = paths
         .iter()
         .filter_map(|(entity, path)| {
             let definition = definitions.find_path(path.definition)?;
@@ -422,67 +328,55 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
                     definitions.topology_cell_size_cm(),
                 )? + IVec3::new(-source_grid_offset.x, source_grid_offset.y, 0);
             }
-            Some((
-                entity,
-                AssetId(definition.surface_texture.0),
-                mask_texture_selections,
-            ))
+            Some((entity, definition.surface_texture, mask_texture_selections))
         })
         .flat_map(|(entity, texture, selections)| {
-            selections.into_iter().flatten().map(move |selection| {
-                (
-                    entity,
-                    GroundPathSurfaceOverlay {
-                        cell: selection.cell,
-                        texture,
-                        mask: AssetId::from_virtual_path(selection.source_path),
-                        mirror_x: selection.mirror_mode & 1 != 0,
-                        mirror_y: selection.mirror_mode & 2 != 0,
-                    },
-                )
-            })
+            selections
+                .into_iter()
+                .flatten()
+                .map(move |selection| (entity, texture, selection))
         })
-        .collect::<Vec<_>>();
+        .map(|(entity, texture, selection)| {
+            Some((
+                entity,
+                GroundPathSurfaceOverlay {
+                    cell: selection.cell,
+                    texture: resolve_image(texture)?,
+                    mask: resolve_image(AssetId::from_virtual_path(selection.source_path))?,
+                    mirror_x: selection.mirror_mode & 1 != 0,
+                    mirror_y: selection.mirror_mode & 2 != 0,
+                },
+            ))
+        })
+        .collect::<Option<Vec<_>>>();
+    // An unavailable source only blocks composition if a selected patch uses it.
+    let Some(mut overlays) = overlays else {
+        retain_changed_chunks();
+        return;
+    };
     overlays.sort_unstable_by_key(|(entity, overlay)| {
         (-overlay.cell.y, overlay.cell.x, entity.to_bits())
     });
-    dependencies.used_by_projected_paths.clear();
-    dependencies.used_by_projected_paths.extend(
-        overlays
-            .iter()
-            .flat_map(|(_, overlay)| [overlay.texture, overlay.mask]),
-    );
-    let missing_images = dependencies
-        .used_by_projected_paths
-        .iter()
-        .filter(|identifier| {
-            dependencies
-                .images
-                .get(*identifier)
-                .is_none_or(|handle| images.get(handle).is_none())
-        })
-        .count();
-    let readiness = (paths.iter().count(), overlays.len(), missing_images);
-    if *reported_surface_readiness != Some(readiness) {
-        debug!(
-            paths = readiness.0,
-            overlays = readiness.1,
-            missing_images,
-            retained_images = dependencies.images.len(),
-            "ground path surface readiness"
-        );
-        *reported_surface_readiness = Some(readiness);
-    }
-    if missing_images != 0 {
-        return;
-    }
 
-    for (entity, chunk, _, surface, render_revision, projected, dirty) in &chunks {
-        if dirty.is_none() && projected.is_some_and(|projected| projected.0 == render_revision.0) {
+    for entity in pending_chunks.iter().chain(
+        changed_chunks
+            .iter()
+            .filter(|entity| !pending_chunks.contains(*entity)),
+    ) {
+        let Ok(GroundPathSurfaceChunkItem { chunk, surface, .. }) = chunks.get(entity) else {
             continue;
-        }
+        };
+        let dirty = pending_chunks.contains(entity);
+        let mut retain_chunk = || {
+            if !dirty {
+                commands
+                    .entity(entity)
+                    .insert(GroundPathSurfaceProjectionPending);
+            }
+        };
         let chunk_cells = f32::from(chunk.side.saturating_sub(1));
         let Some(asset) = terrain_assets.get(&chunk.asset) else {
+            retain_chunk();
             continue;
         };
         let margin_cells = f32::from(
@@ -522,26 +416,30 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             .collect::<Option<Vec<_>>>();
         // Wait for a painted texture to load rather than drop it.
         let Some(relevant_paints) = relevant_paints else {
+            retain_chunk();
             continue;
         };
-        if relevant_overlays.is_empty() && relevant_paints.is_empty() && dirty.is_none() {
-            commands
-                .entity(entity)
-                .insert(GroundPathSurfaceProjectionRevision(render_revision.0));
+        if relevant_overlays.is_empty() && relevant_paints.is_empty() && !dirty {
             continue;
         }
-        let mut composed = if dirty.is_some() {
+        let mut composed = if dirty {
             let edited_chunks = chunks
                 .iter()
-                .filter(|(_, candidate, ..)| {
-                    candidate.asset == chunk.asset
-                        && (candidate.coord - chunk.coord)
+                .filter(|candidate| {
+                    candidate.chunk.asset == chunk.asset
+                        && (candidate.chunk.coord - chunk.coord)
                             .abs()
                             .cmple(IVec2::ONE)
                             .all()
                 })
-                .filter_map(|(_, candidate, edited, ..)| {
-                    edited.map(|edited| (candidate.asset.clone(), candidate.coord, edited.clone()))
+                .filter_map(|candidate| {
+                    candidate.edited.map(|edited| {
+                        (
+                            candidate.chunk.asset.clone(),
+                            candidate.chunk.coord,
+                            edited.clone(),
+                        )
+                    })
                 })
                 .collect::<Vec<_>>();
             let Some(composed) =
@@ -552,16 +450,15 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             composed
         } else {
             let Some(composed) = images.get(&surface.0).cloned() else {
+                retain_chunk();
                 continue;
             };
             composed
         };
         for overlay in relevant_overlays {
-            let Some((path_texture, detail_mask)) = (|| {
-                let path_texture = dependencies.images.get(&overlay.texture)?;
-                let detail_mask = dependencies.images.get(&overlay.mask)?;
-                Some((images.get(path_texture)?, images.get(detail_mask)?))
-            })() else {
+            let Some((path_texture, detail_mask)) =
+                images.get(overlay.texture).zip(images.get(overlay.mask))
+            else {
                 continue;
             };
             if blend_ground_path_surface_patch_into_terrain_surface_image(
@@ -597,12 +494,14 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             }
         }
         let Some(mut image) = images.get_mut(&surface.0) else {
+            retain_chunk();
             continue;
         };
         *image = composed;
-        commands
-            .entity(entity)
-            .insert(GroundPathSurfaceProjectionRevision(render_revision.0))
-            .remove::<GroundPathSurfaceProjectionDirty>();
+        if dirty {
+            commands
+                .entity(entity)
+                .remove::<GroundPathSurfaceProjectionPending>();
+        }
     }
 }

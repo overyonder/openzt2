@@ -1,7 +1,7 @@
 use super::*;
 
 pub(super) fn project_contained_object_transforms(
-    occupancy: Res<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     objects: Query<(Entity, &ContainedObject)>,
     mut transforms: ParamSet<(
         bevy::transform::helper::TransformHelper,
@@ -10,7 +10,7 @@ pub(super) fn project_contained_object_transforms(
 ) {
     for (item, contained) in &objects {
         let joint = contained.joint.or_else(|| {
-            occupancy
+            memberships
                 .container_for_member(item)
                 .map(|(holder, _)| holder)
         });

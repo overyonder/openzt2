@@ -73,67 +73,12 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
     add_developer_diagnostics_when_enabled(&mut game_application);
     #[cfg(feature = "mod-audit")]
     mod_audit::install(&mut game_application);
-    execute_short_main_world_systems_without_per_system_task_dispatch(&mut game_application);
-    execute_short_render_world_systems_without_per_system_task_dispatch(&mut game_application);
     if game_application.run().is_error() {
         Err(std::io::Error::other(
             "game application exited with an error",
         ))
     } else {
         Ok(())
-    }
-}
-
-fn execute_short_render_world_systems_without_per_system_task_dispatch(app: &mut App) {
-    use bevy::{
-        core_pipeline::schedule::{Core2d, Core3d},
-        ecs::schedule::{ScheduleLabel, SingleThreadedExecutor},
-        render::{renderer::RenderGraph, ExtractSchedule, RenderApp},
-    };
-
-    // Preserve the render thread, query-level parallelism and topological
-    // command order without dispatching each short pass to another worker.
-    let render_app = app.sub_app_mut(RenderApp);
-    for label in [
-        ExtractSchedule.intern(),
-        // macOS needs Bevy's multi-threaded executor to move NonSend
-        // `create_surfaces` onto the main thread; NSView access panics elsewhere.
-        #[cfg(not(target_vendor = "apple"))]
-        bevy::render::Render.intern(),
-        RenderGraph.intern(),
-        Core3d.intern(),
-        Core2d.intern(),
-    ] {
-        render_app.edit_schedule(label, |schedule| {
-            schedule.set_executor(SingleThreadedExecutor::default());
-            // Extraction's commands belong to the render world and are applied
-            // later by apply_extract_commands, unlike the render schedules.
-            schedule.set_apply_final_deferred(label != ExtractSchedule.intern());
-        });
-    }
-}
-
-fn execute_short_main_world_systems_without_per_system_task_dispatch(app: &mut App) {
-    use bevy::ecs::schedule::{ScheduleLabel, SingleThreadedExecutor};
-
-    // These schedules contain many short, ordered systems. Run their outer
-    // dispatch inline; parallel queries, asset tasks and the render thread keep
-    // using Bevy's task pools. Schedule dependency ordering is unchanged.
-    for label in [
-        First.intern(),
-        PreUpdate.intern(),
-        Update.intern(),
-        Last.intern(),
-        FixedFirst.intern(),
-        FixedPreUpdate.intern(),
-        FixedUpdate.intern(),
-        FixedPostUpdate.intern(),
-        FixedLast.intern(),
-    ] {
-        app.edit_schedule(label, |schedule| {
-            schedule.set_executor(SingleThreadedExecutor::default());
-            schedule.set_apply_final_deferred(true);
-        });
     }
 }
 

@@ -2,7 +2,7 @@
 //! detach before the authored continuation returns to the enclosing task.
 
 use super::super::behavior_subject_type_resolution::{
-    behavior_subject_type_identifiers, AnimalBehaviorSubjectTypes,
+    AnimalBehaviorSubjectTypes, behavior_subject_type_identifiers,
 };
 use super::*;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
@@ -35,7 +35,12 @@ struct HeldFoodPropAttachment {
 pub(super) fn register(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
-    app.add_systems(FixedUpdate, (discard_cancelled_food_prop_attachments, execute_food_prop_attachments)
+    app.add_systems(FixedUpdate, (
+        discard_cancelled_food_prop_attachments,
+        execute_food_prop_attachments,
+        resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
+        admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
+    )
         .chain()
         .after(super::super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .before(super::start_or_finish_object_attachment)
@@ -49,7 +54,6 @@ pub(super) fn register(app: &mut App) {
 
 fn discard_cancelled_food_prop_attachments(
     mut commands: Commands,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
     actors: Query<(
         Entity,
         &HeldFoodPropAttachment,
@@ -78,7 +82,6 @@ fn discard_cancelled_food_prop_attachments(
             continue;
         }
         if let Some(item) = pending.item.filter(|item| items.contains(*item)) {
-            occupancy.remove_actor(item);
             commands.entity(item).despawn();
         }
         commands.entity(actor).remove::<HeldFoodPropAttachment>();
@@ -93,7 +96,6 @@ fn discard_cancelled_food_prop_attachments(
         {
             continue;
         }
-        occupancy.remove_actor(item);
         commands.entity(item).despawn();
     }
 }
@@ -102,14 +104,56 @@ fn discard_cancelled_food_prop_attachments(
 #[derive(Component)]
 struct FoodPropInstructionOwner(Entity);
 
+pub(super) struct FoodPropAdmission {
+    subject_joint: Option<Entity>,
+    animation: Option<String>,
+    tick: u64,
+}
+
+pub(super) fn finish_food_prop_admission(
+    actor: Entity,
+    item: Entity,
+    admission: FoodPropAdmission,
+    tasks: &mut Query<&mut BehaviorTaskExecutionState>,
+    playback: &mut MessageWriter<AnimationClipPlaybackRequest>,
+    commands: &mut Commands,
+) {
+    let Ok(mut task) = tasks.get_mut(actor) else {
+        commands.entity(item).try_despawn();
+        return;
+    };
+    let completed = admission.animation.is_none();
+    let mut origin = PendingObjectAttachment::waiting_for_attachment(&task, None);
+    origin.joint = admission.subject_joint;
+    if let Some(animation_clip_asset_key) = admission.animation {
+        origin.request_id = Some(
+            playback
+                .write(AnimationClipPlaybackRequest {
+                    animation_subject_entity: actor,
+                    animation_clip_asset_key,
+                    blend_duration_milliseconds: 0,
+                    playback_speed_permille: 1000,
+                    playback_repetition_policy: AnimationPlaybackRepetitionPolicy::PlayOnce,
+                })
+                .id,
+        );
+    }
+    commands.entity(actor).try_insert(HeldFoodPropAttachment {
+        origin,
+        item: Some(item),
+        attached: completed,
+        detached: false,
+        completed,
+    });
+    task.next_action_tick = admission.tick.saturating_add(1);
+}
+
 fn execute_food_prop_attachments(
     mut commands: Commands,
     assets: AttachmentAssets,
     loaded: Res<LoadedBehaviorDocumentCollection>,
     animal_types: AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
-    mut ids: ResMut<PersistentIdAllocator>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
     mut actors: Query<
         (
@@ -185,9 +229,8 @@ fn execute_food_prop_attachments(
                     &definitions,
                     &objects,
                     &transforms,
-                    &mut ids,
-                    &mut occupancy,
                     &mut commands,
+                    &mut admission::DetachMembershipRequests::Queued,
                 ) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
@@ -309,53 +352,44 @@ fn execute_food_prop_attachments(
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 continue;
             };
-            if occupancy.occupied_places(actor, slot) >= usize::from(place.capacity) {
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                continue;
-            }
-            let Ok(id) = ids.allocate(world.root) else {
-                continue;
-            };
             let scale = Transform::from_scale(Vec3::splat(object.prefab_scale));
-            let item = spawn_loaded_scene_prefab_as_world_instance(
+            let definition = object.id;
+            let instance_transform = transform.compute_transform().mul_transform(scale);
+            let attachment = ContainedObject {
+                holder_definition: actor_definition.0,
+                detach_rule: action.detach_rule,
+                joint: Some(joint),
+                relative_transform: scale.mul_transform(transform_from_authored(&root.transform)),
+                attachment_request: None,
+            };
+            let modifier = action.locomotion_modifier;
+            let animation = action.animation.clone();
+            let tick = clock.tick;
+            admission::request_new_object_admission(
                 &mut commands,
-                prefab,
-                handle,
+                actor,
+                slot,
+                place.capacity,
                 world.root,
-                object.id,
-                id,
-                transform.compute_transform().mul_transform(scale),
-                true,
-                None,
-                RigidBody::Kinematic,
+                admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
+                    actor,
+                    attachment,
+                    visibility: Visibility::Inherited,
+                    modifier,
+                    spawn: Some(admission::NewAttachedObject {
+                        world: *world,
+                        definition,
+                        instance_transform,
+                        prefab: Some(handle),
+                    }),
+                    finish: admission::AttachmentAfterAdmission::FoodProp(FoodPropAdmission {
+                        subject_joint: state.origin.joint,
+                        animation,
+                        tick,
+                    }),
+                }),
             );
-            if !occupancy.admit(actor, item, slot, place.capacity) {
-                commands.entity(item).despawn();
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                continue;
-            }
-            if let Some(modifier) = action.locomotion_modifier {
-                commands.entity(actor).insert(
-                    openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
-                        modifier,
-                        item,
-                    },
-                );
-            }
-            commands.entity(item).insert((
-                ContainedObject {
-                    holder_definition: actor_definition.0,
-                    detach_rule: action.detach_rule,
-                    joint: Some(joint),
-                    relative_transform: scale
-                        .mul_transform(transform_from_authored(&root.transform)),
-                    attachment_request: None,
-                },
-                FoodPropInstructionOwner(actor),
-                Visibility::Inherited,
-            ));
-            state.item = Some(item);
-            state.attached = action.animation.is_none();
+            continue;
         }
         if let Some(animation) = &action.animation {
             state.origin.request_id = Some(

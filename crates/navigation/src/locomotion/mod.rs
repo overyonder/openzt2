@@ -12,6 +12,7 @@ mod contact_steering_projection;
 mod direct_docking_request_execution;
 mod direct_locomotion_execution;
 mod entity_pursuit_execution;
+mod fence_navigation_crossing_types;
 mod fence_navigation_policy;
 mod kinematic_navigation_agent_motion_integration;
 mod local_steering_calculation;
@@ -35,7 +36,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigateTo;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence;
 use openzt2_zoo_state::locomotion::locomotion_types::PursueEntity;
 use openzt2_zoo_state::locomotion::locomotion_types::ReachabilityTested;
@@ -52,12 +52,16 @@ use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection;
 use openzt2_zoo_state::locomotion::NavigationRequestAcceptance;
 
+use fence_navigation_crossing_types::FenceNavigationCrossingIndex;
+
 pub struct LocomotionPlugin;
 
 impl Plugin for LocomotionPlugin {
     fn build(&self, game_application: &mut App) {
         game_application
-            .init_resource::<NavigationOverlay>()
+            .init_resource::<FenceNavigationCrossingIndex>()
+            .add_observer(fence_navigation_crossing_types::index_inserted_fence_crossings)
+            .add_observer(fence_navigation_crossing_types::unindex_discarded_fence_crossings)
             .init_resource::<NavigationRequestSequence>()
             .init_resource::<SpatialGrid>()
             .add_message::<NavigateTo>()
@@ -90,8 +94,11 @@ impl Plugin for LocomotionPlugin {
             )
             .add_systems(
                 FixedUpdate,
+                animal_water_contact::project_animal_water_contact.in_set(FixedGameSet::Clock),
+            )
+            .add_systems(
+                FixedUpdate,
                 (
-                    animal_water_contact::project_animal_water_contact,
                     crate::locomotion::animal_animation_locomotion::project_animal_animation_motion_to_navigation
                         .in_set(AnimalAnimationNavigationProjection),
                     person_walk_animation::project_person_motion_to_walk_animation
@@ -121,6 +128,15 @@ impl Plugin for LocomotionPlugin {
             .add_systems(
                 FixedUpdate,
                 (
+                    contact_steering_projection::project_avian_contacts_into_navigation_steering
+                        .before_ignore_deferred(local_steering_calculation::calculate_route_following_and_separation_steering),
+                    direct_locomotion_execution::calculate_direct_locomotion_steering,
+                )
+                    .in_set(FixedGameSet::Navigate),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
                     entity_pursuit_execution::steer_entity_pursuits_toward_live_targets,
                     crate::locomotion::animal_navigation_policy::invalidate_animal_routes_after_policy_changes,
                     staff_tank_gate_navigation::receive_staff_tank_gate_events,
@@ -129,11 +145,8 @@ impl Plugin for LocomotionPlugin {
                     changed_destination_route_planning::
                         plan_routes_for_changed_navigation_destinations,
                     behavior_evasion_steering::project_behavior_evasion_steering,
-                    contact_steering_projection::
-                        project_avian_contacts_into_navigation_steering,
                     local_steering_calculation::
                         calculate_route_following_and_separation_steering,
-                    crate::locomotion::direct_locomotion_execution::calculate_direct_locomotion_steering,
                 )
                     .chain()
                     .in_set(FixedGameSet::Navigate),
@@ -158,7 +171,8 @@ impl Plugin for LocomotionPlugin {
                 FixedUpdate,
                 (
                     topology_navigation_edge_invalidation::
-                        synchronize_navigation_edge_blocking_and_invalidate_routes_after_topology_changes,
+                        invalidate_routes_after_topology_changes,
+                    topology_navigation_edge_invalidation::synchronize_fence_navigation_crossings,
                     crate::locomotion::spatial_index_and_docking_operations::rebuild_spatial_grid,
                     crate::locomotion::spatial_index_and_docking_operations::detect_stuck_agents,
                     crate::locomotion::spatial_index_and_docking_operations::complete_docking,
@@ -175,10 +189,8 @@ impl Plugin for LocomotionPlugin {
 
 fn clear_navigation_resources_after_leaving_gameplay(
     mut commands: Commands,
-    mut navigation_overlay: ResMut<NavigationOverlay>,
     mut spatial_grid: ResMut<SpatialGrid>,
 ) {
-    *navigation_overlay = default();
     *spatial_grid = default();
     commands.remove_resource::<ActiveTerrainDerivedNavigationGraph>();
     commands.remove_resource::<LocomotionCapacity>();

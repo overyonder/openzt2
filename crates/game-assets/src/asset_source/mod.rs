@@ -20,6 +20,8 @@ use crate::model_source::gltf_model_source::{
     gltf_model_source_path_for_asset_path, is_gltf_model_source_path,
 };
 
+use crate::world_definitions::ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION;
+
 pub fn create_bevy_asset_source_for_enabled_z2f_archives(
     enabled_archive_paths: Vec<PathBuf>,
 ) -> std::io::Result<(AssetSourceBuilder, AssetArchives)> {
@@ -629,6 +631,9 @@ impl AssetReader for Z2fAssetReader {
 /// sources through OpenZT2's loaders instead of Bevy's built-in ones.
 fn source_path_for_asset_path(path: &Path) -> PathBuf {
     match path.extension().and_then(|extension| extension.to_str()) {
+        Some(GROUND_PATH_SURFACE_IMAGE_EXTENSION) => {
+            source_path_for_asset_path(&path.with_extension(""))
+        }
         Some("z2cur") => path.with_extension("cur"),
         Some("z2dds") => path.with_extension("dds"),
         _ => gltf_model_source_path_for_asset_path(path),

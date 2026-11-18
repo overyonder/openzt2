@@ -1,6 +1,12 @@
 //! Execution of authored entity-container entry and behavior-set selection.
 
+use super::behavior_container_admission::{
+    behavior_container_admission_selection, request_behavior_container_admission,
+    BehaviorContainerAdmissions,
+};
 use bevy::prelude::*;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRecipient;
+
 use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -8,6 +14,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
@@ -22,6 +29,8 @@ use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 
 pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_sets(
+    In(apply_admissions): In<bool>,
+    task_entities: Query<Entity, With<BehaviorTaskExecutionState>>,
     mut commands: Commands,
     behavior_documents: Res<LoadedBehaviorDocumentCollection>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
@@ -30,7 +39,8 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     simulation_clock: Res<ZooClock>,
     target_definitions: Query<&DefinitionId>,
-    mut occupancy: ResMut<super::interaction_container_occupancy::InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
+    admissions: BehaviorContainerAdmissions,
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
     attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
@@ -50,9 +60,39 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     ) else {
         return;
     };
-    for (actor, mut task, species, staff_role, guest, mut guest_random, mut behavior_random) in
-        &mut actors
-    {
+    let BehaviorContainerAdmissions {
+        mut requests,
+        mut outcomes,
+    } = admissions;
+    let replies = if apply_admissions {
+        Some(outcomes.read())
+    } else {
+        None
+    };
+    let replies = replies.into_iter().flatten().filter_map(|outcome| {
+        let InteractionContainerAdmissionRecipient::Entry(actor) = outcome.reply_to else {
+            return None;
+        };
+        Some((actor, Some(behavior_container_admission_selection(outcome))))
+    });
+    let ready = (!apply_admissions)
+        .then(|| task_entities.iter())
+        .into_iter()
+        .flatten()
+        .map(|actor| (actor, None));
+    for (actor, admission) in replies.chain(ready) {
+        let Ok((
+            actor,
+            mut task,
+            species,
+            staff_role,
+            guest,
+            mut guest_random,
+            mut behavior_random,
+        )) = actors.get_mut(actor)
+        else {
+            continue;
+        };
         if task.next_action_tick > simulation_clock.tick {
             continue;
         }
@@ -128,35 +168,41 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     continue;
                 };
                 let actor_position = actor_transform.translation();
-                let selected_slot = occupancy.nearest_available_service_slot(
-                    target, actor, &target_object.interaction_slots, reservation_tag,
-                    |name| {
-                        let position = if name.is_empty() {
-                            transforms.get(target).ok()?.translation()
-                        } else {
-                            super::behavior_docking_execution::find_named_descendant_global_transform(
-                                target, name, &children, &attachment_transforms,
-                            )?.translation()
-                        };
-                        let offset = position - actor_position;
-                        Some(Vec2::new(offset.x, offset.z))
-                    },
-                );
-                let Some(slot_index) = selected_slot else {
+                let Some(selected_slot) = admission else {
+                    let slots = memberships.service_slot_candidates(
+                        target, actor, &target_object.interaction_slots, reservation_tag,
+                        |name| {
+                            let position = if name.is_empty() {
+                                transforms.get(target).ok()?.translation()
+                            } else {
+                                super::behavior_docking_execution::find_named_descendant_global_transform(
+                                    target, name, &children, &attachment_transforms,
+                                )?.translation()
+                            };
+                            Some((position - actor_position).xz())
+                        },
+                    );
+                    request_behavior_container_admission(
+                        actor,
+                        target,
+                        slots,
+                        Vec::new(),
+                        InteractionContainerAdmissionRecipient::Entry(actor),
+                        &mut requests,
+                    );
+                    continue;
+                };
+                let Some(slot_index) = selected_slot.map(|slot| slot.index) else {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 };
                 let slot = &target_object.interaction_slots[slot_index];
-                if !occupancy.admit(target, actor, slot_index, slot.capacity) {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                }
                 task.interaction_slot = Some(slot_index);
                 debug!(?actor, ?target, slot_index, entrance = ?slot.entrance_behavior_set,
-                    already_docked = occupancy.is_docked(target, actor), "entered interaction container slot");
+                    already_docked = memberships.is_docked(target, actor), "entered interaction container slot");
                 // Native entry completes immediately for an already docked
                 // member; replaying its entrance can restart a completed use.
-                if occupancy.is_docked(target, actor) {
+                if memberships.is_docked(target, actor) {
                     advance_behavior_task_to_next_action(&mut task, simulation_clock.tick);
                     continue;
                 }
@@ -170,7 +216,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     };
                     let Some(slot) = task
                         .target()
-                        .and_then(|target| occupancy.actor_slot(target, actor))
+                        .and_then(|target| memberships.actor_slot(target, actor))
                         .and_then(|slot| target_object.interaction_slots.get(slot))
                     else {
                         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);

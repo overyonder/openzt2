@@ -1,15 +1,13 @@
 use bevy::prelude::*;
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct TerrainCollisionRevision(pub u64);
-
 /// Marks a chunk whose edited collision surface still needs to be handed to
 /// Avian. The marker makes deferral explicit when the per-tick rebuild budget
-/// is exhausted; scanning is bounded and no revision is lost.
+/// is exhausted.
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct TerrainCollisionPending;
 
 /// The centred Avian height-field child owned by one rendered terrain chunk.
+/// Its change tick tracks when the terrain last rebuilt the collider.
 #[allow(
     clippy::redundant_pub_crate,
     reason = "placement queries need sibling-owner access; the terrain collider marker remains a crate-internal API"

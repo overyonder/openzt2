@@ -2,6 +2,7 @@ use super::super::behavior_snapshot_entity_references::BehaviorSnapshotEntities;
 use bevy::{ecs::system::SystemParam, prelude::*};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_zoo_state::{
+    animal_behavior::interaction_container_membership::InteractionContainerMemberships,
     behavior_task_execution_types::{BehaviorTaskExecutionSequence, BehaviorTaskReturnFrame},
     locomotion::locomotion_types::{LocomotionCapacity, NavigationRequestSequence},
 };
@@ -14,7 +15,7 @@ pub(in crate::persistence) struct BehaviorSnapshotApplication<'w, 's> {
     pub(super) executions: ResMut<'w, BehaviorTaskExecutionSequence>,
     pub(super) requests: ResMut<'w, NavigationRequestSequence>,
     pub(super) capacity: Option<Res<'w, LocomotionCapacity>>,
-    pub(super) occupancy: ResMut<'w, openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy>,
+    pub(super) memberships: InteractionContainerMemberships<'w, 's>,
     pub(super) definitions: Res<'w, openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
     pub(super) definition_assets: Res<'w, Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
     pub(super) route_requests: MessageWriter<'w, openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>,

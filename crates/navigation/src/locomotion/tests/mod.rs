@@ -209,3 +209,33 @@ fn cell_mapping_rejects_world_exterior() {
     assert_eq!(grid.cell_of(Vec2::new(9.9, 9.9)), Some(15));
     assert_eq!(grid.cell_of(Vec2::new(10.0, 0.0)), None);
 }
+
+#[test]
+fn fence_crossing_index_tracks_replacement_removal_and_despawn() {
+    use super::fence_navigation_crossing_types::{
+        index_inserted_fence_crossings, unindex_discarded_fence_crossings,
+        FenceNavigationCrossingIndex, FenceNavigationCrossings,
+    };
+    use bevy::prelude::*;
+
+    let mut app = App::new();
+    app.init_resource::<FenceNavigationCrossingIndex>()
+        .add_observer(index_inserted_fence_crossings)
+        .add_observer(unindex_discarded_fence_crossings);
+    let world = app.world_mut();
+    let first = world.spawn(FenceNavigationCrossings(vec![(0, 1)])).id();
+    let second = world.spawn(FenceNavigationCrossings(vec![(0, 1)])).id();
+
+    world
+        .entity_mut(first)
+        .insert(FenceNavigationCrossings(vec![(1, 0)]));
+    let index = world.resource::<FenceNavigationCrossingIndex>();
+    assert_eq!(index.crossing_fences(0, 1), [second]);
+    assert_eq!(index.crossing_fences(1, 0), [first]);
+
+    world.entity_mut(first).remove::<FenceNavigationCrossings>();
+    world.entity_mut(second).despawn();
+    let index = world.resource::<FenceNavigationCrossingIndex>();
+    assert!(index.crossing_fences(0, 1).is_empty());
+    assert!(index.crossing_fences(1, 0).is_empty());
+}

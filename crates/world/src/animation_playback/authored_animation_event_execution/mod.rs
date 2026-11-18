@@ -6,29 +6,6 @@ use crate::animation_playback::authored_animation_event_cursor_types::AuthoredAn
 use crate::animation_playback::authored_animation_text_action_execution_context::AuthoredAnimationTextActionExecutionContext;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 
-pub(super) fn initialize_authored_animation_event_cursors_for_new_playback_controllers(
-    mut commands: Commands,
-    animation_playback_controllers: Query<
-        (Entity, &AnimationPlaybackController),
-        Added<AnimationPlaybackController>,
-    >,
-) {
-    for (animation_playback_controller_entity, animation_playback_controller) in
-        &animation_playback_controllers
-    {
-        commands
-            .entity(animation_playback_controller_entity)
-            .insert(AuthoredAnimationEventCursor {
-                playback_generation: animation_playback_controller.playback_generation,
-                animation_clip_asset_key: animation_playback_controller
-                    .animation_clip_asset_key
-                    .clone(),
-                previous_elapsed_milliseconds: animation_playback_controller.elapsed_milliseconds,
-                requires_initial_event_sample: true,
-            });
-    }
-}
-
 pub(super) fn execute_crossed_authored_animation_events(
     animation_set_assets: Res<Assets<AnimationSetAsset>>,
     mut changed_animation_playback_controllers: Query<
@@ -47,6 +24,19 @@ pub(super) fn execute_crossed_authored_animation_events(
         mut authored_animation_event_cursor,
     ) in &mut changed_animation_playback_controllers
     {
+        let animation_playback_clip_changed = authored_animation_event_cursor
+            .requires_initial_event_sample
+            || authored_animation_event_cursor.playback_generation
+                != animation_playback_controller.playback_generation
+            || authored_animation_event_cursor.animation_clip_asset_key
+                != animation_playback_controller.animation_clip_asset_key;
+        // Both clocks can see the same controller change when a frame runs fixed ticks.
+        if !animation_playback_clip_changed
+            && authored_animation_event_cursor.previous_elapsed_milliseconds
+                == animation_playback_controller.elapsed_milliseconds
+        {
+            continue;
+        }
         let Some(animation_clip) = animation_set_assets
             .get(&animation_playback_controller.animation_set_asset)
             .and_then(|animation_set_asset| {
@@ -57,12 +47,6 @@ pub(super) fn execute_crossed_authored_animation_events(
         else {
             continue;
         };
-        let animation_playback_clip_changed = authored_animation_event_cursor
-            .requires_initial_event_sample
-            || authored_animation_event_cursor.playback_generation
-                != animation_playback_controller.playback_generation
-            || authored_animation_event_cursor.animation_clip_asset_key
-                != animation_playback_controller.animation_clip_asset_key;
         let animation_playback_moves_forward =
             animation_playback_controller.playback_speed_permille >= 0;
         let animation_playback_time_wrapped = !animation_playback_clip_changed

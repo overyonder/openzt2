@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
+use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::{
     ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS, RouteSearch, advance_route,
@@ -17,7 +18,6 @@ use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
-use openzt2_zoo_state::locomotion::locomotion_types::NavigationOverlay;
 use openzt2_zoo_state::locomotion::locomotion_types::Route;
 use openzt2_zoo_state::locomotion::locomotion_types::RouteScratch;
 
@@ -26,14 +26,13 @@ pub(super) struct RouteQueue {
     waiting: VecDeque<Entity>,
     queued: HashSet<Entity>,
     search: RouteSearch,
-    overlay_revision: u64,
 }
 
 #[allow(clippy::type_complexity)]
 pub(super) fn plan_routes_for_changed_navigation_destinations(
     mut commands: Commands,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
-    navigation_overlay: Res<NavigationOverlay>,
+    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     mut route_planning_scratch: Local<RouteScratch>,
     animal_policy: AnimalNavigationPolicy,
@@ -69,6 +68,14 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
         Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
     )>,
 ) {
+    // Invalidate a suspended search even when its next slice cannot run yet.
+    if fence_crossing_index.is_changed()
+        || active_navigation_graph
+            .as_ref()
+            .is_some_and(|graph| graph.is_changed())
+    {
+        queue.search = RouteSearch::default();
+    }
     let Some(locomotion_capacity) =
         locomotion_capacity.filter(|locomotion_capacity| locomotion_capacity.is_valid())
     else {
@@ -103,11 +110,6 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
             queue.waiting.push_back(entity);
         }
     }
-    if active_navigation_graph.is_changed() || queue.overlay_revision != navigation_overlay.revision
-    {
-        queue.search = RouteSearch::default();
-        queue.overlay_revision = navigation_overlay.revision;
-    }
     while let Some(entity) = queue.waiting.front().copied() {
         let Ok((
             navigation_agent_entity,
@@ -131,8 +133,8 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
                 advance_route(
                     terrain_navigation_graph,
                     |from, to| {
-                        navigation_overlay
-                            .fence_crossings(from, to)
+                        fence_crossing_index
+                            .crossing_fences(from, to)
                             .iter()
                             .any(|fence| {
                                 fence_policy.fence_blocks_actor(

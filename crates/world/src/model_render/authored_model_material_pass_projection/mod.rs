@@ -41,7 +41,6 @@ pub(super) fn project_authored_model_material_passes(
         Has<NotShadowReceiver>,
         Option<&SkinnedMesh>,
         Option<&MeshMorphWeights>,
-        &GlobalTransform,
     )>,
     materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
@@ -73,7 +72,7 @@ pub(super) fn project_authored_model_material_passes(
         let all_matched_effect_pass_materials_are_loaded = std::iter::once(root)
             .chain(children.iter_descendants_depth_first::<Children>(root))
             .filter_map(|entity| primitives.get(entity).ok())
-            .filter_map(|(_, name, _, _, _, _, _, _, _)| {
+            .filter_map(|(_, name, _, _, _, _, _, _)| {
                 overrides
                     .0
                     .iter()
@@ -106,17 +105,8 @@ pub(super) fn project_authored_model_material_passes(
         for entity in
             std::iter::once(root).chain(children.iter_descendants_depth_first::<Children>(root))
         {
-            let Ok((
-                entity,
-                name,
-                mesh,
-                layers,
-                no_shadow_cast,
-                no_shadow_receive,
-                skin,
-                morph,
-                transform,
-            )) = primitives.get(entity)
+            let Ok((entity, name, mesh, layers, no_shadow_cast, no_shadow_receive, skin, morph)) =
+                primitives.get(entity)
             else {
                 continue;
             };
@@ -184,7 +174,6 @@ pub(super) fn project_authored_model_material_passes(
                     mesh.clone(),
                     MeshMaterial3d::<EffectPassMaterial>(pass.clone()),
                     Transform::default(),
-                    *transform,
                     Visibility::Inherited,
                     ChildOf(entity),
                     AdditionalAuthoredModelMaterialPass,

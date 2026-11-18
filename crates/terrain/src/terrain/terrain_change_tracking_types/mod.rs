@@ -3,15 +3,14 @@ use std::ops::BitOrAssign;
 
 use bevy::prelude::*;
 
-/// `flags` accumulates every kind of change the chunk has had,
-/// whereas `render` holds only what changed since the chunk's mesh and surface
-/// image were last rebuilt, which the render refresh takes.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TerrainDirty {
-    pub(crate) flags: TerrainDirtyFlags,
-    pub(crate) render: Option<TerrainDirtyRegion>,
-    pub(crate) revision: u64,
-}
+/// The chunk's height or water samples changed.
+#[derive(Component)]
+pub(super) struct TerrainDirty;
+
+/// The region still owed to the mesh and base surface refresh.
+#[derive(Component)]
+#[component(storage = "SparseSet")]
+pub(super) struct TerrainRenderPending(pub(super) TerrainDirtyRegion);
 
 /// Inclusive sample bounds of a change and the kinds of change inside them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

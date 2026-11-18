@@ -37,8 +37,8 @@ use openzt2_zoo_state::{
     },
     locomotion::locomotion_types::{
         ActiveTerrainDerivedNavigationGraph, Arrived, Destination, Docking, LocomotionCapacity,
-        LocomotionMode, NavAgent, NavigationFailed, NavigationFailure, NavigationOverlay,
-        NavigationRequestSequence, Route, RouteScratch, Velocity,
+        LocomotionMode, NavAgent, NavigationFailed, NavigationFailure, NavigationRequestSequence,
+        Route, RouteScratch, Velocity,
     },
     staff::staff_employment_types::{Staff, StaffClimbingTankGate, StaffRole},
     terrain::dry_surface_eligibility::DrySurfaceEligibility,
@@ -51,6 +51,8 @@ use openzt2_zoo_state::{
 use openzt2_zoo_state::staff::staff_tank_gate_types::{
     StaffTankGateJourney, StaffTankGateResume, StaffTankGateStage,
 };
+
+use super::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
 pub(super) fn resume_completed_staff_tank_gate_journeys(
     mut commands: Commands,
@@ -86,7 +88,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
     mut commands: Commands,
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
     capacity: Option<Res<LocomotionCapacity>>,
-    overlay: Res<NavigationOverlay>,
+    fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     fences: FenceNavigationPolicy,
     surfaces: DrySurfaceEligibility,
     habitats: Res<HabitatIndex>,
@@ -221,13 +223,16 @@ pub(super) fn begin_staff_tank_gate_journeys(
             if plan_route(
                 navigation,
                 |from, to| {
-                    overlay.fence_crossings(from, to).iter().any(|edge| {
-                        fences.fence_blocks_actor(
-                            *edge,
-                            agent.capabilities,
-                            fences.actor_types.actor_types(actor),
-                        )
-                    })
+                    fence_crossing_index
+                        .crossing_fences(from, to)
+                        .iter()
+                        .any(|edge| {
+                            fences.fence_blocks_actor(
+                                *edge,
+                                agent.capabilities,
+                                fences.actor_types.actor_types(actor),
+                            )
+                        })
                 },
                 |from, to| {
                     fences.world_segment_blocks_actor(

@@ -15,7 +15,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::animal_behavior::interaction_container_occupancy::InteractionContainerOccupancy;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
@@ -103,7 +103,7 @@ pub(super) fn select_idle_guest_tasks(
         Option<&FacilityContainedWaste>,
     )>,
     held: Query<&DefinitionId>,
-    occupancy: Res<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     paths: Query<(Entity, &GlobalTransform, &WorldMember, &PathTile)>,
     viewable_animals: Query<
         (&GlobalTransform, &Visibility, &WorldMember),
@@ -200,7 +200,7 @@ pub(super) fn select_idle_guest_tasks(
             continue;
         };
         // Items the guest holds, such as a bought burger, for tasks that use one.
-        let held_items = occupancy
+        let held_items = memberships
             .members_of_container(guest)
             .filter_map(|item| {
                 let object = definitions.find_object(held.get(item).ok()?.0)?;

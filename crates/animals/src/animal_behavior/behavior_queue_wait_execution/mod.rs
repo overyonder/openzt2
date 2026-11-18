@@ -14,6 +14,9 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
+    interaction_container_requests_pending, resolve_interaction_container_requests,
+};
 
 #[derive(SystemParam)]
 struct QueueWaitSources<'w, 's> {
@@ -24,8 +27,7 @@ struct QueueWaitSources<'w, 's> {
     targets: Query<'w, 's, &'static DefinitionId>,
 }
 
-/// The wait's suspended instruction and deadline; container membership is owned
-/// separately by InteractionContainerOccupancy and is never copied here.
+/// The wait's suspended instruction and deadline for the requested queue slot.
 #[derive(Component)]
 struct ActiveQueueWait {
     origin: BehaviorTaskReturnFrame,
@@ -51,7 +53,9 @@ pub(super) fn register_queue_wait_execution(application: &mut App) {
     use openzt2_world_state::application_schedule::FixedGameSet;
     application.add_systems(FixedUpdate, (
         update::update_queue_wait_deadlines_and_service_readiness,
-        start::start_or_repeat_authored_queue_wait,
+        (|| false).pipe(start::start_or_repeat_authored_queue_wait),
+        resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
+        (|| true).pipe(start::start_or_repeat_authored_queue_wait),
     ).chain()
         .before(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .in_set(FixedGameSet::Think)

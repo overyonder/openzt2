@@ -7,6 +7,7 @@ mod model_animation_asset_attachment;
 
 use bevy::prelude::*;
 
+use openzt2_world_state::animation_playback::locomotion_root_motion::AnimationLocomotionMotionSampling;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 
@@ -48,13 +49,11 @@ impl Plugin for AnimationGraphPlugin {
                 (
                     execute_animation_graph_node_playback_requests,
                     execute_explicit_animation_clip_playback_requests,
+                    advance_animation_graph_blend_timers,
                 )
                     .chain()
-                    .in_set(FixedGameSet::Think),
-            )
-            .add_systems(
-                FixedUpdate,
-                advance_animation_graph_blend_timers.in_set(FixedGameSet::Act),
+                    .in_set(FixedGameSet::Act)
+                    .before(AnimationLocomotionMotionSampling),
             )
             .add_systems(
                 FixedUpdate,

@@ -1,5 +1,6 @@
 //! Authored carried objects use ordinary world entities and the shared container owner.
 
+mod admission;
 mod created;
 mod detach;
 mod events;
@@ -10,14 +11,17 @@ mod presentation;
 #[cfg(test)]
 mod tests;
 
-use super::{
-    behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
-    interaction_container_occupancy::InteractionContainerOccupancy,
-};
+use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
+    interaction_container_requests_pending, resolve_interaction_container_requests,
+};
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::{
+    InteractionContainerMember, InteractionContainerMemberships,
+};
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
@@ -27,10 +31,8 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
-use openzt2_world::world_spawn::prefab_world_instance_spawning::spawn_loaded_scene_prefab_as_world_instance;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
@@ -56,7 +58,7 @@ struct DeliveredAttachmentDetach;
 
 fn release_detached_object_locomotion_modifiers(
     mut commands: Commands,
-    occupancy: Res<InteractionContainerOccupancy>,
+    memberships: InteractionContainerMemberships,
     actors: Query<(
         Entity,
         &openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier,
@@ -65,7 +67,7 @@ fn release_detached_object_locomotion_modifiers(
 ) {
     for (actor, modifier) in &actors {
         if objects.get(modifier.item).is_err()
-            || occupancy
+            || memberships
                 .container_for_member(modifier.item)
                 .is_none_or(|(holder, _)| holder != actor)
         {
@@ -112,15 +114,29 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
     use openzt2_game_assets::application_lifecycle::GamePhase;
     use openzt2_world_state::application_schedule::FixedGameSet;
     held_food_prop::register(app);
+    events::register_attachment_animation_observers(app);
+    app.add_observer(detach::record_slots_of_destroyed_holders);
     app.add_systems(FixedUpdate, (
         start_or_finish_object_attachment,
+        (
+            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
+            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
+        ).chain(),
         detach_held_objects_for_current_actions,
+        (
+            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
+            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
+        ).chain(),
         detach::apply_delivered_detach_after_object_admission,
+        (
+            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
+            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
+        ).chain(),
         created::hydrate_detach_created_objects,
         detach::release_objects_from_destroyed_holders,
-        release_detached_object_locomotion_modifiers,
+        release_detached_object_locomotion_modifiers
+            .before(openzt2_zoo_state::locomotion::AnimalAnimationNavigationProjection),
     ).chain().in_set(FixedGameSet::Think)
-        .before(super::interaction_container_cleanup::remove_destroyed_container_memberships)
         .after(super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
         .run_if(in_state(GamePhase::InGame)))
         .add_systems(FixedUpdate, held_clip::release_behavior_held_animation_clips
@@ -143,13 +159,12 @@ fn start_or_finish_object_attachment(
     mut commands: Commands,
     assets: AttachmentAssets,
     clock: Res<ZooClock>,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    memberships: InteractionContainerMemberships,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            &BehaviorTaskExecutionState,
             &DefinitionId,
             &WorldMember,
             Option<&PendingObjectAttachment>,
@@ -181,8 +196,8 @@ fn start_or_finish_object_attachment(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, mut task, actor_definition, world, pending) in &mut actors {
-        if pending.is_some_and(|pending| !pending.owns(&task)) {
+    for (actor, task, actor_definition, world, pending) in &actors {
+        if pending.is_some_and(|pending| !pending.owns(task)) {
             commands.entity(actor).remove::<PendingObjectAttachment>();
             continue;
         }
@@ -192,7 +207,7 @@ fn start_or_finish_object_attachment(
         let Some(BehaviorAction::AttachObject(action)) = assets
             .documents
             .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
+            .and_then(|document| find_current_behavior_task_action(document, task))
         else {
             continue;
         };
@@ -213,7 +228,7 @@ fn start_or_finish_object_attachment(
         // such as the burger a guest takes from inventory to eat.
         let held_item = if action.entity == AssetId::from_key("object") {
             let Some(item) = task.object.filter(|item| {
-                occupancy
+                memberships
                     .container_for_member(*item)
                     .is_some_and(|(holder, _)| holder == actor)
             }) else {
@@ -254,7 +269,7 @@ fn start_or_finish_object_attachment(
                     commands
                         .entity(actor)
                         .insert(PendingObjectAttachment::waiting_for_attachment(
-                            &task,
+                            task,
                             Some(prefab_handle.clone()),
                         ));
                 }
@@ -288,7 +303,7 @@ fn start_or_finish_object_attachment(
                     PendingObjectAttachment {
                         request_id: Some(request.id),
                         ..PendingObjectAttachment::waiting_for_attachment(
-                            &task,
+                            task,
                             prefab_handle.clone(),
                         )
                     },
@@ -327,163 +342,92 @@ fn start_or_finish_object_attachment(
             continue;
         };
         let capacity = place.capacity;
-        if let Some(item) = held_item {
-            if occupancy.actor_slot(actor, item) != Some(slot) {
-                if occupancy.occupied_places(actor, slot) >= usize::from(capacity)
-                    && !detach::detach_slot_objects(
-                        actor,
-                        slot,
-                        &definitions,
-                        &objects,
-                        &transforms,
-                        &mut ids,
-                        &mut occupancy,
-                        &mut commands,
-                    )
-                {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                }
-                if !occupancy.admit(actor, item, slot, capacity) {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                }
-            }
-            let scale = Transform::from_scale(Vec3::splat(object.prefab_scale));
-            let relative_transform = definitions
-                .scene(object.prefab)
-                .and_then(|handle| assets.prefabs.get(&handle))
-                .map_or(scale, |prefab| {
-                    scale.mul_transform(transform_from_authored(
-                        &prefab.canonical_scene_prefab_document().entities[0].transform,
-                    ))
-                });
-            if let Some(modifier) = action.locomotion_modifier {
-                commands.entity(actor).insert(
-                    openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
-                        modifier,
-                        item,
-                    },
-                );
-            }
-            commands.entity(item).insert((
-                ContainedObject {
-                    holder_definition: actor_definition.0,
-                    detach_rule: action.detach_rule,
-                    joint: Some(joint),
-                    relative_transform,
-                    attachment_request: pending.and_then(|pending| {
-                        pending
-                            .request_id
-                            .map(|request| (request, pending.execution_id))
-                    }),
-                },
-                if place.hides_contents {
-                    Visibility::Hidden
-                } else {
-                    Visibility::Inherited
-                },
-            ));
-            if detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment) {
-                commands.entity(item).insert(DeliveredAttachmentDetach);
-            }
-            commands.entity(actor).remove::<PendingObjectAttachment>();
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
-            continue;
-        }
-        if occupancy.occupied_places(actor, slot) >= usize::from(capacity)
+        if held_item.is_none_or(|item| memberships.actor_slot(actor, item) != Some(slot))
+            && memberships.occupied_places(actor, slot) >= usize::from(capacity)
             && !detach::detach_slot_objects(
                 actor,
                 slot,
                 &definitions,
                 &objects,
                 &transforms,
-                &mut ids,
-                &mut occupancy,
+                &memberships,
                 &mut commands,
+                &mut admission::DetachMembershipRequests::Queued,
             )
         {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        if occupancy.occupied_places(actor, slot) >= usize::from(capacity) {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
-        let Ok(id) = ids.allocate(world.root) else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
         let scale = Transform::from_scale(Vec3::splat(object.prefab_scale));
-        let relative_transform = presentation.as_ref().map_or(scale, |(_, prefab)| {
-            scale.mul_transform(transform_from_authored(
-                &prefab.canonical_scene_prefab_document().entities[0].transform,
-            ))
-        });
-        let instance_transform = joint_transform.compute_transform().mul_transform(scale);
-        let item = if let Some((prefab_handle, prefab)) = presentation {
-            spawn_loaded_scene_prefab_as_world_instance(
-                &mut commands,
-                prefab,
-                prefab_handle,
-                world.root,
-                object.id,
-                id,
-                instance_transform,
-                true,
-                None,
-                RigidBody::Kinematic,
-            )
+        let relative_transform = if held_item.is_some() {
+            definitions
+                .scene(object.prefab)
+                .and_then(|handle| assets.prefabs.get(&handle))
+                .map_or(scale, |prefab| {
+                    scale.mul_transform(transform_from_authored(
+                        &prefab.canonical_scene_prefab_document().entities[0].transform,
+                    ))
+                })
         } else {
-            commands
-                .spawn((
-                    *world,
-                    DefinitionId(object.id),
-                    id,
-                    Inspectable {
-                        definition: object.id,
-                    },
-                    instance_transform,
-                    Visibility::Inherited,
+            presentation.as_ref().map_or(scale, |(_, prefab)| {
+                scale.mul_transform(transform_from_authored(
+                    &prefab.canonical_scene_prefab_document().entities[0].transform,
                 ))
-                .id()
+            })
         };
-        if !occupancy.admit(actor, item, slot, capacity) {
-            commands.entity(item).despawn();
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
-        if let Some(modifier) = action.locomotion_modifier {
-            commands.entity(actor).insert(
-                openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier {
-                    modifier,
-                    item,
-                },
+        let attachment = ContainedObject {
+            holder_definition: actor_definition.0,
+            detach_rule: action.detach_rule,
+            joint: Some(joint),
+            relative_transform,
+            attachment_request: pending.and_then(|pending| {
+                pending
+                    .request_id
+                    .map(|request| (request, pending.execution_id))
+            }),
+        };
+        let modifier = action.locomotion_modifier;
+        let visibility = if place.hides_contents {
+            Visibility::Hidden
+        } else {
+            Visibility::Inherited
+        };
+        let detach =
+            detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment);
+        let tick = clock.tick;
+        let spawn = held_item.is_none().then(|| admission::NewAttachedObject {
+            world: *world,
+            definition: object.id,
+            instance_transform: joint_transform.compute_transform().mul_transform(scale),
+            prefab: prefab_handle,
+        });
+        let admission = admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
+            actor,
+            attachment,
+            visibility,
+            modifier,
+            spawn,
+            finish: admission::AttachmentAfterAdmission::Authored { tick, detach },
+        });
+        if let Some(item) = held_item {
+            admission::request_existing_object_admission(
+                &mut commands,
+                item,
+                actor,
+                slot,
+                capacity,
+                admission,
+            );
+        } else {
+            admission::request_new_object_admission(
+                &mut commands,
+                actor,
+                slot,
+                capacity,
+                world.root,
+                admission,
             );
         }
-        commands.entity(item).insert((
-            ContainedObject {
-                holder_definition: actor_definition.0,
-                detach_rule: action.detach_rule,
-                joint: Some(joint),
-                relative_transform,
-                attachment_request: pending.and_then(|pending| {
-                    pending
-                        .request_id
-                        .map(|request| (request, pending.execution_id))
-                }),
-            },
-            if place.hides_contents {
-                Visibility::Hidden
-            } else {
-                Visibility::Inherited
-            },
-        ));
-        if detach_at_once || pending.is_some_and(|pending| pending.detach_after_attachment) {
-            commands.entity(item).insert(DeliveredAttachmentDetach);
-        }
-        commands.entity(actor).remove::<PendingObjectAttachment>();
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
     }
 }
 
@@ -493,8 +437,7 @@ fn detach_held_objects_for_current_actions(
     mut commands: Commands,
     assets: AttachmentAssets,
     clock: Res<ZooClock>,
-    mut occupancy: ResMut<InteractionContainerOccupancy>,
-    mut ids: ResMut<PersistentIdAllocator>,
+    memberships: InteractionContainerMemberships,
     mut actors: Query<
         (Entity, &mut BehaviorTaskExecutionState),
         Without<PendingBehaviorTaskFailure>,
@@ -519,7 +462,7 @@ fn detach_held_objects_for_current_actions(
         let item = if action.entity == AssetId::from_key("object") {
             task.object
         } else {
-            occupancy.members_of_container(actor).find(|item| {
+            memberships.members_of_container(actor).find(|item| {
                 objects.get(*item).is_ok_and(|(_, id, _)| {
                     id.0 == action.entity
                         || definitions.find_object(id.0).is_some_and(|object| {
@@ -529,7 +472,7 @@ fn detach_held_objects_for_current_actions(
             })
         };
         let Some(item) = item.filter(|item| {
-            occupancy
+            memberships
                 .container_for_member(*item)
                 .is_some_and(|(holder, _)| holder == actor)
         }) else {
@@ -543,9 +486,8 @@ fn detach_held_objects_for_current_actions(
             &definitions,
             &objects,
             &transforms,
-            &mut ids,
-            &mut occupancy,
             &mut commands,
+            &mut admission::DetachMembershipRequests::Queued,
         ) {
             warn!(
                 ?actor,

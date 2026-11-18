@@ -203,10 +203,6 @@ impl Plugin for GameUiPlugin {
                             .after(authored_ui_pointer_activation::activate_authored_ui_nodes_from_pointer_interaction_changes),
                         drop_list::toggle_or_close_authored_drop_list_displays_from_activations
                             .after(authored_composite_button_activation_forwarding::forward_authored_composite_button_activations_to_projected_child_controls),
-                        cursor::apply_wait_cursor_requests,
-                        cursor::present_cursor
-                            .after(cursor::apply_wait_cursor_requests)
-                            .after(authored_ui_pointer_activation::activate_authored_ui_nodes_from_pointer_interaction_changes),
                         full_canvas_click_catcher::hide_activated_or_elapsed_full_canvas_click_catchers
                             .after(authored_ui_pointer_activation::activate_authored_ui_nodes_from_pointer_interaction_changes),
                         slider::apply_slider_bounds,
@@ -263,6 +259,12 @@ impl Plugin for GameUiPlugin {
                     ),
                 )
                     .in_set(UiSet::Interaction),
+            )
+            .add_systems(
+                Update,
+                (cursor::apply_wait_cursor_requests, cursor::present_cursor)
+                    .chain()
+                    .in_set(GameSet::Presentation),
             )
             .add_systems(
                 Update,
