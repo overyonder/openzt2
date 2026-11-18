@@ -3,6 +3,7 @@ mod authored_fame_star_presentation;
 mod authored_globe_camera_framing;
 mod authored_globe_interaction;
 mod authored_globe_marker_presentation;
+mod authored_globe_model_bounds;
 mod authored_globe_rotation_geometry;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 pub mod active_authored_ui_context;
@@ -46,6 +47,7 @@ pub mod authored_ui_pointer_activation;
 pub mod authored_ui_presentation_action_application;
 pub mod authored_ui_presentation_slot_bindings;
 pub mod authored_ui_selection_binding;
+mod authored_ui_target_lookup;
 use openzt2_interface_state::ui::authored_ui_selection_state;
 mod authored_ui_source_rectangle_presentation;
 pub mod authored_ui_text_content_binding;
@@ -56,7 +58,6 @@ pub mod authored_wheel_scroll;
 pub mod authored_wheel_scroll_diagnostic_types;
 mod authored_window_interaction;
 mod controller_ui_action_routing;
-mod cross_document_node_visibility;
 pub mod cursor;
 mod drop_list;
 mod focused_or_selected_node_scroll_reveal;
@@ -66,7 +67,6 @@ mod graph_history_series_rendering;
 mod graph_presentation;
 mod graph_presentation_types;
 mod held_button_repeat;
-mod localized_countdown_presentation;
 pub mod localized_ui_text_writing;
 mod main_toolbar;
 mod notification;
@@ -88,7 +88,7 @@ use self::scrollbar_value_and_scroll_position_synchronization as scrollbar_synch
 use bevy::prelude::*;
 
 use self::ui_document_lifecycle_contracts::{
-    HideUiDocument, InGameUiOwner, ShowUiDocument, ShowUiRole, UiRoleRequests,
+    HideUiDocument, InGameUiOwner, ShowUiDocument, ShowUiRole,
 };
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::GameSet;
@@ -110,7 +110,7 @@ impl Plugin for GameUiPlugin {
             || bevy::ui::FocusPolicy::Block,
         );
         app.add_systems(PostUpdate,
-            authored_ui_source_rectangle_presentation::resolve_authored_image_source_rectangles_after_image_changes
+            authored_ui_source_rectangle_presentation::project_changed_authored_image_source_rectangles
                 .before(bevy::ui::UiSystems::Layout));
         app.configure_sets(
             PostUpdate,
@@ -127,6 +127,7 @@ impl Plugin for GameUiPlugin {
             .add_message::<SetWaitCursor>()
             .add_message::<SetUiListRowCount>()
             .add_message::<ShowUiRole>()
+            .add_message::<ui_document_lifecycle_contracts::AuthoredUiDocumentOperation>()
             .add_message::<HideUiDocument>()
             .add_message::<authored_ui_interaction_enabled_state_application::SetAuthoredUiNodeInteractionEnabled>()
             .add_message::<authored_ui_activation_contracts::UiNodeActivated>()
@@ -136,7 +137,6 @@ impl Plugin for GameUiPlugin {
             .add_message::<notification_contracts::NotificationPresented>()
             .add_message::<notification_contracts::NotificationRejected>()
             .add_message::<ui_document_asset_load_failure::UiDocumentAssetLoadFailed>()
-            .init_resource::<UiRoleRequests>()
             .add_observer(authored_text_edit_bevy_adaptation::dispatch_authored_change_activation_after_bevy_text_edit)
             .add_systems(
                 Startup,
@@ -164,30 +164,29 @@ impl Plugin for GameUiPlugin {
             .add_systems(
                 Update,
                 (
-                    projection::hide_ui_documents.after(projection::resolve_ui_roles),
-                    projection::resolve_ui_roles,
-                    projection::project_ui_documents
-                        .after(projection::hide_ui_documents)
-                        .after(projection::resolve_ui_roles),
-                    projection::cleanup_orphaned_ui_documents
-                        .after(projection::project_ui_documents),
+                    (
+                        projection::ui_document_opening::ingest_ui_document_opening_requests,
+                        projection::ui_document_opening::project_ui_documents,
+                        projection::ui_document_opening::apply_ready_ui_document_opening_effects,
+                    ).chain(),
                     graph_presentation::clip_authored_graph_generated_geometry
-                        .after(projection::project_ui_documents),
-                    main_toolbar::initialize_main_toolbar.after(projection::project_ui_documents),
+                        .after(projection::ui_document_opening::project_ui_documents),
+                    main_toolbar::initialize_main_toolbar.after(projection::ui_document_opening::project_ui_documents),
                     authored_text_edit_bevy_adaptation::initialize_authored_text_edits_as_bevy_editable_text
-                        .after(projection::project_ui_documents),
-                    projection::reconcile_ui_list_rows,
-                    authored_ui_canvas_scaling_and_clipping::scale_authored_ui_canvas_to_primary_window,
+                        .after(projection::ui_document_opening::project_ui_documents),
+                    (
+                        projection::authored_list_row_projection::record_requested_ui_list_row_counts,
+                        projection::authored_list_row_projection::reconcile_changed_ui_list_row_counts,
+                        projection::authored_list_row_projection::materialize_ready_ui_list_rows,
+                        authored_ui_canvas_scaling_and_clipping::project_authored_ui_canvas_viewport_metrics,
+                        authored_ui_canvas_scaling_and_clipping::apply_authored_canvas_layout_corrections,
+                    ).chain().after(projection::ui_document_opening::project_ui_documents),
                 )
                     .in_set(UiSet::Projection),
             )
             .add_systems(
                 Update,
-                (
-                    cross_document_node_visibility::apply_pending_cross_document_node_visibility,
-                    main_toolbar::reflect_accepted_camera_mode_in_main_toolbar,
-                )
-                    .in_set(UiSet::DomainProjection),
+                main_toolbar::reflect_accepted_camera_mode_in_main_toolbar.in_set(UiSet::DomainProjection),
             )
             .add_systems(
                 Update,
@@ -273,12 +272,12 @@ impl Plugin for GameUiPlugin {
                     animation::dispatch_ui_animation_commands
                         .after(animation::advance_ui_animations),
                     authored_ui_presentation_action_application::apply_authored_ui_presentation_actions_to_projected_bevy_tree,
-                    authored_ui_presentation_action_application::activate_pending_selected_children_after_ui_document_projection
+                    projection::ui_document_opening::apply_authored_ui_document_opening_operations
                         .after(authored_ui_presentation_action_application::apply_authored_ui_presentation_actions_to_projected_bevy_tree),
                     scrollbar_synchronization::apply_changed_authored_scrollbar_values_to_owned_bevy_scroll_positions
                         .after(authored_ui_presentation_action_application::apply_authored_ui_presentation_actions_to_projected_bevy_tree),
-                    authored_timed_action_sequence::advance_authored_timed_action_sequences_and_activate_due_proxies,
-                    localized_countdown_presentation::advance_localized_countdown_presentations_and_activate_completion_targets,
+                    authored_timed_action_sequence::advance_authored_timed_action_sequences_and_activate_due_proxies
+                        .after(authored_ui_presentation_action_application::apply_authored_ui_presentation_actions_to_projected_bevy_tree),
                 )
                     .in_set(UiSet::Commands),
             )
@@ -286,15 +285,15 @@ impl Plugin for GameUiPlugin {
                 Update,
                 (
                     (
-                        graph_presentation::regenerate_visible_authored_graph_presentations_from_canonical_histories,
+                        graph_presentation::update_visible_authored_graph_drawings,
                         held_button_repeat::repeat_held_buttons,
                         authored_wheel_scroll::scroll_captured_authored_list_or_window_from_mouse_wheel,
                         slider::size_scrollbar_thumbs,
-                        authored_window_interaction::drag_authored_windows_from_accumulated_pointer_motion,
+                        authored_window_interaction::move_authored_windows_from_pointer_drags,
                         authored_drag_gesture::apply_authored_drag_gestures_to_bevy_layout_or_scroll_position,
                         authored_tooltip_presentation::update_authored_tooltip_presentations,
                         authored_multi_icon_presentation::present_multi_icons
-                            .after(projection::project_ui_documents),
+                            .after(projection::ui_document_opening::project_ui_documents),
                         (authored_fame_star_presentation::create_fame_star_scenes,
                          authored_fame_star_presentation::hydrate_fame_stars,
                          authored_fame_star_presentation::frame_fame_star_models,
@@ -302,7 +301,8 @@ impl Plugin for GameUiPlugin {
                         authored_rail_camera_presentation::hydrate_rail_cameras,
                         authored_rail_camera_presentation::update_rail_cameras
                             .after(authored_rail_camera_presentation::hydrate_rail_cameras),
-                        authored_rail_camera_presentation::cleanup_rail_camera_scenes,
+                        authored_rail_camera_presentation::project_rail_lighting
+                            .after(authored_rail_camera_presentation::update_rail_cameras),
                         authored_button_attention_pulse_presentation::advance_authored_button_attention_pulse_presentations,
                     ),
                     (
@@ -319,7 +319,6 @@ impl Plugin for GameUiPlugin {
                             .after(authored_globe_interaction::target_selected_globe_marker),
                         authored_globe_interaction::rotate_globe
                             .after(authored_globe_interaction::turn_globe_to_selection),
-                        authored_globe_scene_presentation::cleanup_globe_scenes,
                     ),
                 )
                     .in_set(UiSet::Behavior),
@@ -358,6 +357,9 @@ impl Plugin for GameUiPlugin {
                     authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels
                         .after(bevy::ui::UiSystems::Layout)
                         .before(bevy::ui::UiSystems::Clipping),
+                    authored_globe_model_bounds::update_instantiated_globe_model_bounds
+                        .after(bevy::transform::TransformSystems::Propagate)
+                        .after(bevy::camera::visibility::VisibilitySystems::CalculateBounds),
                     authored_globe_camera_framing::update_globe_camera_viewports
                         .after(bevy::ui::UiSystems::PostLayout),
                     // Measured in the same frame as Bevy's text layout, so a
@@ -383,17 +385,26 @@ impl Plugin for GameUiPlugin {
     }
 }
 
-fn show_application_ui(mut commands: Commands, mut show: ResMut<UiRoleRequests>) {
+fn show_application_ui(mut commands: Commands, mut show: MessageWriter<ShowUiRole>) {
     let owner = commands
         .spawn((ApplicationUiOwner, Visibility::Inherited))
         .id();
-    show.request(UiDocumentRole::ApplicationRoot, owner);
+    show.write(ShowUiRole {
+        role: UiDocumentRole::ApplicationRoot,
+        owner,
+    });
 }
 
-fn show_in_game_hud(mut commands: Commands, mut show: ResMut<UiRoleRequests>) {
+fn show_in_game_hud(mut commands: Commands, mut show: MessageWriter<ShowUiRole>) {
     let owner = commands.spawn((InGameUiOwner, Visibility::Inherited)).id();
-    show.request(UiDocumentRole::InGameHud, owner);
-    show.request(UiDocumentRole::InGamePersistentStatus, owner);
+    show.write(ShowUiRole {
+        role: UiDocumentRole::InGameHud,
+        owner,
+    });
+    show.write(ShowUiRole {
+        role: UiDocumentRole::InGamePersistentStatus,
+        owner,
+    });
 }
 
 fn hide_in_game_hud(mut commands: Commands, owners: Query<Entity, With<InGameUiOwner>>) {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::animal_behavior::behavior_container_admission::add_test_container_member;
 use openzt2_game_data::{
     behavior::{
         action::docking::BehaviorDockAction,
@@ -73,17 +74,8 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         stack_depth: 0,
         request_id: 2,
     };
-    let actor = app
-        .world_mut()
-        .spawn((
-            task.clone(),
-            pending.clone(),
-            InteractionContainerMember {
-                container: target,
-                slot: 0,
-            },
-        ))
-        .id();
+    let actor = app.world_mut().spawn((task.clone(), pending.clone())).id();
+    add_test_container_member(app.world_mut(), target, actor, 0);
     app.world_mut().write_message(NavigationFailed {
         entity: actor,
         request_id: 1,
@@ -131,12 +123,7 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         .world()
         .get::<DockedAtInteractionContainer>(actor)
         .is_some());
-    app.world_mut()
-        .entity_mut(actor)
-        .insert(InteractionContainerMember {
-            container: target,
-            slot: 1,
-        });
+    add_test_container_member(app.world_mut(), target, actor, 1);
     assert!(app
         .world()
         .get::<DockedAtInteractionContainer>(actor)

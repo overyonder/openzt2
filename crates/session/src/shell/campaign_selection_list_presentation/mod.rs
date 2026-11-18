@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bevy::prelude::*;
 use openzt2_game_data::{
     ui_document::widget_live_collection::UiWidgetLiveCollectionSource, AssetId,
@@ -23,25 +25,29 @@ use super::world_selection_presentation_types::CampaignChoice;
 pub(super) fn request_authored_campaign_and_scenario_list_row_counts(
     catalogue_source: Res<WorldScenarios>,
     catalogues: Res<Assets<WorldScenarioDocumentAsset>>,
-    lists: Query<(Entity, &UiListPolicy)>,
-    selected: Query<(&CampaignChoice, &UiSelected)>,
+    lists: Query<(Entity, Ref<UiListPolicy>)>,
+    selected: Query<(&CampaignChoice, Ref<UiSelected>)>,
     mut requests: MessageWriter<SetUiListRowCount>,
 ) {
     let Some(catalogue) = catalogue_source.get(&catalogues) else {
         return;
     };
+    let catalogue_changed = catalogue_source.is_changed() || catalogues.is_changed();
+    let campaign_changed = selected.iter().any(|(_, selected)| selected.is_changed());
     let selected_campaign = selected
         .iter()
         .find_map(|(campaign, selected)| selected.0.then_some(campaign.0));
     for (entity, policy) in &lists {
         match policy.source {
-            UiWidgetLiveCollectionSource::Campaigns => {
+            UiWidgetLiveCollectionSource::Campaigns if catalogue_changed || policy.is_added() => {
                 requests.write(SetUiListRowCount {
                     list: entity,
                     count: catalogue.campaigns().count().min(u16::MAX as usize) as u16,
                 });
             }
-            UiWidgetLiveCollectionSource::CampaignScenarios => {
+            UiWidgetLiveCollectionSource::CampaignScenarios
+                if catalogue_changed || campaign_changed || policy.is_added() =>
+            {
                 let Some(campaign) = selected_campaign else {
                     continue;
                 };
@@ -65,7 +71,8 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     lists: Query<&UiListPolicy>,
     mut rows: Query<(
         Entity,
-        &UiListRow,
+        Ref<UiListRow>,
+        &ChildOf,
         Option<&CampaignChoice>,
         Option<&WorldChoiceView>,
         &mut Visibility,
@@ -73,14 +80,16 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     mut selection: ResMut<ShellSelection>,
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
-    choices: Query<(Entity, &WorldChoice)>,
-    selected_campaign: Query<(&CampaignChoice, &UiSelected)>,
+    choices: Query<(Entity, Ref<WorldChoice>)>,
+    selected_campaign: Query<(&CampaignChoice, Ref<UiSelected>)>,
+    mut removed_choices: RemovedComponents<WorldChoice>,
     active: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
     profile_variables: Res<
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     >,
 ) {
+    let choices_removed = removed_choices.read().count() != 0;
     if selection.mode != Some(WorldSessionMode::Campaign) {
         return;
     }
@@ -99,14 +108,35 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
     let active_campaign = selected_campaign_id
         .filter(|id| catalogue.campaign(*id).is_some())
         .or_else(|| catalogue.campaigns().next().map(|campaign| campaign.id));
+    let refresh_rows = catalogue_source.is_changed()
+        || catalogues.is_changed()
+        || active.as_ref().is_some_and(|active| active.is_changed())
+        || localizations.is_changed()
+        || profile_variables.is_changed()
+        || selection.is_changed()
+        || choices_removed
+        || selected_campaign
+            .iter()
+            .any(|(_, selected)| selected.is_changed())
+        || choices.iter().any(|(_, choice)| choice.is_changed());
+    if !refresh_rows && !rows.iter().any(|(_, row, ..)| row.is_added()) {
+        return;
+    }
+    let campaigns = catalogue.campaigns().collect::<Vec<_>>();
+    let choice_entities = choices
+        .iter()
+        .fold(HashMap::new(), |mut entities, (entity, choice)| {
+            if choice.mode == WorldSessionMode::Campaign {
+                entities.entry(choice.scenario).or_insert(entity);
+            }
+            entities
+        });
     if let Some(campaign) = active_campaign.and_then(|id| catalogue.campaign(id)) {
         let launchable_scenarios = || {
             campaign.scenarios.iter().filter(|scenario| {
                 profile_variables.scenario_state(scenario)
                     != openzt2_game_data::world_scenario::CampaignScenarioState::Locked
-                    && choices
-                        .iter()
-                        .any(|(_, choice)| choice.scenario == scenario.id)
+                    && choice_entities.contains_key(&scenario.id)
             })
         };
         if !launchable_scenarios().any(|scenario| Some(scenario.id) == selection.scenario) {
@@ -116,13 +146,16 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
             }
         }
     }
-    for (entity, row, current_campaign, current_scenario, mut visibility) in &mut rows {
-        let Ok(policy) = lists.get(row.list) else {
+    for (entity, row, parent, current_campaign, current_scenario, mut visibility) in &mut rows {
+        if !refresh_rows && !row.is_added() {
+            continue;
+        }
+        let Ok(policy) = lists.get(parent.parent()) else {
             continue;
         };
         match policy.source {
             UiWidgetLiveCollectionSource::Campaigns => {
-                let Some(campaign) = catalogue.campaigns().nth(usize::from(row.index)) else {
+                let Some(campaign) = campaigns.get(usize::from(row.index)) else {
                     visibility.set_if_neq(Visibility::Hidden);
                     commands
                         .entity(entity)
@@ -169,9 +202,7 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                 commands.entity(entity).insert(openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled(
                     profile_variables.scenario_state(scenario) != openzt2_game_data::world_scenario::CampaignScenarioState::Locked,
                 ));
-                let Some(source) = choices.iter().find_map(|(entity, choice)| {
-                    (choice.scenario == scenario.id).then_some(entity)
-                }) else {
+                let Some(&source) = choice_entities.get(&scenario.id) else {
                     visibility.set_if_neq(Visibility::Hidden);
                     commands.entity(entity).remove::<WorldChoiceView>();
                     continue;

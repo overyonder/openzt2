@@ -1,6 +1,8 @@
 use bevy::{picking::Pickable, prelude::*};
 
-use super::immersive_mode_policy_types::{InteractionCursor, InteractionCursorVisual};
+use super::immersive_mode_policy_types::{
+    InteractionCursor, InteractionCursorVisual, InteractionCursorVisuals,
+};
 
 pub(super) fn move_immersive_mode_cursor_visual_to_current_pointer_position(
     pointer_input: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
@@ -15,50 +17,53 @@ pub(super) fn move_immersive_mode_cursor_visual_to_current_pointer_position(
     }
 }
 
-/// Displays the cursor image selected by the active immersive mode.
-pub(super) fn create_cursor_visual_for_changed_immersive_mode_cursor_policy(
-    changed_cursor_policies: Query<(Entity, &InteractionCursor), Changed<InteractionCursor>>,
-    existing_cursor_visuals: Query<(Entity, &InteractionCursorVisual)>,
+pub(super) fn project_changed_immersive_mode_cursor_images(
     mut commands: Commands,
+    pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    policies: Query<
+        (
+            Entity,
+            &InteractionCursor,
+            Option<&InteractionCursorVisuals>,
+        ),
+        Changed<InteractionCursor>,
+    >,
+    mut visuals: Query<&mut ImageNode, With<InteractionCursorVisual>>,
 ) {
-    for (controller_entity, interaction_cursor) in &changed_cursor_policies {
-        for (cursor_visual_entity, cursor_visual) in &existing_cursor_visuals {
-            if cursor_visual.owner == controller_entity {
-                commands.entity(cursor_visual_entity).despawn();
-            }
+    for (controller, cursor, current) in &policies {
+        if let Some(mut image) = current
+            .and_then(|current| current.iter().next())
+            .and_then(|entity| visuals.get_mut(entity).ok())
+        {
+            image
+                .reborrow()
+                .map_unchanged(|image| &mut image.image)
+                .set_if_neq(cursor.image.clone());
+            continue;
         }
         commands.spawn((
-            InteractionCursorVisual {
-                owner: controller_entity,
-            },
+            InteractionCursorVisual(controller),
             Node {
                 position_type: PositionType::Absolute,
+                left: Val::Px(pointer.screen.x),
+                top: Val::Px(pointer.screen.y),
                 ..default()
             },
-            ImageNode::new(interaction_cursor.image.clone()),
+            ImageNode::new(cursor.image.clone()),
             GlobalZIndex(i32::MAX),
             Pickable::IGNORE,
         ));
     }
 }
 
-pub(super) fn retire_cursor_visuals_without_immersive_mode_cursor_owner(
-    cursor_policy_owners: Query<(), With<InteractionCursor>>,
-    cursor_visuals: Query<(Entity, &InteractionCursorVisual)>,
+pub(super) fn remove_immersive_cursor_on_policy_removal(
+    removed: On<Remove<InteractionCursor>>,
+    children: Query<&InteractionCursorVisuals>,
     mut commands: Commands,
 ) {
-    for (cursor_visual_entity, cursor_visual) in &cursor_visuals {
-        if cursor_policy_owners.get(cursor_visual.owner).is_err() {
-            commands.entity(cursor_visual_entity).despawn();
+    if let Ok(children) = children.get(removed.entity) {
+        for entity in children.iter() {
+            commands.entity(entity).try_despawn();
         }
-    }
-}
-
-pub(super) fn retire_all_immersive_mode_cursor_visuals_when_leaving_gameplay(
-    cursor_visuals: Query<Entity, With<InteractionCursorVisual>>,
-    mut commands: Commands,
-) {
-    for cursor_visual_entity in &cursor_visuals {
-        commands.entity(cursor_visual_entity).despawn();
     }
 }

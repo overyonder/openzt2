@@ -1,92 +1,67 @@
-use bevy::prelude::*;
+use std::time::Duration;
+
+use bevy::{prelude::*, time::Stopwatch};
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_game_data::ui_document::widget::UiWidgetRecord;
+use openzt2_interface_state::{
+    input::input_types::ActionSource, ui::authored_ui_activation_contracts::UiNodeActivated,
+};
 
-use super::authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot};
-use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+#[derive(Component)]
+#[relationship(relationship_target = UiTimedActions)]
+pub(super) struct UiTimedActionOf(pub(super) Entity);
 
-/// Entity-local presentation clock and cursor for one loaded authored timed
-/// action sequence. Event records remain borrowed from the UI document.
-#[derive(Component, Debug, Clone, PartialEq)]
-pub(super) struct UiAuthoredTimedActionSequencePlayback {
-    authored_node_index: u32,
-    action_proxy_entities: Vec<Entity>,
-    elapsed_milliseconds: f64,
-    next_event_index: usize,
-    active: bool,
+#[derive(Component)]
+#[relationship_target(relationship = UiTimedActionOf, linked_spawn)]
+pub(super) struct UiTimedActions(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct UiTimedActionDue(pub(super) Duration);
+
+#[derive(Component, Default)]
+pub(super) struct UiAuthoredTimedActionSequencePlayback(Option<UiTimedActionClock>);
+
+#[derive(Default)]
+struct UiTimedActionClock {
+    elapsed: Stopwatch,
+    emitted: usize,
 }
 
 impl UiAuthoredTimedActionSequencePlayback {
-    pub(super) fn new(authored_node_index: u32, action_proxy_entities: Vec<Entity>) -> Self {
-        Self {
-            authored_node_index,
-            action_proxy_entities,
-            elapsed_milliseconds: 0.0,
-            next_event_index: 0,
-            active: false,
-        }
-    }
-
     pub(super) fn set_active_and_restart(&mut self, active: bool) {
-        self.active = active;
-        self.elapsed_milliseconds = 0.0;
-        self.next_event_index = 0;
+        self.0 = active.then(UiTimedActionClock::default);
     }
 }
 
-/// Advances authored timed sequences on Bevy's real-time clock and activates
-/// their statically typed action proxies in source order.
 pub(super) fn advance_authored_timed_action_sequences_and_activate_due_proxies(
     time: Res<Time<Real>>,
-    documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<&UiDocumentRoot>,
-    mut sequences: Query<(&UiDocumentOwner, &mut UiAuthoredTimedActionSequencePlayback)>,
+    mut sequences: Query<(&UiTimedActions, &mut UiAuthoredTimedActionSequencePlayback)>,
+    deadlines: Query<&UiTimedActionDue>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    let elapsed_milliseconds = time.delta_secs_f64() * 1_000.0;
-    for (owner, mut sequence) in &mut sequences {
-        if !sequence.active {
+    for (actions, mut playback) in &mut sequences {
+        if playback.0.is_none() {
             continue;
         }
-        let Ok(root) = roots.get(owner.0) else {
+        let Some(clock) = playback.0.as_mut() else {
             continue;
         };
-        let Some(document) = documents.get(&root.document) else {
-            continue;
-        };
-        sequence.elapsed_milliseconds += elapsed_milliseconds;
-        let Some(UiWidgetRecord::TimedSequence { events }) = document
-            .canonical_ui_document()
-            .nodes
-            .get(sequence.authored_node_index as usize)
-            .map(|node| &node.widget)
-        else {
-            sequence.active = false;
-            continue;
-        };
-        while sequence.next_event_index < events.len() {
-            let Some(event) = events.get(sequence.next_event_index) else {
-                sequence.active = false;
+        clock.elapsed.tick(time.delta());
+        for node in actions.iter().skip(clock.emitted) {
+            let Ok(deadline) = deadlines.get(node) else {
                 break;
             };
-            if f64::from(event.due_ms) > sequence.elapsed_milliseconds {
+            if deadline.0 > clock.elapsed.elapsed() {
                 break;
             }
-            if let Some(&proxy) = sequence
-                .action_proxy_entities
-                .get(sequence.next_event_index)
-            {
-                activated.write(UiNodeActivated {
-                    source: openzt2_interface_state::input::input_types::ActionSource::System,
-                    node: proxy,
-                    trigger: UiTrigger::Press,
-                });
-            }
-            sequence.next_event_index += 1;
+            activated.write(UiNodeActivated {
+                source: ActionSource::System,
+                node,
+                trigger: UiTrigger::Press,
+            });
+            clock.emitted += 1;
         }
-        if sequence.next_event_index == events.len() {
-            sequence.active = false;
+        if clock.emitted == actions.len() {
+            playback.0 = None;
         }
     }
 }

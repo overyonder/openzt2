@@ -10,7 +10,7 @@ use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borr
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::persistence::profile_types::ProfileIndex;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 
@@ -20,8 +20,8 @@ use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 
 use super::{
     map_selection_screen_lifecycle::{
-        create_or_reuse_selected_mode_map_selection_screen,
-        despawn_retained_map_selection_screen_after_world_activation,
+        create_or_reuse_selected_mode_map_selection_screen, map_selection_screen_lifetime,
+        RetainedMapSelectionScreen,
     },
     shell_navigation_and_world_launch::{
         begin_loading_selected_world, select_requested_play_mode_and_enter_map_selection,
@@ -208,13 +208,14 @@ fn failed_load_reuses_retained_map_selection() {
         scenario: Some(id(3)),
         starting_cash_cents: None,
     })
-    .init_resource::<UiRoleRequests>()
+    .add_message::<ShowUiRole>()
     .init_resource::<NextState<GamePhase>>()
     .add_systems(Update, create_or_reuse_selected_mode_map_selection_screen);
     app.world_mut().spawn((
         ShellScreen::Globe {
             mode: WorldSessionMode::Freeform,
         },
+        RetainedMapSelectionScreen,
         Visibility::Inherited,
     ));
     app.world_mut()
@@ -241,19 +242,22 @@ fn failed_load_reuses_retained_map_selection() {
 #[test]
 fn completed_load_removes_map_selection_and_retains_shared_backdrop() {
     let mut app = App::new();
-    app.add_systems(
-        Update,
-        despawn_retained_map_selection_screen_after_world_activation,
-    );
+    app.add_plugins(StatesPlugin)
+        .insert_state(GamePhase::Loading);
     app.world_mut().spawn((
         ShellScreen::Globe {
             mode: WorldSessionMode::Freeform,
         },
+        map_selection_screen_lifetime(),
         Visibility::Inherited,
     ));
     app.world_mut()
         .spawn((MainMenuBackdrop, Visibility::Inherited));
 
+    app.update();
+    app.world_mut()
+        .resource_mut::<NextState<GamePhase>>()
+        .set(GamePhase::InGame);
     app.update();
 
     assert_eq!(
@@ -274,7 +278,9 @@ fn completed_load_removes_map_selection_and_retains_shared_backdrop() {
 
 #[test]
 fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
-    use super::shell_navigation_and_world_launch::continue_campaign_after_world_exit;
+    use super::shell_navigation_and_world_launch::{
+        begin_pending_campaign_launch_after_world_exit, request_campaign_launch_after_world_exit,
+    };
     use super::shell_navigation_request_types::ContinueCampaign;
     use openzt2_game_data::world_scenario::{
         CampaignScenarioRecord, CampaignScenarioState, ScenarioCampaignRecord,
@@ -298,7 +304,11 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
             .add_message::<ContinueCampaign>()
             .add_systems(
                 Update,
-                continue_campaign_after_world_exit.before(begin_loading_selected_world),
+                request_campaign_launch_after_world_exit.before(begin_loading_selected_world),
+            )
+            .add_systems(
+                OnEnter(GamePhase::MapSelection),
+                begin_pending_campaign_launch_after_world_exit,
             )
             .add_systems(
                 OnExit(GamePhase::InGame),

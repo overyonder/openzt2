@@ -38,19 +38,15 @@ pub(super) fn sample_highest_terrain_or_water_fitting_surface_height_in_three_by
         .reduce(f32::max)
 }
 
-/// Samples terrain and prefab collisions through Avian, then includes the
-/// horizontal water surface from the terrain sample.
-pub(super) fn sample_highest_active_collision_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood(
+/// Samples the highest surface hit by the camera fitting rays.
+pub(super) fn sample_highest_camera_fitting_collider(
     world_horizontal_position: Vec2,
     spatial_query: &SpatialQuery,
-    terrain_index: &TerrainIndex,
-    terrain_assets: &Assets<TerrainAsset>,
-    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-) -> Option<f32> {
+) -> Option<(f32, Entity)> {
     const FITTING_PROBE_TOP_METRES: f32 = 10_000.0;
     const FITTING_PROBE_LENGTH_METRES: f32 = 20_000.0;
 
-    let collision_height = [-1.0_f32, 0.0, 1.0]
+    [-1.0_f32, 0.0, 1.0]
         .into_iter()
         .flat_map(|z| {
             [-1.0_f32, 0.0, 1.0]
@@ -73,21 +69,10 @@ pub(super) fn sample_highest_active_collision_terrain_or_water_fitting_surface_h
                     let height = origin.y - hit.distance;
                     trace!(target: "openzt2_camera_fitting", ?point, entity = ?hit.entity,
                         height, distance = hit.distance, "camera fitting collision hit");
-                    height
+                    (height, hit.entity)
                 })
         })
-        .reduce(f32::max);
-    let terrain_or_water_height =
-        sample_highest_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood(
-            world_horizontal_position,
-            terrain_index,
-            terrain_assets,
-            terrain_chunks,
-        );
-    collision_height
-        .into_iter()
-        .chain(terrain_or_water_height)
-        .reduce(f32::max)
+        .max_by(|left, right| left.0.total_cmp(&right.0))
 }
 
 #[cfg(test)]

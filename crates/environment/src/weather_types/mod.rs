@@ -4,9 +4,16 @@ use openzt2_game_data::AssetId;
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct Weather {
     pub(super) definition: AssetId,
+}
+
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct WeatherDuration {
     pub(super) elapsed_ticks: u64,
     pub(super) duration_ticks: u64,
 }
+
+#[derive(Message)]
+pub(super) struct WeatherWelfareDue(pub(super) Entity);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct WeatherTransition {

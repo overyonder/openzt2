@@ -13,8 +13,15 @@ use openzt2_zoo_state::progression::fame_types::Fame;
 const STAR_RENDER_LAYER: usize = 28;
 
 #[derive(Component)]
+#[relationship(relationship_target = FameStarTarget)]
+pub(super) struct FameStarSceneFor(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = FameStarSceneFor, linked_spawn)]
+pub(super) struct FameStarTarget(Vec<Entity>);
+
+#[derive(Component)]
 pub(super) struct FameStarScene {
-    owner: Entity,
     full: Handle<ScenePrefabAsset>,
     half: Handle<ScenePrefabAsset>,
     hydrated: bool,
@@ -44,7 +51,6 @@ pub(super) fn create_fame_star_scenes(
             TextureFormat::Rgba8UnormSrgb,
             None,
         ));
-        commands.entity(owner).insert(FameStarTarget);
         commands.spawn((
             ImageNode::new(target.clone()),
             Node {
@@ -65,8 +71,8 @@ pub(super) fn create_fame_star_scenes(
                     enabled: false,
                     preserve_authored_material_lighting: true,
                 },
+                FameStarSceneFor(owner),
                 FameStarScene {
-                    owner,
                     full: server.load("ui/fx/zoofame/star_full.nif#Scene"),
                     half: server.load("ui/fx/zoofame/star_half_full.nif#Scene"),
                     hydrated: false,
@@ -96,8 +102,6 @@ pub(super) fn create_fame_star_scenes(
         ));
     }
 }
-#[derive(Component)]
-pub(super) struct FameStarTarget;
 
 pub(super) fn hydrate_fame_stars(
     mut commands: Commands,
@@ -145,22 +149,16 @@ pub(super) fn hydrate_fame_stars(
 }
 
 pub(super) fn present_fame_stars(
-    mut commands: Commands,
     fame: Res<Fame>,
     owners: Query<&InheritedVisibility, With<FameStarTarget>>,
-    scenes: Query<(Entity, &FameStarScene)>,
+    scenes: Query<(&FameStarSceneFor, &FameStarScene)>,
     mut stars: Query<(&FameStar, &mut Visibility, &ChildOf)>,
 ) {
-    for (scene, state) in &scenes {
-        if owners.get(state.owner).is_err() {
-            commands.entity(scene).despawn();
-        }
-    }
     for (star, mut visibility, parent) in &mut stars {
         let visible = scenes
             .get(parent.parent())
             .ok()
-            .and_then(|(_, state)| owners.get(state.owner).ok())
+            .and_then(|(owner, _)| owners.get(owner.0).ok())
             .is_some_and(|visible| visible.get());
         let full_count = fame.half_stars.min(10) / 2;
         let framing = scenes
@@ -173,11 +171,11 @@ pub(super) fn present_fame_stars(
         } else {
             star.index < full_count
         };
-        *visibility = if visible && (filled || framing) {
+        visibility.set_if_neq(if visible && (filled || framing) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
-        };
+        });
     }
 }
 
@@ -187,7 +185,7 @@ pub(super) fn frame_fame_star_models(
     children: Query<&Children>,
     transforms: Query<&GlobalTransform>,
     mut scenes: Query<(Entity, &mut FameStarScene)>,
-    mut stars: Query<(&FameStar, &mut Transform, &ChildOf)>,
+    mut stars: Query<(&FameStar, &mut Transform)>,
 ) {
     for (scene, mut state) in &mut scenes {
         if state.framed {
@@ -232,8 +230,8 @@ pub(super) fn frame_fame_star_models(
         let center = (minimum + maximum) * 0.5;
         let extent = maximum - minimum;
         let scale = 1.8 / extent.x.max(extent.y).max(f32::EPSILON);
-        for (star, mut transform, parent) in &mut stars {
-            if parent.parent() == scene {
+        for entity in children.get(scene).into_iter().flatten().copied() {
+            if let Ok((star, mut transform)) = stars.get_mut(entity) {
                 transform.translation =
                     Vec3::new(f32::from(star.index) * 2.0 - 4.0, 0.0, 0.0) - center * scale;
                 transform.scale = Vec3::splat(scale);

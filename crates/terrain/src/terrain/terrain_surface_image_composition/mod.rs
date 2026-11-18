@@ -102,7 +102,7 @@ pub(super) fn recompose_terrain_surface_image_region(
     previous: &Image,
     changed_min: UVec2,
     changed_max: UVec2,
-) -> Option<Image> {
+) -> Option<(Image, IRect)> {
     let _span = info_span!("recompose_terrain_surface_region").entered();
     let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
     let previous_data = previous.data.as_ref().filter(|data| {
@@ -112,7 +112,9 @@ pub(super) fn recompose_terrain_surface_image_region(
             && data.len() == layout.extent as usize * layout.extent as usize * 4
     });
     let Some(previous_data) = previous_data else {
-        return compose_terrain_surface_image(chunk, asset, edited_chunks, images);
+        let image = compose_terrain_surface_image(chunk, asset, edited_chunks, images)?;
+        let extent = read_rgba_image_extent(&image)?.as_ivec2();
+        return Some((image, IRect::from_corners(IVec2::ZERO, extent)));
     };
     let reach_min = changed_min.as_ivec2() + IVec2::splat(layout.margin - 2);
     let reach_max = changed_max.as_ivec2() + IVec2::splat(layout.margin + 2);
@@ -130,7 +132,10 @@ pub(super) fn recompose_terrain_surface_image_region(
         region = Some(region.map_or((corner, end), |(min, max)| (min.min(corner), max.max(end))));
     }
     let Some((min, max)) = region else {
-        return Some(previous.clone());
+        return Some((
+            previous.clone(),
+            IRect::from_corners(IVec2::ZERO, IVec2::ZERO),
+        ));
     };
     let clip = (
         min.max(IVec2::ZERO),
@@ -159,7 +164,10 @@ pub(super) fn recompose_terrain_surface_image_region(
         overlapping.push(paint);
     }
     composite_terrain_surface_stamps(asset, images, &layout, &overlapping, clip, &mut rgba)?;
-    Some(terrain_surface_image(layout.extent, rgba))
+    Some((
+        terrain_surface_image(layout.extent, rgba),
+        IRect::from_corners(clip.0, clip.1),
+    ))
 }
 
 fn terrain_surface_image(extent: u32, rgba: Vec<u8>) -> Image {
@@ -784,6 +792,7 @@ pub(super) fn read_wrapped_rgba_image_pixel(image: &Image, x: u32, y: u32) -> Op
 /// includes the terrain chunk's authored margin cells.
 pub(super) fn blend_ground_path_surface_patch_into_terrain_surface_image(
     surface: &mut Image,
+    clip: IRect,
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
     path_cell_world_origin: Vec2,
@@ -828,13 +837,14 @@ pub(super) fn blend_ground_path_surface_patch_into_terrain_surface_image(
             / output_texel_step)
             .floor()
             .as_ivec2()
-            .max(IVec2::ZERO);
+            .max(clip.min);
     let destination_max = ((path_cell_world_origin + Vec2::new(patch_world_extent, 0.0)
         - output_origin)
         / output_texel_step)
         .ceil()
         .as_ivec2()
-        .min(extent.as_ivec2());
+        .min(extent.as_ivec2())
+        .min(clip.max);
     if destination_min.cmpge(destination_max).any() {
         return Some(());
     }
@@ -902,6 +912,7 @@ pub(super) fn blend_ground_path_surface_patch_into_terrain_surface_image(
 /// `MODULATE2X` the road decal uses).
 pub(super) fn blend_terrain_surface_paint_into_terrain_surface_image(
     surface: &mut Image,
+    clip: IRect,
     chunk: &TerrainChunk,
     margin_cells: f32,
     paint: &TerrainPaintedTexture,
@@ -920,13 +931,14 @@ pub(super) fn blend_terrain_surface_paint_into_terrain_surface_image(
     let destination_min = ((paint_min - output_origin) / output_texel_step)
         .floor()
         .as_ivec2()
-        .max(IVec2::ZERO)
+        .max(clip.min)
         .as_uvec2();
     let destination_max = ((paint_min + Vec2::splat(paint.size_m) - output_origin)
         / output_texel_step)
         .ceil()
         .as_ivec2()
         .clamp(IVec2::ZERO, extent.as_ivec2())
+        .min(clip.max)
         .as_uvec2();
     let surface_bytes = surface.data.as_mut()?;
     for destination_y in destination_min.y..destination_max.y {
@@ -1002,6 +1014,7 @@ mod painted_texture_tests {
         };
         blend_terrain_surface_paint_into_terrain_surface_image(
             &mut surface,
+            IRect::from_corners(IVec2::ZERO, IVec2::splat(4)),
             &chunk,
             0.0,
             &paint,
@@ -1174,6 +1187,6 @@ mod region_recomposition_tests {
         )
         .expect("region surface");
         assert_ne!(before.data, whole.data, "the edit changes the surface");
-        assert_eq!(region.data, whole.data);
+        assert_eq!(region.0.data, whole.data);
     }
 }

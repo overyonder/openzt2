@@ -1,28 +1,17 @@
 use bevy::{
-    ecs::{
-        entity::{Entities, EntityHashMap, EntityHashSet},
-        entity_disabling::Disabled,
-        query::Allow,
-        relationship::RelationshipTarget,
-        system::SystemParam,
-    },
-    platform::collections::HashMap,
+    ecs::{relationship::RelationshipTarget, system::Command},
     prelude::*,
 };
 use openzt2_world_state::world_spawn::persistent_id_types::{PersistentId, PersistentIdAllocator};
 
-use super::{InteractionContainerMember, InteractionContainerMembers};
+use super::{
+    InteractionContainerMember, InteractionContainerSlotMembers, InteractionContainerSlotOf,
+    InteractionContainerSlots,
+};
 
-#[derive(Message)]
-pub enum InteractionContainerRequest {
-    Admit {
-        admission: InteractionContainerAdmissionRequest,
-        reply_to: InteractionContainerAdmissionRecipient,
-    },
-    Release {
-        member: Entity,
-        despawn: bool,
-    },
+pub struct ReleaseInteractionContainerMember {
+    pub member: Entity,
+    pub despawn: bool,
 }
 
 pub enum InteractionContainerAdmissionRequest {
@@ -42,26 +31,6 @@ pub enum InteractionContainerAdmissionRequest {
 }
 
 #[derive(Clone, Copy)]
-pub enum InteractionContainerAdmissionRecipient {
-    Docking(Entity),
-    Entry(Entity),
-    QueueWait(Entity),
-    Attachment(Entity),
-}
-
-#[derive(Message)]
-pub struct InteractionContainerAdmission {
-    pub reply_to: InteractionContainerAdmissionRecipient,
-    pub outcome: InteractionContainerAdmissionOutcome,
-}
-
-#[derive(Message)]
-pub struct InteractionContainerAttachmentAdmission {
-    pub request_entity: Entity,
-    pub outcome: InteractionContainerAdmissionOutcome,
-}
-
-#[derive(Clone, Copy)]
 pub enum InteractionContainerAdmissionOutcome {
     Granted {
         member: Entity,
@@ -73,307 +42,156 @@ pub enum InteractionContainerAdmissionOutcome {
     IdentityUnavailable,
 }
 
-pub fn register_interaction_container_requests(app: &mut App) {
-    app.add_message::<InteractionContainerRequest>()
-        .add_message::<InteractionContainerAdmission>()
-        .add_message::<InteractionContainerAttachmentAdmission>();
-}
+impl Command for ReleaseInteractionContainerMember {
+    type Out = ();
 
-pub fn interaction_container_requests_pending(
-    requests: Res<Messages<InteractionContainerRequest>>,
-) -> bool {
-    !requests.is_empty()
-}
-
-pub fn resolve_interaction_container_requests(
-    mut requests: ResMut<Messages<InteractionContainerRequest>>,
-    mut admissions: MessageWriter<InteractionContainerAdmission>,
-    mut attachments: MessageWriter<InteractionContainerAttachmentAdmission>,
-    mut resolver: InteractionContainerRequestResolver,
-    mut commands: Commands,
-) {
-    resolver.begin_batch();
-    // Several fixed-tick boundaries drain the same queue.
-    for request in requests.drain() {
-        match request {
-            InteractionContainerRequest::Admit {
-                admission,
-                reply_to,
-            } => {
-                let outcome = resolver.admit(&admission, &mut commands);
-                if let InteractionContainerAdmissionRecipient::Attachment(request_entity) = reply_to
-                {
-                    attachments.write(InteractionContainerAttachmentAdmission {
-                        request_entity,
-                        outcome,
-                    });
-                } else {
-                    admissions.write(InteractionContainerAdmission { reply_to, outcome });
-                }
-            }
-            InteractionContainerRequest::Release { member, despawn } => {
-                resolver.release(member, despawn, &mut commands);
-            }
-        }
+    fn apply(self, world: &mut World) {
+        release_container_member(world, self.member, self.despawn);
     }
 }
 
-// The relationship commands apply after the batch. Project only the members
-// and slot counts touched by this batch so each request sees earlier changes.
-#[derive(Default)]
-struct PendingMembershipChanges {
-    members: EntityHashMap<Option<(InteractionContainerMember, usize)>>,
-    places: HashMap<(Entity, usize), PendingSlotOccupancy>,
-    despawned: EntityHashSet,
-    next_admission: usize,
-}
-
-struct PendingSlotOccupancy {
-    count: usize,
-    first_admission: Option<(Entity, usize)>,
-}
-
-#[derive(bevy::ecs::system::SystemParam)]
-struct LiveMemberships<'w, 's> {
-    members: Query<'w, 's, &'static InteractionContainerMember, Allow<Disabled>>,
-    containers: Query<'w, 's, &'static InteractionContainerMembers, Allow<Disabled>>,
-    entities: &'w Entities,
-}
-
-impl PendingMembershipChanges {
-    fn slot_occupancy(
-        &mut self,
-        live: &LiveMemberships,
-        membership: InteractionContainerMember,
-    ) -> &mut PendingSlotOccupancy {
-        self.places
-            .entry((membership.container, membership.slot))
-            .or_insert_with(|| PendingSlotOccupancy {
-                count: live
-                    .containers
-                    .get(membership.container)
-                    .into_iter()
-                    .flat_map(RelationshipTarget::iter)
-                    .filter(|member| {
-                        live.members
-                            .get(*member)
-                            .is_ok_and(|entry| *entry == membership)
-                    })
-                    .count(),
-                first_admission: None,
-            })
-    }
-
-    fn membership_of(
-        &self,
-        live: &LiveMemberships,
-        member: Entity,
-    ) -> Option<InteractionContainerMember> {
-        self.members
-            .get(&member)
-            .map_or_else(
-                || live.members.get(member).ok().copied(),
-                |entry| entry.map(|(membership, _)| membership),
-            )
-            .filter(|membership| !self.despawned.contains(&membership.container))
-    }
-
-    fn set_membership(
-        &mut self,
-        live: &LiveMemberships,
-        member: Entity,
-        next: Option<InteractionContainerMember>,
-    ) {
-        let previous = self.membership_of(live, member);
-        if previous == next {
-            return;
-        }
-        if let Some(previous) = previous {
-            self.slot_occupancy(live, previous).count -= 1;
-        }
-        let next = next.map(|next| {
-            let admission = self.next_admission;
-            self.next_admission += 1;
-            let occupancy = self.slot_occupancy(live, next);
-            occupancy.count += 1;
-            occupancy.first_admission.get_or_insert((member, admission));
-            (next, admission)
-        });
-        self.members.insert(member, next);
-    }
-
-    // A waiter sees the queue and service capacity at its own admission.
-    fn queue_front_can_enter_service(
-        &mut self,
-        live: &LiveMemberships,
-        member: Entity,
-        queue: InteractionContainerMember,
-        service: &[(usize, u8)],
-    ) -> bool {
-        if service.is_empty() {
-            return false;
-        }
-        let live_front = live
-            .containers
-            .get(queue.container)
-            .into_iter()
-            .flat_map(RelationshipTarget::iter)
-            .find(|entity| {
-                !self.members.contains_key(entity)
-                    && live.members.get(*entity).is_ok_and(|entry| *entry == queue)
-            });
-        let front = live_front.or_else(|| self.first_projected_admission(queue));
-        front == Some(member)
-            && service.iter().any(|&(slot, capacity)| {
-                self.slot_occupancy(live, InteractionContainerMember { slot, ..queue })
-                    .count
-                    < usize::from(capacity)
-            })
-    }
-
-    fn first_projected_admission(&mut self, slot: InteractionContainerMember) -> Option<Entity> {
-        let occupancy = self.places.get_mut(&(slot.container, slot.slot))?;
-        let (entity, order) = occupancy.first_admission?;
-        if self.members.get(&entity) == Some(&Some((slot, order))) {
-            return Some(entity);
-        }
-        occupancy.first_admission = self
-            .members
-            .iter()
-            .filter_map(|(&entity, &entry)| {
-                let (membership, order) = entry?;
-                (membership == slot).then_some((entity, order))
-            })
-            .min_by_key(|&(_, order)| order);
-        occupancy.first_admission.map(|(entity, _)| entity)
-    }
-
-    fn release(
-        &mut self,
-        live: &LiveMemberships,
-        member: Entity,
-        despawn: bool,
-        commands: &mut Commands,
-    ) {
-        if !live.entities.contains_spawned(member) || self.despawned.contains(&member) {
-            return;
-        }
-        self.set_membership(live, member, None);
+fn release_container_member(world: &mut World, member: Entity, despawn: bool) {
+    if let Ok(mut member) = world.get_entity_mut(member) {
         if despawn {
-            self.despawned.insert(member);
-            commands.entity(member).try_despawn();
+            member.despawn();
         } else {
-            commands
-                .entity(member)
-                .try_remove::<InteractionContainerMember>();
+            member.remove::<InteractionContainerMember>();
         }
     }
 }
 
-#[derive(SystemParam)]
-pub struct InteractionContainerRequestResolver<'w, 's> {
-    live: LiveMemberships<'w, 's>,
-    changes: Local<'s, PendingMembershipChanges>,
-    allocator: Option<ResMut<'w, PersistentIdAllocator>>,
+fn find_container_slot(world: &World, container: Entity, index: usize) -> Option<Entity> {
+    world
+        .get::<InteractionContainerSlots>(container)?
+        .iter()
+        .find(|slot| {
+            world
+                .get::<InteractionContainerSlotOf>(*slot)
+                .is_some_and(|slot| slot.index == index)
+        })
 }
 
-impl InteractionContainerRequestResolver<'_, '_> {
-    pub fn begin_batch(&mut self) {
-        self.changes.members.clear();
-        self.changes.places.clear();
-        self.changes.despawned.clear();
-        self.changes.next_admission = 0;
-    }
+fn slot_members(world: &World, slot: Option<Entity>) -> Option<&InteractionContainerSlotMembers> {
+    world.get::<InteractionContainerSlotMembers>(slot?)
+}
 
-    pub fn release(&mut self, member: Entity, despawn: bool, commands: &mut Commands) {
-        self.changes.release(&self.live, member, despawn, commands);
-    }
+#[derive(Resource, Default)]
+struct InteractionContainerAdmissionSequence(u64);
 
-    pub fn admit(
-        &mut self,
-        request: &InteractionContainerAdmissionRequest,
-        commands: &mut Commands,
-    ) -> InteractionContainerAdmissionOutcome {
+fn admit_to_container_slot(
+    world: &mut World,
+    container: Entity,
+    index: usize,
+    slot: Option<Entity>,
+    member: Option<Entity>,
+) -> Entity {
+    let slot = slot.unwrap_or_else(|| {
+        world
+            .spawn(InteractionContainerSlotOf { container, index })
+            .id()
+    });
+    let mut sequence =
+        world.get_resource_or_insert_with(InteractionContainerAdmissionSequence::default);
+    sequence.0 = sequence
+        .0
+        .checked_add(1)
+        .expect("interaction admission sequence exhausted");
+    let membership = InteractionContainerMember {
+        slot,
+        admission_order: sequence.0,
+    };
+    let member = if let Some(member) = member {
+        world.entity_mut(member).insert(membership);
+        member
+    } else {
+        world.spawn(membership).id()
+    };
+    world.flush();
+    member
+}
+
+impl InteractionContainerAdmissionRequest {
+    /// Applies this structural request against committed container membership.
+    pub fn commit(self, world: &mut World) -> InteractionContainerAdmissionOutcome {
         use InteractionContainerAdmissionOutcome::{Granted, IdentityUnavailable, Refused};
 
-        let live = &self.live;
-        let changes = &mut *self.changes;
-        match *request {
-            InteractionContainerAdmissionRequest::Admit {
+        match self {
+            Self::Admit {
                 container,
                 member,
-                ref slots,
+                slots,
                 despawn_on_refusal,
-                ref queue_service_slots,
+                queue_service_slots,
             } => {
-                let selected = if live.entities.contains_spawned(container)
-                    && live.entities.contains_spawned(member)
-                    && !changes.despawned.contains(&container)
-                    && !changes.despawned.contains(&member)
+                if world.entities().contains_spawned(container)
+                    && world.entities().contains_spawned(member)
                 {
-                    let previous = changes.membership_of(live, member);
-                    slots.iter().find_map(|&(slot, capacity)| {
-                        let membership = InteractionContainerMember { container, slot };
-                        if previous != Some(membership) {
-                            if changes.slot_occupancy(live, membership).count
+                    let existing = world
+                        .get::<InteractionContainerMember>(member)
+                        .map(|membership| membership.slot);
+                    for (slot, capacity) in slots {
+                        let slot_entity = find_container_slot(world, container, slot);
+                        if existing.is_none() || existing != slot_entity {
+                            if slot_members(world, slot_entity).map_or(0, RelationshipTarget::len)
                                 >= usize::from(capacity)
                             {
-                                return None;
+                                continue;
                             }
-                            changes.set_membership(live, member, Some(membership));
-                            commands.entity(member).try_insert(membership);
+                            admit_to_container_slot(
+                                world,
+                                container,
+                                slot,
+                                slot_entity,
+                                Some(member),
+                            );
                         }
-                        Some(slot)
-                    })
-                } else {
-                    None
-                };
-                if let Some(slot) = selected {
-                    Granted {
-                        member,
-                        slot,
-                        persistent_id: None,
-                        queue_service_available: changes.queue_front_can_enter_service(
-                            live,
+                        let queue_service_available = !queue_service_slots.is_empty()
+                            && slot_members(world, find_container_slot(world, container, slot))
+                                .and_then(|members| members.iter().next())
+                                == Some(member)
+                            && queue_service_slots.iter().any(|&(slot, capacity)| {
+                                slot_members(world, find_container_slot(world, container, slot))
+                                    .map_or(0, RelationshipTarget::len)
+                                    < usize::from(capacity)
+                            });
+                        return Granted {
                             member,
-                            InteractionContainerMember { container, slot },
-                            queue_service_slots,
-                        ),
+                            slot,
+                            persistent_id: None,
+                            queue_service_available,
+                        };
                     }
-                } else {
-                    if despawn_on_refusal {
-                        changes.release(live, member, true, commands);
-                    }
-                    Refused
                 }
+                if despawn_on_refusal {
+                    release_container_member(world, member, true);
+                }
+                Refused
             }
-            InteractionContainerAdmissionRequest::AdmitNew {
+            Self::AdmitNew {
                 container,
                 slot,
                 capacity,
                 world_root,
             } => {
-                let membership = InteractionContainerMember { container, slot };
-                if !live.entities.contains_spawned(container)
-                    || changes.despawned.contains(&container)
-                    || changes.slot_occupancy(live, membership).count >= usize::from(capacity)
+                let slot_entity = find_container_slot(world, container, slot);
+                if !world.entities().contains_spawned(container)
+                    || slot_members(world, slot_entity).map_or(0, RelationshipTarget::len)
+                        >= usize::from(capacity)
                 {
-                    Refused
-                } else if let Some(persistent_id) = self
-                    .allocator
-                    .as_deref_mut()
-                    .and_then(|ids| ids.allocate(world_root).ok())
-                {
-                    let member = commands.spawn(membership).id();
-                    changes.set_membership(live, member, Some(membership));
-                    Granted {
-                        member,
-                        slot,
-                        persistent_id: Some(persistent_id),
-                        queue_service_available: false,
-                    }
-                } else {
-                    IdentityUnavailable
+                    return Refused;
+                }
+                let Some(persistent_id) = world
+                    .get_resource_mut::<PersistentIdAllocator>()
+                    .and_then(|mut ids| ids.allocate(world_root).ok())
+                else {
+                    return IdentityUnavailable;
+                };
+                let member = admit_to_container_slot(world, container, slot, slot_entity, None);
+                Granted {
+                    member,
+                    slot,
+                    persistent_id: Some(persistent_id),
+                    queue_service_available: false,
                 }
             }
         }

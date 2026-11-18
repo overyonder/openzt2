@@ -5,6 +5,7 @@ use openzt2_interface_state::settings::display_settings_types::DisplaySettings;
 use super::authored_tree_expansion_and_row_indentation::UiAuthoredTreeRowPhysicalIndent;
 
 #[derive(Component, Clone, Copy)]
+#[require(UiCanvasMetrics)]
 pub struct UiLogicalCanvas(Vec2);
 
 impl UiLogicalCanvas {
@@ -38,71 +39,117 @@ impl UiPhysicalListRowHeight {
 #[derive(Component)]
 pub(super) struct UiPhysicalAspect;
 
-pub(super) fn scale_authored_ui_canvas_to_primary_window(
-    windows: Query<&Window, With<PrimaryWindow>>,
+#[derive(Component, Default, Clone, Copy, PartialEq)]
+pub(super) struct UiCanvasMetrics {
+    base_scale: Vec2,
+    pub(super) isotropic_correction: Vec2,
+}
+
+impl UiCanvasMetrics {
+    pub(super) fn has_extent(&self) -> bool {
+        self.base_scale.min_element() > 0.0
+    }
+}
+
+pub(super) fn project_authored_ui_canvas_viewport_metrics(
+    windows: Query<Ref<Window>, With<PrimaryWindow>>,
     settings: Res<DisplaySettings>,
-    mut canvases: Query<(&UiLogicalCanvas, &mut UiTransform)>,
-    mut physical_aspect_nodes: Query<
-        &mut UiTransform,
-        (With<UiPhysicalAspect>, Without<UiLogicalCanvas>),
-    >,
-    mut physical_list_rows: Query<(&UiPhysicalListRowHeight, &mut Node)>,
-    mut physical_tree_rows: Query<
-        (&UiAuthoredTreeRowPhysicalIndent, &mut UiTransform),
-        (Without<UiLogicalCanvas>, Without<UiPhysicalAspect>),
-    >,
+    mut canvases: Query<(Ref<UiLogicalCanvas>, &mut UiCanvasMetrics, &mut UiTransform)>,
     mut scale: ResMut<UiScale>,
 ) {
     let Ok(window) = windows.single() else {
         return;
     };
-    let user_scale = f32::from(settings.ui_scale_permille) / 1000.0;
-    if (scale.0 - 1.0).abs() > f32::EPSILON {
-        scale.0 = 1.0;
-    }
+    scale.map_unchanged(|scale| &mut scale.0).set_if_neq(1.0);
     let viewport = Vec2::new(window.width(), window.height());
-    for (logical, mut transform) in &mut canvases {
-        let logical_size = logical.logical_size();
-        if logical_size.min_element() <= 0.0 {
+    let user_scale = f32::from(settings.ui_scale_permille) / 1000.0;
+    for (logical, mut metrics, mut transform) in &mut canvases {
+        if !window.is_changed() && !settings.is_changed() && !logical.is_changed() {
             continue;
         }
-        let canvas_scale = viewport / logical_size * user_scale;
-        let next = UiTransform {
-            // Bevy applies UiTransform scale about the node's centre. The
-            // authored root is laid out at its unscaled logical size, so move
-            // that centre from logical_size / 2 to viewport / 2. Using the
-            // post-scale extent here leaves the canvas anchored around its
-            // old centre and crops the left/top of every widescreen capture.
-            translation: Val2::px(
-                (viewport.x - logical_size.x) * 0.5,
-                (viewport.y - logical_size.y) * 0.5,
-            ),
-            scale: canvas_scale,
+        let logical_size = logical.logical_size();
+        if logical_size.min_element() <= 0.0 || viewport.min_element() <= 0.0 {
+            metrics.set_if_neq(UiCanvasMetrics::default());
+            continue;
+        }
+        let base_scale = viewport / logical_size;
+        metrics.set_if_neq(UiCanvasMetrics {
+            base_scale,
+            isotropic_correction: Vec2::new(base_scale.y / base_scale.x, 1.0),
+        });
+        let center_offset = (viewport - logical_size) * 0.5;
+        transform.set_if_neq(UiTransform {
+            translation: Val2::px(center_offset.x, center_offset.y),
+            scale: base_scale * user_scale,
             ..UiTransform::IDENTITY
-        };
-        if *transform != next {
-            *transform = next;
-        }
-        let aspect_correction = Vec2::new(canvas_scale.y / canvas_scale.x, 1.0);
-        for mut transform in &mut physical_aspect_nodes {
-            if transform.scale != aspect_correction {
-                transform.scale = aspect_correction;
+        });
+    }
+}
+
+pub(super) fn apply_authored_canvas_layout_corrections(
+    parents: Query<&ChildOf>,
+    canvases: Query<Ref<UiCanvasMetrics>>,
+    mut physical_aspect_nodes: Query<
+        (
+            Entity,
+            Ref<UiPhysicalAspect>,
+            Ref<ChildOf>,
+            &mut UiTransform,
+        ),
+        Without<UiLogicalCanvas>,
+    >,
+    mut physical_list_rows: Query<(
+        Entity,
+        Ref<UiPhysicalListRowHeight>,
+        Ref<ChildOf>,
+        &mut Node,
+    )>,
+    mut physical_tree_rows: Query<
+        (
+            Entity,
+            Ref<UiAuthoredTreeRowPhysicalIndent>,
+            Ref<ChildOf>,
+            &mut UiTransform,
+        ),
+        (Without<UiLogicalCanvas>, Without<UiPhysicalAspect>),
+    >,
+) {
+    let canvas_changed = canvases.iter().any(|canvas| canvas.is_changed());
+    let metrics_for = |entity, member_changed| {
+        parents
+            .iter_ancestors::<ChildOf>(entity)
+            .find_map(|ancestor| canvases.get(ancestor).ok())
+            .filter(|metrics| metrics.has_extent() && (member_changed || metrics.is_changed()))
+    };
+    for (entity, aspect, parent, transform) in &mut physical_aspect_nodes {
+        let changed = aspect.is_changed() || parent.is_changed();
+        if canvas_changed || changed {
+            if let Some(metrics) = metrics_for(entity, changed) {
+                transform
+                    .map_unchanged(|transform| &mut transform.scale)
+                    .set_if_neq(metrics.isotropic_correction);
             }
         }
-        // Generated list cells use the same authored 1024x768 coordinate
-        // space as their templates. Bevy's root transform performs the one
-        // canvas-to-backbuffer mapping for both static and generated nodes.
-        let base_canvas_scale = viewport / logical_size;
-        for (row_height, mut node) in &mut physical_list_rows {
-            let height = px(row_height.0 / base_canvas_scale.y);
-            if node.height != height {
-                node.height = height;
+    }
+    for (entity, height, parent, node) in &mut physical_list_rows {
+        let changed = height.is_changed() || parent.is_changed();
+        if canvas_changed || changed {
+            if let Some(metrics) = metrics_for(entity, changed) {
+                node.map_unchanged(|node| &mut node.height)
+                    .set_if_neq(px(height.0 / metrics.base_scale.y));
             }
         }
-        for (indent, mut transform) in &mut physical_tree_rows {
-            let translation = Val2::px(indent.physical_pixels() / base_canvas_scale.x, 0.0);
-            if transform.translation != translation {
-                transform.translation = translation;
+    }
+    for (entity, indent, parent, transform) in &mut physical_tree_rows {
+        let changed = indent.is_changed() || parent.is_changed();
+        if canvas_changed || changed {
+            if let Some(metrics) = metrics_for(entity, changed) {
+                transform
+                    .map_unchanged(|transform| &mut transform.translation)
+                    .set_if_neq(Val2::px(
+                        indent.physical_pixels() / metrics.base_scale.x,
+                        0.0,
+                    ));
             }
         }
     }

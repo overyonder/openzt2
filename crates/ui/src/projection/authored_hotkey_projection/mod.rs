@@ -7,25 +7,6 @@ use openzt2_game_data::ui_document::hotkey::UiDocumentHotkeyTrigger;
 use crate::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiActionSource;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAnimalActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAnimalHealthActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAudioSettingActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiCameraActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiConstructionActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiImmersiveModeActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPersistenceActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPopulateCatalogueTypeListActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiResearchActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShellActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShowActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiSimulationActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiStaffActions;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiTransportActions;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 
 pub(super) fn project_authored_hotkey_action_proxies(
@@ -69,69 +50,12 @@ pub(super) fn project_authored_hotkey_action_proxies(
                 node: node_index as u32,
                 hotkey: hotkey_index as u32,
             };
-            match &hotkey.action {
-                UiActionRecord::Presentation(_) => {
-                    commands.entity(proxy).insert(UiPresentationActions(source));
-                }
-                UiActionRecord::Shell(_) => {
-                    commands.entity(proxy).insert(UiShellActions(source));
-                }
-                UiActionRecord::PopulateCatalogueTypeList(_) => {
-                    commands
-                        .entity(proxy)
-                        .insert(UiPopulateCatalogueTypeListActions(source));
-                }
-                UiActionRecord::Construction(_) => {
-                    commands.entity(proxy).insert(UiConstructionActions(source));
-                }
-                UiActionRecord::Camera(_) => {
-                    commands.entity(proxy).insert(UiCameraActions(source));
-                }
-                UiActionRecord::Photo(_) => {
-                    commands.entity(proxy).insert(UiPhotoActions(source));
-                }
-                UiActionRecord::StartResearchForSelectedCatalogueItem(_) => {
-                    commands.entity(proxy).insert(UiResearchActions(source));
-                }
-                UiActionRecord::AnimalHealth(_) => {
-                    commands.entity(proxy).insert(UiAnimalHealthActions(source));
-                }
-                UiActionRecord::Show(_) => {
-                    commands.entity(proxy).insert(UiShowActions(source));
-                }
-                UiActionRecord::Transport(_) => {
-                    commands.entity(proxy).insert(UiTransportActions(source));
-                }
-                UiActionRecord::Scenario(_) => {
-                    commands.entity(proxy).insert(UiScenarioActions(source));
-                }
-                UiActionRecord::AudioSetting(_) => {
-                    commands.entity(proxy).insert(UiAudioSettingActions(source));
-                }
-                UiActionRecord::Information(_) => {
-                    commands.entity(proxy).insert(UiInformationActions(source));
-                }
-                UiActionRecord::EnterImmersiveMode(_) => {
-                    commands
-                        .entity(proxy)
-                        .insert(UiImmersiveModeActions(source));
-                }
-                UiActionRecord::Staff(_) => {
-                    commands.entity(proxy).insert(UiStaffActions(source));
-                }
-                UiActionRecord::Economy(_) => {
-                    commands.entity(proxy).insert(UiEconomyActions(source));
-                }
-                UiActionRecord::Animal(_) => {
-                    commands.entity(proxy).insert(UiAnimalActions(source));
-                }
-                UiActionRecord::Persistence(_) => {
-                    commands.entity(proxy).insert(UiPersistenceActions(source));
-                }
-                UiActionRecord::Simulation(_) => {
-                    commands.entity(proxy).insert(UiSimulationActions(source));
-                }
-            };
+            super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
+                commands,
+                proxy,
+                source,
+                &hotkey.action,
+            );
         }
     }
 }

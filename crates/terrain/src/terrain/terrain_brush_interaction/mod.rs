@@ -83,12 +83,11 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
         | TerrainBrushKind::RemoveWater => TerrainBrushFalloff::Constant,
     };
 
-    let Ok((entity, mut brush, mut preview, mut transform, active, pending)) =
-        previews.single_mut()
-    else {
+    let Ok((entity, mut brush, preview, transform, active, pending)) = previews.single_mut() else {
         if previews.is_empty() {
             let transform = Transform::from_translation(cursor.world);
             commands.spawn((
+                super::terrain_live_brush_application::TerrainBrushDraft::default(),
                 TerrainBrushPreview {
                     center: cursor.world.xz(),
                     radius_m,
@@ -128,8 +127,12 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     brush.paint_foliage = paint_foliage;
     brush.paint_rocks = paint_rocks;
     brush.automatic_placement_variation = policy.biome_automatic_placement_variation;
-    preview.transform.translation = cursor.world;
-    transform.translation = cursor.world;
+    preview
+        .map_unchanged(|preview| &mut preview.transform.translation)
+        .set_if_neq(cursor.world);
+    transform
+        .map_unchanged(|transform| &mut transform.translation)
+        .set_if_neq(cursor.world);
 
     let began = primary_pointer.just_pressed && !ui_capture.over_ui && cursor.over_terrain;
     let kind = match (active, kind) {

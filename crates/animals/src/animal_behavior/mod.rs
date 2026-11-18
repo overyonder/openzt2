@@ -67,15 +67,10 @@ mod natural_water_targets;
 
 use bevy::prelude::*;
 
+use behavior_set_start_request_types::StartBehaviorSet;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::deterministic_random_stream::ZooSeed;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
-    interaction_container_requests_pending, register_interaction_container_requests,
-    resolve_interaction_container_requests,
-};
-
-use behavior_set_start_request_types::StartBehaviorSet;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
@@ -84,7 +79,6 @@ pub struct AnimalBehaviorExecutionPlugin;
 
 impl Plugin for AnimalBehaviorExecutionPlugin {
     fn build(&self, application: &mut App) {
-        register_interaction_container_requests(application);
         behavior_object_attachment_execution::register_object_attachment_execution(application);
         behavior_object_spawn_execution::register_object_spawn_execution(application);
         behavior_queue_wait_execution::register_queue_wait_execution(application);
@@ -122,10 +116,18 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         application
             .init_non_send::<behavior_script_execution::BehaviorScriptContexts>()
             .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
+            .add_observer(behavior_interaction_container_execution::apply_interaction_container_entry)
+            .add_observer(behavior_docking_execution::request_dock_after_container_admission)
             .add_message::<StartBehaviorSet>()
             .add_message::<BehaviorFeedbackDispatched>()
             .add_message::<BehaviorTaskFailed>()
             .add_message::<BehaviorTaskFinished>()
+            .add_systems(
+                FixedUpdate,
+                behavior_target_placement_execution::invalidate_obsolete_behavior_target_placement_sites
+                    .in_set(FixedGameSet::Clock)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 FixedUpdate,
                 behavior_task_phase_transition_execution::begin_behavior_target_candidate_selection_updates
@@ -175,22 +177,14 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             FixedUpdate,
             (
                 behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance,
-                (
-                    (|| false).pipe(behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets),
-                    resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-                    (|| true).pipe(behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets),
-                ).chain(),
+                behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
                 (
                     behavior_locomotion_switch_set_execution::play_locomotion_medium_behavior_sets,
                     behavior_locomotion_switch_set_execution::play_animation_node_behavior_sets,
                 )
                     .chain(),
                 behavior_head_look_execution::continue_after_authored_head_look_steps,
-                (
-                    (|| false).pipe(behavior_docking_execution::start_current_supported_behavior_docking_actions),
-                    resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-                    (|| true).pipe(behavior_docking_execution::start_current_supported_behavior_docking_actions),
-                ).chain(),
+                behavior_docking_execution::start_current_supported_behavior_docking_actions,
                 behavior_move_execution::start_current_supported_behavior_move_actions,
                 behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
                 behavior_random_animation_execution::start_next_random_behavior_animation,
@@ -203,7 +197,6 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
                 behavior_clothing_delivery::finish_clothing_delivery,
                 behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
                 behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,
-                behavior_target_placement_execution::despawn_orphaned_behavior_target_placement_site_markers,
             )
                 .chain()
                 .after(

@@ -6,20 +6,24 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 #[test]
 fn preassigned_habitat_membership_still_initializes_containment() {
-    use crate::habitat::habitat_membership_and_containment::update_habitat_membership_after_locatable_entities_move;
+    use crate::habitat::habitat_membership_and_containment::{
+        resolve_changed_habitat_membership_and_containment, HabitatLocationCells,
+        LostHabitatMembership,
+    };
     use openzt2_zoo_state::habitat::habitat_types::Containment;
     use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
+    use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
     use openzt2_zoo_state::habitat::habitat_types::HabitatLocatable;
     use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
     use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
     for breached in [false, true] {
         let mut app = App::new();
         app.init_resource::<TopologyGrid>()
+            .init_resource::<HabitatLocationCells>()
+            .add_message::<LostHabitatMembership>()
+            .add_message::<HabitatChanged>()
             .add_message::<ContainmentChanged>()
-            .add_systems(
-                Update,
-                update_habitat_membership_after_locatable_entities_move,
-            );
+            .add_systems(Update, resolve_changed_habitat_membership_and_containment);
         let habitat = app
             .world_mut()
             .spawn(HabitatSummary {
@@ -46,7 +50,6 @@ fn preassigned_habitat_membership_still_initializes_containment() {
         assert_eq!(
             app.world().get::<Containment>(animal),
             Some(&Containment {
-                habitat_entity: habitat,
                 is_contained: !breached,
             })
         );

@@ -108,11 +108,11 @@ pub(super) fn append_suspension_points(
 pub(super) fn append_initial_suspension_emission(
     points: &mut Vec<ParticleEmissionPoint>,
     volumes: &[TerrainWaterSuspensionVolume],
+    total_volume: f32,
     density: f32,
     particle_radius: f32,
     random: &mut NativeVisualRandomStream,
 ) {
-    let total_volume: f32 = volumes.iter().map(|volume| volume.volume_m3()).sum();
     let target = (density * total_volume).min(10_000.0);
     if total_volume <= 0.0 || target < 1.0 {
         return;
@@ -128,12 +128,12 @@ pub(super) fn append_initial_suspension_emission(
 pub(super) fn append_suspension_density_top_up(
     points: &mut Vec<ParticleEmissionPoint>,
     volumes: &[TerrainWaterSuspensionVolume],
+    total_volume: f32,
     density: f32,
     particle_radius: f32,
     live_count: u32,
     random: &mut NativeVisualRandomStream,
 ) {
-    let total_volume: f32 = volumes.iter().map(|volume| volume.volume_m3()).sum();
     if total_volume <= 0.0 || volumes.is_empty() {
         return;
     }

@@ -1,4 +1,5 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::ecs::system::SystemParam;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -93,42 +94,55 @@ pub(in crate::terrain) struct WaterWakePresentation<'w, 's> {
     settings: Res<'w, GraphicsSettings>,
     meshes: ResMut<'w, Assets<Mesh>>,
     random: ResMut<'w, NativeVisualRandomStream>,
-    emissions: Query<
-        'w,
-        's,
-        (
-            &'static WaterWakeEmission,
-            &'static ChildOf,
-            Option<&'static Children>,
-        ),
-    >,
+    region_children: Query<'w, 's, &'static Children>,
+    emissions: Query<'w, 's, (&'static WaterWakeEmission, Option<&'static Children>)>,
     particles: Query<'w, 's, &'static ParticleEffectPointEmitter, With<WaterWakeMeshParticle>>,
     waves: Query<'w, 's, &'static NativeTerrainWaterGeometricWaveShaderState>,
 }
 
-pub(crate) fn present_terrain_stitch_water_wake_samples(state: WaterWakePresentation) {
-    present_water_wake_samples::<false>(state);
+pub(crate) fn present_water_wake_samples(mut state: WaterWakePresentation) {
+    let mut stitch = Vec::new();
+    let mut geometric = Vec::new();
+    for sample in state.samples.read() {
+        let Ok((transform, path)) = state.sources.get(sample.surface) else {
+            continue;
+        };
+        let routed = (*sample, transform.to_matrix());
+        match path {
+            WaterWakePresentationPath::TerrainStitch => stitch.push(routed),
+            WaterWakePresentationPath::GeometricWave => geometric.push(routed),
+        }
+    }
+    let mut admissions = EntityHashMap::default();
+    present_routed_water_wake_samples::<false>(&mut state, stitch, &mut admissions);
+    present_routed_water_wake_samples::<true>(&mut state, geometric, &mut admissions);
 }
 
-pub(crate) fn present_geometric_water_wake_samples(state: WaterWakePresentation) {
-    present_water_wake_samples::<true>(state);
+#[derive(Default)]
+struct WaterWakeRegionAdmissions {
+    particle_count: u32,
+    nearby_origins: Vec<Vec2>,
 }
 
-fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
+fn present_routed_water_wake_samples<const HIGH: bool>(
+    state: &mut WaterWakePresentation,
+    samples: Vec<(WaterSurfaceWakeSample, Mat4)>,
+    admissions: &mut EntityHashMap<WaterWakeRegionAdmissions>,
+) {
     let WaterWakePresentation {
-        mut commands,
-        mut samples,
+        commands,
         regions,
-        sources,
         memberships,
         terrain_assets,
         effects,
         settings,
-        mut meshes,
-        mut random,
+        meshes,
+        random,
+        region_children,
         emissions,
         particles,
         waves,
+        ..
     } = state;
     let level = match settings.water_detail {
         FourLevelGraphicsDetail::Low => 0,
@@ -137,23 +151,10 @@ fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
         FourLevelGraphicsDetail::Ultra => 3,
     };
     let level = if HIGH { level } else { level.min(1) };
-    let mut queued = Vec::<(Entity, Vec2, u32)>::new();
-    for sample in samples.read() {
-        let Ok((source_transform, path)) = sources.get(sample.surface) else {
-            continue;
-        };
+    for (sample, source_transform) in samples {
         let Some(source) = regions.get(sample.surface) else {
             continue;
         };
-        if *path
-            != if HIGH {
-                WaterWakePresentationPath::GeometricWave
-            } else {
-                WaterWakePresentationPath::TerrainStitch
-            }
-        {
-            continue;
-        }
         let Some(terrain) = terrain_assets.get(source.terrain()) else {
             continue;
         };
@@ -193,34 +194,30 @@ fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
             continue;
         };
         let maximum_count = maximum_count as u32;
-        let mut live_count = 0_u32;
-        let mut too_close = false;
-        for (emission, parent, children) in &emissions {
-            if parent.parent() != sample.surface {
-                continue;
-            }
-            too_close |= emission.proximity_seconds_remaining > 0.0
-                && emission
-                    .source_position
-                    .distance_squared(sample.source_position)
-                    < 0.1;
-            if let Some(children) = children {
-                for child in children.iter() {
-                    if let Ok(particle) = particles.get(child) {
-                        live_count =
-                            live_count.saturating_add(particle.sampled_live_count().unwrap_or(1));
+        let admitted = admissions.entry(sample.surface).or_insert_with(|| {
+            let mut count = WaterWakeRegionAdmissions::default();
+            if let Ok(children) = region_children.get(sample.surface) {
+                for (emission, children) in emissions.iter_many(children.iter()) {
+                    if emission.proximity_seconds_remaining > 0.0 {
+                        count.nearby_origins.push(emission.source_position);
+                    }
+                    if let Some(children) = children {
+                        for particle in particles.iter_many(children.iter()) {
+                            count.particle_count = count
+                                .particle_count
+                                .saturating_add(particle.sampled_live_count().unwrap_or(1));
+                        }
                     }
                 }
             }
-        }
-        for &(region, position, count) in &queued {
-            if region != sample.surface {
-                continue;
-            }
-            live_count = live_count.saturating_add(count);
-            too_close |= position.distance_squared(sample.source_position) < 0.1;
-        }
-        if too_close || live_count >= maximum_count {
+            count
+        });
+        if admitted.particle_count >= maximum_count
+            || admitted
+                .nearby_origins
+                .iter()
+                .any(|position| position.distance_squared(sample.source_position) < 0.1)
+        {
             continue;
         }
         let Some(effect_handle) = terrain.water_particle_effect(system) else {
@@ -254,7 +251,7 @@ fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
                 as f32
         };
         let radius = 1.5 + (10.0 - 1.5) * strength_fraction;
-        let direction = native_wake_unit_direction(sample.direction, &mut random);
+        let direction = native_wake_unit_direction(sample.direction, random);
         let Some((positions, indices)) = construct_wake_stitch_geometry::<HIGH>(
             terrain,
             membership,
@@ -281,9 +278,8 @@ fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
         } else {
             Vec3::new(sample.source_position.x, height, -sample.source_position.y)
         };
-        let group_transform = Transform::from_matrix(
-            source_transform.to_matrix().inverse() * Mat4::from_translation(centre),
-        );
+        let group_transform =
+            Transform::from_matrix(source_transform.inverse() * Mat4::from_translation(centre));
         let group = commands
             .spawn((
                 WaterWakeEmission {
@@ -325,10 +321,13 @@ fn present_water_wake_samples<const HIGH: bool>(state: WaterWakePresentation) {
                 ChildOf(group),
             ));
             if let Some(uniforms) = wave_uniforms {
-                particle.insert(uniforms);
+                particle.insert((uniforms, bevy::camera::visibility::RenderLayers::layer(
+                    openzt2_zoo_state::terrain::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER,
+                )));
             }
         }
-        queued.push((sample.surface, sample.source_position, instance_count));
+        admitted.particle_count = admitted.particle_count.saturating_add(instance_count);
+        admitted.nearby_origins.push(sample.source_position);
     }
 }
 

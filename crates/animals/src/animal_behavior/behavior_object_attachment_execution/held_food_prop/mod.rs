@@ -2,7 +2,7 @@
 //! detach before the authored continuation returns to the enclosing task.
 
 use super::super::behavior_subject_type_resolution::{
-    AnimalBehaviorSubjectTypes, behavior_subject_type_identifiers,
+    behavior_subject_type_identifiers, AnimalBehaviorSubjectTypes,
 };
 use super::*;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
@@ -38,8 +38,6 @@ pub(super) fn register(app: &mut App) {
     app.add_systems(FixedUpdate, (
         discard_cancelled_food_prop_attachments,
         execute_food_prop_attachments,
-        resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-        admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
     )
         .chain()
         .after(super::super::behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome)
@@ -230,7 +228,6 @@ fn execute_food_prop_attachments(
                     &objects,
                     &transforms,
                     &mut commands,
-                    &mut admission::DetachMembershipRequests::Queued,
                 ) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
@@ -373,6 +370,7 @@ fn execute_food_prop_attachments(
                 world.root,
                 admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
                     actor,
+                    instruction: BehaviorAdmissionInstruction::new(actor, &task),
                     attachment,
                     visibility: Visibility::Inherited,
                     modifier,

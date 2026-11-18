@@ -5,14 +5,16 @@ use openzt2_game_data::world_definitions::behavior_selection_policy::BehaviorSel
 
 #[derive(Component, Default)]
 pub struct BehaviorTargetRetryDelays {
-    targets: Vec<RejectedBehaviorTarget>,
+    targets: std::collections::BTreeMap<Entity, RejectedBehaviorTarget>,
+    completed_updates: u64,
+    selection_update: u64,
+    selection_epoch: u64,
 }
 
 struct RejectedBehaviorTarget {
-    target: Entity,
     failures: u32,
-    remaining_updates: u32,
-    reject_for_current_update: bool,
+    ready_at_update: u64,
+    rejected_on_epoch: Option<u64>,
 }
 
 impl BehaviorTargetRetryDelays {
@@ -20,90 +22,86 @@ impl BehaviorTargetRetryDelays {
         Self {
             targets: targets
                 .into_iter()
-                .map(
-                    |(target, failures, remaining_updates)| RejectedBehaviorTarget {
+                .filter(|(_, failures, _)| *failures > 0)
+                .map(|(target, failures, remaining_updates)| {
+                    (
                         target,
-                        failures,
-                        remaining_updates,
-                        reject_for_current_update: remaining_updates > 0,
-                    },
-                )
+                        RejectedBehaviorTarget {
+                            failures,
+                            ready_at_update: u64::from(remaining_updates),
+                            rejected_on_epoch: None,
+                        },
+                    )
+                })
                 .collect(),
+            ..Self::default()
         }
     }
 
     pub fn snapshot_state(&self) -> impl Iterator<Item = (Entity, u32, u32)> + '_ {
-        self.targets
-            .iter()
-            .filter(|rejected| rejected.failures > 0)
-            .map(|rejected| {
+        self.targets.iter().filter_map(|(&target, rejected)| {
+            (rejected.failures > 0).then(|| {
+                let remaining = rejected
+                    .ready_at_update
+                    .saturating_sub(self.completed_updates);
                 (
-                    rejected.target,
+                    target,
                     rejected.failures,
-                    rejected.remaining_updates,
+                    u32::try_from(remaining).unwrap_or(u32::MAX),
                 )
             })
+        })
     }
 
     pub fn rejects(&self, target: Entity) -> bool {
-        self.targets
-            .iter()
-            .any(|rejected| rejected.target == target && rejected.reject_for_current_update)
+        self.targets.get(&target).is_some_and(|rejected| {
+            self.selection_update < rejected.ready_at_update
+                || rejected.rejected_on_epoch == Some(self.selection_epoch)
+        })
     }
 
-    /// Selection in one simulation update observes the same rejection window,
-    /// even when its behavior executor runs earlier than another actor's selector.
+    /// Selection uses the same update number on both sides of behavior execution.
     pub fn begin_candidate_selection_update(&mut self) {
-        self.targets.retain(|rejected| rejected.failures > 0);
-        for rejected in &mut self.targets {
-            rejected.reject_for_current_update = rejected.remaining_updates > 0;
-        }
+        self.selection_epoch += 1;
+        self.selection_update = self.completed_updates;
     }
 
-    /// One running or intentionally idle cognitive update, rather than elapsed time.
+    /// One eligible cognitive update, independent of elapsed simulation time.
     pub fn advance_cognitive_update(&mut self) {
-        for rejected in &mut self.targets {
-            rejected.remaining_updates = rejected.remaining_updates.saturating_sub(1);
-        }
+        self.completed_updates += 1;
     }
 
     pub fn record_failure(&mut self, target: Entity, policy: BehaviorSelectionPolicy) {
-        let index = self
+        let rejected = self
             .targets
-            .iter()
-            .position(|rejected| rejected.target == target);
-        let rejected = if let Some(index) = index {
-            &mut self.targets[index]
-        } else {
-            self.targets.push(RejectedBehaviorTarget {
-                target,
+            .entry(target)
+            .or_insert(RejectedBehaviorTarget {
                 failures: 0,
-                remaining_updates: 0,
-                reject_for_current_update: true,
+                ready_at_update: self.completed_updates,
+                rejected_on_epoch: None,
             });
-            self.targets.last_mut().expect("inserted target")
-        };
         rejected.failures = rejected.failures.saturating_add(1);
-        rejected.reject_for_current_update = true;
-        rejected.remaining_updates = rejected
+        rejected.rejected_on_epoch = Some(self.selection_epoch);
+        let delay = rejected
             .failures
             .saturating_mul(policy.rejected_target_retry_interval)
             .min(policy.rejected_target_retry_interval_cap);
+        rejected.ready_at_update = self.completed_updates.saturating_add(u64::from(delay));
     }
 
     pub fn clear_successful_target(&mut self, target: Entity) {
-        if let Some(rejected) = self
-            .targets
-            .iter_mut()
-            .find(|rejected| rejected.target == target)
-        {
+        let rejects = self.rejects(target);
+        if let Some(rejected) = self.targets.get_mut(&target) {
             rejected.failures = 0;
-            rejected.remaining_updates = 0;
+            rejected.ready_at_update = self.selection_update;
+            rejected.rejected_on_epoch = rejects.then_some(self.selection_epoch);
         }
     }
 
     pub fn remove_destroyed_targets(&mut self, entities: &Query<()>) {
-        self.targets
-            .retain(|rejected| entities.contains(rejected.target));
+        self.targets.retain(|target, rejected| {
+            (rejected.failures > 0 || rejected.rejected_on_epoch == Some(self.selection_epoch))
+                && entities.contains(*target)
+        });
     }
 }

@@ -1,6 +1,7 @@
 //! Applies prepared placed-object relocation edits in either history direction.
 
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::construction::construction_transaction_types::EditApplication;
@@ -25,6 +26,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
+    footprints: &ScenePlacementFootprints,
     placed: &mut Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -38,7 +40,10 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     let forward = matches!(
         application,
         EditApplication::InitialCommit | EditApplication::Redo
-    );
+    ) || (application == EditApplication::FailureRollback
+        && placed
+            .get(target)
+            .is_ok_and(|(_, _, transform, _)| Some(*transform) == edit.previous_transform));
     let (transform, cells) = if forward {
         (edit.transform, edit.cells.as_ref())
     } else {
@@ -79,11 +84,12 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     else {
         return false;
     };
-    let Some(origin) = calculate_object_placement_footprint_origin(definition, &transform, turns)
+    let geometry = footprints.resolve(definition, Some(&edit.prefab));
+    let Some(origin) = calculate_object_placement_footprint_origin(geometry, &transform, turns)
     else {
         return false;
     };
-    if !collect_occupied_placement_cells_for_transform(definition, &transform, &mut scratch.cells)
+    if !collect_occupied_placement_cells_for_transform(geometry, &transform, &mut scratch.cells)
         .is_some_and(|expected| expected == cells)
     {
         return false;

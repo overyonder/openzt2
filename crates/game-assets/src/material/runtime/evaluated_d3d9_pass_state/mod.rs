@@ -52,8 +52,9 @@ pub(super) struct EvaluatedD3d9PassState {
     pub(super) ambient_state_is_authored: bool,
     pub(super) cull: Option<Face>,
     pub(super) polygon: PolygonMode,
+    depth_enabled: bool,
     pub(super) depth_write: bool,
-    pub(super) depth_compare: CompareFunction,
+    depth_compare: CompareFunction,
     pub(super) blend_enabled: bool,
     pub(super) source_blend: u32,
     pub(super) destination_blend: u32,
@@ -105,6 +106,7 @@ impl Default for EvaluatedD3d9PassState {
             ambient_state_is_authored: false,
             cull: Some(Face::Back),
             polygon: PolygonMode::Fill,
+            depth_enabled: true,
             depth_write: true,
             // Bevy's perspective projection uses reversed Z, so D3D9's
             // default LESS_EQUAL comparison becomes GREATER_EQUAL.
@@ -268,6 +270,17 @@ impl EvaluatedD3d9PassState {
         self.samplers
             .iter()
             .try_for_each(EvaluatedD3d9SamplerState::validate)?;
+        if self.pixel_shader.is_some()
+            && self
+                .samplers
+                .iter()
+                .any(|sampler| sampler.lod_bias() != 0.0)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "D3D9 sampler LOD bias in a programmable pixel shader is unsupported",
+            ));
+        }
         if self.pixel_shader.is_none() {
             for stage in &self.stages {
                 for (kind, value) in [("color operation", stage[0]), ("alpha operation", stage[3])]
@@ -287,13 +300,7 @@ impl EvaluatedD3d9PassState {
     }
     fn render_state(&mut self, state: u32, value: u32) -> io::Result<()> {
         match state {
-            7 => {
-                self.depth_compare = if value == 0 {
-                    CompareFunction::Always
-                } else {
-                    self.depth_compare
-                }
-            }
+            7 => self.depth_enabled = value != 0,
             8 => {
                 self.polygon = match value {
                     2 => PolygonMode::Line,
@@ -331,6 +338,15 @@ impl EvaluatedD3d9PassState {
         }
         Ok(())
     }
+
+    pub(super) fn effective_depth_state(&self) -> (bool, CompareFunction) {
+        if self.depth_enabled {
+            (self.depth_write, self.depth_compare)
+        } else {
+            (false, CompareFunction::Always)
+        }
+    }
+
     pub(super) fn blend(&self) -> io::Result<Option<BlendState>> {
         self.blend_enabled
             .then(|| {

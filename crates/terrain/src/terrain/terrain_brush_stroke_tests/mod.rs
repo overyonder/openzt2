@@ -162,6 +162,11 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             origin: Vec2::ZERO,
             chunk_span_m: 16.0,
         });
+        app.insert_resource(
+            crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup(
+                [(TerrainChunkId(0), chunk)].into_iter().collect(),
+            ),
+        );
         app.world_mut().spawn(WorldRoot {
             scenario: default(),
         });

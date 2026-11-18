@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::system::Command, prelude::*};
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     behavior::behavior_asset_types::BehaviorDocumentAsset,
@@ -24,62 +24,154 @@ use openzt2_zoo_state::{
         PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
+    staff::staff_job_types::CurrentJob,
 };
 
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
-    BehaviorSelfToken, ClaimedBehaviorSelfToken,
+    BehaviorSelfToken, BehaviorTokenExpires, ClaimedBehaviorSelfToken,
 };
 
-pub(super) fn register_token_execution(application: &mut App) {
-    application.add_systems(
-        FixedUpdate,
-        (
-            discard_expired_and_consumed_tokens,
-            execute_current_self_token_deliveries,
-        )
-            .chain()
-            .before(super::autonomous_task_selection::select_idle_animal_tasks)
-            .in_set(FixedGameSet::Think)
-            .run_if(in_state(GamePhase::InGame)),
-    );
+#[derive(Component)]
+struct EndedBehaviorTokenClaim;
+
+fn release_claimed_token_when_task_is_discarded(
+    discarded: On<Discard<BehaviorTaskExecutionState>>,
+    tasks: Query<&BehaviorTaskExecutionState>,
+    claims: Query<(&ClaimedBehaviorSelfToken, &ChildOf)>,
+    mut commands: Commands,
+) {
+    let Ok(task) = tasks.get(discarded.entity) else {
+        return;
+    };
+    let Some(token) = task.object else {
+        return;
+    };
+    if claims.get(token).is_ok_and(|(claim, owner)| {
+        owner.parent() == discarded.entity && claim.execution_id == task.execution_id
+    }) {
+        commands.entity(token).try_insert(EndedBehaviorTokenClaim);
+    }
 }
 
 fn discard_expired_and_consumed_tokens(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    tokens: Query<(
-        Entity,
-        &BehaviorSelfToken,
-        &ChildOf,
-        Option<&ClaimedBehaviorSelfToken>,
-    )>,
-    recipients: Query<Option<&BehaviorTaskExecutionState>, Without<Dead>>,
+    tokens: Query<&BehaviorSelfToken>,
+    expiring: Query<
+        (Entity, &BehaviorSelfToken),
+        (
+            With<BehaviorTokenExpires>,
+            Without<ClaimedBehaviorSelfToken>,
+        ),
+    >,
+    released: Query<
+        (
+            Entity,
+            &BehaviorSelfToken,
+            &ClaimedBehaviorSelfToken,
+            &ChildOf,
+        ),
+        With<EndedBehaviorTokenClaim>,
+    >,
+    dead_recipients: Query<&Children, Added<Dead>>,
+    tasks: Query<&BehaviorTaskExecutionState>,
     mut failures: MessageReader<BehaviorTaskFailed>,
 ) {
-    let failed = failures
-        .read()
-        .map(|failure| (failure.actor, failure.execution_id))
-        .collect::<Vec<_>>();
-    for (entity, token, recipient, claim) in &tokens {
-        let Ok(task) = recipients.get(recipient.parent()) else {
-            commands.entity(entity).despawn();
-            continue;
-        };
-        // A selected token remains the task's object until that execution ends.
-        // Completion consumes it; failure does too unless it retains on failure.
+    let failures = failures.read().copied().collect::<Vec<_>>();
+    for (entity, token, claim, recipient) in &released {
         if token.retain_on_failure
-            && claim.is_some_and(|claim| failed.contains(&(recipient.parent(), claim.execution_id)))
+            && failures.iter().any(|failure| {
+                failure.actor == recipient.parent() && failure.execution_id == claim.execution_id
+            })
         {
-            commands.entity(entity).remove::<ClaimedBehaviorSelfToken>();
-            continue;
-        }
-        let expired_or_consumed = claim.map_or(clock.tick >= token.expires_at, |claim| {
-            task.is_none_or(|task| task.execution_id != claim.execution_id)
-        });
-        if expired_or_consumed {
-            commands.entity(entity).despawn();
+            commands
+                .entity(entity)
+                .try_remove::<(ClaimedBehaviorSelfToken, EndedBehaviorTokenClaim)>();
+        } else if tasks
+            .get(recipient.parent())
+            .is_ok_and(|task| task.execution_id == claim.execution_id)
+        {
+            commands
+                .entity(entity)
+                .try_remove::<EndedBehaviorTokenClaim>();
+        } else {
+            commands.entity(entity).try_despawn();
         }
     }
+    for (entity, token) in &expiring {
+        if clock.tick >= token.expires_at {
+            commands.entity(entity).try_despawn();
+        }
+    }
+    for children in &dead_recipients {
+        for token in children
+            .into_iter()
+            .copied()
+            .filter(|&entity| tokens.contains(entity))
+        {
+            commands.entity(token).try_despawn();
+        }
+    }
+}
+
+struct DeliverBehaviorSelfToken {
+    actor: Entity,
+    recipient: Entity,
+    only_one: bool,
+    reconsider: bool,
+    tick: u64,
+    token: BehaviorSelfToken,
+}
+
+impl Command for DeliverBehaviorSelfToken {
+    type Out = ();
+
+    fn apply(self, world: &mut World) {
+        let Ok(recipient) = world.get_entity(self.recipient) else {
+            return;
+        };
+        if recipient.contains::<Dead>() {
+            return;
+        }
+        if self.only_one
+            && recipient
+                .get::<Children>()
+                .into_iter()
+                .flatten()
+                .any(|&entity| {
+                    world.get::<BehaviorSelfToken>(entity).is_some_and(|held| {
+                        held.name == self.token.name && self.tick < held.expires_at
+                    })
+                })
+        {
+            return;
+        }
+        // A sender continues its task. Staff finish their claimed jobs first.
+        if self.reconsider
+            && self.actor != self.recipient
+            && !recipient.contains::<CurrentJob>()
+            && recipient.contains::<BehaviorTaskExecutionState>()
+        {
+            abandon_behavior_task_for_reconsideration(self.recipient, &mut world.commands());
+        }
+        world.spawn((self.token, ChildOf(self.recipient)));
+    }
+}
+
+pub(super) fn register_token_execution(application: &mut App) {
+    application
+        .add_observer(release_claimed_token_when_task_is_discarded)
+        .add_systems(
+            FixedUpdate,
+            (
+                discard_expired_and_consumed_tokens,
+                execute_current_self_token_deliveries,
+            )
+                .chain()
+                .before(super::autonomous_task_selection::select_idle_animal_tasks)
+                .in_set(FixedGameSet::Think)
+                .run_if(in_state(GamePhase::InGame)),
+        );
 }
 
 fn execute_current_self_token_deliveries(
@@ -97,15 +189,13 @@ fn execute_current_self_token_deliveries(
         ),
         (Without<Dead>, Without<PendingBehaviorTaskFailure>),
     >,
-    recipients: Query<Has<BehaviorTaskExecutionState>, Without<Dead>>,
+    recipients: Query<(), Without<Dead>>,
     animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    held_tokens: Query<(&BehaviorSelfToken, &ChildOf)>,
     staff: Query<
         (Entity, &GlobalTransform),
         With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
     >,
-    staff_on_job: Query<(), With<openzt2_zoo_state::staff::staff_job_types::CurrentJob>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -225,37 +315,20 @@ fn execute_current_self_token_deliveries(
                 }
             };
             for recipient in delivered_to {
-                if delivery.only_one
-                    && held_tokens.iter().any(|(held, holder)| {
-                        holder.parent() == recipient
-                            && held.name == delivery.token
-                            && clock.tick < held.expires_at
-                    })
-                {
-                    continue;
-                }
-                // Reconsideration drops the recipient's current task before it
-                // chooses again with the delivered token. A sender's own task
-                // is kept: it chooses again when the task ends, after its
-                // completion. Staff on a claimed job finish it first; the
-                // job's task would otherwise end while the job stays claimed.
-                if delivery.reconsider
-                    && recipient != actor
-                    && !staff_on_job.contains(recipient)
-                    && recipients.get(recipient).is_ok_and(|busy| busy)
-                {
-                    abandon_behavior_task_for_reconsideration(recipient, &mut commands);
-                }
-                commands.spawn((
-                    BehaviorSelfToken {
+                commands.queue(DeliverBehaviorSelfToken {
+                    actor,
+                    recipient,
+                    only_one: delivery.only_one,
+                    reconsider: delivery.reconsider,
+                    tick: clock.tick,
+                    token: BehaviorSelfToken {
                         name: delivery.token,
                         available_at: at_tick(delivery.delay),
                         expires_at: delivery.lifetime.map_or(u64::MAX, at_tick),
                         payload,
                         retain_on_failure: delivery.retain_on_failure,
                     },
-                    ChildOf(recipient),
-                ));
+                });
             }
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);

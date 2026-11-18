@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::query::QueryData, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
@@ -24,9 +24,37 @@ pub struct WorldChoice {
     pub mode: WorldSessionMode,
 }
 
-/// The map choice represented by this UI entity.
+/// The choice shown in a reusable world-selection row.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = WorldChoiceRows)]
 pub struct WorldChoiceView(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = WorldChoiceView)]
+pub struct WorldChoiceRows(Vec<Entity>);
+
+/// A globe anchor expires with the choice it represents.
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = WorldChoiceMarkers)]
+pub struct WorldChoiceMarkerView(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = WorldChoiceMarkerView, linked_spawn)]
+pub struct WorldChoiceMarkers(Vec<Entity>);
+
+#[derive(QueryData)]
+pub struct WorldChoiceBinding {
+    pub views: AnyOf<(&'static WorldChoiceView, &'static WorldChoiceMarkerView)>,
+}
+
+impl WorldChoiceBindingItem<'_, '_> {
+    pub fn choice(&self) -> Option<Entity> {
+        self.views
+            .0
+            .map(|view| view.0)
+            .or_else(|| self.views.1.map(|view| view.0))
+    }
+}
 
 /// Authored world-scenario catalogue globe coordinate retained by one choice.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

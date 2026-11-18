@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -90,8 +90,22 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
             reject_authored_object_placement_terrain_flattening(&mut rejected, request.transaction);
             continue;
         };
+        let mut candidate_chunks = EntityHashSet::default();
+        for position in &flattened_world_sample_positions {
+            let coord = ((*position - terrain_index.origin) / terrain_index.chunk_span_m)
+                .floor()
+                .as_ivec2();
+            // A sample on a chunk border is represented by each adjoining chunk.
+            for z in -1..=1 {
+                for x in -1..=1 {
+                    if let Some(&entity) = terrain_index.chunks.get(&(coord + IVec2::new(x, z))) {
+                        candidate_chunks.insert(entity);
+                    }
+                }
+            }
+        }
         let mut deltas = chunks
-            .iter()
+            .iter_many(candidate_chunks)
             .filter_map(|(chunk, edited, persistent)| {
                 prepare_authored_object_placement_terrain_flattening_delta(
                     persistent,

@@ -73,6 +73,28 @@ pub fn project_document(
     image_selection_index: Option<usize>,
     decorate_owner: bool,
 ) -> Entity {
+    project_document_on_entity(
+        commands,
+        request,
+        document,
+        localization,
+        image_selection_index,
+        decorate_owner,
+        None,
+    )
+}
+
+pub(super) fn project_document_on_entity(
+    commands: &mut Commands,
+    request: &ShowUiDocument,
+    document: &UiDocumentAsset,
+    localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
+        '_,
+    >,
+    image_selection_index: Option<usize>,
+    decorate_owner: bool,
+    existing_root: Option<Entity>,
+) -> Entity {
     let data = document.canonical_ui_document();
     // A source file/directory skin chooses one alternative when the screen is
     // constructed and keeps that choice for the lifetime of the projected
@@ -90,10 +112,13 @@ pub fn project_document(
     let top_level = !matches!(&data.role, UiDocumentRole::Fragment);
 
     for (index, record) in data.nodes.iter().enumerate() {
-        let entity = commands.spawn_empty().id();
-        if index == 0 {
+        let entity = if index == 0 {
+            let entity = existing_root.unwrap_or_else(|| commands.spawn_empty().id());
             root = Some(entity);
-        }
+            entity
+        } else {
+            commands.spawn_empty().id()
+        };
         let document_root = root.expect("validated UI preorder starts at its root");
         entities.push(entity);
 
@@ -303,42 +328,53 @@ pub fn project_document(
                 UiFocusScope::default(),
                 UiPreviousFocus::default(),
             ));
+            if existing_root.is_none() {
+                commands.entity(entity).insert((
+                    super::ui_document_opening::UiDocumentOpeningEffects::default(),
+                    openzt2_world_state::simulation_time::simulation_control_types::UiDocumentPauseTransfer(false),
+                ));
+            }
             // The owner remains the lifecycle parent, but it must also
             // participate in Bevy UI's hierarchy. Bevy only lays out a Node
             // without a Node ancestor as a UI root; a marker-only parent would
             // otherwise exclude this entire document from layout.
             let owner = request.owner;
-            commands.queue(move |world: &mut World| {
-                let Ok(mut owner) = world.get_entity_mut(owner) else {
-                    return;
-                };
-                if decorate_owner {
-                    owner.insert((
-                        Node {
-                            width: percent(100.0),
-                            height: percent(100.0),
-                            justify_content: if top_level {
-                                JustifyContent::Center
-                            } else {
-                                JustifyContent::Start
+            if existing_root.is_none() || decorate_owner {
+                commands.queue(move |world: &mut World| {
+                    let Ok(mut owner) = world.get_entity_mut(owner) else {
+                        world.despawn(entity);
+                        return;
+                    };
+                    if decorate_owner {
+                        owner.insert((
+                            Node {
+                                width: percent(100.0),
+                                height: percent(100.0),
+                                justify_content: if top_level {
+                                    JustifyContent::Center
+                                } else {
+                                    JustifyContent::Start
+                                },
+                                align_items: if top_level {
+                                    AlignItems::Center
+                                } else {
+                                    AlignItems::Start
+                                },
+                                ..default()
                             },
-                            align_items: if top_level {
-                                AlignItems::Center
-                            } else {
-                                AlignItems::Start
-                            },
-                            ..default()
-                        },
-                        Visibility::Inherited,
-                        // Lifecycle owners participate in layout only. Without an
-                        // explicit ignore marker, Bevy UI picking treats this
-                        // full-window node as the top hit and never reaches the
-                        // authored controls below it.
-                        Pickable::IGNORE,
-                    ));
-                }
-                owner.add_child(entity);
-            });
+                            Visibility::Inherited,
+                            // Lifecycle owners participate in layout only. Without an
+                            // explicit ignore marker, Bevy UI picking treats this
+                            // full-window node as the top hit and never reaches the
+                            // authored controls below it.
+                            Pickable::IGNORE,
+                        ));
+                    }
+                    if existing_root.is_none() {
+                        owner.add_child(entity);
+                    }
+                });
+            }
             let logical_size = data.logical_size.map(|value| value);
             if top_level {
                 commands.entity(entity).insert((
@@ -531,7 +567,15 @@ pub fn project_document(
         });
         project_authored_hotkey_action_proxies(commands, root, document);
     }
-    root.expect("validated UI document has a root")
+    let root = root.expect("validated UI document has a root");
+    let targets = crate::authored_ui_target_lookup::ProjectedUiTargets::from_authored_node_entities(
+        data.nodes
+            .iter()
+            .zip(entities)
+            .map(|(record, entity)| (record.id, entity)),
+    );
+    commands.entity(root).insert(targets);
+    root
 }
 
 /// The inherited edit_back branch contains layout and static skin pieces.

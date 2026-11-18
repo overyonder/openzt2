@@ -29,6 +29,7 @@ use super::{
 
 struct SelectedBlueFangBfbRenderPart<'a> {
     node_index: usize,
+    lod_index: Option<u32>,
     name: &'a str,
     mesh_block: &'a BlueFangBfbMeshBlock,
     section: &'a BlueFangBfbMeshSection,
@@ -51,12 +52,11 @@ impl<'a> SelectedBlueFangBfbRenderPart<'a> {
     }
 }
 
-pub(in crate::model_source) fn lower_blue_fang_render_parts_for_lod(
+pub(in crate::model_source) fn lower_blue_fang_render_parts(
     document: &BlueFangBfbDocument,
-    lod: u32,
     mut resolve_material: impl FnMut(NativeMaterialReference<'_>) -> Option<AssetId>,
 ) -> Result<Vec<ModelSource>, NativeGeometryLoweringError> {
-    select_blue_fang_render_parts_for_lod(document, lod)
+    collect_blue_fang_render_parts(document)
         .into_iter()
         // Retain empty mesh slots in the scene hierarchy without emitting geometry.
         .filter(|part| !(part.vertices().is_empty() && part.indices().is_empty()))
@@ -64,14 +64,12 @@ pub(in crate::model_source) fn lower_blue_fang_render_parts_for_lod(
         .collect()
 }
 
-fn select_blue_fang_render_parts_for_lod(
+fn collect_blue_fang_render_parts(
     document: &BlueFangBfbDocument,
-    lod_index: u32,
 ) -> Vec<SelectedBlueFangBfbRenderPart<'_>> {
-    document
+    let mut parts = document
         .hierarchy()
         .enumerate()
-        .filter(|(_, node)| node.lod_index.is_none_or(|index| index == lod_index))
         .filter_map(|(node_index, node)| {
             let (mesh_block_id, material_names) = match &node.kind {
                 BlueFangBfbNodeKind::MeshLink {
@@ -100,6 +98,7 @@ fn select_blue_fang_render_parts_for_lod(
                     .map(move |(section_index, (section, material_name))| {
                         SelectedBlueFangBfbRenderPart {
                             node_index,
+                            lod_index: node.lod_index,
                             name: node.name.as_str(),
                             mesh_block,
                             mesh_data,
@@ -111,7 +110,10 @@ fn select_blue_fang_render_parts_for_lod(
             )
         })
         .flatten()
-        .collect()
+        .collect::<Vec<_>>();
+    // Keep the original default glTF scene while making other tiers addressable.
+    parts.sort_by_key(|part| part.lod_index.is_some_and(|lod| lod != 0));
+    parts
 }
 
 fn adapt_bfb_part(

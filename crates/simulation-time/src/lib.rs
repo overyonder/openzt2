@@ -53,10 +53,9 @@ impl Plugin for SimulationTimePlugin {
                     .in_set(openzt2_interface_state::ui::UiSet::Routing),
             )
             .add_systems(
-                Update,
-                simulation_control_application::reconcile_authored_ui_temporary_pause_holds
-                    .after(openzt2_interface_state::ui::UiSet::Notifications)
-                    .in_set(GameSet::Ui)
+                PostUpdate,
+                simulation_control_application::project_active_simulation_pause_claims
+                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
                     .run_if(resource_exists::<SimulationControl>),
             )
             .add_systems(
@@ -65,7 +64,6 @@ impl Plugin for SimulationTimePlugin {
                     zoo_date_ui_presentation::project_authoritative_zoo_calendar_into_authored_zoo_date_text
                         .run_if(resource_exists::<ZooCalendar>),
                     simulation_control_ui_presentation::project_simulation_pause_state_into_authored_paused_node_visibility
-                        .after(simulation_control_application::reconcile_authored_ui_temporary_pause_holds)
                         .run_if(resource_exists::<SimulationControl>),
                 )
                     .in_set(GameSet::Ui)

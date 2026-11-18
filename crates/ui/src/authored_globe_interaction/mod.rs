@@ -1,7 +1,8 @@
+use super::authored_globe_model_bounds::UiGlobeModelBounds;
 use super::authored_globe_presentation_types::GlobeSelectedMarker;
 use super::authored_globe_presentation_types::GlobeSelectionTurn;
 use super::authored_globe_presentation_types::UiGlobeCamera;
-use super::authored_globe_presentation_types::UiGlobeRenderScene;
+use super::authored_globe_presentation_types::{UiGlobeRenderScene, UiGlobeSceneOwner};
 use super::authored_globe_rotation_geometry::constrained_globe_angles;
 use super::authored_globe_rotation_geometry::globe_alignment_angles;
 use super::authored_globe_rotation_geometry::globe_pitch_after_pointer_drag;
@@ -11,102 +12,129 @@ use crate::authored_globe_presentation_types::UiGlobeDrag;
 use crate::authored_globe_presentation_types::UiGlobeMarkerAnchor;
 use crate::authored_globe_presentation_types::UiGlobeMarkerVisual;
 use crate::authored_globe_presentation_types::UiGlobePresentation;
-use bevy::gltf::Gltf;
-use bevy::prelude::*;
-use bevy::ui::UiGlobalTransform;
-use bevy::window::PrimaryWindow;
+use bevy::{
+    ecs::entity::EntityHashMap,
+    picking::{
+        events::{PointerCancel, PointerDrag, PointerPress, PointerRelease},
+        hover::PointerCaptureMap,
+        pointer::{PointerButton, PointerId, PointerPressState},
+    },
+    prelude::*,
+};
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActiveInputDevice;
 use openzt2_interface_state::input::input_types::GameAction;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
 pub(crate) fn interact_with_globe(
     active_input: Res<ActiveInputDevice>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
-    mut globes: Query<
-        (&ComputedNode, &UiGlobalTransform, &mut UiGlobeDrag),
-        With<UiGlobePresentation>,
-    >,
-    cameras: Query<(&Camera, &GlobalTransform), With<UiGlobeCamera>>,
-    models: Res<Assets<Gltf>>,
-    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
-    meshes: Res<Assets<Mesh>>,
+    mut presses: MessageReader<PointerPress>,
+    mut releases: MessageReader<PointerRelease>,
+    mut cancellations: MessageReader<PointerCancel>,
+    pointer_buttons: Query<(&PointerId, &PointerPressState)>,
+    mut capture: ResMut<PointerCaptureMap>,
+    mut globes: Query<(&UiGlobeRenderScene, &mut UiGlobeDrag)>,
+    cameras: Query<(&UiGlobeSceneOwner, &Camera, &GlobalTransform), With<UiGlobeCamera>>,
     marker_geometry: Query<(
-        &WorldChoiceView,
+        Entity,
         &UiGlobeMarkerVisual,
-        &PrefabModel,
+        &UiGlobeModelBounds,
         &GlobalTransform,
         &InheritedVisibility,
     )>,
-    anchors: Query<(Entity, &WorldChoiceView, &GlobalTransform), With<UiGlobeMarkerAnchor>>,
+    anchors: Query<(&GlobalTransform, &ChildOf), With<UiGlobeMarkerAnchor>>,
+    parents: Query<&ChildOf>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    modal: Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    if primary_pointer.just_released {
-        for (_, _, mut drag) in &mut globes {
-            drag.active = false;
+    let still_pressed = pointer_buttons
+        .iter()
+        .any(|(id, state)| id.is_mouse() && state.is_primary_pressed());
+    let released = releases
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
+        .count()
+        != 0;
+    let cancelled = cancellations
+        .read()
+        .filter(|event| event.pointer.id.is_mouse())
+        .count()
+        != 0;
+    let enabled = |globe| {
+        context.visible_and_enabled(globe)
+            && modal
+                .0
+                .is_none_or(|modal| context.is_in_modal(globe, modal))
+    };
+    if let Some((captured, _)) = capture.get(&PointerId::Mouse) {
+        if globes.contains(captured) && !enabled(captured) {
+            capture.release(PointerId::Mouse);
+            if let Ok((_, mut drag)) = globes.get_mut(captured) {
+                drag.active = false;
+            }
         }
     }
-    if !primary_pointer.just_pressed {
-        return;
+    if released || cancelled || !still_pressed {
+        for (_, mut drag) in &mut globes {
+            if drag.active {
+                drag.active = false;
+            }
+        }
     }
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let Some(pointer) = window.cursor_position() else {
-        return;
-    };
-    let physical_pointer = pointer * window.resolution.scale_factor();
-    let Some((_, _, mut drag)) = globes
-        .iter_mut()
-        .find(|(node, transform, _)| node.contains_point(**transform, physical_pointer))
-    else {
-        return;
-    };
-    let Some((ray, camera_position)) = cameras.iter().find_map(|(camera, transform)| {
-        camera
-            .viewport_to_world(transform, pointer)
-            .ok()
-            .map(|ray| (ray, transform.translation()))
-    }) else {
-        return;
-    };
-    let picked = marker_geometry
-        .iter()
-        .filter(|(_, visual, _, _, visible)| !visual.selected && visible.get())
-        .filter_map(|(view, _, prefab, transform, _)| {
-            let (anchor_entity, _, anchor) =
-                anchors.iter().find(|(_, choice, _)| choice.0 == view.0)?;
-            // The anchor's +Z axis is the globe's outward surface normal.
-            let outward = anchor.affine().transform_vector3(Vec3::Z);
-            if outward.dot(camera_position - anchor.translation()) <= 0.0 {
+    for event in presses
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
+    {
+        let globe = event.entity;
+        let Ok((scene, mut drag)) = globes.get_mut(globe) else {
+            continue;
+        };
+        if !enabled(globe) {
+            continue;
+        }
+        let Some((ray, camera_position)) = cameras.iter().find_map(|(owner, camera, transform)| {
+            if owner.0 != globe || !camera.is_active {
                 return None;
             }
-            let model = models.get(prefab.handle.as_ref()?)?;
-            openzt2_game_assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
-                model,
-                &gltf_meshes,
-                &meshes,
-            )
-            .into_iter()
-            .filter_map(|(minimum, maximum)| ray_box_distance(&ray, transform, minimum, maximum))
-            .min_by(f32::total_cmp)
-            .map(|distance| (distance, anchor_entity))
-        })
-        .min_by(|(left, _), (right, _)| left.total_cmp(right))
-        .map(|(_, anchor)| anchor);
-    drag.active = picked.is_none();
-    if let Some(node) = picked {
-        activated.write(UiNodeActivated {
-            source: active_input.source,
-            node,
-            trigger: UiTrigger::Press,
-        });
+            camera
+                .viewport_to_world(transform, event.pointer.position)
+                .ok()
+                .map(|ray| (ray, transform.translation()))
+        }) else {
+            continue;
+        };
+        let picked = marker_geometry
+            .iter()
+            .filter(|(_, visual, _, _, visible)| !visual.selected && visible.get())
+            .filter_map(|(geometry, _, bounds, transform, _)| {
+                let (anchor_entity, (anchor, world)) = parents
+                    .iter_ancestors::<ChildOf>(geometry)
+                    .find_map(|entity| anchors.get(entity).ok().map(|anchor| (entity, anchor)))?;
+                let outward = anchor.affine().transform_vector3(Vec3::Z);
+                if world.parent() != scene.world
+                    || outward.dot(camera_position - anchor.translation()) <= 0.0
+                {
+                    return None;
+                }
+                ray_box_distance(&ray, transform, bounds.minimum, bounds.maximum)
+                    .map(|distance| (distance, anchor_entity))
+            })
+            .min_by(|(left, _), (right, _)| left.total_cmp(right))
+            .map(|(_, anchor)| anchor);
+        drag.active = picked.is_none() && still_pressed && !cancelled;
+        if let Some(node) = picked {
+            activated.write(UiNodeActivated {
+                source: active_input.source,
+                node,
+                trigger: UiTrigger::Press,
+            });
+        } else if drag.active {
+            capture.capture(event.pointer.id, globe, event.hit.clone());
+        }
     }
 }
 
@@ -224,22 +252,35 @@ pub(crate) fn turn_globe_to_selection(
 
 pub(crate) fn rotate_globe(
     mut commands: Commands,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    mut drags: MessageReader<PointerDrag>,
     mut actions: MessageReader<ActionRequest>,
-    globes: Query<(&UiGlobeDrag, &UiGlobePresentation, &UiGlobeRenderScene)>,
+    globes: Query<(
+        Entity,
+        &UiGlobeDrag,
+        &UiGlobePresentation,
+        &UiGlobeRenderScene,
+    )>,
     mut transforms: Query<&mut Transform>,
 ) {
-    for (drag, presentation, scene) in &globes {
-        let pointer_delta = (drag.active && primary_pointer.pressed)
-            .then_some(primary_pointer.delta * presentation.mouse_increment);
-        let action_delta = actions.read().fold(0.0, |delta, request| {
-            delta
-                + match request.action {
-                    GameAction::RotateLeft | GameAction::NavigateLeft => -1.0,
-                    GameAction::RotateRight | GameAction::NavigateRight => 1.0,
-                    _ => 0.0,
-                }
-        });
+    let mut pointer_motion = EntityHashMap::<Vec2>::default();
+    for drag in drags.read() {
+        if drag.pointer.id.is_mouse() && drag.button == PointerButton::Primary {
+            *pointer_motion.entry(drag.entity).or_default() += drag.delta;
+        }
+    }
+    let action_delta = actions.read().fold(0.0, |delta, request| {
+        delta
+            + match request.action {
+                GameAction::RotateLeft | GameAction::NavigateLeft => -1.0,
+                GameAction::RotateRight | GameAction::NavigateRight => 1.0,
+                _ => 0.0,
+            }
+    });
+    for (entity, drag, presentation, scene) in &globes {
+        let pointer_delta = pointer_motion
+            .get(&entity)
+            .filter(|_| drag.active)
+            .map(|delta| *delta * presentation.mouse_increment);
         if pointer_delta.is_none() && action_delta == 0.0 {
             continue;
         }

@@ -22,14 +22,18 @@ use openzt2_zoo_state::topology::topology_graph_types::EdgeKey;
 use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
+use super::terrain_change_tracking_types::TerrainSurfaceBasePending;
 use crate::terrain::terrain_surface_image_composition::blend_ground_path_surface_patch_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::blend_terrain_surface_paint_into_terrain_surface_image;
-use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
+use crate::terrain::terrain_surface_image_composition::{
+    compose_terrain_surface_image, recompose_terrain_surface_image_region,
+};
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurfaceImage;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 
 #[derive(Message)]
 pub(super) struct DiscardedTerrainPaintArea(Rect);
@@ -160,6 +164,7 @@ pub(super) struct GroundPathSurfaceChunk {
     chunk: &'static TerrainChunk,
     edited: Option<&'static EditedTerrainSamples>,
     surface: &'static TerrainSurfaceImage,
+    base: Option<&'static TerrainSurfaceBasePending>,
 }
 
 /// Rebuilds a terrain chunk's base image and applies the
@@ -175,7 +180,9 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     paths: Query<(Entity, &PathTile)>,
     paints: Query<&TerrainPaintedTexture>,
     chunks: Query<GroundPathSurfaceChunk, With<TerrainRenderChunk>>,
-    changed_chunks: Query<Entity, (With<TerrainSurfaceImage>, Changed<TerrainRenderChunk>)>,
+    terrain_index: Res<TerrainIndex>,
+    added_chunks: Query<Entity, (With<TerrainSurfaceImage>, Added<TerrainRenderChunk>)>,
+    base_pending_chunks: Query<Entity, With<TerrainSurfaceBasePending>>,
     pending_chunks: Query<
         Entity,
         (
@@ -186,11 +193,11 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     surface_images: Res<Assets<GroundPathSurfaceImage>>,
     server: Res<AssetServer>,
 ) {
-    if changed_chunks.is_empty() && pending_chunks.is_empty() {
+    if added_chunks.is_empty() && pending_chunks.is_empty() && base_pending_chunks.is_empty() {
         return;
     }
     let mut retain_changed_chunks = || {
-        for entity in &changed_chunks {
+        for entity in &added_chunks {
             if !pending_chunks.contains(entity) {
                 commands
                     .entity(entity)
@@ -358,12 +365,25 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
         (-overlay.cell.y, overlay.cell.x, entity.to_bits())
     });
 
-    for entity in pending_chunks.iter().chain(
-        changed_chunks
+    for entity in
+        pending_chunks
             .iter()
-            .filter(|entity| !pending_chunks.contains(*entity)),
-    ) {
-        let Ok(GroundPathSurfaceChunkItem { chunk, surface, .. }) = chunks.get(entity) else {
+            .chain(
+                added_chunks
+                    .iter()
+                    .filter(|entity| !pending_chunks.contains(*entity)),
+            )
+            .chain(base_pending_chunks.iter().filter(|entity| {
+                !added_chunks.contains(*entity) && !pending_chunks.contains(*entity)
+            }))
+    {
+        let Ok(GroundPathSurfaceChunkItem {
+            chunk,
+            surface,
+            base,
+            ..
+        }) = chunks.get(entity)
+        else {
             continue;
         };
         let dirty = pending_chunks.contains(entity);
@@ -419,19 +439,32 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             retain_chunk();
             continue;
         };
-        if relevant_overlays.is_empty() && relevant_paints.is_empty() && !dirty {
+        if relevant_overlays.is_empty() && relevant_paints.is_empty() && base.is_none() && !dirty {
             continue;
         }
-        let mut composed = if dirty {
-            let edited_chunks = chunks
-                .iter()
-                .filter(|candidate| {
-                    candidate.chunk.asset == chunk.asset
-                        && (candidate.chunk.coord - chunk.coord)
-                            .abs()
-                            .cmple(IVec2::ONE)
-                            .all()
+        let Some(previous) = images.get(&surface.0) else {
+            retain_chunk();
+            continue;
+        };
+        let full = IRect::from_corners(
+            IVec2::ZERO,
+            IVec2::new(
+                previous.texture_descriptor.size.width as i32,
+                previous.texture_descriptor.size.height as i32,
+            ),
+        );
+        let (mut composed, clip) = if dirty || base.is_some() {
+            let indexed_neighbours = &terrain_index.chunks;
+            let neighbours = (-1..=1).flat_map(|z| {
+                (-1..=1).filter_map(move |x| {
+                    indexed_neighbours
+                        .get(&(chunk.coord + IVec2::new(x, z)))
+                        .copied()
                 })
+            });
+            let edited_chunks = chunks
+                .iter_many(neighbours)
+                .filter(|candidate| candidate.chunk.asset == chunk.asset)
                 .filter_map(|candidate| {
                     candidate.edited.map(|edited| {
                         (
@@ -442,18 +475,26 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
                     })
                 })
                 .collect::<Vec<_>>();
-            let Some(composed) =
+            let next = if let Some(base) = base.filter(|_| !dirty) {
+                recompose_terrain_surface_image_region(
+                    chunk,
+                    asset,
+                    &edited_chunks,
+                    &images,
+                    previous,
+                    base.0.min,
+                    base.0.max,
+                )
+            } else {
                 compose_terrain_surface_image(chunk, asset, &edited_chunks, &images)
-            else {
+                    .map(|image| (image, full))
+            };
+            let Some(next) = next else {
                 continue;
             };
-            composed
+            next
         } else {
-            let Some(composed) = images.get(&surface.0).cloned() else {
-                retain_chunk();
-                continue;
-            };
-            composed
+            (previous.clone(), full)
         };
         for overlay in relevant_overlays {
             let Some((path_texture, detail_mask)) =
@@ -463,6 +504,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             };
             if blend_ground_path_surface_patch_into_terrain_surface_image(
                 &mut composed,
+                clip,
                 chunk,
                 asset,
                 grid.cell_translation(overlay.cell).xz(),
@@ -482,6 +524,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
         for (paint, texture) in relevant_paints {
             if blend_terrain_surface_paint_into_terrain_surface_image(
                 &mut composed,
+                clip,
                 chunk,
                 margin_cells,
                 paint,
@@ -498,6 +541,11 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
             continue;
         };
         *image = composed;
+        if base.is_some() {
+            commands
+                .entity(entity)
+                .remove::<TerrainSurfaceBasePending>();
+        }
         if dirty {
             commands
                 .entity(entity)

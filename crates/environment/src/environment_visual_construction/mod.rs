@@ -76,6 +76,19 @@ pub(super) fn hydrate_environment_visual_sample_renderer_entities(
                 Visibility::Inherited,
                 *member,
             ));
+            if sample
+                .flags
+                .contains_all(EnvironmentVisualFlags::INTERPOLATE_VERTEX_COLORS)
+                && !definition.visual_samples[..sample_index]
+                    .iter()
+                    .any(|earlier| {
+                        earlier.layer == sample.layer
+                            && earlier.order == sample.order
+                            && earlier.kind == sample.kind
+                    })
+            {
+                child_commands.insert(super::sky_vertex_color_interpolation::SkyVertexColorGroup);
+            }
             if matches!(&sample.kind, EnvironmentVisualKind::Skirt) {
                 child_commands.insert(RenderLayers::layer(TERRAIN_RENDER_LAYER));
             } else {

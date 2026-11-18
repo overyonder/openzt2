@@ -7,10 +7,10 @@
 //! is put down on the terrain as it stands. Definitions that need a path, wall
 //! or headroom are rejected rather than placed without that policy.
 
-use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use crate::placement::ground_path_placement_stomp::{GroundPathPlacementAction, GroundPathPlacementStomp};
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
@@ -88,7 +88,8 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
     terrain_index: Res<'w, TerrainIndex>,
     terrain_assets: Res<'w, Assets<TerrainAsset>>,
     terrain_chunks: Query<'w, 's, (&'static TerrainChunk, Option<&'static EditedTerrainSamples>)>,
-    ground_paths: GroundPathTilesUnderObjectPlacement<'w, 's>,
+    ground_paths: GroundPathPlacementStomp<'w, 's>,
+    footprints: Res<'w, ScenePlacementFootprints>,
     recipients: Query<
         'w,
         's,
@@ -147,10 +148,7 @@ pub(super) fn apply_behavior_target_placements(
     };
     let mut created = HashMap::new();
     for (actor, task, actor_world, mut pending) in &mut actors {
-        if !pending.owns(task, actor_world)
-            || !pending.is_current(task)
-            || pending.definition_revision != definitions.catalogue_revision()
-        {
+        if !pending.owns(task, actor_world) || !pending.is_current(task) {
             continue;
         }
         let next = match &pending.stage {
@@ -177,13 +175,18 @@ pub(super) fn apply_behavior_target_placements(
             }
             BehaviorTargetPlacementStage::PuttingDown {
                 site,
-                marker,
                 payment: BehaviorTargetPlacementPaymentState::Unrequested,
             } => {
-                let charge = authored_build_charge(catalogue, pending.definition).filter(|_| {
-                    site_is_still_valid(&pending, site, catalogue, &world, &creation, &created)
-                });
+                let charge = authored_build_charge(catalogue, pending.definition);
                 if let Some(amount) = charge.filter(|amount| amount.is_positive()) {
+                    if !site.uses_current_prefab(catalogue, pending.definition)
+                        || !site_is_still_valid(
+                            &pending, site, catalogue, &world, &creation, &created,
+                        )
+                    {
+                        pending.stage = BehaviorTargetPlacementStage::Rejected;
+                        continue;
+                    }
                     let operation = commands
                         .spawn(BehaviorTargetPlacementPayment { actor })
                         .id();
@@ -197,7 +200,6 @@ pub(super) fn apply_behavior_target_placements(
                     });
                     BehaviorTargetPlacementStage::PuttingDown {
                         site: site.clone(),
-                        marker: *marker,
                         payment: BehaviorTargetPlacementPaymentState::Requested(operation),
                     }
                 } else if charge.is_some() {
@@ -286,6 +288,15 @@ pub(super) fn settle_behavior_target_placement_payments(
         let BehaviorTargetPlacementStage::PuttingDown { site, .. } = &pending.stage else {
             continue;
         };
+        if authored_build_charge(catalogue, pending.definition) != Some(payment.amount) {
+            request_behavior_target_placement_refund(
+                &mut commands,
+                &mut creation.payments,
+                payment.amount,
+            );
+            pending.stage = BehaviorTargetPlacementStage::Rejected;
+            continue;
+        }
         let site = site.clone();
         pending.stage = create_or_refund(
             &mut commands,
@@ -373,7 +384,10 @@ fn choose_behavior_target_placement_site(
     }
     // Automatic footprints are hydrated from the loaded prefab's bounds; a
     // prefab without bounds can never supply one.
-    if definition.automatic_footprint && definition.footprint.is_empty() {
+    if definition.automatic_footprint
+        && !world.footprints.has_scene_bounds(&handle)
+        && definition.footprint.is_empty()
+    {
         return if prefab
             .canonical_scene_prefab_document()
             .automatic_placement_bounds_xz
@@ -491,12 +505,11 @@ fn site_is_still_valid(
     else {
         return false;
     };
-    let paths_block = world
-        .ground_paths
-        .object_placement_cell_collides_with_ground_path(definition, catalogue);
+    let paths = world.ground_paths.overlaps(definition, catalogue);
+    let geometry = world.footprints.resolve(definition, Some(&site.prefab));
     let validity = validate_object_placement_footprint_cells(
-        definition,
-        select_authored_footprint_for_eighth_turns(definition, turns),
+        geometry,
+        geometry.cells(turns),
         &site.transform,
         |position| {
             if locate_habitat_at_world_position(&world.habitats, position, *world.grid)
@@ -515,7 +528,9 @@ fn site_is_still_valid(
             .filter(|_| world.surfaces.on_land(position) == Some(true))
         },
         |cell| {
-            paths_block(cell)
+            paths
+                .actions_at(cell)
+                .any(|action| !matches!(action, GroundPathPlacementAction::Allow))
                 || object_placement_cell_is_blocked_by_existing_object(
                     &creation.placement,
                     cell,
@@ -588,12 +603,15 @@ fn create_behavior_target_placement_object(
     creation: &mut BehaviorTargetPlacementCreation,
     created: &mut HashMap<Entity, AssetId>,
 ) -> Option<Entity> {
-    if !site_is_still_valid(pending, site, catalogue, world, creation, created) {
+    if !site.uses_current_prefab(catalogue, pending.definition)
+        || !site_is_still_valid(pending, site, catalogue, world, creation, created)
+    {
         return None;
     }
     let definition = resolve_object_placeable_definition(catalogue, pending.definition)?;
+    let geometry = world.footprints.resolve(definition, Some(&site.prefab));
     let cells = collect_occupied_placement_cells_for_transform(
-        definition,
+        geometry,
         &site.transform,
         &mut creation.scratch.cells,
     )?
@@ -620,6 +638,7 @@ fn create_behavior_target_placement_object(
         Some(root),
         &mut creation.placement,
         &mut creation.scratch,
+        &world.footprints,
         &world.prefabs,
         &world.models,
         &creation.placed,

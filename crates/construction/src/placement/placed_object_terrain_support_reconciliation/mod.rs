@@ -2,6 +2,8 @@
 
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
+use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -18,10 +20,9 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
+use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::object_placement_validation::rotate_object_placement_cell_by_quarter_turns;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
-use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placed_object_types::PhysicsMovedPlacedObjectFootprint;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
@@ -38,6 +39,7 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut placed: Query<
         (
@@ -46,6 +48,7 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
             &PlacedObjectFootprintOccupancy,
             &mut Transform,
             Option<&HabitatMember>,
+            Option<&PrefabSourceAssetHandle>,
         ),
         Without<PhysicsMovedPlacedObjectFootprint>,
     >,
@@ -58,14 +61,15 @@ pub(super) fn reconcile_static_placed_object_support_after_terrain_changes(
         let Ok((changed_chunk, _)) = chunks.get(change.chunk) else {
             continue;
         };
-        for (entity, placeable, occupancy, mut transform, habitat) in &mut placed {
+        for (entity, placeable, occupancy, mut transform, habitat, prefab) in &mut placed {
             let Some(definition) =
                 resolve_object_placeable_definition(catalogue, placeable.definition)
             else {
                 continue;
             };
-            let authored_footprint =
-                select_authored_footprint_for_eighth_turns(definition, occupancy.eighth_turns);
+            let authored_footprint = footprints
+                .resolve(definition, prefab.map(|source| &source.0))
+                .cells(occupancy.eighth_turns);
             let occupied_cells = authored_footprint.iter().filter_map(|cell| {
                 cell.flags
                     .contains_all(FootprintCellFlags::OCCUPIED)

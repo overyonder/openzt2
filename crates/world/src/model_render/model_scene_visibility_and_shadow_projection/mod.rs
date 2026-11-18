@@ -1,134 +1,154 @@
-use bevy::camera::visibility::RenderLayers;
-use bevy::light::NotShadowCaster;
-use bevy::light::NotShadowReceiver;
+use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
+use bevy::camera::visibility::{RenderLayers, VisibilitySystems};
+use bevy::light::{NotShadowCaster, NotShadowReceiver};
 use bevy::prelude::*;
-use bevy::world_serialization::WorldInstanceReady;
-use openzt2_world_state::model_render::ModelExpanded;
-
-use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
+use openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticScenePass;
+
+use super::authored_model_material_pass_projection::project_authored_model_material_passes;
 
 #[cfg(test)]
 mod tests;
 
-#[derive(Component)]
-pub(super) struct ModelSceneVisibilityAndShadowPolicyProjected;
-
-pub(super) fn invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready(
-    ready: On<WorldInstanceReady>,
-    mut commands: Commands,
-    models: Query<(), With<PrefabModel>>,
-) {
-    if models.contains(ready.event_target()) {
-        // A rebuilt instance replaces the meshes beneath the surviving model.
-        commands
-            .entity(ready.event_target())
-            .remove::<ModelSceneVisibilityAndShadowPolicyProjected>();
-    }
+#[derive(Component, Clone, PartialEq)]
+struct ModelDrawShadowPolicy {
+    layers: RenderLayers,
+    casts: bool,
+    receives: bool,
 }
 
-pub(super) fn project_model_scene_visibility_and_shadow_policy(
-    mut commands: Commands,
-    roots: Query<
-        (Entity, &PrefabShadowPolicy, Option<&RenderLayers>),
-        (
-            With<ModelExpanded>,
-            Without<ModelSceneVisibilityAndShadowPolicyProjected>,
-        ),
-    >,
-    children: Query<&Children>,
-    meshes: Query<(), With<Mesh3d>>,
-) {
-    for (root, shadow, layers) in &roots {
-        if std::iter::once(root)
-            .chain(children.iter_descendants_depth_first::<Children>(root))
-            .all(|entity| !meshes.contains(entity))
-        {
-            continue;
-        }
-        let layers = model_scene_render_layers(shadow, layers);
-        for entity in std::iter::once(root)
-            .chain(children.iter_descendants_depth_first::<Children>(root))
-            .filter(|entity| meshes.contains(*entity))
-        {
-            apply_model_scene_policy(&mut commands, entity, &layers, shadow);
-        }
-        commands
-            .entity(root)
-            .insert(ModelSceneVisibilityAndShadowPolicyProjected);
-    }
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProjectedModelDrawShadowPolicy {
+    layers: bool,
+    casting: bool,
+    receiving: bool,
 }
 
-/// Scene instances can add or reparent primitives after their root was
-/// projected (for example when a catalogue preview replaces one sharing the
-/// same model). Give those primitives their root's layers and shadow policy,
-/// or a preview camera on its own layer never sees them.
-pub(super) fn project_model_scene_visibility_and_shadow_policy_onto_late_primitives(
-    mut commands: Commands,
-    // Per-view material projections (reflection, refraction) sit beneath
-    // their source mesh but own their camera-specific layers.
-    primitives: Query<
+pub(super) fn register_inherited_model_draw_shadow_policy(app: &mut App) {
+    app.add_plugins(HierarchyPropagatePlugin::<ModelDrawShadowPolicy>::new(
+        PostUpdate,
+    ))
+    .add_systems(
+        PostUpdate,
         (
-            Entity,
-            Option<&RenderLayers>,
-            Has<NotShadowCaster>,
-            Has<NotShadowReceiver>,
+            publish_model_draw_shadow_policy_sources
+                .before(PropagateSet::<ModelDrawShadowPolicy>::default()),
+            project_inherited_model_draw_shadow_policy
+                .after(PropagateSet::<ModelDrawShadowPolicy>::default())
+                .before(project_authored_model_material_passes)
+                .before(VisibilitySystems::CheckVisibility),
         ),
-        (With<Mesh3d>, Or<(Added<Mesh3d>, Changed<ChildOf>)>),
+    );
+}
+
+fn publish_model_draw_shadow_policy_sources(
+    mut commands: Commands,
+    changed: Query<
+        Entity,
+        (
+            With<PrefabShadowPolicy>,
+            Or<(Changed<PrefabShadowPolicy>, Changed<RenderLayers>)>,
+        ),
     >,
-    parents: Query<&ChildOf>,
-    roots: Query<
-        (&PrefabShadowPolicy, Option<&RenderLayers>),
-        With<ModelSceneVisibilityAndShadowPolicyProjected>,
-    >,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut removed_policies: RemovedComponents<PrefabShadowPolicy>,
+    mut sources: Query<(
+        &PrefabShadowPolicy,
+        Option<&RenderLayers>,
+        Option<&mut Propagate<ModelDrawShadowPolicy>>,
+    )>,
 ) {
-    for (primitive, current_layers, not_caster, not_receiver) in &primitives {
-        let Some((shadow, layers)) = std::iter::once(primitive)
-            .chain(parents.iter_ancestors::<ChildOf>(primitive))
-            .find_map(|entity| roots.get(entity).ok())
-        else {
+    for entity in changed.iter().chain(removed_layers.read()) {
+        let Ok((shadow, layers, previous)) = sources.get_mut(entity) else {
             continue;
         };
-        let layers = model_scene_render_layers(shadow, layers);
-        let mut target = commands.entity(primitive);
-        // Re-inserting equal layers would invalidate projected materials.
-        if current_layers != Some(&layers) {
-            target.insert(layers);
-        }
-        if !shadow.casts && !not_caster {
-            target.insert(NotShadowCaster);
-        }
-        if !shadow.receives && !not_receiver {
-            target.insert(NotShadowReceiver);
-        }
-    }
-}
-
-fn model_scene_render_layers(
-    shadow: &PrefabShadowPolicy,
-    root_layers: Option<&RenderLayers>,
-) -> RenderLayers {
-    root_layers.cloned().unwrap_or_else(|| {
-        if shadow.visible_in_reflections {
-            RenderLayers::from_layers(&[0, 1])
+        let policy = Propagate(ModelDrawShadowPolicy {
+            layers: layers.cloned().unwrap_or_else(|| {
+                if shadow.visible_in_reflections {
+                    RenderLayers::from_layers(&[0, 1])
+                } else {
+                    RenderLayers::layer(0)
+                }
+            }),
+            casts: shadow.casts,
+            receives: shadow.receives,
+        });
+        if let Some(mut previous) = previous {
+            previous.set_if_neq(policy);
         } else {
-            RenderLayers::layer(0)
+            commands.entity(entity).insert(policy);
         }
-    })
+    }
+    for entity in removed_policies.read() {
+        if !sources.contains(entity) {
+            if let Ok(mut target) = commands.get_entity(entity) {
+                target.remove::<Propagate<ModelDrawShadowPolicy>>();
+            }
+        }
+    }
 }
 
-fn apply_model_scene_policy(
-    commands: &mut Commands,
-    primitive: Entity,
-    layers: &RenderLayers,
-    shadow: &PrefabShadowPolicy,
+fn project_inherited_model_draw_shadow_policy(
+    mut commands: Commands,
+    changed: Query<
+        Entity,
+        (
+            With<Mesh3d>,
+            Or<(Changed<ModelDrawShadowPolicy>, Added<Mesh3d>)>,
+        ),
+    >,
+    mut removed: RemovedComponents<ModelDrawShadowPolicy>,
+    mut draws: Query<
+        (
+            Option<&ModelDrawShadowPolicy>,
+            Option<&mut RenderLayers>,
+            Has<NotShadowCaster>,
+            Has<NotShadowReceiver>,
+            Option<&mut ProjectedModelDrawShadowPolicy>,
+        ),
+        (With<Mesh3d>, Without<TerrainWaterCausticScenePass>),
+    >,
 ) {
-    let mut target = commands.entity(primitive);
-    target.insert(layers.clone());
-    if !shadow.casts {
-        target.insert(NotShadowCaster);
-    }
-    if !shadow.receives {
-        target.insert(NotShadowReceiver);
+    for entity in changed.iter().chain(removed.read()) {
+        let Ok((policy, layers, no_casting, no_receiving, previous)) = draws.get_mut(entity) else {
+            continue;
+        };
+        let mut projected = previous.as_deref().copied().unwrap_or_default();
+        let mut target = commands.entity(entity);
+        if let Some(policy) = policy {
+            if let Some(mut layers) = layers {
+                if projected.layers {
+                    layers.set_if_neq(policy.layers.clone());
+                }
+            } else {
+                target.insert(policy.layers.clone());
+                projected.layers = true;
+            }
+        } else if projected.layers {
+            target.remove::<RenderLayers>();
+            projected.layers = false;
+        }
+
+        let blocks_casting = policy.is_some_and(|policy| !policy.casts);
+        let blocks_receiving = policy.is_some_and(|policy| !policy.receives);
+        if blocks_casting && !no_casting {
+            target.insert(NotShadowCaster);
+            projected.casting = true;
+        } else if !blocks_casting && projected.casting {
+            target.remove::<NotShadowCaster>();
+            projected.casting = false;
+        }
+        if blocks_receiving && !no_receiving {
+            target.insert(NotShadowReceiver);
+            projected.receiving = true;
+        } else if !blocks_receiving && projected.receiving {
+            target.remove::<NotShadowReceiver>();
+            projected.receiving = false;
+        }
+        if let Some(mut previous) = previous {
+            previous.set_if_neq(projected);
+        } else if projected != ProjectedModelDrawShadowPolicy::default() {
+            target.insert(projected);
+        }
     }
 }

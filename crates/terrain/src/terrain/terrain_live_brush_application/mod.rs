@@ -5,6 +5,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::CancelConst
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionPreview;
 
 use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_delta_from_brush_dabs;
+use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_edit_application::apply_validated_terrain_edit_delta_and_publish_changed_region;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::TerrainBrushDab;
@@ -19,6 +20,9 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 
+#[derive(Component, Default)]
+pub(super) struct TerrainBrushDraft(pub(super) TerrainEdit);
+
 /// Applies each held pointer dab to the terrain immediately while
 /// retaining the ordered before/after deltas as one draft undo transaction.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -26,6 +30,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
     mut commands: Commands,
     mut strokes: MessageReader<TerrainStroke>,
     index: Res<TerrainIndex>,
+    chunk_ids: Res<TerrainChunkIdLookup>,
     assets: Res<Assets<TerrainAsset>>,
     water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
     water_membership: Query<
@@ -37,14 +42,14 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         Option<&mut EditedTerrainSamples>,
         &TerrainChunkId,
     )>,
-    mut previews: Query<Option<&mut TerrainEdit>, Or<(With<ActiveTerrainBrush>, With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit>)>>,
+    mut previews: Query<&mut TerrainBrushDraft, Or<(With<ActiveTerrainBrush>, With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit>)>>,
     mut changed: MessageWriter<TerrainChanged>,
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
     mut missing_membership: Local<Option<(Entity, usize)>>,
 ) {
     for stroke in strokes.read() {
-        let Ok(draft_edit) = previews.get_mut(stroke.preview) else {
+        let Ok(mut draft_edit) = previews.get_mut(stroke.preview) else {
             continue;
         };
         let preview = TerrainBrushPreview {
@@ -190,9 +195,7 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
             ).is_none() { continue; }
         }
         for delta in &applied_deltas {
-            let Some(entity) = chunks.iter().find_map(|(entity, _, _, persistent)| {
-                (*persistent == delta.chunk).then_some(entity)
-            }) else {
+            let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
                 continue;
             };
             apply_validated_terrain_edit_delta_and_publish_changed_region(
@@ -215,15 +218,23 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
                 .collect(),
         );
-        if let Some(mut draft_edit) = draft_edit {
-            draft_edit.deltas.extend(applied_deltas);
-            draft_edit.water_regions.extend(owner_changes);
-        } else {
-            commands.entity(stroke.preview).insert(TerrainEdit {
-                deltas: applied_deltas,
-                water_regions: owner_changes,
-            });
+        let owners: bevy::ecs::entity::EntityHashSet =
+            owner_changes.iter().map(|change| change.owner).collect();
+        for owner in owners {
+            if !draft_edit
+                .0
+                .water_regions
+                .iter()
+                .any(|change| change.owner == owner)
+            {
+                commands.spawn((
+                    super::water_regions::edit_retention::WaterRegionRetainedByEdit(owner),
+                    ChildOf(stroke.preview),
+                ));
+            }
         }
+        draft_edit.0.deltas.extend(applied_deltas);
+        draft_edit.0.water_regions.extend(owner_changes);
     }
 }
 
@@ -233,7 +244,8 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
 pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     mut commands: Commands,
     mut cancellations: MessageReader<CancelConstruction>,
-    previews: Query<(Entity, &TerrainEdit), With<ConstructionPreview>>,
+    mut previews: Query<(Entity, &mut TerrainBrushDraft), With<ConstructionPreview>>,
+    chunk_ids: Res<TerrainChunkIdLookup>,
     assets: Res<Assets<TerrainAsset>>,
     mut chunks: Query<(
         Entity,
@@ -248,7 +260,8 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     if cancellations.read().next().is_none() {
         return;
     }
-    for (preview_entity, edit) in &previews {
+    for (preview_entity, mut draft) in &mut previews {
+        let edit = std::mem::take(&mut draft.0);
         crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
             &mut commands,
             edit.water_regions
@@ -258,9 +271,7 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
                 .collect(),
         );
         for delta in edit.deltas.iter().rev() {
-            let Some(chunk_entity) = chunks.iter_mut().find_map(|(entity, _, _, persistent)| {
-                (*persistent == delta.chunk).then_some(entity)
-            }) else {
+            let Some(&chunk_entity) = chunk_ids.0.get(&delta.chunk) else {
                 continue;
             };
             apply_validated_terrain_edit_delta_and_publish_changed_region(
@@ -276,6 +287,5 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
                 &mut water_changed,
             );
         }
-        commands.entity(preview_entity).remove::<TerrainEdit>();
     }
 }

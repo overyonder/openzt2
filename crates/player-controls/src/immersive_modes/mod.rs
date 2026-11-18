@@ -30,7 +30,6 @@ mod photo_mode_control_execution;
 mod photo_mode_entry_execution;
 mod show_edit_mode_control_execution;
 mod show_edit_mode_entry_execution;
-mod simulation_pause_policy_execution;
 mod super_staff_avatar_start_position_search;
 mod super_staff_mode_entry;
 mod tranquilizer_control_execution;
@@ -59,6 +58,9 @@ impl Plugin for ImmersiveModesPlugin {
             .add_message::<ImmersiveModeRejected>()
             .add_message::<ImmersiveModeEntered>()
             .add_message::<ImmersiveModeExited>()
+            .add_observer(guest_view_navigation_marker_projection::drop_navigation_markers_when_guest_view_ends)
+            .add_observer(interaction_cursor_presentation::remove_immersive_cursor_on_policy_removal)
+            .add_observer(interaction_prefab_presentation::remove_immersive_prefab_on_policy_removal)
             .add_systems(
                 Update,
                 (
@@ -112,7 +114,6 @@ impl Plugin for ImmersiveModesPlugin {
                         .run_if(active_view_mode),
                     guest_view_navigation_marker_projection::project_nearest_guest_navigation_positions_as_view_markers
                         .run_if(active_mode_is(ImmersiveMode::GuestView)),
-                    guest_view_navigation_marker_projection::retire_navigation_marker_presentations_without_guest_view_controllers,
                 )
                     .chain()
                     .in_set(GameSet::Presentation),
@@ -120,13 +121,10 @@ impl Plugin for ImmersiveModesPlugin {
             .add_systems(
                 Update,
                 (
-                    simulation_pause_policy_execution::pause_simulation_while_requested_immersive_mode_is_active_and_restore_previous_state,
                     hud_visibility_policy_execution::hide_ingame_hud_while_requested_immersive_mode_is_active_and_restore_visibility,
-                    interaction_cursor_presentation::create_cursor_visual_for_changed_immersive_mode_cursor_policy,
+                    interaction_cursor_presentation::project_changed_immersive_mode_cursor_images,
                     interaction_cursor_presentation::move_immersive_mode_cursor_visual_to_current_pointer_position,
                     interaction_prefab_presentation::create_world_prefab_visual_when_immersive_mode_prefab_is_ready,
-                    interaction_cursor_presentation::retire_cursor_visuals_without_immersive_mode_cursor_owner,
-                    interaction_prefab_presentation::retire_prefab_visuals_without_immersive_mode_prefab_owner,
                 )
                     .chain()
                     .in_set(GameSet::Presentation)
@@ -137,8 +135,6 @@ impl Plugin for ImmersiveModesPlugin {
                 (
                     active_immersive_mode_lifecycle::remove_active_immersive_mode_state_when_leaving_gameplay,
                     hud_visibility_policy_execution::restore_ingame_hud_visibility_when_leaving_gameplay,
-                    interaction_cursor_presentation::retire_all_immersive_mode_cursor_visuals_when_leaving_gameplay,
-                    interaction_prefab_presentation::retire_all_immersive_mode_prefab_visuals_when_leaving_gameplay,
                 )
                     .chain(),
             );

@@ -15,7 +15,7 @@ use crate::camera::camera_execution_types::CameraEasing;
 use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
 
-fn camera_tuning_for_calculation_tests() -> CameraTuning {
+pub(super) fn camera_tuning_for_calculation_tests() -> CameraTuning {
     CameraTuning {
         distance: 8.0..=80.0,
         maximum_distance_by_detail: [40.0, 60.0, 80.0],

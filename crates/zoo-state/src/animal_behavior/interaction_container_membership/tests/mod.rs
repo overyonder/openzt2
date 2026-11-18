@@ -2,47 +2,52 @@ use super::*;
 use bevy::ecs::system::RunSystemOnce;
 
 use super::requests::{
-    InteractionContainerAdmission, InteractionContainerAdmissionOutcome,
-    InteractionContainerAdmissionRecipient, InteractionContainerAdmissionRequest,
-    InteractionContainerRequest, register_interaction_container_requests,
-    resolve_interaction_container_requests,
+    InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
+    ReleaseInteractionContainerMember,
 };
 
+#[derive(Message)]
+struct RecordedAdmission(InteractionContainerAdmissionOutcome);
+
+fn queue_admission(commands: &mut Commands, admission: InteractionContainerAdmissionRequest) {
+    commands.queue(move |world: &mut World| {
+        let outcome = admission.commit(world);
+        world.write_message(RecordedAdmission(outcome));
+    });
+}
+
 fn request_admission(
-    requests: &mut MessageWriter<InteractionContainerRequest>,
+    requests: &mut Commands,
     container: Entity,
     member: Entity,
     slots: Vec<(usize, u8)>,
 ) {
-    requests.write(InteractionContainerRequest::Admit {
-        admission: InteractionContainerAdmissionRequest::Admit {
+    queue_admission(
+        requests,
+        InteractionContainerAdmissionRequest::Admit {
             container,
             member,
             slots,
             despawn_on_refusal: false,
             queue_service_slots: Vec::new(),
         },
-        reply_to: InteractionContainerAdmissionRecipient::Docking(member),
-    });
+    );
 }
 
 fn resolve_admissions(world: &mut World) -> Vec<Option<usize>> {
-    world.run_schedule(FixedUpdate);
     world
-        .run_system_once(
-            |mut results: MessageReader<InteractionContainerAdmission>| {
-                results
-                    .read()
-                    .map(|result| match result.outcome {
-                        InteractionContainerAdmissionOutcome::Granted { slot, .. } => Some(slot),
-                        InteractionContainerAdmissionOutcome::Refused => None,
-                        InteractionContainerAdmissionOutcome::IdentityUnavailable => {
-                            panic!("read an identity error for an existing member")
-                        }
-                    })
-                    .collect::<Vec<_>>()
-            },
-        )
+        .run_system_once(|mut results: MessageReader<RecordedAdmission>| {
+            results
+                .read()
+                .map(|result| match result.0 {
+                    InteractionContainerAdmissionOutcome::Granted { slot, .. } => Some(slot),
+                    InteractionContainerAdmissionOutcome::Refused => None,
+                    InteractionContainerAdmissionOutcome::IdentityUnavailable => {
+                        panic!("read an identity error for an existing member")
+                    }
+                })
+                .collect::<Vec<_>>()
+        })
         .unwrap()
 }
 
@@ -69,8 +74,7 @@ fn slot(
 #[test]
 fn service_selection_preserves_membership_and_excludes_queue_full_and_other_tags() {
     let mut app = App::new();
-    register_interaction_container_requests(&mut app);
-    app.add_systems(FixedUpdate, resolve_interaction_container_requests);
+    app.add_message::<RecordedAdmission>();
     let world = app.world_mut();
     let target = world.spawn_empty().id();
     let actor = world.spawn_empty().id();
@@ -92,8 +96,7 @@ fn service_selection_preserves_membership_and_excludes_queue_full_and_other_tags
     let initial_slots = slots.clone();
     world
         .run_system_once(
-            move |mut requests: MessageWriter<InteractionContainerRequest>,
-                  memberships: InteractionContainerMemberships| {
+            move |mut requests: Commands, memberships: InteractionContainerMemberships| {
                 let candidates = memberships.service_slot_candidates(
                     target,
                     actor,
@@ -107,7 +110,7 @@ fn service_selection_preserves_membership_and_excludes_queue_full_and_other_tags
                     .is_empty());
                 request_admission(&mut requests, target, other, vec![(1, 1)]);
                 request_admission(&mut requests, target, actor, candidates);
-                requests.write(InteractionContainerRequest::Release {
+                requests.queue(ReleaseInteractionContainerMember {
                     member: other,
                     despawn: false,
                 });
@@ -123,21 +126,18 @@ fn service_selection_preserves_membership_and_excludes_queue_full_and_other_tags
             );
         })
         .unwrap();
-    assert_eq!(
-        world.get::<InteractionContainerMember>(actor),
-        Some(&InteractionContainerMember {
-            container: target,
-            slot: 2
+    world
+        .run_system_once(move |memberships: InteractionContainerMemberships| {
+            assert_eq!(memberships.container_for_member(actor), Some((target, 2)));
         })
-    );
+        .unwrap();
     assert!(world.get::<InteractionContainerMember>(other).is_none());
 }
 
 #[test]
 fn only_queue_front_can_use_free_capacity_in_its_own_container() {
     let mut app = App::new();
-    register_interaction_container_requests(&mut app);
-    app.add_systems(FixedUpdate, resolve_interaction_container_requests);
+    app.add_message::<RecordedAdmission>();
     let world = app.world_mut();
     let target = world.spawn_empty().id();
     let first = world.spawn_empty().id();
@@ -151,24 +151,22 @@ fn only_queue_front_can_use_free_capacity_in_its_own_container() {
         slot(2, AssetId::from_key("drinks"), false, 1),
     ];
     world
-        .run_system_once(
-            move |mut requests: MessageWriter<InteractionContainerRequest>| {
-                for member in [first, second, third] {
-                    request_admission(&mut requests, target, member, vec![(0, 5)]);
-                }
-                request_admission(&mut requests, target, serving, vec![(1, 1)]);
-                request_admission(&mut requests, target, first, vec![(1, 1)]);
-                requests.write(InteractionContainerRequest::Release {
-                    member: serving,
-                    despawn: false,
-                });
-                request_admission(&mut requests, target, first, vec![(1, 1)]);
-                requests.write(InteractionContainerRequest::Release {
-                    member: first,
-                    despawn: false,
-                });
-            },
-        )
+        .run_system_once(move |mut requests: Commands| {
+            for member in [first, second, third] {
+                request_admission(&mut requests, target, member, vec![(0, 5)]);
+            }
+            request_admission(&mut requests, target, serving, vec![(1, 1)]);
+            request_admission(&mut requests, target, first, vec![(1, 1)]);
+            requests.queue(ReleaseInteractionContainerMember {
+                member: serving,
+                despawn: false,
+            });
+            request_admission(&mut requests, target, first, vec![(1, 1)]);
+            requests.queue(ReleaseInteractionContainerMember {
+                member: first,
+                despawn: false,
+            });
+        })
         .unwrap();
     assert_eq!(
         resolve_admissions(world),
@@ -180,75 +178,74 @@ fn only_queue_front_can_use_free_capacity_in_its_own_container() {
             assert!(!memberships.queue_front_can_enter_service(target, third, 0, &slots));
         })
         .unwrap();
-    assert!(world
-        .get::<InteractionContainerMembers>(target)
-        .unwrap()
-        .iter()
-        .eq([second, third]));
+    world
+        .run_system_once(move |memberships: InteractionContainerMemberships| {
+            assert!(memberships.members_of_container(target).eq([second, third]));
+        })
+        .unwrap();
 }
 
 #[test]
 fn a_waiter_sees_capacity_at_its_admission() {
     let mut app = App::new();
-    register_interaction_container_requests(&mut app);
-    app.add_systems(
-        FixedUpdate,
-        (
-            resolve_interaction_container_requests,
-            resolve_interaction_container_requests,
-        )
-            .chain(),
-    );
+    app.add_message::<RecordedAdmission>();
     let world = app.world_mut();
     let container = world.spawn_empty().id();
     let waiter = world.spawn_empty().id();
-    let serving = world
-        .spawn(InteractionContainerMember { container, slot: 1 })
-        .id();
-    world.write_message(InteractionContainerRequest::Admit {
-        admission: InteractionContainerAdmissionRequest::Admit {
+    let serving = world.spawn_empty().id();
+    assert!(matches!(
+        InteractionContainerAdmissionRequest::Admit {
+            container,
+            member: serving,
+            slots: vec![(1, 1)],
+            despawn_on_refusal: false,
+            queue_service_slots: vec![],
+        }
+        .commit(world),
+        InteractionContainerAdmissionOutcome::Granted { .. }
+    ));
+    queue_admission(
+        &mut world.commands(),
+        InteractionContainerAdmissionRequest::Admit {
             container,
             member: waiter,
             slots: vec![(0, 2)],
             despawn_on_refusal: false,
             queue_service_slots: vec![(1, 1)],
         },
-        reply_to: InteractionContainerAdmissionRecipient::QueueWait(waiter),
-    });
-    world.write_message(InteractionContainerRequest::Release {
+    );
+    world.commands().queue(ReleaseInteractionContainerMember {
         member: serving,
         despawn: false,
     });
-    world.write_message(InteractionContainerRequest::Admit {
-        admission: InteractionContainerAdmissionRequest::Admit {
+    queue_admission(
+        &mut world.commands(),
+        InteractionContainerAdmissionRequest::Admit {
             container,
             member: waiter,
             slots: vec![(0, 2)],
             despawn_on_refusal: false,
             queue_service_slots: vec![(1, 1)],
         },
-        reply_to: InteractionContainerAdmissionRecipient::QueueWait(waiter),
-    });
+    );
 
-    world.run_schedule(FixedUpdate);
+    world.flush();
     world
-        .run_system_once(
-            |mut results: MessageReader<InteractionContainerAdmission>| {
-                let available: Vec<_> = results
-                    .read()
-                    .map(|result| {
-                        let InteractionContainerAdmissionOutcome::Granted {
-                            queue_service_available,
-                            ..
-                        } = result.outcome
-                        else {
-                            panic!("the queue request was refused");
-                        };
-                        queue_service_available
-                    })
-                    .collect::<Vec<_>>();
-                assert_eq!(available, [false, true]);
-            },
-        )
+        .run_system_once(|mut results: MessageReader<RecordedAdmission>| {
+            let available: Vec<_> = results
+                .read()
+                .map(|result| {
+                    let InteractionContainerAdmissionOutcome::Granted {
+                        queue_service_available,
+                        ..
+                    } = result.0
+                    else {
+                        panic!("the queue request was refused");
+                    };
+                    queue_service_available
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(available, [false, true]);
+        })
         .unwrap();
 }

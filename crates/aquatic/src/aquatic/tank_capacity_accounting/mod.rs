@@ -1,67 +1,110 @@
-use bevy::platform::collections::HashMap;
-use bevy::prelude::*;
-
-use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
-
-use super::aquatic_simulation_types::{
-    AquaticAnimal, AquaticHome, Tank, TankCapacity, TankPopulation,
+use bevy::{
+    ecs::{
+        entity::EntityHashSet, entity_disabling::Disabled, query::Allow,
+        relationship::RelationshipTarget,
+    },
+    prelude::*,
 };
 
-pub(super) fn update_aquatic_homes_from_changed_containment(
-    mut containment_changes: MessageReader<ContainmentChanged>,
-    mut aquatic_animals: Query<Option<&mut AquaticHome>, (With<AquaticAnimal>, With<Animal>)>,
-    tanks: Query<(), With<Tank>>,
-    mut commands: Commands,
+use openzt2_zoo_state::{
+    animal_health::types::Dead,
+    animal_lifecycle::types::Animal,
+    habitat::habitat_types::{Containment, HabitatMember, HabitatMembers},
+};
+
+use super::aquatic_simulation_types::{AquaticAnimal, Tank, TankCapacity, TankPopulation};
+
+#[derive(Message)]
+pub(super) struct TankResidentRequirementsDiscarded(Entity);
+
+pub(super) fn invalidate_discarded_tank_resident_requirements(
+    discarded: On<Discard<(AquaticAnimal, Animal)>>,
+    members: Query<&HabitatMember>,
+    mut affected: MessageWriter<TankResidentRequirementsDiscarded>,
 ) {
-    for containment_change in containment_changes.read() {
-        let Ok(current_home) = aquatic_animals.get_mut(containment_change.affected_entity) else {
-            continue;
-        };
-        let requested_tank = containment_change
-            .is_contained
-            .then_some(containment_change.habitat_entity)
-            .flatten()
-            .filter(|tank| tanks.contains(*tank));
-        match (requested_tank, current_home) {
-            (Some(tank), Some(mut home)) => home.0 = tank,
-            (Some(tank), None) => {
-                commands
-                    .entity(containment_change.affected_entity)
-                    .insert(AquaticHome(tank));
-            }
-            (None, Some(_)) => {
-                commands
-                    .entity(containment_change.affected_entity)
-                    .remove::<AquaticHome>();
-            }
-            (None, None) => {}
-        }
+    if let Ok(member) = members.get(discarded.entity) {
+        affected.write(TankResidentRequirementsDiscarded(member.habitat_entity));
     }
 }
 
-/// Homes own the count, so an animal leaving by any route, such as release or
-/// a tank's demotion, can't leave its space behind.
-pub(super) fn recompute_tank_capacity_from_aquatic_homes(
-    aquatic_animals: Query<(Entity, &AquaticAnimal, &AquaticHome), With<Animal>>,
-    mut tanks: Query<(Entity, &mut TankCapacity, &mut TankPopulation), With<Tank>>,
+pub(super) fn invalidate_disabled_tank_resident(
+    added: On<Add<Disabled>>,
+    residents: Query<&HabitatMember, (With<AquaticAnimal>, Allow<Disabled>)>,
+    mut affected: MessageWriter<TankResidentRequirementsDiscarded>,
 ) {
-    let mut residents: Vec<_> = aquatic_animals.iter().collect();
-    residents.sort_unstable_by_key(|(entity, ..)| *entity);
-    let mut occupancy = HashMap::<Entity, (u32, f32)>::default();
-    for (_, aquatic_animal, home) in residents {
-        let (population, used) = occupancy.entry(home.0).or_default();
-        let space = if *population == 0 {
-            aquatic_animal.initial_space
-        } else {
-            aquatic_animal.additional_space
-        };
-        *population += 1;
-        *used += space.max(0.0);
+    if let Ok(member) = residents.get(added.entity) {
+        affected.write(TankResidentRequirementsDiscarded(member.habitat_entity));
     }
-    for (tank, mut capacity, mut population) in &mut tanks {
-        let (occupants, used) = occupancy.get(&tank).copied().unwrap_or_default();
-        population.set_if_neq(TankPopulation(occupants));
+}
+
+pub(super) fn invalidate_reenabled_tank_resident(
+    removed: On<Remove<Disabled>>,
+    residents: Query<&HabitatMember, (With<AquaticAnimal>, Allow<Disabled>)>,
+    mut affected: MessageWriter<TankResidentRequirementsDiscarded>,
+) {
+    if let Ok(member) = residents.get(removed.entity) {
+        affected.write(TankResidentRequirementsDiscarded(member.habitat_entity));
+    }
+}
+
+#[allow(clippy::type_complexity)]
+pub(super) fn recompute_changed_tank_capacity(
+    changed_tanks: Query<Entity, (With<Tank>, Or<(Added<Tank>, Changed<HabitatMembers>)>)>,
+    changed_residents: Query<
+        &HabitatMember,
+        (
+            With<Animal>,
+            With<AquaticAnimal>,
+            Or<(
+                Changed<Containment>,
+                Changed<AquaticAnimal>,
+                Added<Animal>,
+                Added<Dead>,
+            )>,
+        ),
+    >,
+    mut removed_memberships: RemovedComponents<HabitatMembers>,
+    mut removed_requirements: MessageReader<TankResidentRequirementsDiscarded>,
+    aquatic_animals: Query<&AquaticAnimal, (With<Animal>, Without<Dead>)>,
+    containment: Query<&Containment>,
+    mut tanks: Query<
+        (
+            Option<&HabitatMembers>,
+            &mut TankCapacity,
+            &mut TankPopulation,
+        ),
+        With<Tank>,
+    >,
+) {
+    let affected: EntityHashSet = changed_tanks
+        .iter()
+        .chain(changed_residents.iter().map(|member| member.habitat_entity))
+        .chain(removed_memberships.read())
+        .chain(removed_requirements.read().map(|removed| removed.0))
+        .collect();
+    for tank in affected {
+        let Ok((members, mut capacity, mut population)) = tanks.get_mut(tank) else {
+            continue;
+        };
+        let mut residents: Vec<_> = members
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(|member| {
+                containment.get(member).ok()?.is_contained.then_some(())?;
+                Some((member, aquatic_animals.get(member).ok()?))
+            })
+            .collect();
+        residents.sort_unstable_by_key(|(entity, _)| *entity);
+        let mut used = 0.0;
+        for (index, (_, animal)) in residents.iter().enumerate() {
+            let space = if index == 0 {
+                animal.initial_space
+            } else {
+                animal.additional_space
+            };
+            used += space.max(0.0);
+        }
+        population.set_if_neq(TankPopulation(residents.len() as u32));
         capacity.set_if_neq(TankCapacity {
             used,
             required: used,

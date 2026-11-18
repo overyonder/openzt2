@@ -14,10 +14,10 @@ use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
 use crate::source_document::ui::parser::source_scalar_and_attribute_reading::parse_source_bool;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     FootprintCell, FootprintCellFlags, PlaceableDefinition, PlacementConstraints,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -83,66 +83,6 @@ pub(crate) fn authored_surface_policy(
         maximum_depth_metres: depth("maximumDepth")?,
         use_actual_depth_in_water_collision: boolean("useActualDepthInCheckWaterCollision", false),
     })
-}
-
-/// A ground path under the footprint is an object collision when the placed
-/// object's nearest `stompData` that names the path's type ancestry prevents
-/// it. A family whose rules don't name paths defers to its ancestors, so
-/// scenery inherits the root entity family's `allow path`; a donation box goes
-/// on a path. Types no family names are prevented. Prevention only
-/// collides for `gridSnap` objects, which defaults to false, because path
-/// decals have no collision component for other objects to overlap.
-fn authored_ground_paths_block_placement(record: &RecordView<'_, '_>) -> Result<bool, BindError> {
-    let grid_snap = authored_type_family_component_attribute(record, "ZTPlacementData", "gridSnap")
-        .map(
-            |value| match canonicalize_source_document_record_key(value).as_str() {
-                "true" | "yes" | "1" => Ok(true),
-                "false" | "no" | "0" => Ok(false),
-                _ => Err(BindError::record(
-                    record,
-                    format!("invalid ZTPlacementData gridSnap value {value:?}"),
-                )),
-            },
-        )
-        .transpose()?
-        .unwrap_or(false);
-    if !grid_snap {
-        return Ok(false);
-    }
-    let stomp_data = authored_type_family_components(record, "ZTPlacementData")
-        .into_iter()
-        .filter_map(|placement_data| find_descendant(placement_data, "stompData"))
-        .collect::<Vec<_>>();
-    let action_is_named = |action: &OrderedSourceDocumentNode, name: &str| {
-        source_document_names_are_semantically_equal(action.name.as_str(), name)
-    };
-    // Ground path types are `entity/path/<surface>`. Shipped rules name only
-    // the shared `path` type, so the surface-specific token is not retained.
-    // Later rules for the same type replace earlier ones. Rules with nested
-    // children match entity-data property values rather than entity types.
-    let path_is_allowed = stomp_data
-        .iter()
-        .find_map(|stomp_data| {
-            ["path", "entity"].into_iter().find_map(|target_type| {
-                stomp_data
-                    .element_children()
-                    .rfind(|action| {
-                        ["delete", "prevent", "allow"]
-                            .into_iter()
-                            .any(|name| action_is_named(action, name))
-                            && action.element_children().any(|target| {
-                                target.element_children().next().is_none()
-                                    && source_document_names_are_semantically_equal(
-                                        target.name.as_str(),
-                                        target_type,
-                                    )
-                            })
-                    })
-                    .map(|action| !action_is_named(action, "prevent"))
-            })
-        })
-        .unwrap_or(false);
-    Ok(!path_is_allowed)
 }
 
 pub(super) fn bind_authored_placeable(
@@ -275,7 +215,9 @@ pub(super) fn bind_authored_placeable(
         entrances: Vec::new(),
         moving_footprint: moving_footprint(record)?,
         automatic_footprint,
-        ground_paths_block_placement: authored_ground_paths_block_placement(record)?,
+        stomp: super::authored_placement_stomp_lowering::lower_authored_placement_stomp_policy(
+            record,
+        )?,
         dock_arrow: authored_dock_arrow(record)?,
     });
     Ok(0)

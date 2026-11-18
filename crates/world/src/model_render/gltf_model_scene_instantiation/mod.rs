@@ -1,24 +1,47 @@
+use bevy::ecs::{entity_disabling::Disabled, query::Allow};
 use bevy::gltf::Gltf;
 use bevy::gltf::GltfMaterialName;
 use bevy::gltf::GltfMesh;
 use bevy::gltf::GltfNode;
 use bevy::prelude::*;
-use bevy::world_serialization::WorldInstance;
-
-use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
+use bevy::world_serialization::WorldInstanceReady;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabRenderable;
 
-use crate::model_render::authored_model_material_pass_projection::AdditionalAuthoredModelMaterialPass;
-use crate::model_render::authored_model_material_pass_projection::AuthoredModelMaterialPassesProjected;
-use crate::model_render::model_scene_visibility_and_shadow_projection::ModelSceneVisibilityAndShadowPolicyProjected;
 use openzt2_world_state::model_render::ModelExpanded;
 
 use crate::world_spawn::prefab_world_instance_spawning::ReleasePrefabRenderable;
 
+use super::world_entity_model_suppression::{ModelRenderVisibilityGate, ModelRenderingSuppressed};
+
 #[derive(Component)]
-pub(super) struct HiddenPrefabModelWorldAssetInstanceReleasePending;
+#[require(ModelRenderVisibilityGate)]
+pub(super) struct ResidentPrefabModel;
+
+#[derive(Component)]
+#[relationship(relationship_target = ResidentSceneEntities)]
+struct ResidentSceneEntityOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ResidentSceneEntityOf, linked_spawn)]
+struct ResidentSceneEntities(Vec<Entity>);
+
+pub(super) fn bind_prefab_model_scene_ownership_on_ready(
+    ready: On<WorldInstanceReady>,
+    residents: Query<(), With<ResidentPrefabModel>>,
+    world_instances: Res<WorldInstanceSpawner>,
+    mut commands: Commands,
+) {
+    if !residents.contains(ready.entity) {
+        return;
+    }
+    for entity in world_instances.iter_instance_entities(ready.instance_id) {
+        commands
+            .entity(entity)
+            .try_insert(ResidentSceneEntityOf(ready.entity));
+    }
+}
 
 pub(super) fn instantiate_visible_gltf_model_scenes(
     mut commands: Commands,
@@ -33,6 +56,8 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
             Mut<PrefabModel>,
             &mut PrefabMaterialOverrides,
             Ref<InheritedVisibility>,
+            &GlobalTransform,
+            Has<ModelRenderingSuppressed>,
         ),
         (
             With<PrefabRenderable>,
@@ -41,15 +66,16 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
         ),
     >,
 ) {
-    let gltf_assets_changed = gltf_asset_events.read().next().is_some();
+    let gltf_assets_changed = gltf_asset_events.read().count() != 0;
     if !gltf_assets_changed
         && !roots
             .iter()
-            .any(|(_, model, _, visibility)| model.is_changed() || visibility.is_changed())
+            .any(|(_, model, _, visibility, _, _)| model.is_changed() || visibility.is_changed())
     {
         return;
     }
-    for (entity, mut model, mut material_overrides, visibility) in &mut roots {
+    for (entity, mut model, mut material_overrides, visibility, transform, suppressed) in &mut roots
+    {
         if !visibility.get() {
             continue;
         }
@@ -78,11 +104,19 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
         if let Some((mesh, material, material_name)) =
             directly_projectable_static_primitive(&model, gltf, &nodes, &meshes, &asset_server)
         {
-            commands.entity(entity).insert((
+            let gate =
+                spawn_prefab_model_visibility_root(&mut commands, entity, *transform, suppressed);
+            commands.spawn((
                 Mesh3d(mesh),
                 MeshMaterial3d(material),
                 GltfMaterialName(material_name),
-                ModelExpanded,
+                ChildOf(gate),
+                *transform,
+                if suppressed {
+                    InheritedVisibility::HIDDEN
+                } else {
+                    InheritedVisibility::VISIBLE
+                },
             ));
             continue;
         }
@@ -97,110 +131,83 @@ pub(super) fn instantiate_visible_gltf_model_scenes(
         let Some(scene) = scene else {
             continue;
         };
-        commands
-            .entity(entity)
-            .insert((WorldAssetRoot(scene), ModelExpanded));
+        let gate =
+            spawn_prefab_model_visibility_root(&mut commands, entity, *transform, suppressed);
+        commands.entity(gate).insert(WorldAssetRoot(scene));
     }
 }
 
-pub(super) fn complete_hidden_prefab_model_asset_release_after_world_instance_despawn(
-    mut commands: Commands,
-    mut pending: Query<
-        (Entity, &mut PrefabModel, &mut PrefabMaterialOverrides),
-        With<HiddenPrefabModelWorldAssetInstanceReleasePending>,
-    >,
-    children: Query<&Children>,
-    additional_material_passes: Query<Entity, With<AdditionalAuthoredModelMaterialPass>>,
-) {
-    for (entity, mut model, mut material_overrides) in &mut pending {
-        release_hidden_prefab_model_assets_and_render_components(
-            &mut commands,
-            entity,
-            &mut model,
-            &mut material_overrides,
-            &children,
-            &additional_material_passes,
-        );
-    }
+fn spawn_prefab_model_visibility_root(
+    commands: &mut Commands,
+    owner: Entity,
+    transform: GlobalTransform,
+    suppressed: bool,
+) -> Entity {
+    commands.entity(owner).insert(ModelExpanded);
+    commands
+        .spawn((
+            ResidentPrefabModel,
+            transform,
+            if suppressed {
+                Visibility::Hidden
+            } else {
+                Visibility::Inherited
+            },
+            if suppressed {
+                InheritedVisibility::HIDDEN
+            } else {
+                InheritedVisibility::VISIBLE
+            },
+            ChildOf(owner),
+        ))
+        .id()
 }
 
-pub(super) fn request_hidden_prefab_model_asset_release(
+pub(super) fn retire_hidden_prefab_model_assets(
     mut commands: Commands,
-    mut world_instance_spawner: ResMut<WorldInstanceSpawner>,
-    mut hidden_models: Query<
+    mut models: Query<
         (
             Entity,
             &mut PrefabModel,
             &mut PrefabMaterialOverrides,
             &InheritedVisibility,
-            Option<&WorldInstance>,
+            Option<&Children>,
+            Has<ModelExpanded>,
             Has<ReleasePrefabRenderable>,
         ),
         (
-            With<ModelExpanded>,
-            Without<HiddenPrefabModelWorldAssetInstanceReleasePending>,
+            With<PrefabRenderable>,
+            Allow<Disabled>,
+            Or<(
+                Changed<InheritedVisibility>,
+                Changed<PrefabModel>,
+                Added<ReleasePrefabRenderable>,
+            )>,
         ),
     >,
-    children: Query<&Children>,
-    additional_material_passes: Query<Entity, With<AdditionalAuthoredModelMaterialPass>>,
+    residents: Query<(), With<ResidentPrefabModel>>,
 ) {
-    for (entity, mut model, mut material_overrides, visibility, world_instance, releasing) in
-        &mut hidden_models
+    for (entity, mut model, mut overrides, visibility, children, expanded, rebuilding) in
+        &mut models
     {
-        // A renderable being rebuilt is released as if it were hidden.
-        if visibility.get() && !releasing {
+        if visibility.get() && !rebuilding {
             continue;
         }
-        if let Some(world_instance) = world_instance {
-            world_instance_spawner.despawn_instance(**world_instance);
-            commands
-                .entity(entity)
-                .insert(HiddenPrefabModelWorldAssetInstanceReleasePending);
-            continue;
+        if let Some(children) = children {
+            for child in children.iter().filter(|&child| residents.contains(child)) {
+                commands.entity(child).try_despawn();
+            }
         }
-        release_hidden_prefab_model_assets_and_render_components(
-            &mut commands,
-            entity,
-            &mut model,
-            &mut material_overrides,
-            &children,
-            &additional_material_passes,
-        );
-    }
-}
-
-fn release_hidden_prefab_model_assets_and_render_components(
-    commands: &mut Commands,
-    entity: Entity,
-    model: &mut PrefabModel,
-    material_overrides: &mut PrefabMaterialOverrides,
-    children: &Query<&Children>,
-    additional_material_passes: &Query<Entity, With<AdditionalAuthoredModelMaterialPass>>,
-) {
-    model.handle = None;
-    for material_override in &mut material_overrides.0 {
-        material_override.handle = None;
-    }
-    for descendant in children.iter_descendants_depth_first::<Children>(entity) {
-        if additional_material_passes.contains(descendant) {
-            commands.entity(descendant).despawn();
+        if model.handle.is_some() {
+            model.handle = None;
+        }
+        for material in &mut overrides.0 {
+            material.handle = None;
+        }
+        if expanded {
+            commands.entity(entity).remove::<ModelExpanded>();
         }
     }
-    commands.entity(entity).remove::<(
-        WorldAssetRoot,
-        WorldInstance,
-        Mesh3d,
-        MeshMaterial3d<StandardMaterial>,
-        MeshMaterial3d<EffectPassMaterial>,
-        GltfMaterialName,
-        ModelExpanded,
-        super::mirrored_model_primitive_winding::ModelPrimitiveWindingProjected,
-        AuthoredModelMaterialPassesProjected,
-        // The re-expanded scene spawns new primitives, which need their
-        // render layers and shadow policy projected again.
-        ModelSceneVisibilityAndShadowPolicyProjected,
-        HiddenPrefabModelWorldAssetInstanceReleasePending,
-    )>();
 }
 
 fn directly_projectable_static_primitive(

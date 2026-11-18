@@ -12,8 +12,6 @@ pub enum ModelRenderPresentationSet {
     LevelOfDetail,
     /// The source effect materials and their per-model texture replacements are ready.
     SourceMaterials,
-    /// Queues changes to scene caustic draws and suppressed render layers.
-    VisibilityInputCommands,
-    /// Applies those commands before visibility reads their results.
-    ApplyVisibilityInputCommands,
+    /// Updates scene caustic draws and effective model visibility inputs.
+    VisibilityInputs,
 }

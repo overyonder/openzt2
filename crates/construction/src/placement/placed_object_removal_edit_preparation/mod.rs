@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -11,7 +12,6 @@ use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAs
 use crate::placement::object_placement_request_routing::reject_object_placement_edit_preparation;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_origin_and_quarter_turns;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
@@ -27,6 +27,7 @@ pub(super) fn prepare_placed_object_removal_edit(
     mut requests: MessageReader<PrepareDeletion>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     placed: Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -84,7 +85,9 @@ pub(super) fn prepare_placed_object_removal_edit(
             continue;
         }
         let Some(cells) = collect_occupied_placement_cells_for_origin_and_quarter_turns(
-            select_authored_footprint_for_eighth_turns(definition, occupancy.eighth_turns),
+            footprints
+                .resolve(definition, Some(&prefab.0))
+                .cells(occupancy.eighth_turns),
             occupancy.origin,
             occupancy.eighth_turns / 2,
             &mut scratch.cells,

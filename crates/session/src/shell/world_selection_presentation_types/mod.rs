@@ -20,7 +20,9 @@ use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoice;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
+use openzt2_interface_state::shell::shell_selection_types::{
+    WorldChoiceBinding, WorldChoiceMarkerView, WorldChoiceView,
+};
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShellActions;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -55,7 +57,7 @@ pub(super) struct WorldSelectionParams<'w, 's> {
     pub(super) catalogues: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     pub(super) documents: Res<'w, Assets<UiDocumentAsset>>,
     pub(super) choices: Query<'w, 's, &'static WorldChoice>,
-    pub(super) selectable: Query<'w, 's, (&'static WorldChoiceView, &'static mut UiSelected)>,
+    pub(super) selectable: Query<'w, 's, (WorldChoiceBinding, &'static mut UiSelected)>,
     pub(super) text_bindings:
         Query<'w, 's, (Entity, &'static UiTextBinding, Option<&'static Children>)>,
     pub(super) image_bindings: Query<'w, 's, (Entity, &'static UiImageBinding)>,
@@ -64,7 +66,8 @@ pub(super) struct WorldSelectionParams<'w, 's> {
     pub(super) action_ranges:
         Query<'w, 's, (Entity, &'static UiShellActions, &'static UiDocumentOwner)>,
     pub(super) roots: Query<'w, 's, &'static UiDocumentRoot>,
-    pub(super) changed_views: Query<'w, 's, (), Changed<WorldChoiceView>>,
+    pub(super) changed_views:
+        Query<'w, 's, (), Or<(Changed<WorldChoiceView>, Changed<WorldChoiceMarkerView>)>>,
     pub(super) added_actions: Query<'w, 's, (), Added<UiShellActions>>,
     pub(super) added_text_bindings: Query<'w, 's, (), Added<UiTextBinding>>,
     pub(super) added_image_bindings: Query<'w, 's, (), Added<UiImageBinding>>,

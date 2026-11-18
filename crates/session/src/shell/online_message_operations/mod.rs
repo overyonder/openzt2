@@ -108,7 +108,7 @@ pub(super) fn poll_online_message_requests_and_create_authored_rows(
         }
         commands
             .entity(task_owner.parent())
-            .insert((OnlineMessageContentAvailable, Visibility::Inherited));
+            .insert(OnlineMessageContentAvailable);
     }
 }
 
@@ -149,24 +149,24 @@ pub(super) fn bind_displayed_online_message_to_authored_row_text(
     }
 }
 
-/// Projects the accepted user preference onto the authored main-menu rail.
-pub(super) fn project_online_message_policy_and_content_availability_to_surface(
-    online_message_policy: Res<OnlineMessagePolicy>,
-    mut online_message_surfaces: Query<(
+pub(super) fn project_online_message_surface_visibility(
+    policy: Res<OnlineMessagePolicy>,
+    mut surfaces: Query<(
         &mut Visibility,
         Ref<UiAuthoredOnlineMessageSurface>,
-        Has<OnlineMessageContentAvailable>,
+        Option<Ref<OnlineMessageContentAvailable>>,
     )>,
 ) {
-    for (mut visibility, online_message_surface, content_is_available) in
-        &mut online_message_surfaces
-    {
-        if online_message_policy.is_changed() || online_message_surface.is_added() {
-            *visibility = if online_message_policy.enabled && content_is_available {
+    for (mut visibility, surface, content) in &mut surfaces {
+        if policy.is_changed()
+            || surface.is_added()
+            || content.as_ref().is_some_and(DetectChanges::is_added)
+        {
+            visibility.set_if_neq(if policy.enabled && content.is_some() {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
-            };
+            });
         }
     }
 }

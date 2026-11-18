@@ -1,7 +1,7 @@
 //! One lowered world-definition source document and its demand-loaded dependencies.
 
 use bevy::prelude::*;
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 pub const AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS: [&str; 18] = [
     "entities/objects/paths/shared/north_mask.dds",
@@ -44,45 +44,6 @@ pub struct WorldDefinitionAsset {
 }
 
 impl WorldDefinitionAsset {
-    pub fn automatic_placement_definition_needs_source_lowered_bounds(
-        &self,
-        definition: AssetId,
-        bounds_xz: [[f32; 2]; 2],
-    ) -> bool {
-        self.document
-            .placeables
-            .iter()
-            .find(|placeable| placeable.id == definition && placeable.automatic_footprint)
-            .is_some_and(|placeable| {
-                let mut resolved = placeable.clone();
-                resolved.apply_source_lowered_automatic_placement_bounds(bounds_xz)
-                    && *placeable != resolved
-            })
-    }
-
-    pub fn apply_source_lowered_automatic_placement_bounds(
-        &mut self,
-        definition: AssetId,
-        bounds_xz: [[f32; 2]; 2],
-    ) -> bool {
-        let Some(placeable) = self
-            .document
-            .placeables
-            .iter_mut()
-            .find(|placeable| placeable.id == definition && placeable.automatic_footprint)
-        else {
-            return false;
-        };
-        let mut resolved = placeable.clone();
-        if !resolved.apply_source_lowered_automatic_placement_bounds(bounds_xz)
-            || *placeable == resolved
-        {
-            return false;
-        }
-        *placeable = resolved;
-        true
-    }
-
     pub fn simulation_timing(
         &self,
     ) -> Option<&openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefinition>

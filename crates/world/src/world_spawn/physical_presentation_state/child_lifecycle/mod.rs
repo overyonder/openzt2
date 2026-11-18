@@ -8,20 +8,30 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
-use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
+
+use super::{
+    ObjectPhysicalPresentationControllerOf, PhysicalPresentationChildOf,
+    PhysicalPresentationControllerDefinition,
+};
 
 /// References the canonical selected state; retains only its running clock.
 #[derive(Component)]
-pub(crate) struct PhysicalChildPlayback {
-    pub(crate) owner: Entity,
-    pub(crate) controller: usize,
-    pub(crate) state: usize,
-    pub(crate) started_tick: Option<u64>,
-    pub(crate) completed_periods: u64,
+pub(in crate::world_spawn) struct PhysicalChildPlayback {
+    state: usize,
+    started_tick: Option<u64>,
+    completed_periods: u64,
 }
 
 impl PhysicalChildPlayback {
+    pub(in crate::world_spawn) const fn new(state: usize) -> Self {
+        Self {
+            state,
+            started_tick: None,
+            completed_periods: 0,
+        }
+    }
+
     fn period_finished(&mut self, tick: u64, fixed_hz: u16, duration: std::time::Duration) -> bool {
         let started = *self.started_tick.get_or_insert(tick);
         let elapsed_units = u128::from(tick.saturating_sub(started)) * 1_000_000_000;
@@ -36,36 +46,48 @@ impl PhysicalChildPlayback {
     }
 }
 
-pub(crate) fn advance_authored_child_lifetimes(
+pub(in crate::world_spawn) fn advance_authored_child_lifetimes(
     mut commands: Commands,
     clock: Res<ZooClock>,
     definitions: Res<WorldDefinitions>,
     assets: Res<Assets<WorldDefinitionAsset>>,
-    owners: Query<&PrefabObjectPresentationAttachmentProjection>,
-    mut children: Query<(Entity, &mut PhysicalChildPlayback), With<PrefabPresentationHydrated>>,
+    controllers: Query<(
+        &PhysicalPresentationControllerDefinition,
+        &ObjectPhysicalPresentationControllerOf,
+    )>,
+    mut children: Query<
+        (
+            Entity,
+            &PhysicalPresentationChildOf,
+            &mut PhysicalChildPlayback,
+        ),
+        With<PrefabPresentationHydrated>,
+    >,
     settings: Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>,
     mut notifications: MessageWriter<PhysicalPresentationRequest>,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    for (child, mut playback) in &mut children {
-        let Some(controller) = owners
-            .get(playback.owner)
-            .ok()
-            .and_then(|identity| definitions.find_object(identity.0))
-            .and_then(|object| object.presentation_attachments.get(playback.controller))
-        else {
+    for (child, controller, mut playback) in &mut children {
+        let Ok((identity, owner)) = controllers.get(controller.0) else {
             continue;
         };
-        let Some(animation) = controller
+        let Some(definition) = definitions.find_object(identity.object).and_then(|object| {
+            object
+                .presentation_attachments
+                .get(identity.controller_index)
+        }) else {
+            continue;
+        };
+        let Some(animation) = definition
             .states
             .get(playback.state)
             .and_then(|state| state.child_animation.as_ref())
         else {
             continue;
         };
-        if !settings.physical_animations && !controller.overrides_animation_setting {
+        if !settings.physical_animations && !definition.overrides_animation_setting {
             continue;
         }
         if !animation.auto_start || animation.duration.is_zero() {
@@ -79,15 +101,16 @@ pub(crate) fn advance_authored_child_lifetimes(
         ) {
             continue;
         }
-        let operation = if animation.looping {
-            PhysicalPresentationOperation::Looped(child)
-        } else {
+        if !animation.looping {
             commands.entity(child).remove::<PhysicalChildPlayback>();
-            PhysicalPresentationOperation::Completed(child)
-        };
+        }
         notifications.write(PhysicalPresentationRequest {
-            owner: playback.owner,
-            operation,
+            owner: owner.0,
+            operation: PhysicalPresentationOperation::ChildPeriodFinished {
+                controller: controller.0,
+                child,
+                looping: animation.looping,
+            },
         });
     }
 }
@@ -98,14 +121,7 @@ mod tests {
 
     #[test]
     fn child_periods_use_simulation_ticks_without_fractional_period_drift() {
-        let mut world = World::new();
-        let mut playback = PhysicalChildPlayback {
-            owner: world.spawn_empty().id(),
-            controller: 0,
-            state: 0,
-            started_tick: None,
-            completed_periods: 0,
-        };
+        let mut playback = PhysicalChildPlayback::new(0);
         let period = std::time::Duration::from_millis(1320);
         assert!(!playback.period_finished(100, 30, period));
         assert!(!playback.period_finished(139, 30, period));

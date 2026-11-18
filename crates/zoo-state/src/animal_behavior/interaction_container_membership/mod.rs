@@ -1,6 +1,6 @@
 use bevy::ecs::{
-    lifecycle::HookContext, relationship::RelationshipTarget, system::SystemParam,
-    world::DeferredWorld,
+    entity_disabling::Disabled, lifecycle::HookContext, query::Allow,
+    relationship::RelationshipTarget, system::SystemParam, world::DeferredWorld,
 };
 use bevy::prelude::*;
 use openzt2_game_data::{
@@ -11,19 +11,30 @@ pub mod requests;
 #[cfg(test)]
 mod tests;
 
-#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
-#[relationship(relationship_target = InteractionContainerMembers, allow_self_referential)]
+#[derive(Component)]
+#[relationship(relationship_target = InteractionContainerSlotMembers)]
 #[component(on_discard = clear_docking_on_membership_discard)]
 pub struct InteractionContainerMember {
     #[relationship]
-    pub container: Entity,
-    pub slot: usize,
+    slot: Entity,
+    admission_order: u64,
 }
 
-/// Bevy appends admissions and removes members without reordering the others.
 #[derive(Component)]
 #[relationship_target(relationship = InteractionContainerMember)]
-pub struct InteractionContainerMembers(Vec<Entity>);
+pub struct InteractionContainerSlotMembers(Vec<Entity>);
+
+#[derive(Component, Copy, Clone)]
+#[relationship(relationship_target = InteractionContainerSlots)]
+pub struct InteractionContainerSlotOf {
+    #[relationship]
+    container: Entity,
+    index: usize,
+}
+
+#[derive(Component)]
+#[relationship_target(relationship = InteractionContainerSlotOf, linked_spawn)]
+pub struct InteractionContainerSlots(Vec<Entity>);
 
 #[derive(Component)]
 pub struct DockedAtInteractionContainer;
@@ -50,31 +61,47 @@ pub struct InteractionContainerMemberships<'w, 's> {
             Has<DockedAtInteractionContainer>,
         ),
     >,
-    containers: Query<'w, 's, &'static InteractionContainerMembers>,
+    all_members: Query<'w, 's, &'static InteractionContainerMember, Allow<Disabled>>,
+    containers: Query<'w, 's, &'static InteractionContainerSlots>,
+    slots: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static InteractionContainerSlotOf,
+            Option<&'static InteractionContainerSlotMembers>,
+        ),
+    >,
 }
 
 impl<'w, 's> InteractionContainerMemberships<'w, 's> {
-    fn membership_of(&self, member: Entity) -> Option<InteractionContainerMember> {
-        self.members
-            .get(member)
-            .ok()
-            .map(|(membership, _)| *membership)
-    }
-
     #[must_use]
     pub fn container_for_member(&self, member: Entity) -> Option<(Entity, usize)> {
-        self.membership_of(member)
-            .map(|membership| (membership.container, membership.slot))
+        let (membership, _) = self.members.get(member).ok()?;
+        let (_, slot, _) = self.slots.get(membership.slot).ok()?;
+        Some((slot.container, slot.index))
     }
 
     pub fn members_of_container<'a>(
         &'a self,
         container: Entity,
     ) -> impl Iterator<Item = Entity> + use<'a, 'w, 's> {
-        self.containers
-            .get(container)
-            .into_iter()
-            .flat_map(|members| members.iter())
+        let mut members = self
+            .slots
+            .iter_many(
+                self.containers
+                    .get(container)
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter),
+            )
+            .flat_map(|(_, _, members)| members.into_iter().flat_map(RelationshipTarget::iter))
+            .filter_map(|member| {
+                let membership = self.all_members.get(member).ok()?;
+                Some((membership.admission_order, member))
+            })
+            .collect::<Vec<_>>();
+        members.sort_unstable_by_key(|&(order, _)| order);
+        members.into_iter().map(|(_, member)| member)
     }
 
     pub fn members_in_slot<'a>(
@@ -82,8 +109,18 @@ impl<'w, 's> InteractionContainerMemberships<'w, 's> {
         container: Entity,
         slot: usize,
     ) -> impl Iterator<Item = Entity> + use<'a, 'w, 's> {
-        self.members_of_container(container)
-            .filter(move |member| self.actor_slot(container, *member) == Some(slot))
+        self.slots
+            .iter_many(
+                self.containers
+                    .get(container)
+                    .into_iter()
+                    .flat_map(RelationshipTarget::iter),
+            )
+            .find_map(|(_, candidate, members)| (candidate.index == slot).then_some(members))
+            .flatten()
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter(|member| self.members.contains(*member))
     }
 
     #[must_use]
@@ -93,9 +130,8 @@ impl<'w, 's> InteractionContainerMemberships<'w, 's> {
 
     #[must_use]
     pub fn actor_slot(&self, target: Entity, actor: Entity) -> Option<usize> {
-        self.membership_of(actor)
-            .filter(|membership| membership.container == target)
-            .map(|membership| membership.slot)
+        let (container, slot) = self.container_for_member(actor)?;
+        (container == target).then_some(slot)
     }
 
     pub fn docked_member_entities_in_container<'a>(
@@ -103,14 +139,18 @@ impl<'w, 's> InteractionContainerMemberships<'w, 's> {
         container: Entity,
     ) -> impl Iterator<Item = Entity> + use<'a, 'w, 's> {
         self.members_of_container(container)
-            .filter(move |member| self.is_docked(container, *member))
+            .filter(move |member| self.members.get(*member).is_ok_and(|(_, docked)| docked))
     }
 
     #[must_use]
     pub fn is_docked(&self, target: Entity, actor: Entity) -> bool {
-        self.members
-            .get(actor)
-            .is_ok_and(|(membership, docked)| docked && membership.container == target)
+        self.members.get(actor).is_ok_and(|(member, docked)| {
+            docked
+                && self
+                    .slots
+                    .get(member.slot)
+                    .is_ok_and(|(_, slot, _)| slot.container == target)
+        })
     }
 
     /// Reuse a service position when possible, otherwise try the nearest slots first.

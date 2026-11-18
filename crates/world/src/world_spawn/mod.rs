@@ -33,7 +33,10 @@ mod zoo_entrance_anchor_synchronization;
 use crate::world_spawn::persistent_id_assignment::assign_requested_persistent_ids;
 use crate::world_spawn::prefab_authored_rotation_cycle_advancement::advance_authored_prefab_rotation_cycles_from_elapsed_real_time;
 use crate::world_spawn::prefab_authored_transform_animation_advancement::advance_authored_prefab_transform_animations_from_elapsed_time;
-use crate::world_spawn::prefab_object_presentation_attachment_projection::project_default_authored_world_object_presentation_attachments;
+use crate::world_spawn::prefab_object_presentation_attachment_projection::{
+    initialize_authored_physical_presentation_controllers,
+    project_pending_physical_presentation_children,
+};
 use crate::world_spawn::prefab_presentation_render_tree::hydrate_prefab_presentations;
 use crate::world_spawn::starting_path_hydration::hydrate_all_starting_paths_into_topology_once;
 use crate::world_spawn::starting_topology_hydration::hydrate_all_starting_fence_nodes_and_edges_into_topology_once;
@@ -87,7 +90,8 @@ impl Plugin for WorldSpawnPlugin {
                 .run_if(world_hydration_completion::loading_screen_is_ready),
         );
         app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>()
-            .add_message::<openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced>();
+            .add_message::<openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced>()
+            .add_message::<prefab_presentation_render_tree::ReplacedPrefabReloaded>();
         app.add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssigned>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssignmentFailed>()
@@ -142,13 +146,15 @@ impl Plugin for WorldSpawnPlugin {
             .add_systems(
                 Update,
                 (
-                    crate::world_spawn::prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload,
-                    crate::world_spawn::prefab_world_instance_spawning::begin_rebuilding_world_instance_renderables_after_prefab_reload,
+                    prefab_presentation_render_tree::publish_replaced_prefab_reloads,
+                    prefab_presentation_render_tree::rebuild_prefab_presentations_after_prefab_reload,
+                    prefab_world_instance_spawning::begin_rebuilding_world_instance_renderables_after_prefab_reload,
                     crate::world_spawn::prefab_world_instance_spawning::finish_rebuilding_world_instance_renderables,
                     hydrate_prefab_presentations,
                     crate::world_spawn::expanding_column_presentation::align_expanding_column_piece_attachments,
+                    initialize_authored_physical_presentation_controllers,
                     crate::world_spawn::physical_presentation_state::apply_physical_presentation_requests,
-                    project_default_authored_world_object_presentation_attachments,
+                    project_pending_physical_presentation_children,
                     crate::world_spawn::named_physical_presentation_projection::hydrate_required_named_physical_presentations,
                     crate::world_spawn::named_physical_presentation_projection::attach_named_presentations_to_model_nodes,
                     crate::world_spawn::named_physical_presentation_projection::select_named_presentation_fade_states,

@@ -70,10 +70,10 @@ impl EvaluatedD3d9SamplerState {
         if self.border_color != 0 {
             return Err(invalid("border colour", self.border_color));
         }
-        if self.lod_bias != 0.0 {
+        if !self.lod_bias.is_finite() {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("unsupported D3D9 sampler LOD bias {}", self.lod_bias),
+                format!("non-finite D3D9 sampler LOD bias {}", self.lod_bias),
             ));
         }
         if self.max_anisotropy == 0 || self.max_anisotropy > u32::from(u16::MAX) {
@@ -86,6 +86,10 @@ impl EvaluatedD3d9SamplerState {
             return Err(invalid("element index", self.element_index));
         }
         Ok(())
+    }
+
+    pub(super) const fn lod_bias(&self) -> f32 {
+        self.lod_bias
     }
 
     pub(super) const fn samples_texture_with_srgb_decode(&self) -> bool {

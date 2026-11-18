@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -48,26 +50,6 @@ pub struct TerrainWaterRegionView<'a> {
 }
 
 impl TerrainWaterRegionQuery<'_, '_> {
-    /// Revision of the borrowed source facts used by a terrain's derived index.
-    pub fn source_revision(&self, terrain: bevy::asset::AssetId<TerrainAsset>) -> u64 {
-        use std::hash::{Hash, Hasher};
-        self.iter()
-            .filter(|(_, view)| view.terrain().id() == terrain)
-            .fold(0_u64, |revision, (owner, view)| {
-                let mut hash = std::collections::hash_map::DefaultHasher::new();
-                owner.hash(&mut hash);
-                view.source
-                    .map(TerrainWaterRegionSource::source_region_index)
-                    .hash(&mut hash);
-                if let Some(edit) = view.edit {
-                    edit.biome_index.hash(&mut hash);
-                    edit.surface_height_metres.to_bits().hash(&mut hash);
-                    edit.depth_ratio.to_bits().hash(&mut hash);
-                    edit.uses_tank_minimum_depth.hash(&mut hash);
-                }
-                revision.wrapping_add(hash.finish())
-            })
-    }
     pub fn get(&self, owner: Entity) -> Option<TerrainWaterRegionView<'_>> {
         let (_, source, edit) = self.regions.get(owner).ok()?;
         (source.is_some() || edit.is_some()).then_some(TerrainWaterRegionView { source, edit })
@@ -208,8 +190,7 @@ pub struct TerrainWaterMembershipIndex {
     empty_selector_topology: bool,
     selector_projection: Box<[Option<[u8; 4]>]>,
     fence_probes: Box<[[Box<[[Vec2; 2]]>; 8]]>,
-    height_support_limits: Box<[[f32; 2]]>,
-    region_source_revision: u64,
+    height_support_limits: Arc<[[f32; 2]]>,
     tank_minimum_depth: Option<f32>,
     edited_point_heights: Option<Box<[f32]>>,
 }
@@ -307,8 +288,7 @@ impl TerrainWaterMembershipIndex {
             fence_probes: (0..tiles)
                 .map(|_| std::array::from_fn(|_| Box::default()))
                 .collect(),
-            height_support_limits: vec![[-1000.0, 1000.0]; point_count].into_boxed_slice(),
-            region_source_revision: 0,
+            height_support_limits: vec![[-1000.0, 1000.0]; point_count].into(),
             tank_minimum_depth: None,
             edited_point_heights: None,
         })
@@ -350,7 +330,7 @@ impl TerrainWaterMembershipIndex {
         self.fence_probes.as_ref() == probes
     }
 
-    pub fn with_height_support_limits(mut self, limits: Box<[[f32; 2]]>) -> Option<Self> {
+    pub fn with_height_support_limits(mut self, limits: Arc<[[f32; 2]]>) -> Option<Self> {
         if limits.len() != self.point_owners.len() {
             return None;
         }
@@ -358,17 +338,9 @@ impl TerrainWaterMembershipIndex {
         Some(self)
     }
 
-    pub fn height_support_limits_match(&self, limits: &[[f32; 2]]) -> bool {
-        self.height_support_limits.as_ref() == limits
-    }
-
-    pub fn with_region_source_revision(mut self, revision: u64) -> Self {
-        self.region_source_revision = revision;
-        self
-    }
-
-    pub fn region_source_revision(&self) -> u64 {
-        self.region_source_revision
+    pub fn height_support_limits_match(&self, limits: &Arc<[[f32; 2]]>) -> bool {
+        Arc::ptr_eq(&self.height_support_limits, limits)
+            || self.height_support_limits.as_ref() == limits.as_ref()
     }
 
     pub fn with_tank_minimum_depth(mut self, depth: Option<f32>) -> Self {
@@ -441,7 +413,6 @@ impl TerrainWaterMembershipIndex {
         self.fence_probes.clone_from(&source.fence_probes);
         self.height_support_limits
             .clone_from(&source.height_support_limits);
-        self.region_source_revision = source.region_source_revision;
         self.tank_minimum_depth = source.tank_minimum_depth;
         Some(self)
     }

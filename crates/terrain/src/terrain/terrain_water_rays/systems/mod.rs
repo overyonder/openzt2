@@ -20,6 +20,12 @@ pub(in crate::terrain) struct TerrainWaterRayEffect {
     pub(super) secondary_strip: bool,
 }
 
+#[derive(Component, Default)]
+pub(in crate::terrain) struct TerrainWaterRayMeshPoses {
+    pub(super) strip: Option<Mat4>,
+    pub(super) disk: Option<Mat4>,
+}
+
 #[derive(Component)]
 pub(in crate::terrain) struct TerrainWaterRayPass {
     pub(super) texture_layer: usize,
@@ -59,7 +65,6 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
                 && !changed_assets.contains(&source.terrain().id())
                 && indexes.iter().any(|index| {
                     index.terrain() == source.terrain().id()
-                        && !index.is_changed()
                         && index.accepted_points(parent.parent()).next().is_some()
                 })
         });
@@ -134,6 +139,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
             .spawn((
                 TerrainWaterRayEffect { secondary_strip },
                 TerrainWaterRayAnimation::default(),
+                TerrainWaterRayMeshPoses::default(),
                 Transform::IDENTITY,
                 // Environment producers must establish placement and contribution
                 // before any pass is submitted.

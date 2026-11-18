@@ -2,10 +2,7 @@ use bevy::prelude::*;
 use bevy_hanabi::{ParticleAliveCount, ParticleSpawnBatch, ParticleSpawnPoint};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
-use super::{
-    effect_runtime_types::PendingEffectInstance, LiveParticleEffectInstance,
-    ParticleEffectDocumentAsset,
-};
+use super::{effect_runtime_types::PendingEffectInstance, ParticleEffectDocumentAsset};
 
 #[derive(Component)]
 pub struct ParticleEffectPointEmitter {
@@ -71,7 +68,6 @@ pub(crate) fn prepare_explicit_particle_emitters(
                 effect_asset: emitter.effect_asset.clone(),
                 requested_emitter: Some(emitter.emitter),
                 manual_particle_count: 0,
-                collision_spawn_context: None,
             },
             emitter.alive_count.clone(),
             ParticleSpawnBatch::default(),
@@ -129,22 +125,5 @@ pub(crate) fn upload_explicit_particle_emission_points(
         spawner.spawn_count = spawner
             .spawn_count
             .max(std::mem::take(&mut emitter.pending_manual_count));
-    }
-}
-
-pub(crate) fn retain_explicit_particle_emitters(
-    mut commands: Commands,
-    emitters: Query<
-        Entity,
-        (
-            With<ParticleEffectPointEmitter>,
-            Added<LiveParticleEffectInstance>,
-        ),
-    >,
-) {
-    for emitter in &emitters {
-        commands
-            .entity(emitter)
-            .remove::<super::effect_runtime_types::FiniteEffectInstanceLifetime>();
     }
 }

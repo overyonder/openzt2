@@ -99,6 +99,7 @@ impl TerrainSnapshotApplicationParameters<'_, '_> {
                 chunk: bounds.chunk,
                 min: bounds.min,
                 max: bounds.max,
+                ground_height_changed: true,
             });
             navigation.write(TerrainNavigationRestored {
                 chunk: bounds.chunk,

@@ -5,6 +5,7 @@ use openzt2_game_data::AssetId;
 use crate::habitat::habitat_types::HabitatRegion;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(TankCapacity, TankPopulation)]
 pub struct Tank {
     pub definition: AssetId,
 }
@@ -98,9 +99,6 @@ pub struct AquaticAnimal {
     pub initial_space: f32,
     pub additional_space: f32,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AquaticHome(pub Entity);
 
 /// Current water facts. Source ranges live on `AquaticWaterRequirement`.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

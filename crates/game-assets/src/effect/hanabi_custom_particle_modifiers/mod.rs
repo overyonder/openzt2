@@ -8,12 +8,9 @@ use bevy_hanabi::prelude::{
     Attribute, BoxedModifier, ExprError, ExprHandle, Modifier, ModifierContext, Module,
     ShaderWriter,
 };
-use openzt2_game_data::AssetId;
 
 #[derive(Clone)]
 pub(super) struct CollisionSpawnParticleInitialization {
-    pub(super) parent_emitter_id: AssetId,
-    pub(super) modifier_index: u32,
     pub(super) spawn_radius: f32,
     pub(super) initial_speed: f32,
     pub(super) outward_velocity: Vec3,

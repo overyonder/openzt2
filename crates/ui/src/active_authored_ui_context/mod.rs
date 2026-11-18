@@ -73,7 +73,8 @@ impl ActiveAuthoredUiContext<'_, '_> {
             self.rows
                 .get(ancestor)
                 .ok()
-                .and_then(|row| self.owners.get(row.list).ok())
+                .and_then(|_| self.parents.get(ancestor).ok())
+                .and_then(|parent| self.owners.get(parent.parent()).ok())
                 .map(|owner| owner.0)
         }) {
             if list_owner == owner {

@@ -19,7 +19,7 @@ use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
 use super::authored_globe_presentation_types::{UiGlobeDrag, UiGlobePresentation};
 use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_node_projection_components::UiDocumentRoot;
-use super::projection::PendingUiProjection;
+use super::projection::ui_document_opening::PendingUiProjection;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -76,11 +76,12 @@ pub(super) fn present_cursor(
     capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
     sources: CursorPresentation,
-    window: Single<(Entity, &Window, Option<&CursorIcon>), With<PrimaryWindow>>,
+    window: Single<(Entity, &Window, Option<&mut CursorIcon>), With<PrimaryWindow>>,
     mut commands: Commands,
     mut scaling: CursorScaling,
 ) {
-    let scale_factor = window.1.scale_factor();
+    let (entity, window, current) = window.into_inner();
+    let scale_factor = window.scale_factor();
     let next = if wait.0
         || *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::Loading
         || !sources.pending_documents.is_empty()
@@ -149,10 +150,11 @@ pub(super) fn present_cursor(
             })
             .unwrap_or(CursorIcon::System(SystemCursorIcon::Default))
     };
-    let next = scaling.scale_with_ui_canvas(next, window.1);
-    let (window, _, current) = *window;
-    if current != Some(&next) {
-        commands.entity(window).insert(next);
+    let next = scaling.scale_with_ui_canvas(next, window);
+    if let Some(mut current) = current {
+        current.set_if_neq(next);
+    } else {
+        commands.entity(entity).insert(next);
     }
 }
 

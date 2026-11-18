@@ -1,9 +1,6 @@
 //! Admit once, then repeat the authored waiting set without renewing its deadline.
 
-use super::super::behavior_container_admission::{
-    behavior_container_admission_selection, request_behavior_container_admission,
-    BehaviorContainerAdmissions,
-};
+use super::super::behavior_container_admission::BehaviorAdmissionInstruction;
 use super::super::{
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_subject_type_resolution::behavior_subject_type_identifiers,
@@ -11,7 +8,10 @@ use super::super::{
 };
 use super::{ActiveQueueWait, QueueWaitSources};
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRecipient;
+use openzt2_game_data::behavior::action::queue::BehaviorQueueWaitAction;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
+    InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
+};
 
 use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -58,54 +58,23 @@ pub(super) struct QueueWaitActors<'w, 's> {
 }
 
 pub(super) fn start_or_repeat_authored_queue_wait(
-    In(apply_admissions): In<bool>,
-    task_entities: Query<
-        Entity,
-        (
-            With<BehaviorTaskExecutionState>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
-    >,
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
-    animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     mut actors: QueueWaitActors,
     memberships: InteractionContainerMemberships,
-    admissions: BehaviorContainerAdmissions,
 ) {
-    let (Some(definitions), Some(declarations)) = (
-        sources.definitions.get(&sources.definition_assets),
-        sources
-            .declarations
-            .create_declaration_index_view(&sources.behaviors),
-    ) else {
+    let Some(definitions) = sources.definitions.get(&sources.definition_assets) else {
         return;
     };
-    let BehaviorContainerAdmissions {
-        mut requests,
-        mut outcomes,
-    } = admissions;
-    let replies = if apply_admissions {
-        Some(outcomes.read())
-    } else {
-        None
-    };
-    let replies = replies.into_iter().flatten().filter_map(|outcome| {
-        let InteractionContainerAdmissionRecipient::QueueWait(actor) = outcome.reply_to else {
-            return None;
-        };
-        Some((actor, Some(behavior_container_admission_selection(outcome))))
-    });
-    let ready = (!apply_admissions)
-        .then(|| task_entities.iter())
-        .into_iter()
-        .flatten()
-        .map(|actor| (actor, None));
-    for (actor, admission) in replies.chain(ready) {
-        let Ok((actor, mut task, active_wait)) = actors.tasks.get_mut(actor) else {
-            continue;
-        };
+    if sources
+        .declarations
+        .create_declaration_index_view(&sources.behaviors)
+        .is_none()
+    {
+        return;
+    }
+    for (actor, mut task, _) in &mut actors.tasks {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -149,104 +118,151 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let Some(selected) = admission else {
-            let service_slots = object
-                .interaction_slots
-                .iter()
-                .enumerate()
-                .filter(|(_, slot)| !slot.is_queue && slot.reservation_tag == queue.reservation_tag)
-                .map(|(index, slot)| (index, slot.capacity))
-                .collect();
-            request_behavior_container_admission(
-                actor,
-                target,
-                vec![(queue_index, queue.capacity)],
-                service_slots,
-                InteractionContainerAdmissionRecipient::QueueWait(actor),
-                &mut requests,
-            );
-            continue;
+        let service_slots = object
+            .interaction_slots
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| !slot.is_queue && slot.reservation_tag == queue.reservation_tag)
+            .map(|(index, slot)| (index, slot.capacity))
+            .collect();
+        let request = InteractionContainerAdmissionRequest::Admit {
+            container: target,
+            member: actor,
+            slots: vec![(queue_index, queue.capacity)],
+            despawn_on_refusal: false,
+            queue_service_slots: service_slots,
         };
-        let Some(selected) = selected else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        task.interaction_slot = Some(selected.index);
-        if selected.queue_service_available {
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
-            commands.entity(actor).remove::<ActiveQueueWait>();
-            continue;
-        }
-        let Ok((species, staff, guest)) = actors.identities.get(actor) else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        let Some((document, declaration)) = declarations.find_behavior_set_location(
-            action.waiting_behavior_set,
-            behavior_subject_type_identifiers(
-                species,
-                staff,
-                guest,
-                definitions,
-                animal_types.borrow_for(actor),
-            ),
-        ) else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        let waiting_set = action.waiting_behavior_set;
-        let origin = task.create_return_frame_after_action(task.action);
-        if active_wait.is_none() {
-            let duration = if action.minimum_wait == action.maximum_wait {
-                action.minimum_wait
-            } else {
-                let Ok((guest_random, behavior_random)) = actors.random.get_mut(actor) else {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                };
-                let mut guest_random = guest_random;
-                let mut behavior_random = behavior_random;
-                let Some(random) = guest_random
-                    .as_deref_mut()
-                    .map(|rng| &mut rng.0)
-                    .or_else(|| behavior_random.as_deref_mut().map(|rng| &mut rng.0))
-                else {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                };
-                action.minimum_wait
-                    + (action.maximum_wait - action.minimum_wait)
-                        .mul_f64(f64::from(random.unit_f32()))
-            };
-            if duration.is_zero() {
-                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                continue;
+        let instruction = BehaviorAdmissionInstruction::new(actor, &task);
+        let action = action.clone();
+        commands.queue(move |world: &mut World| {
+            if instruction.is_current(world) {
+                let outcome = request.commit(world);
+                world.trigger(QueueWaitAdmitted {
+                    actor,
+                    target,
+                    action,
+                    outcome,
+                });
             }
-            let ticks = duration
-                .as_nanos()
-                .saturating_mul(u128::from(definitions.timing().fixed_hz))
-                .div_ceil(1_000_000_000);
-            commands.entity(actor).insert(ActiveQueueWait {
-                origin: origin.clone(),
-                stack_depth: task.stack.len(),
-                target,
-                queue_slot: queue_index,
-                deadline_tick: clock
-                    .tick
-                    .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
-            });
-        }
-        if !task.push_return_frame(origin) {
-            commands.entity(actor).remove::<ActiveQueueWait>();
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
-        task.program = waiting_set;
-        task.document = document;
-        task.declaration = declaration;
-        task.phase = BehaviorTaskExecutionPhase::Set;
-        task.action = 0;
-        task.repetitions = 0;
-        task.next_action_tick = clock.tick.saturating_add(1);
+        });
     }
+}
+
+#[derive(EntityEvent)]
+pub(super) struct QueueWaitAdmitted {
+    #[event_target]
+    actor: Entity,
+    target: Entity,
+    action: BehaviorQueueWaitAction,
+    outcome: InteractionContainerAdmissionOutcome,
+}
+
+pub(super) fn apply_queue_wait_admission(
+    admitted: On<QueueWaitAdmitted>,
+    mut commands: Commands,
+    clock: Res<ZooClock>,
+    sources: QueueWaitSources,
+    animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
+    mut actors: QueueWaitActors,
+) {
+    let actor = admitted.actor;
+    let target = admitted.target;
+    let action = &admitted.action;
+    let Ok((_, mut task, active_wait)) = actors.tasks.get_mut(actor) else {
+        return;
+    };
+    let InteractionContainerAdmissionOutcome::Granted {
+        slot: queue_index,
+        queue_service_available,
+        ..
+    } = admitted.outcome
+    else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    task.interaction_slot = Some(queue_index);
+    if queue_service_available {
+        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        commands.entity(actor).remove::<ActiveQueueWait>();
+        return;
+    }
+    let (Some(definitions), Some(declarations)) = (
+        sources.definitions.get(&sources.definition_assets),
+        sources
+            .declarations
+            .create_declaration_index_view(&sources.behaviors),
+    ) else {
+        return;
+    };
+    let Ok((species, staff, guest)) = actors.identities.get(actor) else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    let Some((document, declaration)) = declarations.find_behavior_set_location(
+        action.waiting_behavior_set,
+        behavior_subject_type_identifiers(
+            species,
+            staff,
+            guest,
+            definitions,
+            animal_types.borrow_for(actor),
+        ),
+    ) else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    let waiting_set = action.waiting_behavior_set;
+    let origin = task.create_return_frame_after_action(task.action);
+    if active_wait.is_none() {
+        let duration = if action.minimum_wait == action.maximum_wait {
+            action.minimum_wait
+        } else {
+            let Ok((guest_random, behavior_random)) = actors.random.get_mut(actor) else {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                return;
+            };
+            let mut guest_random = guest_random;
+            let mut behavior_random = behavior_random;
+            let Some(random) = guest_random
+                .as_deref_mut()
+                .map(|rng| &mut rng.0)
+                .or_else(|| behavior_random.as_deref_mut().map(|rng| &mut rng.0))
+            else {
+                mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+                return;
+            };
+            action.minimum_wait
+                + (action.maximum_wait - action.minimum_wait).mul_f64(f64::from(random.unit_f32()))
+        };
+        if duration.is_zero() {
+            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+            return;
+        }
+        let ticks = duration
+            .as_nanos()
+            .saturating_mul(u128::from(definitions.timing().fixed_hz))
+            .div_ceil(1_000_000_000);
+        commands.entity(actor).insert(ActiveQueueWait {
+            execution_id: task.execution_id,
+            origin: origin.clone(),
+            stack_depth: task.stack.len(),
+            target,
+            queue_slot: queue_index,
+            deadline_tick: clock
+                .tick
+                .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+        });
+    }
+    if !task.push_return_frame(origin) {
+        commands.entity(actor).remove::<ActiveQueueWait>();
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    }
+    task.program = waiting_set;
+    task.document = document;
+    task.declaration = declaration;
+    task.phase = BehaviorTaskExecutionPhase::Set;
+    task.action = 0;
+    task.repetitions = 0;
+    task.next_action_tick = clock.tick.saturating_add(1);
 }

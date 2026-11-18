@@ -9,7 +9,10 @@ use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollecti
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
+use openzt2_interface_state::ui::{
+    authored_ui_node_projection_components::UiDocumentOwner,
+    authored_ui_selection_state::UiSelected,
+};
 
 use super::{
     display_settings_types::{
@@ -69,38 +72,44 @@ pub(super) fn set_authored_display_resolution_list_row_count(
     }
 }
 
-/// Hydrates authored resolution rows with their monitor identity and label.
-/// Typography, layout, visuals, and hit policy remain those of
-/// `UI/layout/resolution.xml`.
 pub(super) fn project_supported_display_resolutions_into_authored_rows(
     mut commands: Commands,
     supported: Res<SupportedDisplayResolutions>,
-    rows: Query<(Entity, Ref<UiListRow>, Option<&DisplayResolutionChoice>)>,
+    mut rows: Query<(
+        Entity,
+        Ref<UiListRow>,
+        Option<&mut DisplayResolutionChoice>,
+        &ChildOf,
+    )>,
     lists: Query<&UiListPolicy>,
-    parents: Query<&ChildOf>,
-    mut texts: Query<(Entity, &mut Text)>,
+    children: Query<&Children>,
+    mut texts: Query<&mut Text>,
 ) {
-    for (row_entity, row, current) in &rows {
-        let Ok(policy) = lists.get(row.list) else {
+    for (entity, row, current, parent) in &mut rows {
+        if !supported.is_changed() && !row.is_changed() {
             continue;
-        };
-        if policy.source != UiWidgetLiveCollectionSource::DisplayResolutions
-            || (!supported.is_changed() && !row.is_added())
+        }
+        if !lists
+            .get(parent.parent())
+            .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::DisplayResolutions)
         {
             continue;
         }
-        let Some(resolution) = supported.0.get(usize::from(row.index)).copied() else {
+        let Some(&resolution) = supported.0.get(usize::from(row.index)) else {
             continue;
         };
         let choice = DisplayResolutionChoice(resolution);
-        if current != Some(&choice) {
-            commands.entity(row_entity).insert(choice);
+        if let Some(mut current) = current {
+            current.set_if_neq(choice);
+        } else {
+            commands.entity(entity).insert(choice);
         }
         let label = format!("{} x {}", resolution.width, resolution.height);
-        for (entity, mut text) in &mut texts {
-            if entity_is_descendant_of_or_equal_to(entity, row_entity, &parents) && text.0 != label
-            {
-                text.0.clone_from(&label);
+        for descendant in std::iter::once(entity).chain(children.iter_descendants(entity)) {
+            if let Ok(mut text) = texts.get_mut(descendant) {
+                if text.0 != label {
+                    text.0.clone_from(&label);
+                }
             }
         }
     }
@@ -112,16 +121,23 @@ pub(super) fn copy_activated_display_resolution_into_settings_draft(
     mut activations: MessageReader<UiNodeActivated>,
     choices: Query<&DisplayResolutionChoice>,
     parents: Query<&ChildOf>,
-    mut draft: ResMut<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    mut drafts: Query<&mut OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
 ) {
     for activation in activations
         .read()
         .filter(|activation| matches!(activation.trigger, UiTrigger::Press | UiTrigger::Submit))
     {
-        let choice = std::iter::successors(Some(activation.node), |entity| {
-            parents.get(*entity).ok().map(ChildOf::parent)
-        })
-        .find_map(|entity| choices.get(entity).ok());
+        let ancestors = || {
+            std::iter::once(activation.node)
+                .chain(parents.iter_ancestors::<ChildOf>(activation.node))
+        };
+        let choice = ancestors().find_map(|entity| choices.get(entity).ok());
+        let Some(draft_owner) = ancestors().find(|entity| drafts.contains(*entity)) else {
+            continue;
+        };
+        let Ok(mut draft) = drafts.get_mut(draft_owner) else {
+            continue;
+        };
         if let Some(choice) = choice {
             if draft.display.width != choice.0.width || draft.display.height != choice.0.height {
                 draft.display.width = choice.0.width;
@@ -133,22 +149,32 @@ pub(super) fn copy_activated_display_resolution_into_settings_draft(
 }
 
 pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
-    draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    drafts: Query<Ref<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>>,
     choices: Query<(Entity, Ref<DisplayResolutionChoice>)>,
+    children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut selected: Query<(Entity, &mut UiSelected)>,
+    mut selected: Query<(
+        &mut UiSelected,
+        Option<&mut openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection>,
+    )>,
 ) {
-    if !draft.is_changed() && choices.iter().all(|(_, choice)| !choice.is_added()) {
-        return;
-    }
     for (row, choice) in &choices {
-        if !draft.is_changed() && !choice.is_added() {
+        let Some(draft) = parents
+            .iter_ancestors::<ChildOf>(row)
+            .find_map(|entity| drafts.get(entity).ok())
+        else {
+            continue;
+        };
+        if !draft.is_changed() && !choice.is_changed() {
             continue;
         }
         let next = draft.display.width == choice.0.width && draft.display.height == choice.0.height;
-        for (entity, mut selected) in &mut selected {
-            if entity_is_descendant_of_or_equal_to(entity, row, &parents) && selected.0 != next {
-                selected.0 = next;
+        for entity in std::iter::once(row).chain(children.iter_descendants(row)) {
+            if let Ok((mut selected, previous)) = selected.get_mut(entity) {
+                selected.set_if_neq(UiSelected(next));
+                if let Some(mut previous) = previous {
+                    previous.synchronize_with_non_authored_selection_change(next);
+                }
             }
         }
     }
@@ -157,27 +183,21 @@ pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
 /// Shows the drafted mode in the options screen's `Video Setting` field, as
 /// the source options mode does above its resolution list.
 pub(super) fn project_drafted_display_resolution_into_authored_text(
-    draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
-    mut texts: Query<(Ref<UiTextBinding>, &mut Text)>,
+    drafts: Query<Ref<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>>,
+    mut texts: Query<(Ref<UiTextBinding>, &UiDocumentOwner, &mut Text)>,
 ) {
-    let label = format!("{} x {}", draft.display.width, draft.display.height);
-    for (binding, mut text) in &mut texts {
-        if binding.0 == UiTextPropertyBindingSource::DraftDisplayResolution
-            && (draft.is_changed() || binding.is_added())
-            && text.0 != label
-        {
-            text.0.clone_from(&label);
+    for (binding, owner, text) in &mut texts {
+        if binding.0 != UiTextPropertyBindingSource::DraftDisplayResolution {
+            continue;
+        }
+        let Ok(draft) = drafts.get(owner.0) else {
+            continue;
+        };
+        if draft.is_changed() || binding.is_added() {
+            text.map_unchanged(|text| &mut text.0).set_if_neq(format!(
+                "{} x {}",
+                draft.display.width, draft.display.height
+            ));
         }
     }
-}
-
-fn entity_is_descendant_of_or_equal_to(
-    entity: Entity,
-    ancestor: Entity,
-    parents: &Query<&ChildOf>,
-) -> bool {
-    std::iter::successors(Some(entity), |entity| {
-        parents.get(*entity).ok().map(ChildOf::parent)
-    })
-    .any(|entity| entity == ancestor)
 }

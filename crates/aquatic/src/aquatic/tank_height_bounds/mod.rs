@@ -105,8 +105,8 @@ impl TankHeightBoundsQueries<'_, '_> {
         &self,
         region: &HabitatRegion,
         limits: TankGeometryLimits,
+        walls: &[TankWallHeightEdit],
     ) -> Option<TankHeightBounds> {
-        let walls = self.wall_height_images(region, limits)?;
         let (edge, ..) = self
             .fences
             .get(*region.boundary_fence_entities.first()?)

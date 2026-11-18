@@ -47,47 +47,37 @@ pub(super) fn lower_events(
                 event.message == "ZT_EVENT" && event.string.as_deref() == Some("back")
             })
             && block.events.iter().any(source_event_shows_main_menu_layout);
-        if returns_from_options {
-            output
-                .actions
-                .push(UiActionRecord::Shell(UiShellActionRecord {
-                    trigger: trigger(&block.trigger),
-                    action: UiShellAction::NavigateBackFromOptions,
-                }));
-        }
-        let shell_owns_role_transition = returns_from_map_selection
-            || returns_from_options
-            || block.events.iter().any(source_event_enters_shell_role);
-        if returns_from_map_selection {
-            output
-                .actions
-                .push(UiActionRecord::Shell(UiShellActionRecord {
-                    trigger: trigger(&block.trigger),
-                    action: UiShellAction::NavigateBackFromMapSelection,
-                }));
-        }
-        let event_scope = block
+        let shown_by_shell = block
             .events
             .iter()
-            .find_map(|event| {
-                (event.message == "UI_CHILD")
-                    .then_some(event.target_child.as_deref())
-                    .flatten()
-            })
-            .or(confirmation_scope);
+            .filter_map(shell_transition_destination)
+            .collect::<Vec<_>>();
+        let mut returned_to_main_menu = false;
         for event in &block.events {
             if photo_safari_transition_owns_legacy_first_person_mode_setup
                 && source_event_enters_first_person_mode(event)
             {
                 continue;
             }
-            // The shell replaces the whole options screen with the main menu.
-            // Back and Apply's receiver-less UI_HIDE would otherwise hide only
-            // the pressed button, leaving the screen open without it.
-            if returns_from_options
-                && (source_event_hides_its_receiver(event)
-                    || source_event_shows_main_menu_layout(event))
+            if (returns_from_options || returns_from_map_selection)
+                && source_event_shows_main_menu_layout(event)
             {
+                if !returned_to_main_menu {
+                    output
+                        .actions
+                        .push(UiActionRecord::Shell(UiShellActionRecord {
+                            trigger: trigger(&block.trigger),
+                            action: if returns_from_options {
+                                UiShellAction::NavigateBackFromOptions
+                            } else {
+                                UiShellAction::NavigateBackFromMapSelection
+                            },
+                        }));
+                    returned_to_main_menu = true;
+                }
+                continue;
+            }
+            if returns_from_options && source_event_hides_its_receiver(event) {
                 continue;
             }
             flatten_event(
@@ -100,8 +90,8 @@ pub(super) fn lower_events(
                 tree_element,
                 output,
                 input,
-                event_scope,
-                shell_owns_role_transition,
+                confirmation_scope,
+                &shown_by_shell,
             )?;
         }
     }
@@ -161,12 +151,12 @@ pub(super) fn flatten_event(
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
     scope: Option<&str>,
-    shell_owns_role_transition: bool,
+    shown_by_shell: &[UiDocumentRole],
 ) -> io::Result<()> {
     if let Some(child) = event
         .child
         .as_deref()
-        .filter(|_| event.message == "UI_CHILD")
+        .filter(|_| matches!(event.message.as_str(), "UI_CHILD" | "UI_ROOT_CHILD"))
     {
         return flatten_event(
             trigger,
@@ -178,17 +168,20 @@ pub(super) fn flatten_event(
             tree_element,
             output,
             input,
-            scope,
-            shell_owns_role_transition,
+            child
+                .target_child
+                .as_deref()
+                .or(event.target_child.as_deref())
+                .or(scope),
+            shown_by_shell,
         );
     }
-    if shell_owns_role_transition
-        && matches!(event.message.as_str(), "UI_SHOW" | "UI_HIDE")
-        && cross_document_role(event, input).is_some()
+    if event.message == "UI_SHOW"
+        && cross_document_role(event, input).is_some_and(|role| shown_by_shell.contains(&role))
     {
-        // The shell already opens this screen; inline show/hide would open it twice.
         return Ok(());
     }
+    let scope = event.target_child.as_deref().or(scope);
     let target = if matches!(event.message.as_str(), "UI_EXPAND" | "UI_COLLAPSE") {
         tree_element.unwrap_or(current)
     } else {
@@ -212,32 +205,35 @@ pub(super) fn flatten_event(
     Ok(())
 }
 
-pub(super) fn source_event_enters_shell_role(event: &SourceUiEvent) -> bool {
-    let direct_transition = matches!(
-        event.message.as_str(),
-        "ZT_SET_GAME_MODE"
-            | "START_FREEFORM"
-            | "OPEN_CHALLENGE"
-            | "OPEN_CAMPAIGN"
-            | "OPEN_OPTIONS"
-            | "OPEN_DOWNLOADS"
-            | "OPEN_SAVED_GAMES"
-    );
-    let set_mode_transition = event.message == "ZT_SETMODE"
-        && matches!(
-            event
-                .string
-                .as_deref()
-                .or(event.value.as_deref())
-                .unwrap_or_default(),
-            "mode_options" | "mode_download"
-        );
-    direct_transition
-        || set_mode_transition
-        || event
+fn shell_transition_destination(event: &SourceUiEvent) -> Option<UiDocumentRole> {
+    let value = event
+        .string
+        .as_deref()
+        .or(event.value.as_deref())
+        .unwrap_or_default();
+    match event.message.as_str() {
+        "OPEN_OPTIONS" => Some(UiDocumentRole::Options),
+        "OPEN_DOWNLOADS" => Some(UiDocumentRole::Downloads),
+        "OPEN_SAVED_GAMES" => Some(UiDocumentRole::SavedGames),
+        "START_FREEFORM" | "OPEN_CHALLENGE" => Some(UiDocumentRole::Globe),
+        "OPEN_CAMPAIGN" => Some(UiDocumentRole::MapSelect),
+        "ZT_SET_GAME_MODE" => match value.to_ascii_lowercase().as_str() {
+            "freeform" | "config/freeform_mode.xml" | "challenge" | "config/challenge_mode.xml" => {
+                Some(UiDocumentRole::Globe)
+            }
+            "campaign" | "config/campaign_mode.xml" => Some(UiDocumentRole::MapSelect),
+            _ => None,
+        },
+        "ZT_SETMODE" => match value {
+            "mode_options" => Some(UiDocumentRole::Options),
+            "mode_download" => Some(UiDocumentRole::Downloads),
+            _ => None,
+        },
+        _ => event
             .child
             .as_deref()
-            .is_some_and(source_event_enters_shell_role)
+            .and_then(shell_transition_destination),
+    }
 }
 
 pub(super) fn closed_information_value<T>(

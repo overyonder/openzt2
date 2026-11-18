@@ -5,6 +5,7 @@ use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -13,6 +14,7 @@ use crate::construction::construction_interaction_types::PlacementValidity;
 use crate::economy::money_types::Money;
 use crate::terrain::terrain_world_sampling_types::TerrainPoint;
 
+use crate::placement::object_placement_geometry::ObjectPlacementGeometry;
 use crate::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 
 const POSITION_EPSILON_M: f32 = 0.01;
@@ -36,33 +38,57 @@ pub fn object_placement_cell_is_blocked_by_existing_object(
     catalogue: WorldDefinitionsView<'_>,
     mut definition_for: impl FnMut(Entity) -> Option<openzt2_game_data::AssetId>,
 ) -> bool {
-    let allows_scenery = definition
-        .constraints
-        .contains_all(PlacementConstraints::ALLOW_OVERLAP_SCENERY);
     placement.entities_occupying_cell(cell).any(|entity| {
-        if Some(entity) == ignored {
-            return false;
-        }
-        !allows_scenery
-            || definition_for(entity)
-                .and_then(|definition| catalogue.find_object(definition))
-                .is_none_or(|object| !matches!(&object.kind, WorldObjectKind::Scenery))
+        Some(entity) != ignored
+            && object_placement_stomp_action(definition, catalogue, definition_for(entity))
+                != PlacementStompAction::Allow
     })
 }
 
-pub fn validate_object_placement_footprint_cells(
+pub fn object_placement_stomp_action(
     definition: &PlaceableDefinition,
+    catalogue: WorldDefinitionsView<'_>,
+    target: Option<openzt2_game_data::AssetId>,
+) -> PlacementStompAction {
+    let Some(object) = target.and_then(|target| catalogue.find_object(target)) else {
+        return PlacementStompAction::Prevent;
+    };
+    let target = catalogue.placement_target_facts(object.id);
+    let types = target.map_or(object.behavior_type_identifiers.as_slice(), |target| {
+        target.types.as_slice()
+    });
+    if let Some(action) = definition
+        .stomp
+        .action_for_target(types, target.map(|target| &target.properties))
+    {
+        return action;
+    }
+    if definition
+        .constraints
+        .contains_all(PlacementConstraints::ALLOW_OVERLAP_SCENERY)
+        && matches!(object.kind, WorldObjectKind::Scenery)
+    {
+        PlacementStompAction::Allow
+    } else {
+        PlacementStompAction::Prevent
+    }
+}
+
+pub fn validate_object_placement_footprint_cells<'a>(
+    geometry: impl Into<ObjectPlacementGeometry<'a>>,
     footprint: &[FootprintCell],
     transform: &Transform,
     terrain: impl Fn(Vec2) -> Option<TerrainPoint>,
     occupied: impl Fn(IVec2) -> bool,
     facts: ObjectPlacementAuthoritativeFacts,
 ) -> PlacementValidity {
+    let geometry = geometry.into();
+    let definition = geometry.definition;
     let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, transform)
     else {
         return PlacementValidity::Invalid(PlacementFailure::AuthoredRule(definition.id));
     };
-    let Some(origin) = calculate_object_placement_footprint_origin(definition, transform, turns)
+    let Some(origin) = calculate_object_placement_footprint_origin(geometry, transform, turns)
     else {
         return PlacementValidity::Invalid(PlacementFailure::OutsideMap);
     };
@@ -161,17 +187,13 @@ pub fn validate_object_placement_over_terrain_samples(
     }
 }
 
-pub fn calculate_object_placement_footprint_origin(
-    definition: &PlaceableDefinition,
+pub fn calculate_object_placement_footprint_origin<'a>(
+    geometry: impl Into<ObjectPlacementGeometry<'a>>,
     transform: &Transform,
     eighth_turns: u8,
 ) -> Option<IVec2> {
     transform.translation.is_finite().then(|| {
-        let pivot_cm = if eighth_turns & 1 == 0 {
-            &definition.pivot_cm
-        } else {
-            &definition.diagonal_pivot_cm
-        };
+        let pivot_cm = geometry.into().pivot_cm(eighth_turns);
         let pivot = Vec2::new(f32::from(pivot_cm[0]), f32::from(pivot_cm[1])) / 100.0;
         let rotated_pivot = rotate_object_placement_point_by_quarter_turns(pivot, eighth_turns / 2);
         (Vec2::new(transform.translation.x, transform.translation.z) - rotated_pivot)
@@ -180,17 +202,14 @@ pub fn calculate_object_placement_footprint_origin(
     })
 }
 
-pub fn snap_object_placement_transform_to_authored_grid(
-    definition: &PlaceableDefinition,
+pub fn snap_object_placement_transform_to_authored_grid<'a>(
+    geometry: impl Into<ObjectPlacementGeometry<'a>>,
     mut transform: Transform,
 ) -> Option<Transform> {
-    let turns = calculate_authored_object_placement_eighth_turns(definition, &transform)?;
-    let origin = calculate_object_placement_footprint_origin(definition, &transform, turns)?;
-    let pivot_cm = if turns & 1 == 0 {
-        &definition.pivot_cm
-    } else {
-        &definition.diagonal_pivot_cm
-    };
+    let geometry = geometry.into();
+    let turns = calculate_authored_object_placement_eighth_turns(geometry.definition, &transform)?;
+    let origin = calculate_object_placement_footprint_origin(geometry, &transform, turns)?;
+    let pivot_cm = geometry.pivot_cm(turns);
     let pivot = Vec2::new(f32::from(pivot_cm[0]), f32::from(pivot_cm[1])) / 100.0;
     let rotated_pivot = rotate_object_placement_point_by_quarter_turns(pivot, turns / 2);
     let snapped = origin.as_vec2() + rotated_pivot;

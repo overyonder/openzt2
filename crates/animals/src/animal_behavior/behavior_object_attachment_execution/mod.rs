@@ -12,13 +12,11 @@ mod presentation;
 mod tests;
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
+use super::behavior_container_admission::BehaviorAdmissionInstruction;
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
-    interaction_container_requests_pending, resolve_interaction_container_requests,
-};
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::{
     InteractionContainerMember, InteractionContainerMemberships,
 };
@@ -115,23 +113,12 @@ pub(super) fn register_object_attachment_execution(app: &mut App) {
     use openzt2_world_state::application_schedule::FixedGameSet;
     held_food_prop::register(app);
     events::register_attachment_animation_observers(app);
-    app.add_observer(detach::record_slots_of_destroyed_holders);
+    app.add_observer(detach::record_slots_of_destroyed_holders)
+        .add_observer(admission::apply_object_attachment_admissions);
     app.add_systems(FixedUpdate, (
         start_or_finish_object_attachment,
-        (
-            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
-        ).chain(),
         detach_held_objects_for_current_actions,
-        (
-            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
-        ).chain(),
         detach::apply_delivered_detach_after_object_admission,
-        (
-            resolve_interaction_container_requests.run_if(interaction_container_requests_pending),
-            admission::apply_object_attachment_admissions.run_if(admission::attachment_admissions_pending),
-        ).chain(),
         created::hydrate_detach_created_objects,
         detach::release_objects_from_destroyed_holders,
         release_detached_object_locomotion_modifiers
@@ -352,7 +339,6 @@ fn start_or_finish_object_attachment(
                 &transforms,
                 &memberships,
                 &mut commands,
-                &mut admission::DetachMembershipRequests::Queued,
             )
         {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -403,6 +389,7 @@ fn start_or_finish_object_attachment(
         });
         let admission = admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
             actor,
+            instruction: BehaviorAdmissionInstruction::new(actor, task),
             attachment,
             visibility,
             modifier,
@@ -487,7 +474,6 @@ fn detach_held_objects_for_current_actions(
             &objects,
             &transforms,
             &mut commands,
-            &mut admission::DetachMembershipRequests::Queued,
         ) {
             warn!(
                 ?actor,

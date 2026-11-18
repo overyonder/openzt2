@@ -73,9 +73,6 @@ pub(super) struct GlobeSelectionTurn {
 pub(super) struct GlobeSelectedMarker(pub(super) Entity);
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct UiGlobeMarkerProjected;
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct UiGlobeModelsHydrated;
 
 #[derive(Component, Debug, Clone)]
@@ -84,8 +81,8 @@ pub(super) struct UiGlobePrefab {
     pub(super) primary: bool,
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct UiGlobePrimaryRenderable;
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct UiGlobePrimaryRenderable(pub(super) Entity);
 
 /// Rendered globe scene displayed inside the UI.
 #[derive(Component, Debug, Clone)]
@@ -94,9 +91,12 @@ pub(super) struct UiGlobeRenderScene {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = UiGlobeHostedSceneEntities)]
 pub(super) struct UiGlobeSceneOwner(pub(super) Entity);
 
+#[derive(Component)]
+#[relationship_target(relationship = UiGlobeSceneOwner, linked_spawn)]
+pub(super) struct UiGlobeHostedSceneEntities(Vec<Entity>);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct UiGlobeCamera {
-    pub(super) model: Entity,
-}
+pub(super) struct UiGlobeCamera;

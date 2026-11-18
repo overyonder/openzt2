@@ -163,22 +163,29 @@ fn video_setting_field_shows_the_drafted_resolution() {
     use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
     let mut app = App::new();
-    app.init_resource::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>()
-        .add_systems(
+    app.add_systems(
             Update,
             super::display_resolution_ui_presentation::project_drafted_display_resolution_into_authored_text,
         );
+    let owner = app
+        .world_mut()
+        .spawn(OptionsScreenDisplayGraphicsAndOnlineMessageDraft::default())
+        .id();
     let field = app
         .world_mut()
         .spawn((
             Text::new(""),
             UiTextBinding(UiTextPropertyBindingSource::DraftDisplayResolution),
+            openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner(
+                owner,
+            ),
         ))
         .id();
     {
         let mut draft = app
             .world_mut()
-            .resource_mut::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>();
+            .get_mut::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>(owner)
+            .unwrap();
         draft.display.width = 1920;
         draft.display.height = 1080;
     }

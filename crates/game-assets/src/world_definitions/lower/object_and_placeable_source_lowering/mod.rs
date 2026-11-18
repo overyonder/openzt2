@@ -13,6 +13,7 @@ use super::world_definition_source_value_reading_and_conversion::{
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
 use crate::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::{
     EntranceDefinition, FootprintCell, FootprintCellFlags, PlaceableDefinition,
     PlacementConstraints,
@@ -22,7 +23,6 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
-use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
@@ -206,6 +206,10 @@ pub(super) fn bind_object(
     {
         output.document.maintenance_definitions.push(maintenance);
     }
+    output.document.placement_target_facts.insert(
+        id(record.key),
+        super::authored_placement_stomp_lowering::lower_authored_placement_target_facts(record),
+    );
     output.document.object_record_keys.push((
         super::world_definition_source_value_reading_and_conversion::id(record.key),
         record.key.to_string(),
@@ -368,7 +372,7 @@ pub(super) fn bind_placeable(
         entrances,
         moving_footprint: moving_footprint(record)?,
         automatic_footprint: false,
-        ground_paths_block_placement: false,
+        stomp: Default::default(),
         dock_arrow: None,
     });
     Ok(())

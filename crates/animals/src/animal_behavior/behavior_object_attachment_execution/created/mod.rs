@@ -2,7 +2,7 @@
 //! demand-loaded presentation arrives.
 
 use super::*;
-use super::admission::{DetachAdmission, DetachMembershipRequest, DetachMembershipRequests};
+use super::admission::{DetachAdmission, DetachMembershipRequest};
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
@@ -24,7 +24,6 @@ pub(super) fn reserve_detach_created_objects(
     created: &[(AssetId, WorldObjectDetachDestination)],
     definitions: &WorldDefinitionsView<'_>,
     commands: &mut Commands,
-    requests: &mut DetachMembershipRequests,
 ) {
     let Some(holder_policy) = super::holder::AttachmentHolder::find(definitions, holder_definition)
     else {
@@ -40,30 +39,28 @@ pub(super) fn reserve_detach_created_objects(
         else {
             continue;
         };
-        requests.submit(
-            DetachMembershipRequest::Admit(
-                InteractionContainerAdmissionRequest::AdmitNew {
-                    container: holder,
-                    slot,
-                    capacity: policy.capacity,
-                    world_root: world.root,
+        DetachMembershipRequest::Admit(
+            InteractionContainerAdmissionRequest::AdmitNew {
+                container: holder,
+                slot,
+                capacity: policy.capacity,
+                world_root: world.root,
+            },
+            DetachAdmission::Create {
+                holder,
+                definition,
+                world,
+                transform: joint_transform,
+                attachment: ContainedObject {
+                    holder_definition,
+                    detach_rule: AssetId::default(),
+                    joint: None,
+                    relative_transform,
+                    attachment_request: None,
                 },
-                DetachAdmission::Create {
-                    holder,
-                    definition,
-                    world,
-                    transform: joint_transform,
-                    attachment: ContainedObject {
-                        holder_definition,
-                        detach_rule: AssetId::default(),
-                        joint: None,
-                        relative_transform,
-                        attachment_request: None,
-                    },
-                },
-            ),
-            commands,
-        );
+            },
+        )
+        .submit(commands);
     }
 }
 

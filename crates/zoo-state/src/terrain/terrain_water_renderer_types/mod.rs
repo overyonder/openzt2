@@ -7,7 +7,7 @@ pub const WATER_RENDER_TARGET_SIDE: u32 = 512;
 pub const WATER_REFLECTION_TARGET_SIZE: UVec2 = UVec2::new(512, 256);
 pub const WATER_REFRACTION_TARGET_SIZE: UVec2 = UVec2::new(1024, 512);
 
-#[derive(Resource)]
+#[derive(Component)]
 pub struct AuthoredTerrainWaterRendererTargets {
     pub combined_bump_map: Handle<Image>,
     pub reflection: Handle<Image>,

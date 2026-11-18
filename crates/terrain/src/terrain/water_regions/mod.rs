@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 pub(super) mod authored_membership;
+pub(super) mod edit_retention;
 
 use bevy::math::DVec3;
 use bevy::prelude::*;
@@ -13,39 +14,12 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegion;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::NaturalWaterRegionCells;
-use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionSource;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionsProjected;
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain_water;
-
-/// Retired edited owners survive only while an undo transaction references them.
-pub(super) fn cleanup_unreferenced_retired_water_region_entities(
-    mut commands: Commands,
-    retired: Query<Entity, (With<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionRetired>, Without<TerrainWaterRegionSource>)>,
-    edits: Query<(
-        &openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit,
-        Option<
-            &openzt2_zoo_state::construction::construction_transaction_types::EditCommitProgress,
-        >,
-    )>,
-) {
-    use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
-    for owner in &retired {
-        let retained = edits.iter().any(|(edit, progress)| {
-            progress.is_none_or(|progress| progress.phase != EditCommitPhase::Failed)
-                && edit
-                    .water_regions
-                    .iter()
-                    .any(|change| change.owner == owner)
-        });
-        if !retained {
-            commands.entity(owner).despawn();
-        }
-    }
-}
 
 /// Projects each authored DAT water-region row into one focused ECS entity.
 pub(super) fn project_natural_water_regions(
@@ -147,6 +121,46 @@ struct LiveWaterCell {
     owner_origin: Vec2,
 }
 
+#[derive(Component)]
+pub(super) struct TerrainWaterTargetsPending(IRect);
+
+pub(super) fn mark_edited_water_targets_pending(
+    mut commands: Commands,
+    mut changes: MessageReader<TerrainWaterChanged>,
+    mut chunks: Query<Option<&mut TerrainWaterTargetsPending>, With<TerrainChunk>>,
+) {
+    let mut dirty = bevy::ecs::entity::EntityHashMap::<IRect>::default();
+    for change in changes.read() {
+        let bounds = IRect::from_corners(change.min.as_ivec2(), change.max.as_ivec2());
+        dirty
+            .entry(change.chunk)
+            .and_modify(|previous| *previous = previous.union(bounds))
+            .or_insert(bounds);
+    }
+    for (entity, bounds) in dirty {
+        let Ok(pending) = chunks.get_mut(entity) else {
+            continue;
+        };
+        if let Some(mut pending) = pending {
+            pending.0 = pending.0.union(bounds);
+        } else {
+            commands
+                .entity(entity)
+                .insert(TerrainWaterTargetsPending(bounds));
+        }
+    }
+}
+
+pub(super) fn water_target_refresh_is_ready(
+    pending: Query<(), With<TerrainWaterTargetsPending>>,
+    brushes: Query<
+        (),
+        With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush>,
+    >,
+) -> bool {
+    brushes.is_empty() && !pending.is_empty()
+}
+
 /// Rebuilds spatial-audio emitters and animal water targets after a water edit.
 /// These connected regions do not supply water-effect affiliation. Sample/style
 /// state remains in the terrain overlays.
@@ -156,26 +170,35 @@ struct LiveWaterCell {
 #[allow(clippy::too_many_arguments)]
 pub(super) fn rebuild_edited_water_regions(
     mut commands: Commands,
-    mut changes: MessageReader<TerrainWaterChanged>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>)>,
-    regions: Query<(Entity, Option<&TerrainWaterRegionSource>), With<NaturalWaterRegion>>,
-    membership_indexes: Query<Entity, With<TerrainWaterMembershipIndex>>,
-    held_brushes: Query<
-        (),
-        With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush>,
-    >,
-    mut pending: Local<bool>,
+    regions: Query<(Entity, Has<TerrainWaterRegionSource>, &ChildOf), With<NaturalWaterRegion>>,
+    pending: Query<(Entity, &TerrainChunk), With<TerrainWaterTargetsPending>>,
 ) {
-    if changes.read().count() != 0 {
-        *pending = true;
+    let mut assets = Vec::<Handle<TerrainAsset>>::new();
+    for (entity, chunk) in &pending {
+        if terrain_assets
+            .get(&chunk.asset)
+            .and_then(TerrainAsset::terrain_chunk_cells_per_side)
+            .is_none()
+        {
+            continue;
+        }
+        commands
+            .entity(entity)
+            .remove::<TerrainWaterTargetsPending>();
+        if !assets.contains(&chunk.asset) {
+            assets.push(chunk.asset.clone());
+        }
     }
-    if !*pending || !held_brushes.is_empty() {
-        return;
-    }
-    *pending = false;
-    for (entity, source) in &regions {
-        if source.is_some() {
+    for (entity, source, parent) in &regions {
+        if !chunks
+            .get(parent.parent())
+            .is_ok_and(|(_, chunk, _)| assets.contains(&chunk.asset))
+        {
+            continue;
+        }
+        if source {
             commands
                 .entity(entity)
                 .remove::<(NaturalWaterRegion, NaturalWaterRegionCells)>();
@@ -183,18 +206,7 @@ pub(super) fn rebuild_edited_water_regions(
             commands.entity(entity).despawn();
         }
     }
-    for entity in &membership_indexes {
-        commands
-            .entity(entity)
-            .remove::<TerrainWaterMembershipIndex>();
-    }
 
-    let mut assets = Vec::<Handle<TerrainAsset>>::new();
-    for (_, chunk, _) in &chunks {
-        if !assets.iter().any(|asset| asset.id() == chunk.asset.id()) {
-            assets.push(chunk.asset.clone());
-        }
-    }
     for handle in assets {
         let Some(asset) = terrain_assets.get(&handle) else {
             continue;

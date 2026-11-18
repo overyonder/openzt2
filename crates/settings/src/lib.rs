@@ -1,9 +1,7 @@
-pub mod settings_action_types;
-pub mod settings_ui_routing_and_projection;
-
 mod audio_settings_application;
+mod authored_audio_volume_controls;
+mod authored_options_settings;
 use openzt2_interface_state::settings::audio_settings_types;
-mod audio_settings_ui_routing_and_projection;
 mod display_resolution_ui_presentation;
 mod display_settings_application;
 use openzt2_interface_state::settings::display_settings_types;
@@ -24,7 +22,6 @@ use display_settings_types::{
 use online_message_policy_types::OnlineMessagePolicy;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::graphics_settings_types::ReplaceGraphicsSettingsRequest;
-use options_screen_settings_draft_types::OptionsScreenDisplayGraphicsAndOnlineMessageDraft;
 
 use bevy::{ecs::schedule::common_conditions::*, prelude::*};
 
@@ -38,7 +35,6 @@ impl Plugin for SettingsPlugin {
         app.init_resource::<DisplaySettings>()
             .init_resource::<AudioSettings>()
             .init_resource::<GraphicsSettings>()
-            .init_resource::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>()
             .init_resource::<OnlineMessagePolicy>()
             .init_resource::<
                 openzt2_interface_state::settings::modder_tools_settings_types::ModderToolsSettings,
@@ -50,15 +46,27 @@ impl Plugin for SettingsPlugin {
             .add_message::<ReplaceAudioSettingsRequest>()
             .add_systems(
                 Update,
-                settings_ui_routing_and_projection::project_settings_to_authored_controls
-                    .after(UiSet::Projection)
-                    .in_set(GameSet::Ui),
+                (
+                    authored_options_settings::apply_authored_options_setting_edits,
+                    authored_options_settings::apply_authored_mouse_look_settings,
+                )
+                    .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
+                    .in_set(GameSet::Intent),
             )
             .add_systems(
                 Update,
                 (
-                    audio_settings_ui_routing_and_projection::
-                        route_authored_audio_volume_actions_to_replacement_requests,
+                    authored_options_settings::initialize_projected_options_settings_drafts,
+                    authored_options_settings::project_options_draft_into_radio_buttons
+                        .after(authored_options_settings::initialize_projected_options_settings_drafts),
+                    authored_options_settings::project_current_camera_mouse_look_into_controls,
+                )
+                    .in_set(UiSet::DomainProjection),
+            )
+            .add_systems(
+                Update,
+                (
+                    authored_audio_volume_controls::apply_authored_audio_volume_edits,
                     audio_settings_application::replace_accepted_audio_settings_from_requests,
                 )
                     .chain()
@@ -66,8 +74,7 @@ impl Plugin for SettingsPlugin {
             )
             .add_systems(
                 Update,
-                audio_settings_ui_routing_and_projection::
-                    project_accepted_audio_volume_settings_into_authored_controls
+                authored_audio_volume_controls::project_accepted_audio_volume_into_controls
                     .after(UiSet::Projection)
                     .in_set(GameSet::Ui),
             )
@@ -87,12 +94,16 @@ impl Plugin for SettingsPlugin {
             .add_systems(
                 Update,
                 display_settings_application::validate_and_accept_requested_display_settings
+                    .after(authored_options_settings::apply_authored_options_setting_edits)
+                    .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
                     .run_if(on_message::<ReplaceDisplaySettingsRequest>)
                     .in_set(GameSet::Intent),
             )
             .add_systems(
                 Update,
                 graphics_settings_application::validate_and_accept_requested_graphics_settings
+                    .after(authored_options_settings::apply_authored_options_setting_edits)
+                    .before(openzt2_interface_state::shell::ShellNavigationAfterSettings)
                     .run_if(on_message::<ReplaceGraphicsSettingsRequest>)
                     .in_set(GameSet::Intent),
             )
@@ -105,15 +116,9 @@ impl Plugin for SettingsPlugin {
             .add_systems(
                 Update,
                 (
-                    graphics_settings_application::
-                        apply_accepted_multisample_count_to_zoo_cameras,
-                    graphics_settings_application::
-                        apply_accepted_shadow_detail_to_environment_lights,
+                    graphics_settings_application::project_multisample_count_to_zoo_cameras,
+                    graphics_settings_application::project_shadow_detail_to_environment_lights,
                 )
-                    .run_if(
-                        graphics_settings_application::
-                            graphics_settings_changed_or_render_target_was_added,
-                    )
                     .in_set(GameSet::Presentation),
             )
             .add_systems(
@@ -137,7 +142,8 @@ impl Plugin for SettingsPlugin {
                         project_drafted_display_resolution_into_authored_text,
                 )
                     .chain()
-                    .in_set(GameSet::Ui),
+                    .after(authored_options_settings::initialize_projected_options_settings_drafts)
+                    .in_set(UiSet::DomainProjection),
             )
             .add_systems(
                 Update,
@@ -150,7 +156,8 @@ impl Plugin for SettingsPlugin {
                         project_drafted_graphics_detail_settings_into_authored_rows,
                 )
                     .chain()
-                    .in_set(GameSet::Ui),
+                    .after(authored_options_settings::initialize_projected_options_settings_drafts)
+                    .in_set(UiSet::DomainProjection),
             );
     }
 }

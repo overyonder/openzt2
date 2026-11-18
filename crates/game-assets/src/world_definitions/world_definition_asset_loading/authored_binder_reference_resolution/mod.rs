@@ -27,7 +27,7 @@ impl AuthoredBinderSourcePathIndex {
         from: &str,
         binder_type: &str,
     ) -> io::Result<Option<(PathBuf, u64)>> {
-        let revision = archives.revision();
+        let revision = archives.binder_source_version();
         let mut resolved = self
             .resolved
             .lock()

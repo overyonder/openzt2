@@ -4,19 +4,17 @@ use bevy::{
     render::Extract,
     ui::ComputedStackIndex,
     ui_render::{stack_z_offsets, ExtractedUiItem, ExtractedUiNodes},
-    window::PrimaryWindow,
 };
 
 use super::{
-    authored_ui_canvas_scaling_and_clipping::UiLogicalCanvas,
+    authored_ui_canvas_scaling_and_clipping::UiCanvasMetrics,
     authored_ui_text_layout_presentation::{UiPhysicalFontSize, UiSingleLineTextAlignment},
 };
 
 /// Preserve system-font aspect when the authored canvas stretches. Bevy owns
 /// shaping, glyph atlases and drawing; node regions and images stay unchanged.
-pub fn preserve_authored_font_aspect_in_extracted_text_draws(
-    windows: Extract<Query<&Window, With<PrimaryWindow>>>,
-    hierarchy: Extract<Query<(Option<&UiLogicalCanvas>, Option<&ChildOf>)>>,
+pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
+    hierarchy: Extract<Query<(Option<&UiCanvasMetrics>, Option<&ChildOf>)>>,
     text_nodes: Extract<
         Query<
             (
@@ -31,10 +29,6 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
     >,
     extracted: ResMut<ExtractedUiNodes>,
 ) {
-    let Ok(window) = windows.single() else {
-        return;
-    };
-    let viewport = Vec2::new(window.width(), window.height());
     let ExtractedUiNodes { uinodes, changed } = extracted.into_inner();
     for main_entity in changed.iter() {
         let Some((_, draws)) = uinodes.get_mut(main_entity) else {
@@ -54,24 +48,17 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
         else {
             continue;
         };
-        let mut ancestor = entity;
-        let mut logical_size = None;
-        while let Ok((canvas, parent)) = hierarchy.get(ancestor) {
-            if let Some(canvas) = canvas {
-                logical_size = Some(canvas.logical_size());
-                break;
-            }
-            let Some(parent) = parent else {
-                break;
-            };
-            ancestor = parent.parent();
-        }
-        let Some(logical_size) = logical_size else {
+        let metrics = std::iter::successors(Some(entity), |entity| {
+            hierarchy
+                .get(*entity)
+                .ok()
+                .and_then(|(_, parent)| parent)
+                .map(ChildOf::parent)
+        })
+        .find_map(|node| hierarchy.get(node).ok().and_then(|(metrics, _)| metrics));
+        let Some(metrics) = metrics.filter(|metrics| metrics.has_extent()) else {
             continue;
         };
-        if viewport.min_element() <= 0.0 || logical_size.min_element() <= 0.0 {
-            continue;
-        }
         let alignment = match layout.justify {
             Justify::Center => 0.5,
             Justify::End | Justify::Right => 1.0,
@@ -91,10 +78,7 @@ pub fn preserve_authored_font_aspect_in_extracted_text_draws(
         }
         let correction = global
             * Affine2::from_translation(anchor)
-            * Affine2::from_scale(Vec2::new(
-                viewport.y * logical_size.x / (logical_size.y * viewport.x),
-                1.0,
-            ))
+            * Affine2::from_scale(metrics.isotropic_correction)
             * Affine2::from_translation(-anchor)
             * global.inverse();
         let correction =

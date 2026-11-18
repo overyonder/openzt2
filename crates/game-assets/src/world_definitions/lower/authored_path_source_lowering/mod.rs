@@ -13,6 +13,7 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
@@ -22,7 +23,6 @@ use openzt2_game_data::world_definitions::paths_and_tile_surfaces::{
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 /// Lowers ground and elevated paths into the surface,
@@ -122,6 +122,14 @@ pub(super) fn bind_authored_path(
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
+    output.document.path_stomp_policies.insert(
+        object_id,
+        super::authored_placement_stomp_lowering::lower_authored_placement_stomp_policy(record)?,
+    );
+    output.document.placement_target_facts.insert(
+        id(record.key),
+        super::authored_placement_stomp_lowering::lower_authored_placement_target_facts(record),
+    );
     output.document.object_record_keys.push((
         super::world_definition_source_value_reading_and_conversion::id(record.key),
         record.key.to_string(),

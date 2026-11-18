@@ -16,6 +16,7 @@ use openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::locomotion::locomotion_types::Velocity;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPrefabHydrated;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewRequest;
 use openzt2_zoo_state::progression::adoption_and_content_availability_types::AnimalAdoptionAvailabilityPolicy;
@@ -31,20 +32,32 @@ use super::{
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
 };
 
+pub(super) type AnimalPlacementCursor<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static mut AnimalSpeciesAwaitingHabitatPlacement>,
+        Option<&'static mut ObjectPlacementPreviewRequest>,
+    ),
+    With<ConstructionCursor>,
+>;
+
 pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
     mut commands: Commands,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
-    construction_cursors: Query<Entity, With<ConstructionCursor>>,
+    mut construction_cursors: AnimalPlacementCursor,
     mut construction_tool_requests: MessageWriter<SelectConstructionTool>,
 ) {
-    let Ok(construction_cursor) = construction_cursors.single() else {
+    let Ok((cursor, placement, preview)) = construction_cursors.single_mut() else {
         return;
     };
     let Some(available_species) = species_index.get(&species_assets) else {
         return;
     };
+    let mut latest = None;
     for request in adoption_placement_requests.read() {
         // Species rows choose the sex from the gender toggle. A variant row
         // names the exact authored entity, including its sex and life stage.
@@ -66,7 +79,7 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
             };
         info!(target: "openzt2_gameplay_journey", ?request, prefab = ?preview_definition,
             "starting adoption placement");
-        commands.entity(construction_cursor).insert((
+        latest = Some((
             AnimalSpeciesAwaitingHabitatPlacement {
                 species: species.id,
                 variant,
@@ -78,6 +91,16 @@ pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
             ObjectPlacementPreviewRequest(preview_definition),
         ));
         construction_tool_requests.write(SelectConstructionTool(ConstructionTool::Placement));
+    }
+    if let Some((request, preview_request)) = latest {
+        set_animal_cursor_placement(
+            cursor,
+            placement,
+            preview,
+            request,
+            preview_request,
+            &mut commands,
+        );
     }
 }
 
@@ -97,17 +120,18 @@ pub(super) fn begin_animal_relocation_on_construction_cursor(
             Without<openzt2_zoo_state::animal_health::types::Rampaging>,
         ),
     >,
-    cursors: Query<Entity, With<ConstructionCursor>>,
+    mut cursors: AnimalPlacementCursor,
     mut tools: MessageWriter<SelectConstructionTool>,
 ) {
-    let Ok(cursor) = cursors.single() else {
+    let Ok((cursor, placement, preview)) = cursors.single_mut() else {
         return;
     };
+    let mut latest = None;
     for request in requests.read() {
         let Ok((species, variant, definition)) = animals.get(request.0) else {
             continue;
         };
-        commands.entity(cursor).insert((
+        latest = Some((
             AnimalSpeciesAwaitingHabitatPlacement {
                 species: species.species,
                 variant: Some(variant.0),
@@ -116,6 +140,36 @@ pub(super) fn begin_animal_relocation_on_construction_cursor(
             ObjectPlacementPreviewRequest(definition.0),
         ));
         tools.write(SelectConstructionTool(ConstructionTool::Placement));
+    }
+    if let Some((request, preview_request)) = latest {
+        set_animal_cursor_placement(
+            cursor,
+            placement,
+            preview,
+            request,
+            preview_request,
+            &mut commands,
+        );
+    }
+}
+
+fn set_animal_cursor_placement(
+    cursor: Entity,
+    placement: Option<Mut<AnimalSpeciesAwaitingHabitatPlacement>>,
+    preview: Option<Mut<ObjectPlacementPreviewRequest>>,
+    request: AnimalSpeciesAwaitingHabitatPlacement,
+    preview_request: ObjectPlacementPreviewRequest,
+    commands: &mut Commands,
+) {
+    if let Some(mut placement) = placement {
+        placement.set_if_neq(request);
+    } else {
+        commands.entity(cursor).insert(request);
+    }
+    if let Some(mut preview) = preview {
+        preview.set_if_neq(preview_request);
+    } else {
+        commands.entity(cursor).insert(preview_request);
     }
 }
 
@@ -244,6 +298,7 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
             &mut Transform,
             Option<&mut avian3d::prelude::Position>,
             Option<&mut avian3d::prelude::Rotation>,
+            Option<&mut Velocity>,
             Has<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>,
         ),
         (
@@ -297,7 +352,9 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
             });
         }
         AnimalPlacementOperation::Relocation(animal) => {
-            let Ok((mut transform, position, rotation, has_task)) = animals.get_mut(animal) else {
+            let Ok((mut transform, position, rotation, velocity, has_task)) =
+                animals.get_mut(animal)
+            else {
                 return;
             };
             transform.translation = valid_preview.transform.translation;
@@ -311,15 +368,15 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
             if has_task {
                 openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(animal, &mut commands);
             }
-            commands
-                .entity(animal)
-                .remove::<(
-                    openzt2_zoo_state::locomotion::locomotion_types::Destination,
-                    openzt2_zoo_state::locomotion::locomotion_types::Docking,
-                )>()
-                .insert(openzt2_zoo_state::locomotion::locomotion_types::Velocity(
-                    Vec3::ZERO,
-                ));
+            commands.entity(animal).remove::<(
+                openzt2_zoo_state::locomotion::locomotion_types::Destination,
+                openzt2_zoo_state::locomotion::locomotion_types::Docking,
+            )>();
+            if let Some(mut velocity) = velocity {
+                velocity.set_if_neq(Velocity(Vec3::ZERO));
+            } else {
+                commands.entity(animal).insert(Velocity(Vec3::ZERO));
+            }
         }
     }
     commands.entity(cursor_entity).remove::<(

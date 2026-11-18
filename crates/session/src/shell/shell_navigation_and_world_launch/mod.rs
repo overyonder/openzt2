@@ -1,52 +1,22 @@
 use bevy::{app::AppExit, prelude::*};
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_scenario::WorldMapSupportedGameModeFlags;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::persistence::profile_types::ProfileIndex;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 
-use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoice;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
+use openzt2_interface_state::shell::shell_selection_types::WorldChoiceBinding;
 
 use super::shell_navigation_request_types::{
-    ChooseWorld, ExitApplication, NavigateShellBack, ReturnToMainMenu, SelectWorldSessionMode,
-    ShowDownloads, ShowSavedGames, StartSelectedWorld,
+    ChooseWorld, ExitApplication, SelectWorldSessionMode, StartSelectedWorld,
 };
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
-
-/// Applies the focused application transition requested by gameplay or a
-/// combined confirmation action. The current shell document is rebuilt only
-/// when already in `MainMenu`; all other phases use Bevy state teardown.
-pub(super) fn return_to_main_menu(
-    mut commands: Commands,
-    mut requests: MessageReader<ReturnToMainMenu>,
-    phase: Res<State<GamePhase>>,
-    screens: Query<(Entity, &ShellScreen)>,
-    mut next_phase: ResMut<NextState<GamePhase>>,
-    mut show_ui: MessageWriter<ShowUiRole>,
-) {
-    for _ in requests.read() {
-        if *phase.get() == GamePhase::MainMenu {
-            replace_current_shell_screen(
-                &mut commands,
-                &screens,
-                ShellScreen::MainMenu,
-                UiDocumentRole::MainMenu,
-                &mut show_ui,
-            );
-        } else {
-            next_phase.set(GamePhase::MainMenu);
-        }
-    }
-}
 
 /// Requests a normal application exit.
 pub(super) fn exit_application_after_request(
@@ -61,7 +31,7 @@ pub(super) fn exit_application_after_request(
 /// Selects the world represented by the pressed or submitted choice.
 pub(super) fn select_world_from_activated_choice_view(
     mut activations: MessageReader<UiNodeActivated>,
-    views: Query<&WorldChoiceView>,
+    views: Query<WorldChoiceBinding>,
     choices: Query<&WorldChoice>,
     mut selection: ResMut<ShellSelection>,
 ) {
@@ -69,10 +39,14 @@ pub(super) fn select_world_from_activated_choice_view(
         if !matches!(activation.trigger, UiTrigger::Press | UiTrigger::Submit) {
             continue;
         }
-        let Ok(view) = views.get(activation.node) else {
+        let Some(view) = views
+            .get(activation.node)
+            .ok()
+            .and_then(|binding| binding.choice())
+        else {
             continue;
         };
-        let Ok(choice) = choices.get(view.0) else {
+        let Ok(choice) = choices.get(view) else {
             continue;
         };
         if selection.mode == Some(choice.mode) {
@@ -193,133 +167,55 @@ fn supports_mode(flags: WorldMapSupportedGameModeFlags, mode: WorldSessionMode) 
     flags.contains_all(expected)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn navigate_to_previous_shell_screen(
+#[derive(Component)]
+pub(super) struct PendingCampaignLaunch(openzt2_game_data::AssetId);
+
+pub(super) fn request_campaign_launch_after_world_exit(
     mut commands: Commands,
-    mut requests: MessageReader<NavigateShellBack>,
-    phase: Res<State<GamePhase>>,
-    screens: Query<(Entity, &ShellScreen)>,
-    mut next_phase: ResMut<NextState<GamePhase>>,
-    mut show_ui: MessageWriter<ShowUiRole>,
-) {
-    for _ in requests.read() {
-        match phase.get() {
-            GamePhase::MapSelection => next_phase.set(GamePhase::MainMenu),
-            GamePhase::MainMenu => {
-                let nested_screen = screens.iter().any(|(_, screen)| {
-                    matches!(
-                        screen,
-                        ShellScreen::ProfileSelect
-                            | ShellScreen::Options
-                            | ShellScreen::Downloads
-                            | ShellScreen::SavedGames
-                    )
-                });
-                if nested_screen {
-                    replace_current_shell_screen(
-                        &mut commands,
-                        &screens,
-                        ShellScreen::MainMenu,
-                        UiDocumentRole::MainMenu,
-                        &mut show_ui,
-                    );
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
-pub(super) fn show_downloads_screen_from_requests(
-    mut commands: Commands,
-    mut requests: MessageReader<ShowDownloads>,
-    screens: Query<(Entity, &ShellScreen)>,
-    mut show_ui: MessageWriter<ShowUiRole>,
-) {
-    for _ in requests.read() {
-        replace_current_shell_screen(
-            &mut commands,
-            &screens,
-            ShellScreen::Downloads,
-            UiDocumentRole::Downloads,
-            &mut show_ui,
-        );
-    }
-}
-
-pub(super) fn show_saved_games_screen_from_requests(
-    mut commands: Commands,
-    mut requests: MessageReader<ShowSavedGames>,
-    screens: Query<(Entity, &ShellScreen)>,
-    mut show_ui: MessageWriter<ShowUiRole>,
-) {
-    for _ in requests.read() {
-        replace_current_shell_screen(
-            &mut commands,
-            &screens,
-            ShellScreen::SavedGames,
-            UiDocumentRole::SavedGames,
-            &mut show_ui,
-        );
-    }
-}
-
-pub(super) fn replace_current_shell_screen(
-    commands: &mut Commands,
-    screens: &Query<(Entity, &ShellScreen)>,
-    screen: ShellScreen,
-    role: UiDocumentRole,
-    show_ui: &mut MessageWriter<ShowUiRole>,
-) -> Entity {
-    for (entity, _) in screens.iter() {
-        commands.entity(entity).despawn();
-    }
-    let owner = commands.spawn((screen, Visibility::Inherited)).id();
-    show_ui.write(ShowUiRole { role, owner });
-    owner
-}
-
-/// Keep the authored next/retry target across the ordinary world teardown.
-pub(super) fn continue_campaign_after_world_exit(
     mut requests: MessageReader<super::shell_navigation_request_types::ContinueCampaign>,
     phase: Res<State<GamePhase>>,
     mut selection: ResMut<ShellSelection>,
     mut next_phase: ResMut<NextState<GamePhase>>,
-    mut pending: Local<Option<openzt2_game_data::AssetId>>,
-    mut starts: MessageWriter<StartSelectedWorld>,
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     variables: Res<
         openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     >,
 ) {
-    for request in requests.read() {
-        if *phase.get() != GamePhase::InGame {
-            continue;
-        }
-        let Some(scenario) = scenarios
-            .get(&assets)
-            .and_then(|view| view.campaign_scenario(request.0))
-        else {
-            continue;
-        };
-        if variables.scenario_state(scenario)
-            == openzt2_game_data::world_scenario::CampaignScenarioState::Locked
-        {
-            continue;
-        }
-        *pending = Some(request.0);
-        selection.mode = Some(WorldSessionMode::Campaign);
-        selection.scenario = Some(request.0);
-        selection.starting_cash_cents = None;
-        next_phase.set(GamePhase::MapSelection);
-    }
-    if *phase.get() == GamePhase::MapSelection {
-        if let Some(target) = pending.take() {
-            selection.scenario = Some(target);
-            starts.write(StartSelectedWorld);
-        }
-    } else if *phase.get() == GamePhase::MainMenu {
-        *pending = None;
+    let target = requests
+        .read()
+        .filter(|_| *phase.get() == GamePhase::InGame)
+        .filter(|request| {
+            scenarios
+                .get(&assets)
+                .and_then(|view| view.campaign_scenario(request.0))
+                .is_some_and(|scenario| {
+                    variables.scenario_state(scenario)
+                        != openzt2_game_data::world_scenario::CampaignScenarioState::Locked
+                })
+        })
+        .map(|request| request.0)
+        .last();
+    let Some(target) = target else { return };
+    commands.spawn((
+        PendingCampaignLaunch(target),
+        DespawnOnEnter(GamePhase::MainMenu),
+    ));
+    selection.mode = Some(WorldSessionMode::Campaign);
+    selection.scenario = Some(target);
+    selection.starting_cash_cents = None;
+    next_phase.set(GamePhase::MapSelection);
+}
+
+pub(super) fn begin_pending_campaign_launch_after_world_exit(
+    mut commands: Commands,
+    launches: Query<(Entity, &PendingCampaignLaunch)>,
+    mut selection: ResMut<ShellSelection>,
+    mut starts: MessageWriter<StartSelectedWorld>,
+) {
+    for (entity, launch) in &launches {
+        selection.scenario = Some(launch.0);
+        starts.write(StartSelectedWorld);
+        commands.entity(entity).despawn();
     }
 }

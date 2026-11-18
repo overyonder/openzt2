@@ -1,12 +1,9 @@
 use super::{
     build_water_ray_disk_mesh, build_water_ray_strip_mesh,
-    systems::{TerrainWaterRayEffect, TerrainWaterRayPass},
+    systems::{TerrainWaterRayEffect, TerrainWaterRayMeshPoses, TerrainWaterRayPass},
     view_occlusion::WaterRayViewOcclusion,
 };
-use bevy::{
-    mesh::VertexAttributeValues, prelude::*, render::storage::ShaderBuffer,
-    transform::helper::TransformHelper,
-};
+use bevy::{mesh::VertexAttributeValues, prelude::*, render::storage::ShaderBuffer};
 use openzt2_game_assets::{
     material::runtime::effect_pass_gpu_data::EffectPassMaterial,
     terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
@@ -17,7 +14,7 @@ use openzt2_zoo_state::{
     terrain::{
         terrain_water_presentation_types::TerrainWaterRegionQuery,
         terrain_water_ray_types::TerrainWaterRayAnimation,
-        terrain_water_view_state::TerrainWaterViewState,
+        terrain_water_view_state::{TerrainWaterCameraPose, TerrainWaterViewState},
     },
 };
 
@@ -27,7 +24,16 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
     time: Res<Time>,
     view: Res<TerrainWaterViewState>,
     lights: Query<&EnvironmentWaterRayLight>,
-    cameras: Query<(Entity, &Camera, &Projection, Option<&WaterRayViewOcclusion>), With<ZooCamera>>,
+    mut cameras: Query<
+        (
+            Entity,
+            &Camera,
+            &Projection,
+            Option<&TerrainWaterCameraPose>,
+            Option<&mut WaterRayViewOcclusion>,
+        ),
+        With<ZooCamera>,
+    >,
     sources: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
     mut effects: Query<(
@@ -36,114 +42,129 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
         &TerrainWaterRayEffect,
         &mut TerrainWaterRayAnimation,
         &mut Visibility,
+        &mut TerrainWaterRayMeshPoses,
+        Option<&Children>,
     )>,
-    mut spatial: ParamSet<(
-        TransformHelper,
-        Query<(
-            &ChildOf,
-            &TerrainWaterRayPass,
-            &Mesh3d,
-            &MeshMaterial3d<EffectPassMaterial>,
-            &mut Transform,
-        )>,
+    mut passes: Query<(
+        &TerrainWaterRayPass,
+        &Mesh3d,
+        &MeshMaterial3d<EffectPassMaterial>,
+        &mut Transform,
     )>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    for (_, _, _, _, mut visibility) in &mut effects {
-        *visibility = Visibility::Hidden;
+    for (_, _, _, _, mut visibility, _, _) in &mut effects {
+        visibility.set_if_neq(Visibility::Hidden);
     }
-    for (entity, _, _, _) in &cameras {
-        commands.entity(entity).remove::<WaterRayViewOcclusion>();
-    }
-    if effects.is_empty() {
-        return;
-    }
-    let (Ok(light), Ok((camera_entity, camera, projection, query))) =
-        (lights.single(), cameras.single())
-    else {
-        return;
-    };
-    let Some(sun) = light.sun_direction() else {
-        return;
-    };
-    let Ok(camera_transform) = spatial.p0().compute_global_transform(camera_entity) else {
-        return;
-    };
-    if !camera.is_active {
-        return;
-    }
-    let Some(position) = view.camera_position() else {
-        return;
-    };
-    let Projection::Perspective(perspective) = projection else {
-        return;
-    };
-    let Some(viewport) = camera.physical_viewport_size() else {
-        return;
-    };
-    let world_to_clip =
-        projection.get_clip_from_view() * Mat4::from(camera_transform.affine().inverse());
-    let centre = position + sun * (perspective.far * 0.95);
-    let side = perspective.far * 0.95 * 0.05;
-    let right = *camera_transform.right();
-    let up = *camera_transform.up();
-    let corners = billboard_clip_corners(world_to_clip, centre, right, up, side);
-    let offset = centre - position;
-    let camera_offset = Vec3::new(
-        right.dot(offset),
-        up.dot(offset),
-        camera_transform.forward().dot(offset),
-    );
-    let vertical_tangent = (perspective.fov * 0.5).tan();
-    let half_fov_tangents = Vec2::new(
-        vertical_tangent * perspective.aspect_ratio,
-        vertical_tangent,
-    );
-    let (total, clipped) = projected_pixel_area(
-        camera_offset,
-        Vec2::splat(side),
-        half_fov_tangents,
-        viewport,
-    );
-    let (large_total, large_clipped) = projected_pixel_area(
-        camera_offset,
-        Vec2::splat(side * 6.0),
-        half_fov_tangents,
-        viewport,
-    );
-    if let Some(query) = query {
-        // The renderer consumes an extracted copy; the mailbox retains only
-        // the last completed GPU result across main/render worlds.
-        let visible = query.visible_fraction().unwrap_or(0.0);
-        apply_ray_contributions(
-            light,
-            sun,
-            position,
-            right,
-            visible,
-            if large_total > 0.0 {
-                large_clipped / large_total
-            } else {
-                0.0
-            },
-            &view,
-            &sources,
-            &assets,
-            &mut effects,
-            &mut spatial.p1(),
-            &mut materials,
-            &mut buffers,
-            &mut meshes,
-            time.delta_secs(),
+    let active_camera = (|| {
+        if effects.is_empty() {
+            return None;
+        }
+        let (Ok(light), Ok((camera_entity, camera, projection, pose, query))) =
+            (lights.single(), cameras.single_mut())
+        else {
+            return None;
+        };
+        let Some(sun) = light.sun_direction() else {
+            return None;
+        };
+        let Some(camera_transform) = pose.and_then(|pose| pose.0) else {
+            return None;
+        };
+        if !camera.is_active {
+            return None;
+        }
+        let Some(position) = view.camera_position() else {
+            return None;
+        };
+        let Projection::Perspective(perspective) = projection else {
+            return None;
+        };
+        let Some(viewport) = camera.physical_viewport_size() else {
+            return None;
+        };
+        let world_to_clip =
+            projection.get_clip_from_view() * Mat4::from(camera_transform.affine().inverse());
+        let centre = position + sun * (perspective.far * 0.95);
+        let side = perspective.far * 0.95 * 0.05;
+        let right = *camera_transform.right();
+        let up = *camera_transform.up();
+        let corners = billboard_clip_corners(world_to_clip, centre, right, up, side);
+        let offset = centre - position;
+        let camera_offset = Vec3::new(
+            right.dot(offset),
+            up.dot(offset),
+            camera_transform.forward().dot(offset),
         );
+        let vertical_tangent = (perspective.fov * 0.5).tan();
+        let half_fov_tangents = Vec2::new(
+            vertical_tangent * perspective.aspect_ratio,
+            vertical_tangent,
+        );
+        let (total, clipped) = projected_pixel_area(
+            camera_offset,
+            Vec2::splat(side),
+            half_fov_tangents,
+            viewport,
+        );
+        let (large_total, large_clipped) = projected_pixel_area(
+            camera_offset,
+            Vec2::splat(side * 6.0),
+            half_fov_tangents,
+            viewport,
+        );
+        if let Some(query) = query.as_deref() {
+            // The renderer consumes an extracted copy; the mailbox retains only
+            // the last completed GPU result across main/render worlds.
+            let visible = query.visible_fraction().unwrap_or(0.0);
+            apply_ray_contributions(
+                light,
+                sun,
+                position,
+                right,
+                visible,
+                if large_total > 0.0 {
+                    large_clipped / large_total
+                } else {
+                    0.0
+                },
+                &view,
+                &sources,
+                &assets,
+                &mut effects,
+                &mut passes,
+                &mut materials,
+                &mut buffers,
+                &mut meshes,
+                time.delta_secs(),
+            );
+        }
+        let fraction = if total > 0.0 { clipped / total } else { 0.0 };
+        if let Some(mut current) = query {
+            if current.clip_corners != corners
+                || current.full_sample_count != total
+                || current.projected_fraction != fraction
+            {
+                current.clip_corners = corners;
+                current.full_sample_count = total;
+                current.projected_fraction = fraction;
+            }
+        } else {
+            let mut next = WaterRayViewOcclusion::default();
+            next.clip_corners = corners;
+            next.full_sample_count = total;
+            next.projected_fraction = fraction;
+            commands.entity(camera_entity).insert(next);
+        }
+        Some(camera_entity)
+    })();
+    for (entity, _, _, _, request) in &cameras {
+        if request.is_some() && Some(entity) != active_camera {
+            commands.entity(entity).remove::<WaterRayViewOcclusion>();
+        }
     }
-    let mut next = query.cloned().unwrap_or_default();
-    next.clip_corners = corners;
-    next.full_sample_count = total;
-    next.projected_fraction = if total > 0.0 { clipped / total } else { 0.0 };
-    commands.entity(camera_entity).insert(next);
 }
 
 fn billboard_clip_corners(
@@ -241,9 +262,10 @@ fn apply_ray_contributions(
         &TerrainWaterRayEffect,
         &mut TerrainWaterRayAnimation,
         &mut Visibility,
+        &mut TerrainWaterRayMeshPoses,
+        Option<&Children>,
     )>,
     passes: &mut Query<(
-        &ChildOf,
         &TerrainWaterRayPass,
         &Mesh3d,
         &MeshMaterial3d<EffectPassMaterial>,
@@ -270,7 +292,9 @@ fn apply_ray_contributions(
     }) else {
         return;
     };
-    for (entity, parent, effect, mut animation, mut visibility) in effects.iter_mut() {
+    for (_, parent, effect, mut animation, mut visibility, mut mesh_poses, children) in
+        effects.iter_mut()
+    {
         animation.advance_intensity(visible, delta);
         if parent.parent() != owner {
             continue;
@@ -302,10 +326,9 @@ fn apply_ray_contributions(
             Vec4::W,
         );
         let mut valid = true;
-        for (pass_parent, pass, mesh, material, mut transform) in passes.iter_mut() {
-            if pass_parent.parent() != entity {
-                continue;
-            }
+        let mut children_passes =
+            passes.iter_many_mut(children.into_iter().flat_map(|children| children.iter()));
+        while let Some((pass, mesh, material, transform)) = children_passes.fetch_next() {
             let contribution = if pass.disk {
                 disk
             } else if effect.secondary_strip {
@@ -320,18 +343,30 @@ fn apply_ray_contributions(
             let channel = ((f64::from(contribution) * 255.0 + 0.5) as u32).min(255);
             valid &= material.set_fixed_function_ambient_colour_argb(channel * 0x01010101);
             material.write_changed_fixed_function_registers_to_persistent_buffer(buffers);
-            let source_mesh = if pass.disk {
-                build_water_ray_disk_mesh()
+            let matrix = if pass.disk { disk_matrix } else { strip_matrix };
+            let previous = if pass.disk {
+                mesh_poses.disk
             } else {
-                build_water_ray_strip_mesh()
+                mesh_poses.strip
             };
-            if let Some(mut mesh) = meshes.get_mut(&mesh.0) {
-                *mesh = transform_ray_mesh(
-                    source_mesh,
-                    if pass.disk { disk_matrix } else { strip_matrix },
-                );
+            if previous != Some(matrix) {
+                if let Some(mut mesh) = meshes.get_mut(&mesh.0) {
+                    let source = if pass.disk {
+                        build_water_ray_disk_mesh()
+                    } else {
+                        build_water_ray_strip_mesh()
+                    };
+                    *mesh = transform_ray_mesh(source, matrix);
+                    if pass.disk {
+                        mesh_poses.disk = Some(matrix);
+                    } else {
+                        mesh_poses.strip = Some(matrix);
+                    }
+                }
             }
-            transform.translation = if pass.disk { hit } else { camera };
+            transform
+                .map_unchanged(|pose| &mut pose.translation)
+                .set_if_neq(if pass.disk { hit } else { camera });
         }
         if valid && (strip > 0.0 || disk > 0.0) {
             *visibility = Visibility::Inherited;

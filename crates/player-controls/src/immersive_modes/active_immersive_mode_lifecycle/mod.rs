@@ -12,7 +12,6 @@ use super::immersive_mode_policy_types::AllowedInteractionActions;
 use super::immersive_mode_policy_types::HideHudWhileActive;
 use super::immersive_mode_policy_types::InteractionCursor;
 use super::immersive_mode_policy_types::InteractionPrefab;
-use super::immersive_mode_policy_types::PauseSimulationWhileActive;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ControlledEntity;
 use super::immersive_mode_state_types::EquippedInteractionTool;
@@ -25,6 +24,7 @@ use crate::immersive_modes::immersive_control_execution_types::GuestViewControl;
 use crate::immersive_modes::immersive_control_execution_types::GuestViewTileCount;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
 use crate::immersive_modes::immersive_control_execution_types::ShowEditControl;
+use openzt2_world_state::simulation_time::simulation_control_types::ImmersiveSimulationPauseClaim;
 
 pub(super) fn request_immersive_mode_exit_when_subject_or_tool_is_removed(
     active_immersive_modes: Query<(Entity, &ActiveImmersiveMode)>,
@@ -130,7 +130,7 @@ fn remove_active_immersive_mode_state_and_restore_camera(
         AllowedInteractionActions,
         InteractionCursor,
         InteractionPrefab,
-        PauseSimulationWhileActive,
+        ImmersiveSimulationPauseClaim,
         HideHudWhileActive,
     )>();
     commands.entity(controller_entity).remove::<(

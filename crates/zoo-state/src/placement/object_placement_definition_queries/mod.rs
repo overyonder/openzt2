@@ -13,20 +13,22 @@ use crate::progression::adoption_and_content_availability_types::ScenarioContent
 use crate::progression::catalogue_entry_availability::catalogue_entry_is_available;
 use crate::progression::unlock_types::UnlockedCatalogueDefinitionSet;
 
+use crate::placement::object_placement_geometry::ObjectPlacementGeometry;
 use crate::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use crate::placement::object_placement_validation::calculate_object_placement_footprint_origin;
 use crate::placement::object_placement_validation::rotate_object_placement_cell_by_quarter_turns;
 use crate::placement::placed_object_types::PlacedObjectAuthoredEntrance;
 
-pub fn collect_occupied_placement_cells_for_transform<'a>(
-    definition: &PlaceableDefinition,
+pub fn collect_occupied_placement_cells_for_transform<'a, 'definition>(
+    geometry: impl Into<ObjectPlacementGeometry<'definition>>,
     transform: &Transform,
     scratch: &'a mut Vec<IVec2>,
 ) -> Option<&'a [IVec2]> {
-    let turns = calculate_authored_object_placement_eighth_turns(definition, transform)?;
+    let geometry = geometry.into();
+    let turns = calculate_authored_object_placement_eighth_turns(geometry.definition, transform)?;
     collect_occupied_placement_cells_for_origin_and_quarter_turns(
-        select_authored_footprint_for_eighth_turns(definition, turns),
-        calculate_object_placement_footprint_origin(definition, transform, turns)?,
+        geometry.cells(turns),
+        calculate_object_placement_footprint_origin(geometry, transform, turns)?,
         turns / 2,
         scratch,
     )
@@ -61,12 +63,7 @@ pub fn select_authored_footprint_for_eighth_turns<'a>(
     definition: &'a PlaceableDefinition,
     eighth_turns: u8,
 ) -> &'a [FootprintCell] {
-    let selected = if eighth_turns & 1 == 0 {
-        &definition.footprint
-    } else {
-        &definition.diagonal_footprint
-    };
-    selected
+    ObjectPlacementGeometry::from(definition).cells(eighth_turns)
 }
 
 /// Object IDs are the public placement identity. PlacedObjectDefinitionReference definitions use the

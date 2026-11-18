@@ -7,14 +7,14 @@ use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     daylight_environment_sampling::collect_authored_environment_light_kind_ranks,
-    environment_fog_attachment::insert_neutral_environment_fog,
-    environment_presentation_types::{EnvironmentPresentationPending, EnvironmentSky},
+    environment_presentation_types::{
+        AboveWaterFog, EnvironmentPresentationPending, EnvironmentRendererReady, EnvironmentSky,
+    },
     environment_visual_construction::{
         convert_authored_sky_keyframe_tint_to_bevy_color,
         create_environment_texture_renderer_components,
@@ -26,12 +26,10 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
     mut commands: Commands,
     environments: Query<
         (Entity, &WorldEnvironment, &WorldMember),
-        With<EnvironmentPresentationPending>,
+        Without<EnvironmentRendererReady>,
     >,
-    cameras: Query<Entity, With<ZooCamera>>,
     worlds: Query<&SelectedWorldTerrainAssetHandle>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    lights: Query<(), With<EnvironmentLight>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -51,55 +49,53 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
         else {
             continue;
         };
-        if lights.is_empty() {
-            if !definition.light_keyframes.is_empty() {
-                let light_entity = commands
-                    .spawn((
-                        EnvironmentLight {
-                            keyframe: 0,
-                            target: EnvironmentLightTarget::Object,
-                            kind_rank: 0,
-                        },
-                        DirectionalLight::default(),
-                        RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER]),
-                        Transform::IDENTITY,
-                        world_member.clone(),
-                    ))
-                    .id();
-                commands.entity(environment_entity).add_child(light_entity);
-            } else {
-                for light_target in [
-                    EnvironmentLightTarget::Object,
-                    EnvironmentLightTarget::Terrain,
-                ] {
-                    let (authored_light_ranks, light_count) =
-                        collect_authored_environment_light_kind_ranks(
-                            definitions,
-                            definition,
-                            light_target,
-                        );
-                    for light_kind_rank in authored_light_ranks.into_iter().take(light_count) {
-                        let render_layers = match light_target {
-                            EnvironmentLightTarget::Terrain => {
-                                RenderLayers::layer(TERRAIN_RENDER_LAYER)
-                            }
-                            _ => RenderLayers::layer(0),
-                        };
-                        let light_entity = commands
-                            .spawn((
-                                EnvironmentLight {
-                                    keyframe: 0,
-                                    target: light_target,
-                                    kind_rank: light_kind_rank,
-                                },
-                                DirectionalLight::default(),
-                                render_layers,
-                                Transform::IDENTITY,
-                                world_member.clone(),
-                            ))
-                            .id();
-                        commands.entity(environment_entity).add_child(light_entity);
-                    }
+        if !definition.light_keyframes.is_empty() {
+            let light_entity = commands
+                .spawn((
+                    EnvironmentLight {
+                        keyframe: 0,
+                        target: EnvironmentLightTarget::Object,
+                        kind_rank: 0,
+                    },
+                    DirectionalLight::default(),
+                    RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER]),
+                    Transform::IDENTITY,
+                    world_member.clone(),
+                ))
+                .id();
+            commands.entity(environment_entity).add_child(light_entity);
+        } else {
+            for light_target in [
+                EnvironmentLightTarget::Object,
+                EnvironmentLightTarget::Terrain,
+            ] {
+                let (authored_light_ranks, light_count) =
+                    collect_authored_environment_light_kind_ranks(
+                        definitions,
+                        definition,
+                        light_target,
+                    );
+                for light_kind_rank in authored_light_ranks.into_iter().take(light_count) {
+                    let render_layers = match light_target {
+                        EnvironmentLightTarget::Terrain => {
+                            RenderLayers::layer(TERRAIN_RENDER_LAYER)
+                        }
+                        _ => RenderLayers::layer(0),
+                    };
+                    let light_entity = commands
+                        .spawn((
+                            EnvironmentLight {
+                                keyframe: 0,
+                                target: light_target,
+                                kind_rank: light_kind_rank,
+                            },
+                            DirectionalLight::default(),
+                            render_layers,
+                            Transform::IDENTITY,
+                            world_member.clone(),
+                        ))
+                        .id();
+                    commands.entity(environment_entity).add_child(light_entity);
                 }
             }
         }
@@ -136,8 +132,10 @@ pub(super) fn hydrate_bevy_renderer_entities_for_new_world_environment(
             &mut meshes,
             &mut materials,
         );
-        for camera in &cameras {
-            insert_neutral_environment_fog(&mut commands, camera);
-        }
+        commands.entity(environment_entity).insert((
+            EnvironmentRendererReady,
+            EnvironmentPresentationPending,
+            AboveWaterFog::default(),
+        ));
     }
 }

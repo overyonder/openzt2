@@ -9,14 +9,12 @@ impl SpeciesView<'_> {
         server: &AssetServer,
         variant: &SpeciesVariant,
     ) -> Option<Handle<AnimationSetAsset>> {
-        self.documents()
-            .find_map(|asset| {
-                asset
-                    .animation_sets
-                    .binary_search_by_key(&variant.model_animation_set, |candidate| candidate.id)
-                    .ok()
-                    .map(|index| asset.animation_sets[index].path.to_string())
-            })
-            .map(|path| server.load(path))
+        let id = variant.model_animation_set;
+        let asset = self.assets.get(self.animation_set_owners.get(&id)?)?;
+        let index = asset
+            .animation_sets
+            .binary_search_by_key(&id, |dependency| dependency.id)
+            .ok()?;
+        Some(server.load(asset.animation_sets[index].path.to_string()))
     }
 }

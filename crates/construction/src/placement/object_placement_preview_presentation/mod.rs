@@ -1,10 +1,12 @@
 //! Builds authored placement decals and projects preview validity onto visuals.
 
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
-use openzt2_game_data::AssetId;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -15,7 +17,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
 
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::rotate_object_placement_point_by_quarter_turns;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewDecal;
@@ -116,11 +117,19 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
         if let (Some(footprint_valid), Some(footprint_invalid), grid_cardinal, grid_diagonal) =
             authored_material_handles
         {
-            let [Some(small_cardinal), Some(medium_cardinal), Some(large_cardinal)] = grid_cardinal
+            let [
+                Some(small_cardinal),
+                Some(medium_cardinal),
+                Some(large_cardinal),
+            ] = grid_cardinal
             else {
                 continue;
             };
-            let [Some(small_diagonal), Some(medium_diagonal), Some(large_diagonal)] = grid_diagonal
+            let [
+                Some(small_diagonal),
+                Some(medium_diagonal),
+                Some(large_diagonal),
+            ] = grid_diagonal
             else {
                 continue;
             };
@@ -249,10 +258,12 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     mut plane: Local<Option<Handle<Mesh>>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     mut previews: Query<(
         Entity,
         &ConstructionPreview,
         &ObjectPlacementPreviewMaterials,
+        Option<&ObjectPlacementPrefabSource>,
         &Visibility,
         Option<&mut ObjectPlacementPreviewVisualState>,
     )>,
@@ -266,10 +277,12 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     let edited = terrain.edits.read().count() != 0;
     let restored = terrain.restores.read().count() != 0;
     let terrain_changed = edited || restored;
-    for (entity, preview, materials, visibility, state) in &mut previews {
+    for (entity, preview, materials, prefab, visibility, state) in &mut previews {
         if *visibility == Visibility::Hidden {
             if terrain_changed && state.is_some() {
-                commands.entity(entity).remove::<ObjectPlacementPreviewVisualState>();
+                commands
+                    .entity(entity)
+                    .remove::<ObjectPlacementPreviewVisualState>();
             }
             continue;
         }
@@ -283,17 +296,14 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             continue;
         };
         let valid = matches!(preview.validity, PlacementValidity::Valid { .. });
-        let footprint = select_authored_footprint_for_eighth_turns(definition, turns);
+        let geometry = footprints.resolve(definition, prefab.map(|source| &source.0));
+        let footprint = geometry.cells(turns);
         let grid_size = match calculate_occupied_footprint_maximum_axis_span(footprint) {
             ..=2 => 0,
             3..=4 => 1,
             _ => 2,
         };
-        let pivot_cm = if turns & 1 == 0 {
-            &definition.pivot_cm
-        } else {
-            &definition.diagonal_pivot_cm
-        };
+        let pivot_cm = geometry.pivot_cm(turns);
         let pivot = Vec2::new(f32::from(pivot_cm[0]), f32::from(pivot_cm[1])) / 100.0;
         let inverse_rotation = preview.transform.rotation.inverse();
         let footprint_material = if valid {
@@ -587,7 +597,11 @@ impl DockArrowNodes<'_, '_> {
 #[derive(bevy::ecs::system::SystemParam)]
 pub(super) struct PreviewDecalTerrain<'w, 's> {
     edits: MessageReader<'w, 's, openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>,
-    restores: MessageReader<'w, 's, openzt2_zoo_state::terrain::terrain_edit_types::TerrainPresentationRestored>,
+    restores: MessageReader<
+        'w,
+        's,
+        openzt2_zoo_state::terrain::terrain_edit_types::TerrainPresentationRestored,
+    >,
     index: Res<'w, openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex>,
     assets: Res<
         'w,

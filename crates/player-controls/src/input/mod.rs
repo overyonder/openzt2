@@ -26,6 +26,7 @@ pub struct GameInputPlugin;
 impl Plugin for GameInputPlugin {
     fn build(&self, application: &mut App) {
         application
+            .register_required_components::<Gamepad, gamepad_input_translation::GamepadNavigationRepeat>()
             .init_resource::<GameActionInputBindings>()
             .init_resource::<DeviceControlAxes>()
             .init_resource::<PrimaryPointerInputState>()

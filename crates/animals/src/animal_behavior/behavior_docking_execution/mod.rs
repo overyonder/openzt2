@@ -1,9 +1,10 @@
-use super::behavior_container_admission::{
-    behavior_container_admission_selection, request_behavior_container_admission,
-    BehaviorContainerAdmissions,
+use super::behavior_container_admission::BehaviorAdmissionInstruction;
+use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_data::behavior::action::docking::BehaviorDockAction;
+use openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
+    InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
-use bevy::prelude::*;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRecipient;
 
 #[cfg(test)]
 mod navigation_event_tests;
@@ -13,7 +14,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::{
-    DockedAtInteractionContainer, InteractionContainerMember, InteractionContainerMemberships,
+    DockedAtInteractionContainer, InteractionContainerMemberships,
 };
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
@@ -22,7 +23,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingComp
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
 use openzt2_zoo_state::locomotion::locomotion_types::DockAt;
-use openzt2_zoo_state::locomotion::locomotion_types::NavAgent;
+use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavigationRequestSequence};
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode;
 use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectAuthoredEntrance;
@@ -30,80 +31,58 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
+pub(super) type DockBehaviorActors<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        Option<&'static NavAgent>,
+        Option<&'static LocomotionMode>,
+        &'static mut BehaviorTaskExecutionState,
+    ),
+    (
+        Without<PendingBehaviorDockingCompletion>,
+        Without<PendingBehaviorTaskFailure>,
+    ),
+>;
+
+#[derive(SystemParam)]
+pub(super) struct DockBehaviorGeometry<'w, 's> {
+    target_entrances: Query<'w, 's, &'static PlacedObjectAuthoredEntrance>,
+    fences: Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge>,
+    topology_nodes:
+        Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
+    topology_grid: Res<'w, openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
+    ground: openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility<'w, 's>,
+    children: Query<'w, 's, &'static Children>,
+    authored_attachment_transforms: NamedNodeTransforms<'w, 's>,
+    entity_global_transforms: Query<'w, 's, &'static GlobalTransform>,
+    memberships: InteractionContainerMemberships<'w, 's>,
+}
+
 pub(super) fn start_current_supported_behavior_docking_actions(
-    In(apply_admissions): In<bool>,
     mut commands: Commands,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
-    (task_entities, mut behavior_tasks): (
-        Query<
-            Entity,
-            (
-                With<BehaviorTaskExecutionState>,
-                Without<PendingBehaviorDockingCompletion>,
-                Without<PendingBehaviorTaskFailure>,
-            ),
-        >,
-        Query<
-            (
-                Entity,
-                Option<&NavAgent>,
-                Option<&LocomotionMode>,
-                &mut BehaviorTaskExecutionState,
-            ),
-            (
-                Without<PendingBehaviorDockingCompletion>,
-                Without<PendingBehaviorTaskFailure>,
-            ),
-        >,
-    ),
-    target_entrances: Query<&PlacedObjectAuthoredEntrance>,
+    mut behavior_tasks: DockBehaviorActors,
     target_definition_references: Query<&DefinitionId>,
     path_tiles: Query<(), With<openzt2_zoo_state::topology::topology_graph_types::PathTile>>,
-    (fences, topology_nodes, topology_grid, ground): (
-        Query<&openzt2_zoo_state::topology::topology_graph_types::FenceEdge>,
-        Query<&openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
-        Res<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
-        openzt2_zoo_state::terrain::dry_surface_eligibility::DrySurfaceEligibility,
-    ),
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    children: Query<&Children>,
-    authored_attachment_transforms: NamedNodeTransforms,
-    entity_global_transforms: Query<&GlobalTransform>,
-    mut navigation_request_sequence: ResMut<
-        openzt2_zoo_state::locomotion::locomotion_types::NavigationRequestSequence,
-    >,
+    geometry: DockBehaviorGeometry,
+    mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     mut docking_requests: MessageWriter<DockAt>,
-    (memberships, admissions): (InteractionContainerMemberships, BehaviorContainerAdmissions),
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    let BehaviorContainerAdmissions {
-        mut requests,
-        mut outcomes,
-    } = admissions;
-    let replies = if apply_admissions {
-        Some(outcomes.read())
-    } else {
-        None
-    };
-    let replies = replies.into_iter().flatten().filter_map(|outcome| {
-        let InteractionContainerAdmissionRecipient::Docking(actor) = outcome.reply_to else {
-            return None;
-        };
-        Some((actor, Some(behavior_container_admission_selection(outcome))))
-    });
-    let ready = (!apply_admissions)
-        .then(|| task_entities.iter())
-        .into_iter()
-        .flatten()
-        .map(|actor| (actor, None));
-    for (actor, admission) in replies.chain(ready) {
-        let Ok((actor, navigation_agent, locomotion_mode, mut behavior_task)) =
-            behavior_tasks.get_mut(actor)
-        else {
-            continue;
-        };
+    let DockBehaviorGeometry {
+        fences,
+        children,
+        authored_attachment_transforms,
+        entity_global_transforms,
+        memberships,
+        ..
+    } = &geometry;
+    for (actor, navigation_agent, locomotion_mode, mut behavior_task) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
@@ -167,8 +146,8 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 let Some(node) = find_named_descendant_global_transform(
                     target,
                     queue_node_name,
-                    &children,
-                    &authored_attachment_transforms,
+                    children,
+                    authored_attachment_transforms,
                 ) else {
                     continue;
                 };
@@ -230,57 +209,155 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             let Ok(actor_transform) = entity_global_transforms.get(actor) else {
                 continue;
             };
-            let Some(selected) = admission else {
-                let slots = memberships.service_slot_candidates(
-                    target,
-                    actor,
-                    &definition.interaction_slots,
-                    Some(reservation_tag),
-                    |name| {
-                        let position = if name.is_empty() {
-                            entity_global_transforms.get(target).ok()?.translation()
-                        } else {
-                            find_named_descendant_global_transform(
-                                target,
-                                name,
-                                &children,
-                                &authored_attachment_transforms,
-                            )?
-                            .translation()
-                        };
-                        Some((position - actor_transform.translation()).xz())
-                    },
-                );
-                request_behavior_container_admission(
-                    actor,
-                    target,
-                    slots,
-                    Vec::new(),
-                    InteractionContainerAdmissionRecipient::Docking(actor),
-                    &mut requests,
-                );
-                continue;
+            let slots = memberships.service_slot_candidates(
+                target,
+                actor,
+                &definition.interaction_slots,
+                Some(reservation_tag),
+                |name| {
+                    let position = if name.is_empty() {
+                        entity_global_transforms.get(target).ok()?.translation()
+                    } else {
+                        find_named_descendant_global_transform(
+                            target,
+                            name,
+                            children,
+                            authored_attachment_transforms,
+                        )?
+                        .translation()
+                    };
+                    Some((position - actor_transform.translation()).xz())
+                },
+            );
+            let request = InteractionContainerAdmissionRequest::Admit {
+                container: target,
+                member: actor,
+                slots,
+                despawn_on_refusal: false,
+                queue_service_slots: Vec::new(),
             };
-            let Some(slot_index) = selected.map(|slot| slot.index) else {
-                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
-                    actor, &mut commands,
-                );
-                continue;
-            };
-            behavior_task.interaction_slot = Some(slot_index);
-        }
-        if !docking_action.redock && memberships.is_docked(target, actor) {
-            advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
+            let action = docking_action.clone();
+            let instruction = BehaviorAdmissionInstruction::new(actor, &behavior_task);
+            commands.queue(move |world: &mut World| {
+                if instruction.is_current(world) {
+                    let outcome = request.commit(world);
+                    world.trigger(BehaviorDockAdmitted {
+                        actor,
+                        target,
+                        action,
+                        outcome,
+                    });
+                }
+            });
             continue;
         }
-        let (mut local_point, local_forward) = if let Some(radial_distance_m) =
-            docking_action.radial_distance_m
-        {
+        request_behavior_dock(
+            actor,
+            target,
+            docking_action,
+            target_definition,
+            navigation_agent,
+            locomotion_mode,
+            simulation_clock.tick,
+            &mut behavior_task,
+            &geometry,
+            &mut navigation_request_sequence,
+            &mut docking_requests,
+            &mut commands,
+        );
+    }
+}
+
+#[derive(EntityEvent)]
+pub(super) struct BehaviorDockAdmitted {
+    #[event_target]
+    actor: Entity,
+    target: Entity,
+    action: BehaviorDockAction,
+    outcome: InteractionContainerAdmissionOutcome,
+}
+
+pub(super) fn request_dock_after_container_admission(
+    admitted: On<BehaviorDockAdmitted>,
+    mut commands: Commands,
+    clock: Res<ZooClock>,
+    mut actors: DockBehaviorActors,
+    target_definitions: Query<&DefinitionId>,
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    definitions: Res<WorldDefinitions>,
+    geometry: DockBehaviorGeometry,
+    mut sequence: ResMut<NavigationRequestSequence>,
+    mut requests: MessageWriter<DockAt>,
+) {
+    let actor = admitted.actor;
+    let target = admitted.target;
+    let Ok((_, Some(agent), mode, mut task)) = actors.get_mut(actor) else {
+        return;
+    };
+    let InteractionContainerAdmissionOutcome::Granted { slot, .. } = admitted.outcome else {
+        super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+            actor,
+            &mut commands,
+        );
+        return;
+    };
+    let definition = definitions
+        .get(&definition_assets)
+        .and_then(|definitions| definitions.find_object(target_definitions.get(target).ok()?.0));
+    task.interaction_slot = Some(slot);
+    request_behavior_dock(
+        actor,
+        target,
+        &admitted.action,
+        definition,
+        agent,
+        mode,
+        clock.tick,
+        &mut task,
+        &geometry,
+        &mut sequence,
+        &mut requests,
+        &mut commands,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn request_behavior_dock(
+    actor: Entity,
+    target: Entity,
+    docking_action: &BehaviorDockAction,
+    target_definition: Option<&WorldObjectDefinition>,
+    navigation_agent: &NavAgent,
+    locomotion_mode: Option<&LocomotionMode>,
+    tick: u64,
+    behavior_task: &mut BehaviorTaskExecutionState,
+    geometry: &DockBehaviorGeometry,
+    navigation_request_sequence: &mut NavigationRequestSequence,
+    docking_requests: &mut MessageWriter<DockAt>,
+    commands: &mut Commands,
+) {
+    let DockBehaviorGeometry {
+        target_entrances,
+        fences,
+        topology_nodes,
+        topology_grid,
+        ground,
+        children,
+        authored_attachment_transforms,
+        entity_global_transforms,
+        memberships,
+    } = geometry;
+    if !docking_action.redock && memberships.is_docked(target, actor) {
+        advance_behavior_task_to_next_action(behavior_task, tick);
+        return;
+    }
+    let (mut local_point, local_forward) =
+        if let Some(radial_distance_m) = docking_action.radial_distance_m {
             let (Ok(actor_transform), Ok(target_transform)) = (
                 entity_global_transforms.get(actor),
                 entity_global_transforms.get(target),
             ) else {
-                continue;
+                return;
             };
             // A fence segment's origin is its first end; dock on its middle,
             // on the ground there rather than at the topology layer's height.
@@ -315,8 +392,8 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                 find_named_descendant_global_transform(
                     target,
                     target_node_name,
-                    &children,
-                    &authored_attachment_transforms,
+                    children,
+                    authored_attachment_transforms,
                 )
                 .and_then(|target_node_global_transform| {
                     let target_global_transform = entity_global_transforms.get(target).ok()?;
@@ -332,8 +409,8 @@ pub(super) fn start_current_supported_behavior_docking_actions(
             });
             if target_node_name.is_some() && authored_named_target_dock.is_none() {
                 debug!(?actor, ?target, target_node = ?target_node_name,
-                        "dock waits: the target node is absent");
-                continue;
+                    "dock waits: the target node is absent");
+                return;
             }
             authored_named_target_dock.unwrap_or_else(|| {
                 target_entrances
@@ -343,73 +420,72 @@ pub(super) fn start_current_supported_behavior_docking_actions(
                     })
             })
         };
-        if let Some(subject_node_name) = docking_action.subject_node_name.as_deref() {
-            let Some(subject_node_global_transform) = find_named_descendant_global_transform(
-                actor,
-                subject_node_name,
-                &children,
-                &authored_attachment_transforms,
-            ) else {
-                // Radial subject nodes are often authored position attributes
-                // rather than model or virtual nodes; waiting cannot supply one.
-                if docking_action.radial_distance_m.is_some() {
-                    super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
-                        actor, &mut commands,
-                    );
-                } else {
-                    debug!(
-                        ?actor,
-                        subject_node = subject_node_name,
-                        "dock waits: the actor's subject node is absent"
-                    );
-                }
-                continue;
-            };
-            let Some(actor_global_transform) = entity_global_transforms.get(actor).ok() else {
-                continue;
-            };
-            let subject_node_local_position = actor_global_transform
-                .affine()
-                .inverse()
-                .transform_point3(subject_node_global_transform.translation());
-            let Ok(target_global_transform) = entity_global_transforms.get(target) else {
-                continue;
-            };
-            local_point = align_subject_attachment_with_target_dock(
-                local_point,
-                local_forward,
-                subject_node_local_position,
-                actor_global_transform,
-                target_global_transform,
-                locomotion_mode.copied().unwrap_or_default(),
-            );
-        }
-        commands
-            .entity(actor)
-            .try_remove::<DockedAtInteractionContainer>();
-        let request_id = navigation_request_sequence.next();
-        debug!(?actor, ?target, request_id, ?local_point, slot = ?behavior_task.interaction_slot,
-            "dock requested");
-        docking_requests.write(DockAt {
-            entity: actor,
-            request_id,
-            target,
+    if let Some(subject_node_name) = docking_action.subject_node_name.as_deref() {
+        let Some(subject_node_global_transform) = find_named_descendant_global_transform(
+            actor,
+            subject_node_name,
+            children,
+            authored_attachment_transforms,
+        ) else {
+            // Radial subject nodes are often authored position attributes
+            // rather than model or virtual nodes; waiting cannot supply one.
+            if docking_action.radial_distance_m.is_some() {
+                super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(
+                    actor, commands,
+                );
+            } else {
+                debug!(
+                    ?actor,
+                    subject_node = subject_node_name,
+                    "dock waits: the actor's subject node is absent"
+                );
+            }
+            return;
+        };
+        let Some(actor_global_transform) = entity_global_transforms.get(actor).ok() else {
+            return;
+        };
+        let subject_node_local_position = actor_global_transform
+            .affine()
+            .inverse()
+            .transform_point3(subject_node_global_transform.translation());
+        let Ok(target_global_transform) = entity_global_transforms.get(target) else {
+            return;
+        };
+        local_point = align_subject_attachment_with_target_dock(
             local_point,
             local_forward,
-            radius_m: docking_action
-                .arrival_radius_m
-                .unwrap_or(navigation_agent.radius_m.max(0.05)),
-        });
-        commands
-            .entity(actor)
-            .insert(PendingBehaviorDockingCompletion {
-                target,
-                origin: behavior_task.create_return_frame_after_action(behavior_task.action),
-                stack_depth: behavior_task.stack.len(),
-                request_id,
-            });
-        behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+            subject_node_local_position,
+            actor_global_transform,
+            target_global_transform,
+            locomotion_mode.copied().unwrap_or_default(),
+        );
     }
+    commands
+        .entity(actor)
+        .try_remove::<DockedAtInteractionContainer>();
+    let request_id = navigation_request_sequence.next();
+    debug!(?actor, ?target, request_id, ?local_point, slot = ?behavior_task.interaction_slot,
+        "dock requested");
+    docking_requests.write(DockAt {
+        entity: actor,
+        request_id,
+        target,
+        local_point,
+        local_forward,
+        radius_m: docking_action
+            .arrival_radius_m
+            .unwrap_or(navigation_agent.radius_m.max(0.05)),
+    });
+    commands
+        .entity(actor)
+        .insert(PendingBehaviorDockingCompletion {
+            target,
+            origin: behavior_task.create_return_frame_after_action(behavior_task.action),
+            stack_depth: behavior_task.stack.len(),
+            request_id,
+        });
+    behavior_task.next_action_tick = tick.saturating_add(1);
 }
 
 fn radial_dock_point_and_forward_in_target_space(
@@ -610,7 +686,7 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
     mut arrivals: MessageReader<Arrived>,
     behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
-    memberships: Query<&InteractionContainerMember>,
+    memberships: InteractionContainerMemberships,
     mut behavior_tasks: Query<
         (
             &mut BehaviorTaskExecutionState,
@@ -649,8 +725,8 @@ pub(super) fn finish_behavior_docking_actions_after_matching_arrival(
             .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
             .is_some_and(|action| matches!(action, BehaviorAction::Dock(_)))
             && memberships
-                .get(arrival.entity)
-                .is_ok_and(|membership| membership.container == pending_docking.target)
+                .actor_slot(pending_docking.target, arrival.entity)
+                .is_some()
         {
             commands
                 .entity(arrival.entity)

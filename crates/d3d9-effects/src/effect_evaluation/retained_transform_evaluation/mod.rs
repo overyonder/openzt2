@@ -1,6 +1,6 @@
 use std::{
     fmt,
-    sync::{Arc, Mutex, MutexGuard},
+    sync::{Arc, RwLock},
 };
 
 use crate::{
@@ -126,7 +126,11 @@ impl RetainedD3d9TransformExpression {
         &self,
         parameter_assignments: &[D3d9EffectParameterAssignment<'_>],
     ) -> Result<[f32; 16], D3d9EffectProcessingError> {
-        let allocation = self.program.lock_allocation()?;
+        let allocation = self
+            .program
+            .allocation
+            .read()
+            .map_err(|_| poisoned_allocation())?;
         let scratch_pointer =
             unsafe { openzt2_effect_open_parameter_scratch(allocation.0.native_effect_pointer) };
         if scratch_pointer.is_null() {
@@ -173,25 +177,28 @@ struct RetainedMojoShaderEffectAllocation(MojoShaderEffectAllocationOwner);
 // SAFETY: shader.c uses owned malloc allocations and CPU-only MojoShader parse data,
 // with the default allocator and no thread-affine graphics API handles. Its callbacks
 // refer only to the same owned allocation. Moving it changes no native addresses.
-// The wrapper never exposes its pointer outside this module's synchronous operations;
-// all access, evaluation scratch destruction and final destruction are serialized by
-// the Mutex/Arc lifetime. Native shader reference counters are never accessed concurrently.
-// The compiled allocation is only initialized by the loading path; later evaluations
-// read it and mutate exclusively their own parameter buffers and register storage.
-// Scratch borrows metadata but is dropped before the lock guard on every return
-// path. The last Arc uniquely owns final destruction, including after poisoning.
-// The general allocation owner remains non-Send: it also represents that borrowed
-// scratch, which must not escape its program's locked lifetime.
+// Native state initialization holds the exclusive write guard. Read guards
+// permit only evaluation, which reads the program and changes private parameter
+// and register scratch. Scratch borrows metadata and drops before the read
+// guard. The last Arc uniquely owns final destruction.
 #[allow(
     unsafe_code,
     clippy::non_send_fields_in_send_ty,
-    reason = "only this private wrapper transfers the owned CPU allocation under Arc/Mutex; the raw owner also represents borrowed scratch"
+    reason = "only this private wrapper transfers native program ownership"
 )]
 unsafe impl Send for RetainedMojoShaderEffectAllocation {}
 
+// SAFETY: the shared evaluation path only reads the program and its metadata.
+// Initial evaluation and mutation run under the exclusive write guard.
+#[allow(
+    unsafe_code,
+    reason = "native transform evaluation uses private scratch"
+)]
+unsafe impl Sync for RetainedMojoShaderEffectAllocation {}
+
 #[derive(Clone)]
 pub(super) struct RetainedD3d9EffectProgram {
-    allocation: Arc<Mutex<RetainedMojoShaderEffectAllocation>>,
+    allocation: Arc<RwLock<RetainedMojoShaderEffectAllocation>>,
 }
 
 impl fmt::Debug for RetainedD3d9EffectProgram {
@@ -205,24 +212,14 @@ impl fmt::Debug for RetainedD3d9EffectProgram {
 impl RetainedD3d9EffectProgram {
     pub(super) fn new(allocation: MojoShaderEffectAllocationOwner) -> Self {
         Self {
-            allocation: Arc::new(Mutex::new(RetainedMojoShaderEffectAllocation(allocation))),
+            allocation: Arc::new(RwLock::new(RetainedMojoShaderEffectAllocation(allocation))),
         }
-    }
-
-    fn lock_allocation(
-        &self,
-    ) -> Result<MutexGuard<'_, RetainedMojoShaderEffectAllocation>, D3d9EffectProcessingError> {
-        self.allocation.lock().map_err(|_| {
-            D3d9EffectProcessingError::CompiledEffectEvaluationFailed(
-                "retained effect allocation lock was poisoned".to_owned(),
-            )
-        })
     }
 
     pub(super) fn copy_initial_evaluated_effect(
         &self,
     ) -> Result<crate::effect_types::EvaluatedD3d9Effect, D3d9EffectProcessingError> {
-        let allocation = self.lock_allocation()?;
+        let allocation = self.allocation.write().map_err(|_| poisoned_allocation())?;
         super::evaluated_state_copying::copy_evaluated_d3d9_effect_from_mojoshader(
             &allocation.0,
             self,
@@ -312,6 +309,12 @@ impl RetainedD3d9EffectProgram {
             },
         }))
     }
+}
+
+fn poisoned_allocation() -> D3d9EffectProcessingError {
+    D3d9EffectProcessingError::CompiledEffectEvaluationFailed(
+        "retained effect allocation lock was poisoned".to_owned(),
+    )
 }
 
 /// Copies a native preshader into owned Rust values.

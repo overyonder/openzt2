@@ -35,7 +35,6 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
     );
     application
         .add_plugins(MaterialPlugin::<EffectPassMaterial>::default())
-        .init_resource::<texture_coordinate_animation::AnimatedTextureCoordinateMaterials>()
         .add_systems(
             PostUpdate,
             texture_coordinate_animation::advance_texture_coordinate_animations

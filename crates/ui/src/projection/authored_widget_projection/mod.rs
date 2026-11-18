@@ -10,14 +10,13 @@ use openzt2_game_data::ui_document::node_property_binding::UiNodePropertyBinding
 use openzt2_game_data::ui_document::node_style::UiStyleFlags;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::ui_document::widget_control::UiAxis;
-use openzt2_game_data::ui_document::widget_control::UiDragOperation;
 use openzt2_game_data::ui_document::widget_control::UiTooltipPresentation;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 use openzt2_game_data::AssetId;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use crate::authored_button_attention_pulse_presentation::UiAuthoredButtonAttentionPulse;
-use crate::authored_drag_gesture::UiAuthoredDragGesturePolicy;
+use crate::authored_drag_gesture::{UiAuthoredDragCommand, UiAuthoredDragHandle};
 use crate::authored_globe_presentation_types::UiGlobeBiomeAsset;
 use crate::authored_globe_presentation_types::UiGlobeBiomeModel;
 use crate::authored_globe_presentation_types::UiGlobeDrag;
@@ -47,7 +46,6 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiActionSource;
-use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPresentationActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMaximum;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMinimum;
@@ -247,29 +245,33 @@ pub(super) fn project_widget(
                 });
             }
         }
-        // The canonical record retains the authored bounds. No drag
-        // procedure consumes them yet, so do not project an unread ECS copy.
-        UiWidgetRecord::Drag { .. } => {}
+        UiWidgetRecord::Drag {
+            minimum_width,
+            maximum_width,
+            minimum_height,
+            maximum_height,
+            bounded,
+        } => {
+            commands.entity(entity).insert(UiAuthoredDragHandle {
+                minimum_size: IVec2::new(*minimum_width, *minimum_height),
+                maximum_size: IVec2::new(*maximum_width, *maximum_height),
+                bounded: *bounded,
+            });
+        }
         UiWidgetRecord::DragCommand {
             operation,
             axis,
             flip_axis,
         } => {
-            commands
-                .entity(entity)
-                .insert(UiAuthoredDragGesturePolicy::from_authored_gesture(
-                    match operation {
-                        UiDragOperation::Move => UiDragOperation::Move,
-                        UiDragOperation::Resize => UiDragOperation::Resize,
-                        UiDragOperation::Scroll => UiDragOperation::Scroll,
-                    },
-                    match axis {
-                        UiAxis::X => UiSliderAxis::Horizontal,
-                        UiAxis::Y => UiSliderAxis::Vertical,
-                        UiAxis::Both => UiSliderAxis::Both,
-                    },
-                    *flip_axis,
-                ));
+            commands.entity(entity).insert(UiAuthoredDragCommand {
+                operation: *operation,
+                axis: match axis {
+                    UiAxis::X => UiSliderAxis::Horizontal,
+                    UiAxis::Y => UiSliderAxis::Vertical,
+                    UiAxis::Both => UiSliderAxis::Both,
+                },
+                flip_axis: *flip_axis,
+            });
         }
         UiWidgetRecord::Graph {
             graph_type,
@@ -378,9 +380,10 @@ pub(super) fn project_widget(
             commands.entity(entity).insert(UiTablePolicy::WorldMap);
         }
         UiWidgetRecord::MultiIcon { .. } => {
-            commands
-                .entity(entity)
-                .insert(crate::authored_multi_icon_presentation::UiMultiIconPolicy);
+            commands.entity(entity).insert((
+                crate::authored_multi_icon_presentation::UiMultiIconPolicy,
+                openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect([0, 0, -1, -1]),
+            ));
             let has_value_binding = node
                 .bindings
                 .iter()
@@ -389,46 +392,34 @@ pub(super) fn project_widget(
                 commands.entity(entity).insert(UiValue(0));
             }
         }
-        UiWidgetRecord::LocalizedCountdown(countdown) => {
-            commands.entity(entity).insert(
-                crate::localized_countdown_presentation::UiLocalizedCountdownPresentation::new(
-                    AssetId(countdown.text_node.0),
-                    AssetId(countdown.localization_key.0),
-                    countdown.start_count,
-                    countdown.tick_interval_ms,
-                    AssetId(countdown.completion_target.0),
-                ),
-            );
-        }
         UiWidgetRecord::TimedSequence { events } => {
-            let actions = events
-                .iter()
-                .enumerate()
-                .map(|(event, _)| {
-                    commands
-                        .spawn((
-                            Name::new("timed UI action"),
-                            UiDocumentOwner(document_root),
-                            UiPresentationActions(UiActionSource::TimedEvent {
-                                node: node_index,
-                                event: event as u32,
-                            }),
-                            ChildOf(entity),
-                        ))
-                        .id()
-                })
-                .collect();
-            commands.entity(entity).insert(
-                crate::authored_timed_action_sequence::UiAuthoredTimedActionSequencePlayback::new(
-                    node_index, actions,
-                ),
-            );
+            use crate::authored_timed_action_sequence::{
+                UiAuthoredTimedActionSequencePlayback, UiTimedActionDue, UiTimedActionOf,
+            };
+            for (index, event) in events.iter().enumerate() {
+                let proxy = commands
+                    .spawn((
+                        Name::new("timed UI action"),
+                        UiDocumentOwner(document_root),
+                        UiTimedActionOf(entity),
+                        UiTimedActionDue(std::time::Duration::from_millis(u64::from(event.due_ms))),
+                    ))
+                    .id();
+                super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
+                    commands,
+                    proxy,
+                    UiActionSource::TimedEvent {
+                        node: node_index,
+                        event: index as u32,
+                    },
+                    &event.action,
+                );
+            }
+            commands
+                .entity(entity)
+                .insert(UiAuthoredTimedActionSequencePlayback::default());
         }
-        UiWidgetRecord::EarthquakeTrigger
-        | UiWidgetRecord::EarthquakeRunner
-        | UiWidgetRecord::FirstPersonCountdown { .. }
-        | UiWidgetRecord::Tool { .. }
-        | UiWidgetRecord::XmlEdit { .. } => {}
+        UiWidgetRecord::Tool { .. } | UiWidgetRecord::XmlEdit { .. } => {}
         UiWidgetRecord::ButtonPulser {
             target,
             hidden_ms,

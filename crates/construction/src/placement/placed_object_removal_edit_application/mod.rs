@@ -1,6 +1,7 @@
 //! Applies prepared placed-object removal edits.
 
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 
@@ -18,6 +19,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
     catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
+    footprints: &ScenePlacementFootprints,
     placed: &Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -43,7 +45,7 @@ pub(super) fn apply_prepared_placed_object_removal_edit(
         .and_then(|(id, placeable, transform, _)| {
             let definition = resolve_object_placeable_definition(catalogue, placeable.definition)?;
             let exact_cells = collect_occupied_placement_cells_for_transform(
-                definition,
+                footprints.resolve(definition, Some(&edit.prefab)),
                 transform,
                 &mut scratch.cells,
             )

@@ -6,7 +6,6 @@ mod missing_game_content_screen;
 #[cfg(feature = "mod-audit")]
 mod mod_audit;
 mod openzt2_game_plugin_group;
-mod render_scheduling;
 
 use bevy::{
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
@@ -42,7 +41,6 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         enabled_z2f_archive_paths,
     } = launch_configuration;
     let mut game_application = App::new();
-    render_scheduling::configure(&mut game_application);
 
     let content_result = enabled_z2f_archive_paths.and_then(|paths| {
         add_enabled_z2f_archives_as_default_asset_source(&mut game_application, paths)

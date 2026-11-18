@@ -13,7 +13,9 @@ use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
 
 use crate::terrain::terrain_biome_detail_types::TerrainDetail;
-use crate::terrain::terrain_biome_detail_types::TerrainDetailProjectionState;
+use crate::terrain::terrain_biome_detail_types::{
+    TerrainDetailProjectionState, TerrainDetailRenderRoot,
+};
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -24,6 +26,7 @@ use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample
 #[derive(Component)]
 pub(in crate::terrain) struct TerrainBiomeDetailProjectionPending;
 
+#[allow(clippy::type_complexity)]
 pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
@@ -41,7 +44,8 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         Has<TerrainBiomeDetailProjectionPending>,
         &mut TerrainDetailProjectionState,
     )>,
-    details: Query<&TerrainDetail>,
+    mut details: Query<(&mut TerrainDetail, &mut Transform, Option<&Children>)>,
+    prefab_roots: Query<(), With<TerrainDetailRenderRoot>>,
     changed_chunks: Query<(), Or<(Changed<TerrainDirty>, Changed<TerrainRenderChunk>)>>,
 ) {
     let all_sources_changed = settings.is_changed()
@@ -103,16 +107,15 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         for detail_entity in children
             .into_iter()
             .flat_map(|children| children.iter())
-            .filter_map(|child| details.get(child).ok().map(|detail| (child, detail)))
+            .filter_map(|child| details.get(child).ok().map(|(detail, ..)| (child, detail)))
         {
-            if source_changed {
-                commands.entity(detail_entity.0).despawn();
-            } else {
-                retained_detail_entities_by_placement_key
-                    .insert(detail_entity.1.placement_key, detail_entity.0);
-            }
+            retained_detail_entities_by_placement_key
+                .insert(detail_entity.1.placement_key, detail_entity.0);
         }
         let (Some(level), Some(asset)) = (level.as_ref(), asset) else {
+            for detail_entity in retained_detail_entities_by_placement_key.into_values() {
+                commands.entity(detail_entity).despawn();
+            }
             projection_state.retained_camera_focus = Some(camera.focus);
             continue;
         };
@@ -203,12 +206,6 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
                     {
                         continue;
                     }
-                    if retained_detail_entities_by_placement_key
-                        .remove(&seed)
-                        .is_some()
-                    {
-                        continue;
-                    }
                     let Some(prefab_handle) = definitions.scene(choice.prefab) else {
                         continue;
                     };
@@ -223,23 +220,38 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
                     ) else {
                         continue;
                     };
-                    commands.spawn((
-                        TerrainDetail {
-                            placement_key: seed,
-                            prefab: prefab_handle,
-                            solid_m: f32::from(placement.solid_distance_cm) * 0.01,
-                            fade_m: f32::from(placement.fade_distance_cm) * 0.01,
-                            materialized_render_tree_root: None,
-                        },
-                        Transform::from_xyz(x, f32::from(height_cm) * 0.01, z).with_rotation(
-                            Quat::from_rotation_y(
-                                convert_terrain_detail_placement_hash_to_unit_interval(
-                                    seed.rotate_left(7),
-                                ) * std::f32::consts::TAU,
-                            ),
-                        ),
-                        ChildOf(entity),
-                    ));
+                    let next = TerrainDetail {
+                        placement_key: seed,
+                        prefab: prefab_handle,
+                        solid_m: f32::from(placement.solid_distance_cm) * 0.01,
+                        fade_m: f32::from(placement.fade_distance_cm) * 0.01,
+                    };
+                    let pose = Transform::from_xyz(x, f32::from(height_cm) * 0.01, z)
+                        .with_rotation(Quat::from_rotation_y(
+                            convert_terrain_detail_placement_hash_to_unit_interval(
+                                seed.rotate_left(7),
+                            ) * std::f32::consts::TAU,
+                        ));
+                    if let Some(detail_entity) =
+                        retained_detail_entities_by_placement_key.remove(&seed)
+                    {
+                        let (mut detail, mut transform, children) = details
+                            .get_mut(detail_entity)
+                            .expect("indexed biome detail");
+                        if detail.prefab != next.prefab {
+                            for root in children
+                                .into_iter()
+                                .flat_map(|children| children.iter())
+                                .filter(|&child| prefab_roots.contains(child))
+                            {
+                                commands.entity(root).despawn();
+                            }
+                        }
+                        detail.set_if_neq(next);
+                        transform.set_if_neq(pose);
+                    } else {
+                        commands.spawn((next, pose, ChildOf(entity)));
+                    }
                 }
             }
         }
@@ -276,32 +288,56 @@ pub(super) fn materialize_terrain_biome_detail_render_trees_within_overhead_came
         With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
     >,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    mut detail_queries: ParamSet<(
-        Query<(), Added<TerrainDetail>>,
-        Query<(Entity, &GlobalTransform, &mut TerrainDetail)>,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    details: Query<(
+        Entity,
+        &TerrainDetail,
+        &Transform,
+        &ChildOf,
+        Option<&Children>,
     )>,
+    changed_details: Query<
+        (),
+        (
+            With<TerrainDetail>,
+            Or<(Changed<TerrainDetail>, Changed<Transform>)>,
+        ),
+    >,
+    chunks: Query<&TerrainChunk>,
+    prefab_roots: Query<(), With<TerrainDetailRenderRoot>>,
 ) {
     let Ok(camera) = cameras.single() else { return };
-    if !camera.is_changed() && !prefabs.is_changed() && detail_queries.p0().is_empty() {
+    let prefab_ready = prefab_events.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. } | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    prefab_events.clear();
+    if !camera.is_changed() && !prefab_ready && changed_details.is_empty() {
         return;
     }
-    for (entity, transform, mut detail) in &mut detail_queries.p1() {
-        let inside_authored_visibility_range =
-            transform.translation().xz().distance(camera.focus) <= detail.solid_m + detail.fade_m;
-        match (
-            inside_authored_visibility_range,
-            detail.materialized_render_tree_root,
-        ) {
+    for (entity, detail, transform, parent, children) in &details {
+        let Ok(chunk) = chunks.get(parent.parent()) else {
+            continue;
+        };
+        let inside_authored_visibility_range = (chunk.origin + transform.translation.xz())
+            .distance(camera.focus)
+            <= detail.solid_m + detail.fade_m;
+        let root = children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .find(|&child| prefab_roots.contains(child));
+        match (inside_authored_visibility_range, root) {
             (true, None) => {
                 let Some(prefab) = prefabs.get(&detail.prefab) else {
                     continue;
                 };
                 let (root, _, _) = spawn_prefab_render_tree(&mut commands, prefab, entity, false);
-                detail.materialized_render_tree_root = Some(root);
+                commands.entity(root).insert(TerrainDetailRenderRoot);
             }
             (false, Some(root)) => {
                 commands.entity(root).despawn();
-                detail.materialized_render_tree_root = None;
             }
             _ => {}
         }

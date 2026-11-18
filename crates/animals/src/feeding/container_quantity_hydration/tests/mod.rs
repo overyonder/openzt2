@@ -17,7 +17,6 @@ fn replacement_definition_hides_old_quantity_before_the_registry_is_available() 
             DefinitionId(original),
             ContainerQuantityResolved {
                 definition_id: original,
-                definitions_revision: 0,
             },
             FoodContainer {
                 food: original,

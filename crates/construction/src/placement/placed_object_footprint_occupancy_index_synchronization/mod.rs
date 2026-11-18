@@ -2,6 +2,8 @@
 
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
+use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -12,7 +14,6 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::placement::object_placement_definition_queries::authored_object_entrance_definitions;
 use openzt2_zoo_state::placement::object_placement_definition_queries::project_authored_object_entrance_definition_to_component;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin;
 use openzt2_zoo_state::placement::object_placement_validation::rotate_object_placement_cell_by_quarter_turns;
@@ -28,6 +29,7 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
     mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     mut placed: Query<(
         Entity,
         &PersistentId,
@@ -35,14 +37,17 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
         &Transform,
         &mut PlacedObjectFootprintOccupancy,
         Option<&PhysicsMovedPlacedObjectFootprint>,
+        Option<Ref<PrefabSourceAssetHandle>>,
     )>,
 ) {
     if !definitions.is_changed()
         && !active_definitions.is_changed()
+        && !footprints.is_changed()
         && !placed
             .iter_mut()
-            .any(|(_, _, placeable, _, footprint, moving)| {
-                placeable.is_added()
+            .any(|(_, _, placeable, _, footprint, moving, prefab)| {
+                prefab.is_some_and(|prefab| prefab.is_changed())
+                    || placeable.is_added()
                     || footprint.is_added()
                     || match moving {
                         None => footprint.is_changed(),
@@ -56,32 +61,19 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
         return;
     };
     let mut ordered: Vec<_> = placed.iter_mut().collect();
-    ordered.sort_unstable_by_key(|(_, id, _, _, _, _)| id.0);
-    let capacity = ordered
-        .iter()
-        .filter_map(|(_, _, placed, _, _, _)| {
-            resolve_object_placeable_definition(catalogue, placed.definition)
-        })
-        .map(|definition| {
-            definition
-                .footprint
-                .len()
-                .max(definition.diagonal_footprint.len())
-        })
-        .sum();
+    ordered.sort_unstable_by_key(|(_, id, _, _, _, _, _)| id.0);
     index.clear();
-    index.reserve(capacity);
-    for (entity, _, placeable, transform, mut occupancy, _) in ordered {
+    for (entity, _, placeable, transform, mut occupancy, _, prefab) in ordered {
         let Some(definition) = resolve_object_placeable_definition(catalogue, placeable.definition)
         else {
             continue;
         };
+        let geometry = footprints.resolve(definition, prefab.as_ref().map(|prefab| &prefab.0));
         let Some(turns) = calculate_authored_object_placement_eighth_turns(definition, transform)
         else {
             continue;
         };
-        let Some(origin) =
-            calculate_object_placement_footprint_origin(definition, transform, turns)
+        let Some(origin) = calculate_object_placement_footprint_origin(geometry, transform, turns)
         else {
             continue;
         };
@@ -90,7 +82,8 @@ pub(super) fn rebuild_placed_object_footprint_occupancy_index(
             occupancy.origin = origin;
             occupancy.eighth_turns = turns;
         }
-        select_authored_footprint_for_eighth_turns(definition, occupancy.eighth_turns)
+        geometry
+            .cells(occupancy.eighth_turns)
             .iter()
             .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
             .for_each(|cell| {
@@ -116,8 +109,15 @@ pub(super) fn hydrate_placed_object_placement_components(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     objects: Query<
-        (Entity, &DefinitionId, &Transform, &WorldMember),
+        (
+            Entity,
+            &DefinitionId,
+            &Transform,
+            &WorldMember,
+            Option<&PrefabSourceAssetHandle>,
+        ),
         (
             With<DefinitionId>,
             With<PersistentId>,
@@ -128,15 +128,16 @@ pub(super) fn hydrate_placed_object_placement_components(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, object, transform, member) in &objects {
+    for (entity, object, transform, member, prefab) in &objects {
         let Some(definition) = resolve_object_placeable_definition(catalogue, object.0) else {
             continue;
         };
+        let geometry = footprints.resolve(definition, prefab.map(|prefab| &prefab.0));
         let Some((origin, eighth_turns)) = calculate_authored_object_placement_eighth_turns(
             definition, transform,
         )
         .and_then(|turns| {
-            calculate_object_placement_footprint_origin(definition, transform, turns)
+            calculate_object_placement_footprint_origin(geometry, transform, turns)
                 .map(|origin| (origin, turns))
         }) else {
             continue;
@@ -179,12 +180,14 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
     mut index: ResMut<PlacedObjectFootprintOccupancyIndex>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     mut moving: Query<
         (
             Entity,
             &PlacedObjectDefinitionReference,
             &Transform,
             &mut PlacedObjectFootprintOccupancy,
+            Option<&PrefabSourceAssetHandle>,
         ),
         (With<PhysicsMovedPlacedObjectFootprint>, Changed<Transform>),
     >,
@@ -192,16 +195,17 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (entity, placeable, transform, mut occupancy) in &mut moving {
+    for (entity, placeable, transform, mut occupancy, prefab) in &mut moving {
         let Some(definition) = resolve_object_placeable_definition(catalogue, placeable.definition)
         else {
             continue;
         };
+        let geometry = footprints.resolve(definition, prefab.map(|prefab| &prefab.0));
         let Some((origin, eighth_turns)) = calculate_authored_object_placement_eighth_turns(
             definition, transform,
         )
         .and_then(|turns| {
-            calculate_object_placement_footprint_origin(definition, transform, turns)
+            calculate_object_placement_footprint_origin(geometry, transform, turns)
                 .map(|origin| (origin, turns))
         }) else {
             continue;
@@ -209,7 +213,7 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
         if occupancy.origin == origin && occupancy.eighth_turns == eighth_turns {
             continue;
         }
-        for cell in select_authored_footprint_for_eighth_turns(definition, occupancy.eighth_turns) {
+        for cell in geometry.cells(occupancy.eighth_turns) {
             if !cell.flags.contains_all(FootprintCellFlags::OCCUPIED) {
                 continue;
             }
@@ -220,7 +224,7 @@ pub(super) fn synchronize_physics_moved_object_footprints_with_occupancy_index(
         }
         occupancy.origin = origin;
         occupancy.eighth_turns = eighth_turns;
-        for cell in select_authored_footprint_for_eighth_turns(definition, eighth_turns) {
+        for cell in geometry.cells(eighth_turns) {
             if !cell.flags.contains_all(FootprintCellFlags::OCCUPIED) {
                 continue;
             }

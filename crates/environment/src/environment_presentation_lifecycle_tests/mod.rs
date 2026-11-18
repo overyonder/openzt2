@@ -8,10 +8,13 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_unloading::assert_no_invalid_entity_commands_during;
 
 use super::{
-    ambient_animal_types::AmbientAnimal,
-    environment_fog_attachment::attach_neutral_environment_fog_to_new_zoo_cameras,
+    ambient_animal_types::{AmbientAnimal, AmbientAnimalPopulationMember},
+    environment_fog_attachment::{
+        attach_neutral_environment_fog_to_new_zoo_cameras,
+        remove_camera_fog_when_environment_is_unlinked,
+    },
     environment_presentation_types::{EnvironmentFog, EnvironmentPresentationPending},
-    world_environment_cleanup::remove_world_environment_entities_and_camera_fog_after_leaving_game,
+    world_environment_cleanup::retire_remaining_world_environments_after_leaving_game,
 };
 
 fn asset_identifier_with_first_byte(first_byte: u8) -> openzt2_game_data::AssetId {
@@ -23,10 +26,12 @@ fn asset_identifier_with_first_byte(first_byte: u8) -> openzt2_game_data::AssetI
 #[test]
 fn cleanup_removes_owned_entities_and_detaches_fog_from_camera() {
     let mut application = App::new();
-    application.add_systems(
-        Update,
-        remove_world_environment_entities_and_camera_fog_after_leaving_game,
-    );
+    application
+        .add_observer(remove_camera_fog_when_environment_is_unlinked)
+        .add_systems(
+            Update,
+            retire_remaining_world_environments_after_leaving_game,
+        );
     let environment = application
         .world_mut()
         .spawn(WorldEnvironment {
@@ -35,14 +40,17 @@ fn cleanup_removes_owned_entities_and_detaches_fog_from_camera() {
         .id();
     let ambient_animal = application
         .world_mut()
-        .spawn(AmbientAnimal {
-            definition: asset_identifier_with_first_byte(2),
-            despawn_tick: 10,
-        })
+        .spawn((
+            AmbientAnimal { despawn_tick: 10 },
+            AmbientAnimalPopulationMember(environment),
+        ))
         .id();
     let camera = application
         .world_mut()
-        .spawn((EnvironmentFog, bevy::pbr::DistanceFog::default()))
+        .spawn((
+            EnvironmentFog(environment),
+            bevy::pbr::DistanceFog::default(),
+        ))
         .id();
     application.update();
 
@@ -96,7 +104,7 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
         .world_mut()
         .spawn((
             WorldMember { root },
-            EnvironmentFog,
+            EnvironmentFog(environment),
             bevy::pbr::DistanceFog::default(),
         ))
         .id();
@@ -130,7 +138,7 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
     let environment_camera = application
         .world_mut()
         .spawn((
-            EnvironmentFog,
+            EnvironmentFog(environment_without_membership),
             bevy::pbr::DistanceFog::default(),
             ChildOf(leftover_visual),
             Disabled,
@@ -139,7 +147,7 @@ fn registered_world_exit_flushes_members_before_environment_and_surviving_camera
     let surviving_camera = application
         .world_mut()
         .spawn((
-            EnvironmentFog,
+            EnvironmentFog(environment_without_membership),
             bevy::pbr::DistanceFog::default(),
             ChildOf(unrelated_parent),
             Disabled,
@@ -210,5 +218,5 @@ fn camera_added_after_environment_receives_renderer_owned_fog() {
     assert!(application
         .world()
         .get::<EnvironmentPresentationPending>(environment)
-        .is_some());
+        .is_none());
 }

@@ -39,9 +39,6 @@ fn removing_an_inherited_layer_reselects_only_its_lod_group() {
     let unaffected_root = world.spawn_empty().id();
     let changed_member = spawn_lod(world, changed_root);
     let unaffected_member = spawn_lod(world, unaffected_root);
-    world
-        .entity_mut(changed_member)
-        .insert((RenderLayers::none(), SuppressedModelRenderLayers(None)));
     app.update();
     assert_eq!(
         app.world().get::<Visibility>(changed_member),
@@ -70,9 +67,5 @@ fn removing_an_inherited_layer_reselects_only_its_lod_group() {
     assert_eq!(
         app.world().get::<Visibility>(unaffected_member),
         Some(&Visibility::Hidden)
-    );
-    assert_eq!(
-        app.world().get::<RenderLayers>(changed_member),
-        Some(&RenderLayers::none())
     );
 }

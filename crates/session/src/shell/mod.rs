@@ -9,9 +9,9 @@ mod in_game_shell_ui_action_routing;
 mod loading_screen_presentation;
 mod main_menu_screen_lifecycle_and_presentation;
 mod map_selection_screen_lifecycle;
+mod menu_screen_lifecycle;
 mod online_message_operations;
 mod online_message_types;
-mod options_screen_lifecycle;
 mod post_save_navigation;
 mod profile_dialog_lifecycle;
 mod profile_selection_list_presentation;
@@ -27,6 +27,7 @@ mod world_selection_presentation;
 mod world_selection_presentation_types;
 
 use bevy::prelude::*;
+use menu_screen_lifecycle::ShellMenuPage;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
@@ -41,7 +42,8 @@ pub struct ShellPlugin;
 
 impl Plugin for ShellPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<shell_navigation_request_types::ContinueCampaign>()
+        app.add_sub_state::<ShellMenuPage>()
+            .add_message::<shell_navigation_request_types::ContinueCampaign>()
             .init_resource::<ShellSelection>()
             .add_message::<NavigateShellBack>()
             .add_message::<ShowOptions>()
@@ -59,9 +61,14 @@ impl Plugin for ShellPlugin {
                     online_message_operations::start_online_message_request_for_newly_projected_surfaces,
                     online_message_operations::poll_online_message_requests_and_create_authored_rows,
                     online_message_operations::bind_displayed_online_message_to_authored_row_text,
-                    online_message_operations::project_online_message_policy_and_content_availability_to_surface,
                 )
                     .chain()
+                    .in_set(GameSet::Ui),
+            )
+            .add_systems(
+                Update,
+                online_message_operations::project_online_message_surface_visibility
+                    .after(online_message_operations::poll_online_message_requests_and_create_authored_rows)
                     .in_set(GameSet::Ui),
             )
             .add_systems(
@@ -74,7 +81,7 @@ impl Plugin for ShellPlugin {
                     .in_set(openzt2_interface_state::ui::UiSet::DomainProjection),
             )
             .add_systems(
-                OnEnter(GamePhase::MainMenu),
+                OnEnter(ShellMenuPage::MainMenu),
                 main_menu_screen_lifecycle_and_presentation::
                     create_main_menu_screen_and_request_profile_index,
             )
@@ -84,33 +91,14 @@ impl Plugin for ShellPlugin {
                     create_or_reuse_selected_mode_map_selection_screen,
             )
             .add_systems(
-                OnExit(GamePhase::MainMenu),
-                main_menu_screen_lifecycle_and_presentation::
-                    despawn_shell_screens_when_leaving_main_menu,
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                in_game_options_overlay_lifecycle::
-                    close_in_game_options_overlays_when_game_exits,
-            )
-            .add_systems(
                 OnEnter(GamePhase::Loading),
                 loading_screen_presentation::show_authored_loading_screen,
-            )
-            .add_systems(
-                OnExit(GamePhase::Loading),
-                loading_screen_presentation::close_authored_loading_screen,
             )
             .add_systems(
                 Update,
                 loading_screen_presentation::project_world_loading_progress
                     .in_set(openzt2_interface_state::ui::UiSet::DomainProjection)
                     .run_if(in_state(GamePhase::Loading)),
-            )
-            .add_systems(
-                OnEnter(GamePhase::InGame),
-                map_selection_screen_lifecycle::
-                    despawn_retained_map_selection_screen_after_world_activation,
             )
             .add_systems(
                 Update,
@@ -144,18 +132,16 @@ impl Plugin for ShellPlugin {
                     shell_navigation_and_world_launch::
                         select_world_from_activated_choice_view,
                     shell_navigation_and_world_launch::select_requested_compatible_world,
-                    shell_navigation_and_world_launch::continue_campaign_after_world_exit,
+                    shell_navigation_and_world_launch::request_campaign_launch_after_world_exit,
                     shell_navigation_and_world_launch::begin_loading_selected_world,
                     in_game_shell_ui_action_routing::route_authored_in_game_shell_ui_actions,
-                    in_game_options_overlay_lifecycle::
-                        close_hidden_in_game_options_overlays_and_restore_simulation_pause_state,
+                    in_game_options_overlay_lifecycle::close_finished_in_game_options_overlays,
                     exit_confirmation_presentation::
                         reveal_authored_exit_confirmation_after_modal_projection,
                     post_save_navigation::
                         complete_or_cancel_pending_navigation_after_save_result,
-                    shell_navigation_and_world_launch::return_to_main_menu,
                     shell_navigation_and_world_launch::exit_application_after_request,
-                    shell_navigation_and_world_launch::navigate_to_previous_shell_screen,
+                    menu_screen_lifecycle::route_requested_shell_menu_page,
                 )
                     .chain()
                     .in_set(ShellNavigationAfterSettings)
@@ -167,23 +153,12 @@ impl Plugin for ShellPlugin {
                     .in_set(openzt2_interface_state::ui::UiSet::Routing)
                     .run_if(shell_is_active),
             )
+            .add_systems(OnEnter(ShellMenuPage::Options), menu_screen_lifecycle::open_secondary_shell_menu)
+            .add_systems(OnEnter(ShellMenuPage::Downloads), menu_screen_lifecycle::open_secondary_shell_menu)
+            .add_systems(OnEnter(ShellMenuPage::SavedGames), menu_screen_lifecycle::open_secondary_shell_menu)
             .add_systems(
-                Update,
-                (
-                    shell_navigation_and_world_launch::show_downloads_screen_from_requests,
-                    shell_navigation_and_world_launch::show_saved_games_screen_from_requests,
-                )
-                    .chain()
-                    .after(
-                        shell_navigation_and_world_launch::navigate_to_previous_shell_screen,
-                    )
-                    .in_set(GameSet::Intent),
-            )
-            .add_systems(
-                Update,
-                options_screen_lifecycle::replace_current_shell_screen_with_requested_options_screen
-                    .in_set(GameSet::Intent)
-                    .run_if(shell_is_active),
+                OnEnter(GamePhase::MapSelection),
+                shell_navigation_and_world_launch::begin_pending_campaign_launch_after_world_exit,
             )
             .add_systems(
                 Update,

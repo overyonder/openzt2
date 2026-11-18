@@ -1,5 +1,7 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_data::ui_document::{action::shell_navigation::UiShellAction, document::*};
+use openzt2_world_state::simulation_time::simulation_control_types::AuthoredUiTemporarySimulationPause;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
@@ -10,8 +12,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::GameViewDocumentOwner;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
-use openzt2_world_state::simulation_time::simulation_control_types::SimulationControl;
-use openzt2_world_state::simulation_time::simulation_control_types::SimulationPauseRequest;
 
 use super::{
     exit_confirmation_presentation::ExitConfirmationPending,
@@ -46,13 +46,12 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
     ),
     mut screenshots: MessageWriter<CaptureScreenshotRequest>,
     mut show: MessageWriter<ShowUiRole>,
-    simulation: Option<Res<SimulationControl>>,
     overlays: Query<(), With<InGameOptionsOverlay>>,
-    mut set_paused: MessageWriter<SimulationPauseRequest>,
     cameras: Query<(Entity, &Camera), With<Camera3d>>,
     game_view: GameViewDocumentOwner,
     mut information: OverheadInformationDismissalTargets,
 ) {
+    let mut options_open = !overlays.is_empty();
     for activation in activations.read() {
         let Ok((range, owner)) = nodes.get(activation.node) else {
             continue;
@@ -110,28 +109,23 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                             continue;
                         }
                     }
-                    if !overlays.is_empty() {
+                    if options_open {
                         continue;
                     }
-                    let Some(simulation) = simulation.as_deref() else {
-                        continue;
-                    };
                     let overlay = commands
                         .spawn((
-                            InGameOptionsOverlay::remembering_previous_pause_state(
-                                simulation.paused,
-                            ),
+                            InGameOptionsOverlay,
+                            AuthoredUiTemporarySimulationPause::holding(),
+                            DespawnOnExit(GamePhase::InGame),
                             Visibility::Inherited,
+                            ChildOf(game_view.owner(owner.0)),
                         ))
                         .id();
-                    set_paused.write(SimulationPauseRequest::Set(true));
-                    // The menu belongs with the game view, so the dialogs it
-                    // opens as it closes, such as returning to the main menu or
-                    // saving, outlive it.
                     show.write(ShowUiRole {
                         role: UiDocumentRole::InGameOptions,
-                        owner: game_view.owner(overlay),
+                        owner: overlay,
                     });
+                    options_open = true;
                 }
                 // Navigation waits on the save dialog's owner, where its save
                 // completes or its cancellation abandons the navigation.

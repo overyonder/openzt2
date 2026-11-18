@@ -2,10 +2,10 @@ use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectBiomeAutomaticPlacementClass;
-use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -28,24 +28,28 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
-use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use crate::placement::ground_path_placement_stomp::{
+    GroundPathPlacementStomp, GroundPathStompRemovals,
+};
+use crate::placement::stomped_object_edit_preparation::{
+    StompablePlacedObject, prepare_stomped_object_removals,
+};
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
-use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
-use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
+use openzt2_zoo_state::placement::object_placement_validation::{
+    object_placement_stomp_action, validate_object_placement_footprint_cells,
+};
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPrepared;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
+use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 
 #[derive(Component, Debug, Clone)]
 pub(super) struct BiomeAutomaticPlacementAssetDependencies {
@@ -62,6 +66,7 @@ pub(super) struct BiomeAutomaticPlacementRandomStream(DeterministicRng);
 pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     definitions: Res<'w, Assets<WorldDefinitionAsset>>,
     active_definitions: Res<'w, WorldDefinitions>,
+    footprints: Res<'w, ScenePlacementFootprints>,
     images: Res<'w, Assets<Image>>,
     prefabs: Res<'w, Assets<ScenePrefabAsset>>,
     models: Res<'w, Assets<Gltf>>,
@@ -80,18 +85,8 @@ pub(super) struct BiomeAutomaticObjectPlacementPreparationParameters<'w, 's> {
     >,
     roots: Query<'w, 's, &'static mut BiomeAutomaticPlacementRandomStream, With<WorldRoot>>,
     placement: Res<'w, PlacedObjectFootprintOccupancyIndex>,
-    ground_paths: GroundPathTilesUnderObjectPlacement<'w, 's>,
-    placed: Query<
-        'w,
-        's,
-        (
-            &'static PersistentId,
-            &'static PlacedObjectDefinitionReference,
-            &'static Transform,
-            &'static PlacedObjectFootprintOccupancy,
-            &'static PrefabSourceAssetHandle,
-        ),
-    >,
+    ground_paths: GroundPathPlacementStomp<'w, 's>,
+    placed: Query<'w, 's, StompablePlacedObject>,
     allocator: ResMut<'w, PersistentIdAllocator>,
     scratch: ResMut<'w, ObjectPlacementCellCollectionScratch>,
 }
@@ -201,10 +196,12 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
     mut requests: MessageReader<PrepareConstruction>,
     parameters: BiomeAutomaticObjectPlacementPreparationParameters,
     mut prepared: MessageWriter<ObjectPlacementEditPrepared>,
+    mut topology_prepared: MessageWriter<TopologyEditPrepared>,
 ) {
     let BiomeAutomaticObjectPlacementPreparationParameters {
         definitions,
         active_definitions,
+        footprints,
         images,
         prefabs,
         models,
@@ -282,7 +279,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         let mut mutations = Vec::new();
         for cell in candidate_cells.iter().copied() {
             for entity in placement.entities_occupying_cell(cell) {
-                if !removed_entities.insert(entity) {
+                if removed_entities.contains(&entity) {
                     continue;
                 }
                 let Ok((id, reference, transform, _occupancy, prefab)) = placed.get(entity) else {
@@ -299,23 +296,21 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                         .properties
                         .contains_all(WorldObjectPropertyFlags::SAVE_RELEVANT)
                 {
-                    removed_entities.remove(&entity);
                     continue;
                 }
                 let Some(definition) =
                     resolve_object_placeable_definition(catalogue, reference.definition)
                 else {
-                    removed_entities.remove(&entity);
                     continue;
                 };
                 let Some(cells) = collect_occupied_placement_cells_for_transform(
-                    definition,
+                    footprints.resolve(definition, Some(&prefab.0)),
                     transform,
                     &mut scratch.cells,
                 ) else {
-                    removed_entities.remove(&entity);
                     continue;
                 };
+                removed_entities.insert(entity);
                 mutations.push(PreparedObjectPlacementMutation {
                     entity: *id,
                     definition: reference.definition,
@@ -331,6 +326,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
             }
         }
 
+        let mut removed_paths = GroundPathStompRemovals::default();
         let mut created_cells = HashSet::new();
         let mut total_cost = 0_i64;
         for cell in candidate_cells.iter().copied() {
@@ -382,12 +378,14 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 ),
                 scale: Vec3::ONE,
             };
-            let footprint = select_authored_footprint_for_eighth_turns(definition, eighth_turns);
-            let collides_with_ground_path =
-                ground_paths.object_placement_cell_collides_with_ground_path(definition, catalogue);
+            let Some(prefab) = catalogue.scene(object.prefab) else {
+                continue;
+            };
+            let geometry = footprints.resolve(definition, Some(&prefab));
+            let path_overlaps = ground_paths.overlaps(definition, catalogue);
             let validity = validate_object_placement_footprint_cells(
-                definition,
-                footprint,
+                geometry,
+                geometry.cells(eighth_turns),
                 &transform,
                 |position| {
                     let entity = terrain_chunk_at(&terrain_index, position)?;
@@ -397,15 +395,18 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 },
                 |occupied_cell| {
                     created_cells.contains(&occupied_cell)
-                        || collides_with_ground_path(occupied_cell)
-                        || biome_automatic_placement_cell_has_remaining_blocker(
-                            &placement,
-                            occupied_cell,
-                            &removed_entities,
-                            definition.constraints,
-                            catalogue,
-                            &placed,
-                        )
+                        || path_overlaps.prevents_placement(occupied_cell)
+                        || placement
+                            .entities_occupying_cell(occupied_cell)
+                            .filter(|entity| !removed_entities.contains(entity))
+                            .any(|entity| {
+                                let target = placed
+                                    .get(entity)
+                                    .ok()
+                                    .map(|(_, reference, _, _, _)| reference.definition);
+                                object_placement_stomp_action(definition, catalogue, target)
+                                    == PlacementStompAction::Prevent
+                            })
                 },
                 ObjectPlacementAuthoritativeFacts {
                     habitat: None,
@@ -420,20 +421,36 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 continue;
             }
             let Some(cells) = collect_occupied_placement_cells_for_transform(
-                definition,
+                geometry,
                 &transform,
                 &mut scratch.cells,
             ) else {
                 continue;
             };
-            let Some(prefab) = catalogue.scene(object.prefab) else {
-                continue;
-            };
-            if prefabs.get(&prefab).is_none_or(|prefab| {
-                first_missing_prefab_collider_model_asset_id(prefab, &models).is_some()
+            if prefabs.get(&prefab).is_none_or(|scene| {
+                (definition.automatic_footprint
+                    && scene
+                        .canonical_scene_prefab_document()
+                        .automatic_placement_bounds_xz
+                        .is_some()
+                    && !footprints.has_scene_bounds(&prefab))
+                    || first_missing_prefab_collider_model_asset_id(scene, &models).is_some()
             }) {
                 continue;
             }
+            let cells = cells.to_vec().into_boxed_slice();
+            let Some(removals) = prepare_stomped_object_removals(
+                &cells,
+                definition,
+                catalogue,
+                &footprints,
+                &placement,
+                &placed,
+                |entity| removed_entities.contains(&entity),
+                &mut scratch.cells,
+            ) else {
+                continue;
+            };
             let Ok(entity) = allocator.allocate(member.root) else {
                 continue;
             };
@@ -441,12 +458,15 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 continue;
             };
             total_cost = cost;
+            removed_paths.collect(&path_overlaps, &cells);
+            removed_entities.extend(removals.iter().filter_map(|removal| removal.applied_entity));
+            mutations.extend(removals);
             created_cells.extend(cells.iter().copied());
             mutations.push(PreparedObjectPlacementMutation {
                 entity,
                 definition: definition_id,
                 transform,
-                cells: cells.to_vec().into_boxed_slice(),
+                cells,
                 previous_transform: None,
                 previous_cells: Box::new([]),
                 mutation: PreparedObjectPlacementEditMutationKind::Create,
@@ -458,6 +478,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
         if mutations.is_empty() {
             continue;
         }
+        removed_paths.prepare(request.transaction, &mut commands, &mut topology_prepared);
         commands
             .entity(request.transaction)
             .insert(PreparedObjectPlacementEdit {
@@ -517,32 +538,4 @@ const fn biome_automatic_placement_class_is_enabled(
         WorldObjectBiomeAutomaticPlacementClass::Plant => preview.paint_foliage,
         WorldObjectBiomeAutomaticPlacementClass::Rock => preview.paint_rocks,
     }
-}
-
-fn biome_automatic_placement_cell_has_remaining_blocker(
-    placement: &PlacedObjectFootprintOccupancyIndex,
-    cell: IVec2,
-    removed: &HashSet<Entity>,
-    constraints: PlacementConstraints,
-    catalogue: openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView<'_>,
-    placed: &Query<(
-        &PersistentId,
-        &PlacedObjectDefinitionReference,
-        &Transform,
-        &PlacedObjectFootprintOccupancy,
-        &PrefabSourceAssetHandle,
-    )>,
-) -> bool {
-    let allows_scenery = constraints.contains_all(PlacementConstraints::ALLOW_OVERLAP_SCENERY);
-    placement
-        .entities_occupying_cell(cell)
-        .filter(|entity| !removed.contains(entity))
-        .any(|entity| {
-            !allows_scenery
-                || placed
-                    .get(entity)
-                    .ok()
-                    .and_then(|(_, reference, _, _, _)| catalogue.find_object(reference.definition))
-                    .is_none_or(|object| !matches!(object.kind, WorldObjectKind::Scenery))
-        })
 }

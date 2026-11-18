@@ -1,6 +1,7 @@
-use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
+use bevy::{ecs::entity::EntityHashMap, platform::collections::HashSet};
 
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
     WorldDefinitions, WorldDefinitionsView,
 };
@@ -13,6 +14,7 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::{
 };
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
 use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatRegion};
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyNode};
 
 use super::tank_geometry_rules::{
@@ -20,6 +22,25 @@ use super::tank_geometry_rules::{
 };
 
 const NEW_TANK_WATER_QUALITY: WaterQuality = WaterQuality(1_000);
+
+#[derive(Component, PartialEq, Eq)]
+pub(super) struct PendingTankPromotion {
+    restore_next: bool,
+}
+
+fn mark_tank_promotion_pending(
+    commands: &mut Commands,
+    pending: &mut Query<(Entity, &mut PendingTankPromotion)>,
+    habitat: Entity,
+    restore_next: bool,
+) {
+    let next = PendingTankPromotion { restore_next };
+    if let Ok((_, mut current)) = pending.get_mut(habitat) {
+        current.set_if_neq(next);
+    } else {
+        commands.entity(habitat).insert(next);
+    }
+}
 
 /// Ground and wall facts of a habitat whose whole boundary is tank wall.
 struct TankWallBoundary {
@@ -111,53 +132,97 @@ fn read_tank_wall_boundary(
 /// tank state when a pending restoration's seed cell lies in the habitat, even
 /// one already promoted with new-tank defaults. Habitats that cannot be read
 /// yet are retried on later ticks.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     habitat_index: Res<HabitatIndex>,
+    terrain_index: Res<TerrainIndex>,
+    mut terrain_assets: MessageReader<AssetEvent<TerrainAsset>>,
     changed_habitats: Query<Entity, Changed<HabitatRegion>>,
-    habitats: Query<(
+    mut pending_habitats: Query<(Entity, &mut PendingTankPromotion)>,
+    mut habitats: Query<(
         &HabitatRegion,
-        Has<Tank>,
         &WorldMember,
-        Option<&TankGeometry>,
+        Option<&mut Tank>,
+        Option<&mut TankGeometry>,
+        Option<&mut TankWater>,
+        Option<&mut TankEnvironment>,
+        Option<&mut WaterQuality>,
     )>,
     pending_restorations: Query<(Entity, &PendingTankRestoration, &WorldMember)>,
+    changed_restorations: Query<(), Changed<PendingTankRestoration>>,
     fences: Query<(&FenceEdge, &PersistentId, Option<&TankWallTopHeight>)>,
     nodes: Query<&TopologyNode>,
+    changed_fences: Query<(), Changed<FenceEdge>>,
+    changed_nodes: Query<(), Changed<TopologyNode>>,
     ground: TankWallGroundSampling,
-    mut deferred_habitats: Local<Vec<Entity>>,
     mut commands: Commands,
 ) {
-    let mut candidates = std::mem::take(&mut *deferred_habitats);
-    candidates.extend(changed_habitats.iter());
-    candidates.extend(
-        pending_restorations.iter().filter_map(|(_, pending, _)| {
-            habitat_index.habitat_for_topology_cell(pending.seed_cell)
-        }),
-    );
+    let terrain_loaded = terrain_assets.read().any(|event| {
+        matches!(
+            event,
+            AssetEvent::Added { .. }
+                | AssetEvent::Modified { .. }
+                | AssetEvent::LoadedWithDependencies { .. }
+        )
+    });
+    terrain_assets.clear();
+    let inputs_changed = active_definitions.is_changed()
+        || terrain_index.is_changed()
+        || terrain_loaded
+        || !changed_fences.is_empty()
+        || !changed_nodes.is_empty();
+    let mut candidates: Vec<_> = changed_habitats.iter().collect();
+    candidates.extend(pending_habitats.iter().filter_map(|(habitat, pending)| {
+        (inputs_changed || pending.restore_next).then_some(habitat)
+    }));
+    let resolve_changed_restorations =
+        habitat_index.is_changed() || !changed_restorations.is_empty();
+    if candidates.is_empty() && !resolve_changed_restorations {
+        return;
+    }
+    let mut restorations: EntityHashMap<(Entity, &PendingTankRestoration, bool)> =
+        EntityHashMap::default();
+    for (entity, pending, world) in &pending_restorations {
+        let Some(habitat) = habitat_index.habitat_for_topology_cell(pending.seed_cell) else {
+            continue;
+        };
+        if habitats
+            .get(habitat)
+            .is_ok_and(|(_, member, ..)| member.root == world.root)
+        {
+            restorations
+                .entry(habitat)
+                .and_modify(|(_, _, multiple)| *multiple = true)
+                .or_insert((entity, pending, false));
+            if resolve_changed_restorations {
+                candidates.push(habitat);
+            }
+        }
+    }
     candidates.sort_unstable();
     candidates.dedup();
     let Some((definitions, limits)) = active_definitions
         .get(&definitions)
         .and_then(|definitions| Some((definitions, tank_geometry_limits(definitions)?)))
     else {
-        deferred_habitats.extend(
-            candidates
-                .iter()
-                .filter(|habitat| habitats.get(**habitat).is_ok()),
-        );
+        for habitat in candidates {
+            mark_tank_promotion_pending(&mut commands, &mut pending_habitats, habitat, false);
+        }
         return;
     };
     for habitat in candidates {
-        let Ok((region, is_tank, member, existing_geometry)) = habitats.get(habitat) else {
+        let Ok((region, member, tank, existing_geometry, water, environment, quality)) =
+            habitats.get_mut(habitat)
+        else {
             continue;
         };
         let walls =
             match read_tank_wall_boundary(region, definitions, limits, &fences, &nodes, &ground) {
                 TankWallBoundaryReading::NotTankWalls => {
-                    if is_tank {
+                    commands.entity(habitat).remove::<PendingTankPromotion>();
+                    if tank.is_some() {
                         commands
                             .entity(habitat)
                             .remove::<(Tank, TankGeometry, TankWater, TankEnvironment)>();
@@ -165,31 +230,30 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
                     continue;
                 }
                 TankWallBoundaryReading::NotReady => {
-                    deferred_habitats.push(habitat);
+                    mark_tank_promotion_pending(
+                        &mut commands,
+                        &mut pending_habitats,
+                        habitat,
+                        false,
+                    );
                     continue;
                 }
                 TankWallBoundaryReading::Walls(walls) => walls,
             };
-        let restoration = pending_restorations
-            .iter()
-            .find(|(_, pending, pending_member)| {
-                pending_member.root == member.root
-                    && region
-                        .topology_cells
-                        .binary_search_by_key(&(pending.seed_cell.x, pending.seed_cell.y), |cell| {
-                            (cell.x, cell.y)
-                        })
-                        .is_ok()
-            });
+        let restoration = restorations.get(&habitat).copied();
         let restored_wall_top = restoration
             .map(|(_, pending, _)| pending.geometry.wall_height)
-            .or_else(|| existing_geometry.map(|geometry| geometry.wall_height));
+            .or_else(|| {
+                existing_geometry
+                    .as_deref()
+                    .map(|geometry| geometry.wall_height)
+            });
         for (fence, top) in &walls.missing_tops {
             commands
                 .entity(*fence)
-                .insert(TankWallTopHeight(restored_wall_top.unwrap_or(*top)));
+                .insert_if_new(TankWallTopHeight(restored_wall_top.unwrap_or(*top)));
         }
-        if let Some((pending_entity, pending, _)) = restoration {
+        if let Some((pending_entity, pending, restore_next)) = restoration {
             let mut geometry = pending.geometry;
             if pending.water_limit_missing
                 && geometry.water_height
@@ -201,21 +265,49 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
             geometry.area = region.area_square_metres.max(0.0);
             geometry.volume = geometry.area * geometry.depth();
             if !geometry.is_valid() {
+                mark_tank_promotion_pending(&mut commands, &mut pending_habitats, habitat, false);
                 continue;
             }
             commands.entity(pending_entity).despawn();
-            commands.entity(habitat).insert((
-                Tank {
-                    definition: pending.definition,
-                },
-                geometry,
-                TankWater::default(),
-                TankEnvironment::default(),
-                pending.water_quality,
-            ));
+            if restore_next {
+                mark_tank_promotion_pending(&mut commands, &mut pending_habitats, habitat, true);
+            }
+            let mut entity = commands.entity(habitat);
+            if !restore_next {
+                entity.remove::<PendingTankPromotion>();
+            }
+            let definition = Tank {
+                definition: pending.definition,
+            };
+            if let Some(mut current) = tank {
+                current.set_if_neq(definition);
+            } else {
+                entity.insert_if_new(definition);
+            }
+            if let Some(mut current) = existing_geometry {
+                current.set_if_neq(geometry);
+            } else {
+                entity.insert_if_new(geometry);
+            }
+            if let Some(mut current) = water {
+                current.set_if_neq(TankWater::default());
+            } else {
+                entity.insert_if_new(TankWater::default());
+            }
+            if let Some(mut current) = environment {
+                current.set_if_neq(TankEnvironment::default());
+            } else {
+                entity.insert_if_new(TankEnvironment::default());
+            }
+            if let Some(mut current) = quality {
+                current.set_if_neq(pending.water_quality);
+            } else {
+                entity.insert_if_new(pending.water_quality);
+            }
             continue;
         }
-        if is_tank {
+        commands.entity(habitat).remove::<PendingTankPromotion>();
+        if tank.is_some() {
             continue;
         }
         let Some(geometry) = new_tank_geometry(

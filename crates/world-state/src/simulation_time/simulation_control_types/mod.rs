@@ -4,7 +4,9 @@ use bevy::prelude::*;
 pub struct SimulationControl {
     pub speed_tier: u8,
     pub paused: bool,
-    pause_state_before_temporary_ui_hold: Option<bool>,
+    requested_pause: bool,
+    temporary_ui_pause: bool,
+    immersive_pause: bool,
 }
 
 impl SimulationControl {
@@ -12,60 +14,58 @@ impl SimulationControl {
         Self {
             speed_tier,
             paused,
-            pause_state_before_temporary_ui_hold: None,
+            requested_pause: paused,
+            temporary_ui_pause: false,
+            immersive_pause: false,
         }
     }
 
-    pub fn requested_pause_state(&self) -> bool {
-        self.pause_state_before_temporary_ui_hold
-            .unwrap_or(self.paused)
+    pub const fn requested_pause_state(&self) -> bool {
+        self.requested_pause
     }
 
-    pub fn temporary_ui_pause_is_held(&self) -> bool {
-        self.pause_state_before_temporary_ui_hold.is_some()
+    pub const fn temporary_ui_pause_is_held(&self) -> bool {
+        self.temporary_ui_pause
     }
 
     pub fn apply_pause_request(&mut self, request: SimulationPauseRequest) -> bool {
-        let paused = match request {
+        self.requested_pause = match request {
             SimulationPauseRequest::Set(paused) => paused,
-            SimulationPauseRequest::ToggleRequested => !self.requested_pause_state(),
+            SimulationPauseRequest::ToggleRequested => !self.requested_pause,
         };
-        self.set_requested_pause_state(paused)
+        self.update_effective_pause()
     }
 
-    fn set_requested_pause_state(&mut self, paused: bool) -> bool {
+    pub fn project_pause_claims(
+        &mut self,
+        temporary_ui_pause: bool,
+        immersive_pause: bool,
+    ) -> bool {
+        self.temporary_ui_pause = temporary_ui_pause;
+        self.immersive_pause = immersive_pause;
+        self.update_effective_pause()
+    }
+
+    pub const fn pause_claims_match(
+        &self,
+        temporary_ui_pause: bool,
+        immersive_pause: bool,
+    ) -> bool {
+        self.temporary_ui_pause == temporary_ui_pause && self.immersive_pause == immersive_pause
+    }
+
+    fn update_effective_pause(&mut self) -> bool {
         let previous = self.paused;
-        if let Some(previous_pause) = &mut self.pause_state_before_temporary_ui_hold {
-            // Explicit pause requests, including an options overlay's restore,
-            // remain authoritative when the final temporary UI hold ends.
-            *previous_pause = paused;
-        } else {
-            self.paused = paused;
-        }
+        self.paused = self.requested_pause || self.temporary_ui_pause || self.immersive_pause;
         self.paused != previous
-    }
-
-    pub fn set_temporary_ui_pause_held(&mut self, held: bool) -> bool {
-        let previous = self.paused;
-        if held {
-            let _ = self
-                .pause_state_before_temporary_ui_hold
-                .get_or_insert(self.paused);
-            self.paused = true;
-        } else if let Some(previous_pause) = self.pause_state_before_temporary_ui_hold.take() {
-            self.paused = previous_pause;
-        }
-        self.paused != previous
-    }
-
-    pub fn temporary_ui_pause_hold_matches_current_control(&self, held: bool) -> bool {
-        self.pause_state_before_temporary_ui_hold.is_some() == held && (!held || self.paused)
     }
 }
 
-/// Intent belongs to its authored node or pending receiver. Effective holding
-/// also requires its post-command ancestor chain to be shown.
 #[derive(Component)]
+pub struct ImmersiveSimulationPauseClaim;
+
+/// A live authored node or pending receiver that requests a pause while shown.
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub struct AuthoredUiTemporarySimulationPause(pub bool);
 
 impl AuthoredUiTemporarySimulationPause {
@@ -77,6 +77,9 @@ impl AuthoredUiTemporarySimulationPause {
         self.0
     }
 }
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub struct UiDocumentPauseTransfer(pub bool);
 
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetSimulationSpeed {

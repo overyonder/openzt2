@@ -100,6 +100,7 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     mut random_streams: Query<(Option<&mut GuestRng>, Option<&mut BehaviorRandomStream>)>,
     mut payments: MessageWriter<TransactionRequest>,
     staff_jobs: Query<&CurrentJob, With<Staff>>,
+    mut usage_counters: Query<&mut EconomyUsage>,
 ) {
     let Some(definitions) = definitions.get(&assets) else {
         return;
@@ -279,9 +280,15 @@ pub(super) fn execute_authored_behavior_transaction_steps(
                 )]
                 let count = amount.round() as i32;
                 let adding = transaction.kind == EconomyTransactionKind::AddUser;
-                queue_usage_change(actor, count, adding, &mut commands);
+                apply_usage_change(actor, count, adding, &mut usage_counters, &mut commands);
                 if transaction.track_on_parent && pending.facility != actor {
-                    queue_usage_change(pending.facility, count, adding, &mut commands);
+                    apply_usage_change(
+                        pending.facility,
+                        count,
+                        adding,
+                        &mut usage_counters,
+                        &mut commands,
+                    );
                 }
                 finish_transaction_step(
                     actor,
@@ -304,18 +311,31 @@ pub(super) fn execute_authored_behavior_transaction_steps(
     }
 }
 
-fn queue_usage_change(entity: Entity, count: i32, adding: bool, commands: &mut Commands) {
-    commands.queue(move |world: &mut World| {
-        let Ok(mut entity) = world.get_entity_mut(entity) else {
-            return;
-        };
-        if !entity.contains::<EconomyUsage>() {
-            entity.insert(EconomyUsage::default());
-        }
-        if let Some(mut usage) = entity.get_mut::<EconomyUsage>() {
+fn apply_usage_change(
+    entity: Entity,
+    count: i32,
+    adding: bool,
+    usage_counters: &mut Query<&mut EconomyUsage>,
+    commands: &mut Commands,
+) {
+    if let Ok(mut usage) = usage_counters.get_mut(entity) {
+        if count != 0 {
             usage.apply_user_change(count, adding);
         }
-    });
+        return;
+    }
+    // Earlier changes in this system may have queued the first use of this account.
+    commands.entity(entity).queue_silenced(
+        move |mut entity: bevy::ecs::world::EntityWorldMut<'_>| {
+            if let Some(mut usage) = entity.get_mut::<EconomyUsage>() {
+                usage.apply_user_change(count, adding);
+            } else {
+                let mut usage = EconomyUsage::default();
+                usage.apply_user_change(count, adding);
+                entity.insert(usage);
+            }
+        },
+    );
 }
 
 fn fail_transaction(actor: Entity, transaction: AssetId, reason: &str, commands: &mut Commands) {

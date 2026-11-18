@@ -6,6 +6,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyFlags;
 use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
+use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_sample_change_calculations::changed_terrain_sample_bounds;
 use crate::terrain::terrain_sample_change_calculations::determine_terrain_dirty_flags_from_changed_samples;
 use crate::terrain::terrain_sample_change_calculations::queue_terrain_render_refresh;
@@ -29,6 +30,7 @@ use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_t
 #[derive(Component)]
 pub(super) struct LiveAppliedTerrainEdit;
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,
@@ -38,6 +40,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
         Has<LiveAppliedTerrainEdit>,
     )>,
     entities: Query<Entity>,
+    chunk_ids: Res<TerrainChunkIdLookup>,
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -81,9 +84,11 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
                     })
         });
         for delta in edit.deltas.iter() {
-            let Some((entity, chunk, edited, _)) =
-                chunks.iter_mut().find(|(_, _, _, id)| **id == delta.chunk)
-            else {
+            let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
+                valid = false;
+                break;
+            };
+            let Ok((_, chunk, edited, _)) = chunks.get(entity) else {
                 valid = false;
                 break;
             };
@@ -97,7 +102,7 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
                 valid = false;
                 break;
             };
-            if edited.as_deref().is_some_and(|samples| {
+            if edited.is_some_and(|samples| {
                 !terrain_sample_overlay_has_expected_lengths(samples, expected)
             }) || (edited.is_none()
                 && !(0..chunk.side as usize).all(|z| {
@@ -261,16 +266,20 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
             flags,
         },
     );
-    if flags.contains(TerrainDirtyFlags::COLLISION) {
-        commands.entity(entity).insert(TerrainDirty);
-    }
     changed.write(TerrainChanged {
         transaction,
         chunk: entity,
         min: delta.min,
         max: delta.max,
+        ground_height_changed: flags.contains(TerrainDirtyFlags::HEIGHT),
     });
-    if flags.contains(TerrainDirtyFlags::COLLISION) {
+    if flags.contains(TerrainDirtyFlags::HEIGHT) {
+        commands.entity(entity).insert_if_new(
+            openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionPending,
+        );
+    }
+    if flags.intersects(TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::WATER) {
+        commands.entity(entity).insert(TerrainDirty);
         navigation_changed.write(TerrainNavigationChanged {
             chunk: entity,
             min: delta.min,

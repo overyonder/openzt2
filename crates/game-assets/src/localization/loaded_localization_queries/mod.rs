@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    localization::{
-        LocalizationFormatArgument, LocalizationFormatError, LocalizationRichContentNode,
-        LocalizationTextPresentation,
-    },
     AssetId,
+    localization::{
+        LocalizationCatalog, LocalizationDateFormatToken, LocalizationFormatArgument,
+        LocalizationFormatError, LocalizationRichContentNode, LocalizationTextPresentation,
+    },
 };
 
 use super::{
@@ -45,7 +45,9 @@ impl<'a> LoadedLocalizationView<'a> {
         self.find_localization_asset_for_entry(id)
             .ok_or(LocalizationFormatError::MissingKey)?
             .localization_catalog
-            .write_localized_text_with_format_arguments(id, arguments, target)
+            .write_localized_text_with_currency_formatter(id, arguments, target, |cents, writer| {
+                self.write_localized_currency_amount(cents, true, writer)
+            })
     }
 
     pub fn find_localized_text_presentation(
@@ -72,10 +74,13 @@ impl<'a> LoadedLocalizationView<'a> {
         include_fractional_currency_cents: bool,
         target: &mut impl std::fmt::Write,
     ) -> std::fmt::Result {
-        if let Some(asset) =
-            self.find_localization_asset_for_entry(AssetId::from_key("locale:currency_symbol"))
-        {
-            asset.localization_catalog.write_localized_currency_amount(
+        let symbol_id = self
+            .localization_precedence_index
+            .configuration()
+            .currency_symbol;
+        if let Some(symbol) = self.find_plain_localized_text(symbol_id) {
+            LocalizationCatalog::write_currency_amount_with_symbol_and_comma_grouped_whole_dollars(
+                symbol,
                 currency_amount_cents,
                 include_fractional_currency_cents,
                 target,
@@ -90,16 +95,14 @@ impl<'a> LoadedLocalizationView<'a> {
     }
 
     pub fn localized_month_abbreviation(&self, month_number: u8) -> Option<&'a str> {
-        self.localization_precedence_index
-            .localization_asset_handles()
-            .iter()
-            .rev()
-            .filter_map(|handle| self.localization_assets.get(handle))
-            .find_map(|asset| {
-                asset
-                    .localization_catalog
-                    .localized_month_abbreviation(month_number)
-            })
+        let month_index = usize::from(month_number.checked_sub(1)?);
+        self.find_plain_localized_text(
+            *self
+                .localization_precedence_index
+                .configuration()
+                .months
+                .get(month_index)?,
+        )
     }
 
     pub fn write_localized_month_and_year(
@@ -108,20 +111,22 @@ impl<'a> LoadedLocalizationView<'a> {
         year: u16,
         target: &mut impl std::fmt::Write,
     ) -> Result<(), LocalizationFormatError> {
-        self.localization_precedence_index
-            .localization_asset_handles()
-            .iter()
-            .rev()
-            .filter_map(|handle| self.localization_assets.get(handle))
-            .find(|asset| {
-                !asset
-                    .localization_catalog
-                    .localized_month_and_year_format_tokens
-                    .is_empty()
-            })
-            .ok_or(LocalizationFormatError::MissingKey)?
-            .localization_catalog
-            .write_localized_month_and_year(month, year, target)
+        let tokens = self.localization_precedence_index.month_year_tokens();
+        if tokens.is_empty() {
+            return Err(LocalizationFormatError::MissingKey);
+        }
+        let month = self
+            .localized_month_abbreviation(month)
+            .ok_or(LocalizationFormatError::MissingKey)?;
+        for token in tokens {
+            match token {
+                LocalizationDateFormatToken::Literal(text) => target.write_str(text),
+                LocalizationDateFormatToken::MonthAbbreviation => target.write_str(month),
+                LocalizationDateFormatToken::Year => write!(target, "{year:02}"),
+            }
+            .map_err(LocalizationFormatError::Write)?;
+        }
+        Ok(())
     }
 
     fn find_localization_asset_for_entry(

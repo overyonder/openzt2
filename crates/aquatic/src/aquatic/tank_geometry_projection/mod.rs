@@ -1,3 +1,4 @@
+use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
@@ -22,6 +23,7 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     added_tanks: Query<Entity, Added<Tank>>,
     mut tanks: Query<
         (
+            Entity,
             &HabitatRegion,
             &HabitatSummary,
             &mut TankGeometry,
@@ -36,77 +38,84 @@ pub(super) fn project_changed_habitat_and_terrain_geometry_into_tanks(
     nodes: Query<&TopologyNode>,
     ground: TankWallGroundSampling,
 ) {
-    if let Some(surface) = active_definitions
+    let surface = active_definitions
         .get(&definitions)
-        .and_then(|view| view.tank_surface_policy())
-    {
-        let changed_walls = changed_wall_tops
-            .iter()
-            .collect::<bevy::platform::collections::HashSet<_>>();
-        if !changed_walls.is_empty() {
-            for (region, _, mut geometry, _) in &mut tanks {
-                if !region
-                    .boundary_fence_entities
-                    .iter()
-                    .any(|wall| changed_walls.contains(wall))
-                {
-                    continue;
-                }
-                let rim = region
-                    .boundary_fence_entities
-                    .iter()
-                    .filter_map(|wall| fences.get(*wall).ok()?.1.map(|top| top.0))
-                    .fold(f32::INFINITY, f32::min);
-                if rim.is_finite() {
-                    geometry.wall_height = rim;
-                    geometry.water_height = geometry
-                        .water_height
-                        .min(rim - surface.water_height_offset_cm as f32 / 100.0);
-                    geometry.volume = geometry.area * geometry.depth();
-                }
+        .and_then(|view| view.tank_surface_policy());
+    let changed_walls = changed_wall_tops.iter().collect::<EntityHashSet>();
+    let changed_habitats = habitat_changes
+        .read()
+        .map(|change| change.habitat_entity)
+        .chain(added_tanks.iter())
+        .collect::<EntityHashSet>();
+    let changed_terrain: Vec<_> = terrain_changes
+        .read()
+        .filter_map(|event| {
+            let chunk = chunks.get(event.chunk).ok()?;
+            let origin = chunk.coord * i32::from(chunk.side.saturating_sub(1));
+            Some((
+                origin + event.min.as_ivec2() - IVec2::ONE,
+                origin + event.max.as_ivec2(),
+                event.ground_height_changed,
+            ))
+        })
+        .collect();
+    if changed_walls.is_empty() && changed_habitats.is_empty() && changed_terrain.is_empty() {
+        return;
+    }
+    for (tank, region, summary, mut geometry, mut environment) in &mut tanks {
+        let changed_habitat = changed_habitats.contains(&tank);
+        let mut terrain_changed = false;
+        let mut ground_changed = false;
+        for (minimum, maximum, height_changed) in &changed_terrain {
+            if region
+                .topology_cells
+                .iter()
+                .any(|cell| cell.cmpge(*minimum).all() && cell.cmple(*maximum).all())
+            {
+                terrain_changed = true;
+                ground_changed |= *height_changed;
             }
         }
-    }
-    let changed = habitat_changes
-        .read()
-        .map(|event| event.habitat_entity)
-        .chain(added_tanks.iter());
-    for entity in changed {
-        let Ok((region, summary, mut geometry, mut environment)) = tanks.get_mut(entity) else {
+        let wall_top_changed = surface.is_some()
+            && region
+                .boundary_fence_entities
+                .iter()
+                .any(|wall| changed_walls.contains(wall));
+        if !changed_habitat && !terrain_changed && !wall_top_changed {
             continue;
-        };
-        project_habitat_region_into_tank_geometry(
-            region,
-            summary,
-            lowest_ground_under_boundary(region, &fences, &nodes, &ground),
-            &mut geometry,
-            &mut environment,
-        );
-    }
-
-    for event in terrain_changes.read() {
-        let Ok(chunk) = chunks.get(event.chunk) else {
-            continue;
-        };
-        let origin = chunk.coord * i32::from(chunk.side.saturating_sub(1));
-        let minimum_changed_cell = origin + event.min.as_ivec2();
-        let maximum_changed_cell = origin + event.max.as_ivec2();
-        for (region, summary, mut geometry, mut environment) in &mut tanks {
-            // Boundary nodes sit on the far corners of the region's cells.
-            if !region.topology_cells.iter().any(|cell| {
-                cell.cmpge(minimum_changed_cell - IVec2::ONE).all()
-                    && cell.cmple(maximum_changed_cell).all()
-            }) {
-                continue;
+        }
+        let mut next_geometry = *geometry;
+        let mut next_environment = *environment;
+        if let Some(surface) = surface.filter(|_| wall_top_changed) {
+            let rim = region
+                .boundary_fence_entities
+                .iter()
+                .filter_map(|wall| fences.get(*wall).ok()?.1.map(|top| top.0))
+                .fold(f32::INFINITY, f32::min);
+            if rim.is_finite() {
+                next_geometry.wall_height = rim;
+                next_geometry.water_height = next_geometry
+                    .water_height
+                    .min(rim - surface.water_height_offset_cm as f32 / 100.0);
+                next_geometry.volume = next_geometry.area * next_geometry.depth();
             }
+        }
+        if changed_habitat || terrain_changed {
+            let lowest_ground = if changed_habitat || ground_changed {
+                lowest_ground_under_boundary(region, &fences, &nodes, &ground)
+            } else {
+                None
+            };
             project_habitat_region_into_tank_geometry(
                 region,
                 summary,
-                lowest_ground_under_boundary(region, &fences, &nodes, &ground),
-                &mut geometry,
-                &mut environment,
+                lowest_ground,
+                &mut next_geometry,
+                &mut next_environment,
             );
         }
+        geometry.set_if_neq(next_geometry);
+        environment.set_if_neq(next_environment);
     }
 }
 

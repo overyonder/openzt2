@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 
 use super::immersive_mode_message_types::EnterImmersiveMode;
 use super::immersive_mode_message_types::ExitImmersiveMode;
@@ -8,6 +9,9 @@ use super::immersive_mode_message_types::ModeExitReason;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
+
+#[derive(Component)]
+pub(super) struct DeferredImmersiveSwitch(EnterImmersiveMode);
 
 /// The camera buttons are a radio set: pressing one while another view is open
 /// leaves that view and then enters the new one.
@@ -26,14 +30,22 @@ pub(super) fn reserve_one_pending_immersive_mode_entry_from_valid_controller_req
     active_immersive_modes: Query<(Entity, &ActiveImmersiveMode)>,
     pending_immersive_entries: Query<(), With<PendingImmersiveEntry>>,
     existing_controller_entities: Query<()>,
-    mut queued_switch: Local<Option<EnterImmersiveMode>>,
+    mut deferred_switches: Query<(Entity, &mut DeferredImmersiveSwitch)>,
     mut commands: Commands,
     mut rejected_entry_messages: MessageWriter<ImmersiveModeRejected>,
     mut exit_requests: MessageWriter<ExitImmersiveMode>,
 ) {
     let mut entry_is_reserved =
         !active_immersive_modes.is_empty() || !pending_immersive_entries.is_empty();
-    let queued = (!entry_is_reserved).then(|| queued_switch.take()).flatten();
+    let queued = if entry_is_reserved {
+        None
+    } else if let Ok((entity, deferred)) = deferred_switches.single() {
+        commands.entity(entity).despawn();
+        Some(deferred.0)
+    } else {
+        None
+    };
+    let mut next_switch = None;
     for entry_request in queued.into_iter().chain(entry_requests.read().copied()) {
         if let Some((controller, _)) = active_immersive_modes.iter().next().filter(|(_, active)| {
             entry_request.mode != active.mode
@@ -44,7 +56,7 @@ pub(super) fn reserve_one_pending_immersive_mode_entry_from_valid_controller_req
                 controller,
                 reason: ModeExitReason::Cancelled,
             });
-            *queued_switch = Some(entry_request);
+            next_switch = Some(entry_request);
         } else if entry_is_reserved {
             rejected_entry_messages.write(ImmersiveModeRejected {
                 mode: entry_request.mode,
@@ -67,6 +79,16 @@ pub(super) fn reserve_one_pending_immersive_mode_entry_from_valid_controller_req
                     failure: None,
                 });
             entry_is_reserved = true;
+        }
+    }
+    if let Some(request) = next_switch {
+        if let Ok((_, mut current)) = deferred_switches.single_mut() {
+            current.0 = request;
+        } else {
+            commands.spawn((
+                DeferredImmersiveSwitch(request),
+                DespawnOnExit(GamePhase::InGame),
+            ));
         }
     }
 }

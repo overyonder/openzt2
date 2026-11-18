@@ -1,5 +1,6 @@
 use super::world_definition_source_value_reading_and_conversion::simple_error;
 use crate::source_document::resolved_source_record_index::BindError;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::animal_shows_and_training::ShowPlatformUpgradePolicy;
 use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
 use openzt2_game_data::world_definitions::environment::EnvironmentDefinition;
@@ -9,7 +10,6 @@ use openzt2_game_data::world_definitions::simulation_time::SimulationTimingDefin
 use openzt2_game_data::world_definitions::transportation_and_tours::{
     TourCategoryScore, TourRatingRange,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[derive(Default)]
@@ -64,6 +64,7 @@ impl WorldDefinitionLoweringTables {
             object_record_keys,
             entity_naming,
             placeables,
+            placement_target_facts,
             facilities,
             maintenance_definitions,
             staff,
@@ -74,6 +75,7 @@ impl WorldDefinitionLoweringTables {
             viewing_opportunities,
             fences,
             paths,
+            path_stomp_policies,
             biomes,
             locations,
             brushes,

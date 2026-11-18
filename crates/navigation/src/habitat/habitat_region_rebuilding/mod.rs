@@ -15,8 +15,11 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use crate::habitat::habitat_region_derivation::derive_enclosed_habitat_regions_from_fence_segments;
 use crate::habitat::habitat_region_derivation::HabitatFenceSegment;
+use crate::habitat::habitat_region_derivation::{
+    derive_enclosed_habitats_from_cardinal_boundaries,
+    expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries,
+};
 use crate::habitat::habitat_terrain_summary_calculation::calculate_habitat_terrain_summary_from_topology_cells;
 use crate::habitat::habitat_terrain_summary_refresh::derive_dominant_habitat_climate;
 use crate::habitat::habitat_terrain_summary_refresh::read_terrain_fact_for_topology_cell;
@@ -76,7 +79,16 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     topology_nodes: Query<&TopologyNode>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     world_roots: Query<Entity, With<WorldRoot>>,
-    existing_habitats: Query<(Entity, &HabitatRegion, &HabitatSummary), With<Habitat>>,
+    mut existing_habitats: Query<
+        (
+            Entity,
+            &mut HabitatRegion,
+            &mut HabitatSummary,
+            Option<&mut HabitatClimate>,
+            Option<&mut WorldMember>,
+        ),
+        With<Habitat>,
+    >,
     mut habitat_changes: MessageWriter<HabitatChanged>,
 ) {
     let Some(changed_topology_bounds) =
@@ -148,9 +160,11 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     // fences, even when they lie outside the change. Widen the rebuild until
     // it covers each touched habitat and each region derived within it.
     let mut rebuild_topology_bounds = changed_topology_bounds;
-    let (derived_regions, mut affected_existing_habitats) = loop {
-        let derived_regions = derive_enclosed_habitat_regions_from_fence_segments(
-            &fence_segments,
+    let cardinal_boundaries =
+        expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(&fence_segments);
+    let (derived_regions, affected_existing_habitats) = loop {
+        let derived_regions = derive_enclosed_habitats_from_cardinal_boundaries(
+            &cardinal_boundaries,
             rebuild_topology_bounds,
         );
         debug!(
@@ -163,7 +177,7 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             rebuild_topology_bounds.max + IVec2::ONE,
         );
         let mut affected_existing_habitats = Vec::new();
-        for (habitat_entity, habitat_region, _) in &existing_habitats {
+        for (habitat_entity, habitat_region, ..) in &existing_habitats {
             if topology_cells_overlap_inclusive_bounds(
                 &habitat_region.topology_cells,
                 affected_topology_bounds,
@@ -202,11 +216,15 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         }
         rebuild_topology_bounds = covering_topology_bounds;
     };
+    let mut affected_existing_habitats = affected_existing_habitats
+        .into_iter()
+        .map(|(entity, cells)| (entity, cells.to_vec().into_boxed_slice()))
+        .collect::<Vec<_>>();
     affected_existing_habitats.sort_unstable_by_key(|(entity, _)| entity.to_bits());
     let mut reused_existing_habitats = vec![false; affected_existing_habitats.len()];
 
     for (habitat_entity, topology_cells) in &affected_existing_habitats {
-        for topology_cell in *topology_cells {
+        for topology_cell in topology_cells.iter() {
             habitat_index
                 .remove_habitat_for_topology_cell_if_it_matches(*topology_cell, *habitat_entity);
         }
@@ -255,16 +273,35 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
             habitat_index.record_habitat_for_topology_cell(topology_cell, habitat_entity);
         }
         let habitat_climate = derive_dominant_habitat_climate(&habitat_summary, world_definitions);
-        commands.entity(habitat_entity).insert((
-            Habitat,
-            habitat_region,
-            habitat_summary,
-            WorldMember { root: world_root },
-        ));
-        if let Some(habitat_climate) = habitat_climate {
-            commands.entity(habitat_entity).insert(habitat_climate);
+        let member = WorldMember { root: world_root };
+        if let Ok((_, mut region, mut summary, climate, world)) =
+            existing_habitats.get_mut(habitat_entity)
+        {
+            region.set_if_neq(habitat_region);
+            summary.set_if_neq(habitat_summary);
+            match (climate, habitat_climate) {
+                (Some(mut current), Some(next)) => {
+                    current.set_if_neq(next);
+                }
+                (None, Some(next)) => {
+                    commands.entity(habitat_entity).insert(next);
+                }
+                (Some(_), None) => {
+                    commands.entity(habitat_entity).remove::<HabitatClimate>();
+                }
+                (None, None) => {}
+            }
+            if let Some(mut world) = world {
+                world.set_if_neq(member);
+            } else {
+                commands.entity(habitat_entity).insert(member);
+            }
         } else {
-            commands.entity(habitat_entity).remove::<HabitatClimate>();
+            let mut spawned = commands.entity(habitat_entity);
+            spawned.insert((Habitat, habitat_region, habitat_summary, member));
+            if let Some(climate) = habitat_climate {
+                spawned.insert(climate);
+            }
         }
         habitat_changes.write(HabitatChanged {
             habitat_entity,
@@ -323,7 +360,7 @@ fn merge_requested_habitat_region_rebuild_bounds(
 
 fn find_best_reusable_habitat_region_index(
     derived_region_cells: &[IVec2],
-    affected_existing_habitats: &[(Entity, &[IVec2])],
+    affected_existing_habitats: &[(Entity, Box<[IVec2]>)],
     reused_existing_habitats: &[bool],
 ) -> Option<usize> {
     affected_existing_habitats

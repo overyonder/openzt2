@@ -3,41 +3,33 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use super::{
-    hanabi_custom_particle_modifiers::CollisionSpawnParticleInitialization,
-    ParticleEffectDocumentAsset,
-};
-use crate::material::material_asset_types::MaterialAsset;
+use super::ParticleEffectDocumentAsset;
 
 #[derive(Component, Clone)]
 pub(super) struct PendingEffectInstance {
     pub(super) effect_asset: Handle<ParticleEffectDocumentAsset>,
     pub(super) requested_emitter: Option<AssetId>,
     pub(super) manual_particle_count: u32,
-    pub(super) collision_spawn_context: Option<CollisionSpawnParticleInitialization>,
 }
 
 /// Identity retained on a complete document root, including multi-emitter roots.
 #[derive(Component)]
 pub(super) struct ParticleEffectDocumentInstance(pub(super) Handle<ParticleEffectDocumentAsset>);
 
-#[derive(Component)]
-pub(super) struct FiniteEffectInstanceLifetime(pub(super) Timer);
+#[derive(Component, Default, PartialEq)]
+#[require(bevy_hanabi::ParticleAliveCount)]
+pub(super) enum EffectRetirementReadback {
+    #[default]
+    WaitingForParticles,
+    WaitingForChildren,
+    Drained,
+}
 
 #[derive(Component, Clone, Debug)]
 pub(super) struct ControlledEffectEmissionState {
     pub(super) elapsed_seconds: f32,
     pub(super) fractional_particle_remainder: f32,
     pub(super) manual_particle_count: u32,
-}
-
-#[derive(Component)]
-pub(super) struct PendingEffectMaterialBinding(pub(super) Handle<MaterialAsset>);
-
-#[derive(Component)]
-pub(super) struct PendingEffectMeshBinding {
-    pub(super) model_asset: Handle<bevy::gltf::Gltf>,
-    pub(super) named_mesh_asset_path: String,
 }
 
 /// Attached emitters whose orientation stays aligned with the world axes.

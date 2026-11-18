@@ -5,9 +5,7 @@ pub mod lua_script_asset_loading;
 
 use bevy::prelude::*;
 
-use lua_script_archive_path_index::{
-    refresh_lua_script_archive_path_index_after_archive_revision, LuaScriptArchivePathIndex,
-};
+use lua_script_archive_path_index::{LuaScriptArchivePathIndex, discover_lua_script_archive_paths};
 use lua_script_asset_loading::register_lua_script_asset_and_loader;
 
 pub struct LuaScriptAssetLoadingPlugin;
@@ -19,7 +17,8 @@ impl Plugin for LuaScriptAssetLoadingPlugin {
             .init_resource::<LuaScriptArchivePathIndex>()
             .add_systems(
                 PreUpdate,
-                refresh_lua_script_archive_path_index_after_archive_revision,
+                discover_lua_script_archive_paths
+                    .run_if(resource_changed::<crate::asset_source::AssetArchives>),
             );
     }
 }

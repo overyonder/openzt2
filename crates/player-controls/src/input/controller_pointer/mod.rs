@@ -40,12 +40,14 @@ pub(super) fn project_controller_pointer(
     else {
         return;
     };
+    let mut axis = Vec2::ZERO;
     for (entity, gamepad) in &gamepads {
-        let axis = apply_radial_gamepad_dead_zone(Vec2::new(
+        let candidate = apply_radial_gamepad_dead_zone(Vec2::new(
             gamepad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
             -gamepad.get(GamepadAxis::LeftStickY).unwrap_or(0.0),
         ));
-        if axis != Vec2::ZERO {
+        if candidate != Vec2::ZERO {
+            axis = candidate;
             active.source = ActionSource::Controller(entity);
             active.changed_at = time.elapsed();
         }
@@ -54,12 +56,6 @@ pub(super) fn project_controller_pointer(
         ActionSource::Controller(entity) => gamepads.get(entity).ok(),
         _ => None,
     };
-    let axis = controller.map_or(Vec2::ZERO, |(_, gamepad)| {
-        apply_radial_gamepad_dead_zone(Vec2::new(
-            gamepad.get(GamepadAxis::LeftStickX).unwrap_or(0.0),
-            -gamepad.get(GamepadAxis::LeftStickY).unwrap_or(0.0),
-        ))
-    });
     let scale = window.scale_factor();
     let previous = if pointer.available {
         pointer.screen / scale

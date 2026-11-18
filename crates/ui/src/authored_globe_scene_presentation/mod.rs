@@ -13,7 +13,6 @@ use bevy::camera::visibility::RenderLayers;
 use bevy::camera::ClearColorConfig;
 use bevy::prelude::*;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
@@ -63,7 +62,7 @@ pub(crate) fn hydrate_globe_models(
                 ChildOf(scene),
             ))
             .id();
-        let mut primary = None;
+        let mut has_primary = false;
         for (name, handle, translation, is_primary) in [
             (
                 "globe",
@@ -81,23 +80,19 @@ pub(crate) fn hydrate_globe_models(
             let Some(handle) = handle.cloned() else {
                 continue;
             };
-            let model = commands
-                .spawn((
-                    Name::new(name),
-                    UiGlobePrefab {
-                        handle,
-                        primary: is_primary,
-                    },
-                    Transform::from_translation(translation - globe.primary_translation),
-                    Visibility::Inherited,
-                    ChildOf(world),
-                ))
-                .id();
-            if is_primary {
-                primary = Some(model);
-            }
+            commands.spawn((
+                Name::new(name),
+                UiGlobePrefab {
+                    handle,
+                    primary: is_primary,
+                },
+                Transform::from_translation(translation - globe.primary_translation),
+                Visibility::Inherited,
+                ChildOf(world),
+            ));
+            has_primary |= is_primary;
         }
-        if let Some(model) = primary {
+        if has_primary {
             commands.spawn((
                 Name::new("map selection globe camera"),
                 Camera3d::default(),
@@ -114,7 +109,7 @@ pub(crate) fn hydrate_globe_models(
                     ..default()
                 },
                 Transform::from_xyz(0.0, 0.0, 5.0).looking_at(Vec3::ZERO, Vec3::Y),
-                UiGlobeCamera { model },
+                UiGlobeCamera,
                 UiGlobeSceneOwner(entity),
                 RenderLayers::layer(GLOBE_RENDER_LAYER),
             ));
@@ -157,13 +152,14 @@ pub(crate) fn project_globe_prefabs(
         Entity,
         &UiGlobePrefab,
         &InheritedVisibility,
+        &ChildOf,
         Option<&UiGlobeMarkerVisual>,
-        Option<&WorldChoiceView>,
         Option<&UiDocumentOwner>,
     )>,
-    mut cameras: Query<(Entity, &mut UiGlobeCamera)>,
+    cameras: Query<(Entity, &UiGlobeSceneOwner), With<UiGlobeCamera>>,
+    scenes: Query<&UiGlobeRenderScene>,
 ) {
-    for (entity, request, inherited, marker, choice, owner) in &requests {
+    for (entity, request, inherited, parent, marker, owner) in &requests {
         if !inherited.get() {
             continue;
         }
@@ -183,23 +179,29 @@ pub(crate) fn project_globe_prefabs(
                 .insert(RenderLayers::layer(GLOBE_RENDER_LAYER));
         }
         if request.primary {
+            let globe_world = parent.parent();
             for renderable in &renderables {
                 commands
                     .entity(*renderable)
-                    .insert(UiGlobePrimaryRenderable);
+                    .insert(UiGlobePrimaryRenderable(globe_world));
             }
-            if let Some(model) = renderables.first().copied() {
-                for (camera_entity, mut camera) in &mut cameras {
-                    camera.model = model;
-                    if let Some(light) = prefab
-                        .canonical_scene_prefab_document()
-                        .entities
-                        .iter()
-                        .flat_map(|entity| &entity.lights)
-                        .find(|light| {
-                            light.kind == openzt2_game_data::scene_prefab::PrefabLightKind::Ambient
-                        })
-                    {
+            if !renderables.is_empty() {
+                if let Some(light) = prefab
+                    .canonical_scene_prefab_document()
+                    .entities
+                    .iter()
+                    .flat_map(|entity| &entity.lights)
+                    .find(|light| {
+                        light.kind == openzt2_game_data::scene_prefab::PrefabLightKind::Ambient
+                    })
+                {
+                    for (camera_entity, owner) in &cameras {
+                        if !scenes
+                            .get(owner.0)
+                            .is_ok_and(|scene| scene.world == globe_world)
+                        {
+                            continue;
+                        }
                         commands.entity(camera_entity).insert(AmbientLight {
                             color: Color::srgb(
                                 light.color_srgb[0],
@@ -216,30 +218,15 @@ pub(crate) fn project_globe_prefabs(
                 }
             }
         }
-        if let Some(choice) = choice.copied() {
+        if let Some(marker) = marker.copied() {
             for renderable in &renderables {
                 let mut entity = commands.entity(*renderable);
-                entity.insert(choice);
-                if let Some(marker) = marker.copied() {
-                    entity.insert(marker);
-                }
+                entity.insert(marker);
                 if let Some(owner) = owner.copied() {
                     entity.insert(owner);
                 }
             }
         }
         commands.entity(entity).remove::<UiGlobePrefab>();
-    }
-}
-
-pub(crate) fn cleanup_globe_scenes(
-    mut commands: Commands,
-    scenes: Query<(Entity, &UiGlobeSceneOwner)>,
-    owners: Query<(), With<UiGlobePresentation>>,
-) {
-    for (entity, owner) in &scenes {
-        if owners.get(owner.0).is_err() {
-            commands.entity(entity).despawn();
-        }
     }
 }

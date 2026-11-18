@@ -1,4 +1,7 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::{entity::EntityHashMap, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_game_data::{
     world_definitions::environment::{AmbientClass, AmbientSpawnDefinition},
     AssetId,
@@ -24,7 +27,10 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 use super::{
     ambient_animal_spawn_rules::ambient_animal_population_is_below_authored_maximum,
-    ambient_animal_types::{AmbientAnimal, AmbientAnimalSpawner},
+    ambient_animal_types::{
+        AmbientAnimal, AmbientAnimalPopulation, AmbientAnimalPopulationMember,
+        AmbientAnimalPopulationMembers, AmbientAnimalSpawner,
+    },
     daylight_curve_sampling::{
         calculate_environment_month_fraction, daylight_fraction_unit_is_within_inclusive_window,
         encode_daylight_fraction_as_u16,
@@ -44,8 +50,12 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
     terrain_index: Res<TerrainIndex>,
     spatial_grid: Res<SpatialGrid>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    mut spawners: Query<(&WorldMember, &mut AmbientAnimalSpawner)>,
-    ambient_animals: Query<(&AmbientAnimal, &WorldMember)>,
+    mut spawners: Query<(&ChildOf, &mut AmbientAnimalSpawner)>,
+    populations: Query<(
+        &AmbientAnimalPopulation,
+        &WorldMember,
+        Option<&AmbientAnimalPopulationMembers>,
+    )>,
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
     graphics: Option<Res<GraphicsSettings>>,
 ) {
@@ -57,24 +67,24 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (world_member, mut spawner) in &mut spawners {
+    let mut admissions = EntityHashMap::default();
+    for (parent, mut spawner) in &mut spawners {
         if clock.tick < spawner.next_tick {
             continue;
         }
-        let Some(definition) = definitions.find_ambient_spawn(spawner.definition) else {
+        let population = parent.parent();
+        let Ok((definition, world_member, animals)) = populations.get(population) else {
+            continue;
+        };
+        let Some(definition) = definitions.find_ambient_spawn(definition.0) else {
             continue;
         };
         let spawn_interval_ticks =
             sample_inclusive_u32_range(definition.spawn_interval_ticks, &mut spawner.random);
         spawner.next_tick = clock.tick.saturating_add(u64::from(spawn_interval_ticks));
 
-        let current_population = ambient_animals
-            .iter()
-            .filter(|(animal, animal_world_member)| {
-                animal_world_member.root == world_member.root
-                    && animal.definition == spawner.definition
-            })
-            .count();
+        let admitted = admissions.entry(population).or_insert(0_usize);
+        let current_population = animals.map_or(0, RelationshipTarget::len) + *admitted;
         if !ambient_animal_population_is_below_authored_maximum(
             current_population,
             definition.population,
@@ -120,9 +130,9 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
         let ambient_animal = commands
             .spawn((
                 AmbientAnimal {
-                    definition: spawner.definition,
                     despawn_tick: clock.tick.saturating_add(u64::from(lifetime_ticks)),
                 },
+                AmbientAnimalPopulationMember(population),
                 PrefabPresentation::new(prefab_handle),
                 locomotion_mode,
                 Transform::from_translation(position)
@@ -131,11 +141,12 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
                 *world_member,
             ))
             .id();
+        *admitted += 1;
 
         let audio_identifier = definition.audio;
         if audio_identifier != AssetId::default() {
             commands.entity(ambient_animal).insert(AmbientAudioEmitter {
-                definition: spawner.definition,
+                definition: definition.id,
                 cue: audio_identifier,
                 selection: (u64::from(spawner.random.next_u32()) << 32)
                     | u64::from(spawner.random.next_u32()),

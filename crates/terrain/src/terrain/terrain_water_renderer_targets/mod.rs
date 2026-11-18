@@ -13,6 +13,10 @@ use openzt2_world_state::model_render::authored_model_material_pass_projection::
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER;
 use openzt2_world_state::model_render::authored_model_material_pass_projection::WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER;
+use openzt2_world_state::world_spawn::{
+    selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle,
+    world_membership_types::WorldRoot,
+};
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfacePassKind;
@@ -24,6 +28,15 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_RENDER_TARGE
 #[derive(Component)]
 struct AuthoredTerrainWaterBumpCombinationQuad;
 
+#[derive(Component)]
+#[relationship(relationship_target = WorldWaterCaptureRigs)]
+pub(super) struct WaterCaptureRigOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = WaterCaptureRigOf, linked_spawn)]
+pub(super) struct WorldWaterCaptureRigs(Vec<Entity>);
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn initialize_authored_terrain_water_renderer_targets(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
@@ -33,12 +46,15 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    existing: Option<Res<AuthoredTerrainWaterRendererTargets>>,
+    worlds: Query<
+        (Entity, &SelectedWorldTerrainAssetHandle),
+        (With<WorldRoot>, Without<WorldWaterCaptureRigs>),
+    >,
 ) {
-    if existing.is_some() {
+    let Ok((world, terrain)) = worlds.single() else {
         return;
-    }
-    let Some((_, terrain_asset)) = terrain_assets.iter().next() else {
+    };
+    let Some(terrain_asset) = terrain_assets.get(&terrain.0) else {
         return;
     };
     let Some(water_bump_material_asset) =
@@ -86,6 +102,13 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
         None,
     ));
     let bump_mesh = Mesh3d(meshes.add(Rectangle::new(2.0, 2.0)));
+    let rig = commands
+        .spawn((
+            WaterCaptureRigOf(world),
+            Transform::IDENTITY,
+            Visibility::Inherited,
+        ))
+        .id();
     let mut bump_technique_invocation = None;
     for (pass_index, material) in water_bump_combination_materials.iter().enumerate() {
         let entity = commands
@@ -94,6 +117,7 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
                 bump_mesh.clone(),
                 MeshMaterial3d(material.clone()),
                 RenderLayers::layer(WATER_BUMP_COMBINATION_RENDER_LAYER),
+                ChildOf(rig),
             ))
             .id();
         let technique_invocation = *bump_technique_invocation.get_or_insert(entity);
@@ -124,10 +148,12 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
             Transform::from_xyz(0.0, 0.0, 1.0),
             RenderTarget::Image(combined_bump_map.clone().into()),
             RenderLayers::layer(WATER_BUMP_COMBINATION_RENDER_LAYER),
+            ChildOf(rig),
         ))
         .id();
     let refraction_camera = spawn_water_scene_render_target_camera(
         &mut commands,
+        rig,
         refraction.clone(),
         -2,
         WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
@@ -135,6 +161,7 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
     );
     let reflection_camera = spawn_water_scene_render_target_camera(
         &mut commands,
+        rig,
         reflection.clone(),
         -1,
         WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
@@ -142,31 +169,35 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
     );
     let fallback_reflection_camera = spawn_water_scene_render_target_camera(
         &mut commands,
+        rig,
         fallback_reflection.clone(),
         -4,
         WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
         true,
     );
-    commands.insert_resource(AuthoredTerrainWaterRendererTargets {
-        combined_bump_map,
-        reflection,
-        refraction,
-        fallback_reflection,
-        bump_camera,
-        reflection_camera,
-        refraction_camera,
-        fallback_reflection_camera,
-        water_bump_combination_materials,
-        elapsed_seconds: 0.0,
-        active_water_plane_height: None,
-        reflection_world_extent: Vec2::splat(50.0),
-        refraction_world_extent: Vec2::splat(50.0),
-        fallback_reflection_world_extent: Vec2::splat(50.0),
-    });
+    commands
+        .entity(rig)
+        .insert(AuthoredTerrainWaterRendererTargets {
+            combined_bump_map,
+            reflection,
+            refraction,
+            fallback_reflection,
+            bump_camera,
+            reflection_camera,
+            refraction_camera,
+            fallback_reflection_camera,
+            water_bump_combination_materials,
+            elapsed_seconds: 0.0,
+            active_water_plane_height: None,
+            reflection_world_extent: Vec2::splat(50.0),
+            refraction_world_extent: Vec2::splat(50.0),
+            fallback_reflection_world_extent: Vec2::splat(50.0),
+        });
 }
 
 fn spawn_water_scene_render_target_camera(
     commands: &mut Commands,
+    rig: Entity,
     target: Handle<Image>,
     order: isize,
     effect_pass_render_layer: usize,
@@ -184,6 +215,7 @@ fn spawn_water_scene_render_target_camera(
             },
             RenderTarget::Image(target.into()),
             RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER, effect_pass_render_layer]),
+            ChildOf(rig),
         ))
         .id()
 }
@@ -192,11 +224,13 @@ fn spawn_water_scene_render_target_camera(
 /// samples the scene. Keep them across camera moves and visibility changes.
 pub(super) fn reconcile_water_material_render_views(
     mut commands: Commands,
-    targets: Option<Res<AuthoredTerrainWaterRendererTargets>>,
+    targets: Query<&AuthoredTerrainWaterRendererTargets>,
     passes: Query<&TerrainWaterSurfacePassKind>,
     views: Query<(), With<EffectPassMaterialRenderView>>,
 ) {
-    let Some(targets) = targets else { return };
+    let Ok(targets) = targets.single() else {
+        return;
+    };
     let needs_capture = passes.iter().any(|pass| !pass.uses_stitch_geometry());
     for (camera, render_layer) in [
         (
@@ -235,7 +269,7 @@ mod tests {
         let mut app = App::new();
         let [bump_camera, reflection_camera, refraction_camera, fallback_reflection_camera] =
             std::array::from_fn(|_| app.world_mut().spawn_empty().id());
-        app.insert_resource(AuthoredTerrainWaterRendererTargets {
+        app.world_mut().spawn(AuthoredTerrainWaterRendererTargets {
             combined_bump_map: default(),
             reflection: default(),
             refraction: default(),
@@ -250,8 +284,8 @@ mod tests {
             reflection_world_extent: Vec2::ZERO,
             refraction_world_extent: Vec2::ZERO,
             fallback_reflection_world_extent: Vec2::ZERO,
-        })
-        .add_systems(Update, reconcile_water_material_render_views);
+        });
+        app.add_systems(Update, reconcile_water_material_render_views);
         let pass = app
             .world_mut()
             .spawn(TerrainWaterSurfacePassKind::LowDetail)

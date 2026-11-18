@@ -46,14 +46,10 @@ use crate::terrain::terrain_brush_cursor_projection::project_terrain_brush_curso
 use crate::terrain::terrain_brush_interaction::despawn_terrain_brush_previews_after_transaction_preparation;
 use crate::terrain::terrain_brush_interaction::update_terrain_brush_preview_and_commit_completed_pointer_strokes;
 use crate::terrain::terrain_brush_preview_accumulation::accumulate_terrain_stroke_dabs_into_brush_preview;
-use crate::terrain::terrain_chunk_index_cleanup::remove_despawned_terrain_chunks_from_spatial_index;
 use crate::terrain::terrain_chunk_initial_projection::apply_changed_effect_quality_to_projected_terrain_chunks;
 use crate::terrain::terrain_chunk_initial_projection::validate_index_and_project_loaded_terrain_chunks;
 use crate::terrain::terrain_chunk_render_refresh::refresh_changed_terrain_chunk_meshes_and_surface_images;
-use crate::terrain::terrain_collision_rebuilding::{
-    mark_changed_terrain_chunk_collisions_pending,
-    rebuild_pending_terrain_chunk_collisions_within_tick_budget,
-};
+use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_collisions_within_tick_budget;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
@@ -103,11 +99,16 @@ pub struct TerrainPlugin;
 impl Plugin for TerrainPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<TerrainIndex>()
+            .init_resource::<terrain_chunk_index_cleanup::TerrainChunkIdLookup>()
+            .add_observer(terrain_chunk_index_cleanup::index_validated_terrain_chunk)
+            .add_observer(terrain_chunk_index_cleanup::remove_discarded_terrain_chunk_from_indexes)
             .add_plugins(terrain_water_rays::view_occlusion::WaterRayOcclusionPlugin)
             .init_resource::<openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState>()
             .init_resource::<TerrainCollisionBudget>()
             .add_message::<DiscardedTerrainPaintArea>()
             .add_observer(record_discarded_terrain_paint_area)
+            .add_observer(water_regions::edit_retention::retain_water_owners_for_terrain_edit)
+            .add_observer(water_regions::edit_retention::release_water_owners_from_discarded_terrain_edit)
             .add_message::<TerrainStroke>()
             .add_message::<DefinedTerrainStroke>()
             .add_message::<TerrainChanged>()
@@ -115,6 +116,8 @@ impl Plugin for TerrainPlugin {
             .add_message::<TerrainNavigationChanged>()
             .add_message::<TerrainWaterChanged>()
             .add_message::<water_regions::authored_membership::TerrainWaterMembershipChanged>()
+            .add_message::<water_regions::authored_membership::WaterRegionFactsDiscarded>()
+            .add_observer(water_regions::authored_membership::invalidate_discarded_water_region_facts)
             .add_message::<ActivateTerrainWaterImpactWave>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceSpraySample>()
             .add_message::<openzt2_zoo_state::terrain::terrain_water_geometric_wave_shader_state::WaterSurfaceWakeSample>()
@@ -135,14 +138,17 @@ impl Plugin for TerrainPlugin {
                     validate_index_and_project_loaded_terrain_chunks,
                     apply_changed_effect_quality_to_projected_terrain_chunks,
                     project_natural_water_regions,
-                    rebuild_edited_water_regions,
-                    water_regions::cleanup_unreferenced_retired_water_region_entities,
+                    water_regions::mark_edited_water_targets_pending,
+                    rebuild_edited_water_regions.run_if(water_regions::water_target_refresh_is_ready),
+                    water_regions::edit_retention::release_water_owners_from_failed_transactions,
+                    water_regions::edit_retention::reclaim_unretained_retired_water_owners,
                     water_regions::authored_membership::project_terrain_water_membership,
                     initialize_authored_terrain_water_renderer_targets,
                     terrain_water_renderer_inputs::initialize_authored_terrain_water_region_material_state,
                     project_changed_terrain_water_surfaces_and_waterfalls,
                     terrain_water_renderer_inputs::advance_authored_terrain_water_surface_effect_state,
                     apply_authored_water_impact_events_to_geometric_wave_channels,
+                    terrain_water_view_selection::sample_terrain_water_camera_pose,
                     terrain_water_renderer_inputs::update_authored_terrain_water_surface_visibility,
                     terrain_water_view_selection::update_camera_terrain_water_membership,
                     terrain_water_view_selection::update_terrain_water_view_selection,
@@ -163,10 +169,14 @@ impl Plugin for TerrainPlugin {
                 (
                     update_authored_terrain_water_renderer_inputs,
                     terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
-                    terrain_water_caustics::systems::advance_terrain_caustic_animation,
-                    terrain_water_caustics::systems::project_changed_terrain_caustic_ground_passes,
-                    terrain_water_caustics::systems::update_terrain_caustic_view_bindings,
-                    terrain_water_caustics::systems::despawn_caustic_passes_without_owner_or_view,
+                    (
+                        terrain_water_caustics::systems::advance_terrain_caustic_animation
+                            .after(terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples),
+                        terrain_water_caustics::systems::project_changed_terrain_caustic_ground_passes,
+                        terrain_water_caustics::systems::update_terrain_caustic_view_bindings
+                            .after(update_authored_terrain_water_renderer_inputs),
+                        terrain_water_caustics::systems::despawn_caustic_passes_without_owner_or_view,
+                    ).chain(),
                     (
                         terrain_water_shoreline_geometry::projection::project_changed_terrain_shoreline_geometry,
                         terrain_water_shoreline_presentation::initialize_terrain_shoreline_material_animation,
@@ -182,26 +192,33 @@ impl Plugin for TerrainPlugin {
                     ).chain(),
                     (
                         terrain_water_disturbance_presentation::wake_mesh_emission::advance_water_wake_mesh_lifetimes,
-                        terrain_water_disturbance_presentation::wake_mesh_emission::present_terrain_stitch_water_wake_samples,
-                        terrain_water_disturbance_presentation::wake_mesh_emission::present_geometric_water_wake_samples,
+                        terrain_water_disturbance_presentation::wake_mesh_emission::present_water_wake_samples
+                            .after(terrain_water_caustics::systems::advance_terrain_caustic_animation),
                         terrain_water_disturbance_presentation::wake_mesh_emission::update_water_wake_wave_uniforms,
                     ).chain(),
                     (
-                        terrain_water_underwater_particles::runtime::synchronize_region_underwater_particle_effects,
-                        terrain_water_underwater_particles::runtime::emit_region_underwater_particles,
+                        terrain_water_underwater_particles::runtime::synchronize_region_underwater_particle_effects
+                            .after(terrain_water_disturbance_presentation::wake_mesh_emission::present_water_wake_samples),
+                        terrain_water_underwater_particles::runtime::emit_region_underwater_particles
+                            .after(terrain_water_underwater_particles::runtime::project_region_suspension_volumes),
                         terrain_water_underwater_particles::runtime::update_underwater_particle_visibility,
                     ).chain(),
+                    terrain_water_underwater_particles::runtime::project_region_suspension_volumes,
                     advance_authored_terrain_waterfall_decal_detail_texture_coordinates,
-                    refresh_changed_terrain_chunk_meshes_and_surface_images,
-                    project_terrain_biome_details_after_source_or_setting_changes,
-                    materialize_terrain_biome_detail_render_trees_within_overhead_camera_range,
+                    (
+                        terrain_brush_cursor_projection::resolve_terrain_brush_cursor_shape,
+                        project_terrain_brush_cursor_onto_terrain_surfaces,
+                        refresh_changed_terrain_chunk_meshes_and_surface_images,
+                        project_terrain_biome_details_after_source_or_setting_changes,
+                        materialize_terrain_biome_detail_render_trees_within_overhead_camera_range,
+                    ).chain(),
                     mark_terrain_chunks_requiring_ground_path_surface_recomposition,
                     mark_terrain_chunks_under_changed_painted_textures,
-                    recompose_ground_path_surfaces_into_terrain_chunk_images,
-                    project_terrain_brush_cursor_onto_terrain_surfaces,
-                    remove_despawned_terrain_chunks_from_spatial_index,
+                    recompose_ground_path_surfaces_into_terrain_chunk_images
+                        .after(refresh_changed_terrain_chunk_meshes_and_surface_images)
+                        .after(mark_terrain_chunks_requiring_ground_path_surface_recomposition)
+                        .after(mark_terrain_chunks_under_changed_painted_textures),
                 )
-                    .chain()
                     .in_set(WaterPresentationSet::Rendering),
             )
             .add_systems(
@@ -265,15 +282,19 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                (mark_changed_terrain_chunk_collisions_pending, rebuild_pending_terrain_chunk_collisions_within_tick_budget).chain()
+                rebuild_pending_terrain_chunk_collisions_within_tick_budget
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(OnExit(GamePhase::InGame), reset_terrain_index);
     }
 }
 
-fn reset_terrain_index(mut index: ResMut<TerrainIndex>) {
+fn reset_terrain_index(
+    mut index: ResMut<TerrainIndex>,
+    mut ids: ResMut<terrain_chunk_index_cleanup::TerrainChunkIdLookup>,
+) {
     *index = default();
+    ids.0.clear();
 }
 
 #[cfg(test)]

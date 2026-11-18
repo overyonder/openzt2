@@ -19,19 +19,19 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
 use openzt2_game_data::world_definitions::staff_management::{
-    StaffHeadPresentation, StaffJobCapabilityFlags, StaffPresentationVariant, StaffRoleDefinition,
-    StaffRoleKind, StaffStateVariable, StaffSwimmingDepths, StaffVirtualNode,
+    StaffHeadPresentation, StaffPresentationVariant, StaffRoleDefinition, StaffRoleKind,
+    StaffStateVariable, StaffSwimmingDepths, StaffVirtualNode,
 };
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectKind, WorldObjectPropertyFlags,
     WorldObjectTextureReplacement, WorldObjectTextureReplacementGroup,
     WorldObjectTextureReplacementSet,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -46,8 +46,8 @@ mod tests {
     use crate::world_definitions::world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document;
 
     #[test]
-    fn staff_portrait_uses_authored_head_scene_without_changing_world_body(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_portrait_uses_authored_head_scene_without_changing_world_body()
+    -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",
@@ -121,16 +121,18 @@ mod tests {
             assert_eq!(object.preview_offset_cm, [0, 0, 49]);
             assert!((object.preview_scale - 3.954_455).abs() < 0.000_001);
             // Behavior Lua compares the authored binder type case-sensitively.
-            assert!(document
-                .object_binder_types
-                .contains(&(object.id, "Worker".into())));
+            assert!(
+                document
+                    .object_binder_types
+                    .contains(&(object.id, "Worker".into()))
+            );
         }
         Ok(())
     }
 
     #[test]
-    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum()
+    -> Result<(), Box<dyn std::error::Error>> {
         // The paleontologist authors `Value=""` with a `ValueMin`/`ValueMax` range.
         let sources = [
             (
@@ -195,8 +197,8 @@ mod tests {
     }
 
     #[test]
-    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets(
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets()
+    -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",
@@ -879,57 +881,27 @@ pub(super) fn bind_authored_staff_catalogue(
             "authored staff salary does not use the supported monthly cadence",
         ));
     }
-    let key = canonicalize_source_document_record_key(record.key);
-    let (role, permitted_jobs) = if key == "keeper" {
-        (
-            StaffRoleKind::Keeper,
-            StaffJobCapabilityFlags::FEED
-                .with_additional_capabilities(StaffJobCapabilityFlags::REFILL_WATER)
-                .with_additional_capabilities(StaffJobCapabilityFlags::CLEAN_HABITAT)
-                .with_additional_capabilities(StaffJobCapabilityFlags::TREAT),
-        )
-    } else if key == "worker" {
-        (
-            StaffRoleKind::Maintenance,
-            StaffJobCapabilityFlags::EMPTY_BIN
-                .with_additional_capabilities(StaffJobCapabilityFlags::SWEEP_LITTER)
-                .with_additional_capabilities(StaffJobCapabilityFlags::MAINTAIN_TANK),
-        )
-    } else if key == "educator" {
-        (StaffRoleKind::Educator, StaffJobCapabilityFlags::EDUCATE)
-    } else if key == "trainer" {
-        (
-            StaffRoleKind::Trainer,
-            StaffJobCapabilityFlags::OPERATE_SHOW,
-        )
-    } else if key == "mc" {
-        (
-            StaffRoleKind::Presenter,
-            StaffJobCapabilityFlags::ENTERTAIN
-                .with_additional_capabilities(StaffJobCapabilityFlags::OPERATE_SHOW),
-        )
-    } else if key.starts_with("entertainer") {
-        (
-            StaffRoleKind::Entertainer,
-            StaffJobCapabilityFlags::ENTERTAIN,
-        )
-    } else if key == "paleontologist" {
-        (
-            StaffRoleKind::Paleontologist,
-            StaffJobCapabilityFlags::CAPTURE,
-        )
-    } else if key.starts_with("dinorecovery") {
-        (
-            StaffRoleKind::Recovery,
-            StaffJobCapabilityFlags::TRANQUILIZE
-                .with_additional_capabilities(StaffJobCapabilityFlags::CAPTURE),
-        )
-    } else {
-        return Err(BindError::record(
-            record,
-            format!("authored hireable staff role {key:?} has no canonical StaffRoleKind"),
-        ));
-    };
+    let role = record
+        .type_tokens()
+        .iter()
+        .rev()
+        .find_map(|family| {
+            Some(match family.as_str() {
+                "keeper" => StaffRoleKind::Keeper,
+                "worker" => StaffRoleKind::Maintenance,
+                "educator" => StaffRoleKind::Educator,
+                "trainer" => StaffRoleKind::Trainer,
+                "mc" => StaffRoleKind::Presenter,
+                "entertainer" => StaffRoleKind::Entertainer,
+                "paleontologist" => StaffRoleKind::Paleontologist,
+                "dinorecoverytranqteam" | "dinorecoverycrateteam" | "dinorecoveryrobot" => {
+                    StaffRoleKind::Recovery
+                }
+                "veterinarian" => StaffRoleKind::Veterinarian,
+                _ => return None,
+            })
+        })
+        .unwrap_or(StaffRoleKind::None);
     let move_speed_mps = actor_record
         .descendant_named("slow")
         .and_then(|slow| slow.attribute_named_any(&["minAnimSpeed"]))
@@ -1022,6 +994,10 @@ pub(super) fn bind_authored_staff_catalogue(
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
+    output.document.placement_target_facts.insert(
+        id(record.key),
+        super::authored_placement_stomp_lowering::lower_authored_placement_target_facts(record),
+    );
     output.document.object_record_keys.push((
         super::world_definition_source_value_reading_and_conversion::id(record.key),
         record.key.to_string(),
@@ -1091,7 +1067,10 @@ pub(super) fn bind_authored_staff_catalogue(
         wage_cents_per_month,
         move_speed_mps,
         navigation_radius_m,
-        permitted_jobs,
+        permitted_jobs:
+            super::staff_role_and_job_source_lowering::lower_authored_staff_job_capabilities(
+                record,
+            )?,
         job_overrides: Vec::new(),
         presentation_variants: lower_authored_staff_presentation_variants(
             record,
@@ -1260,6 +1239,10 @@ pub(super) fn bind_authored_animal_catalogue(
         super::authored_presentation_physics_source_lowering::lower_authored_presentation_physics(
             record,
         )?;
+    output.document.placement_target_facts.insert(
+        id(record.key),
+        super::authored_placement_stomp_lowering::lower_authored_placement_target_facts(record),
+    );
     output.document.object_record_keys.push((
         super::world_definition_source_value_reading_and_conversion::id(record.key),
         record.key.to_string(),

@@ -1,13 +1,18 @@
 use crate::behavior_task_execution_types::BehaviorTaskExecutionState;
 use crate::behavior_task_execution_types::BehaviorTaskReturnFrame;
-use bevy::prelude::*;
+use bevy::{
+    ecs::{lifecycle::HookContext, relationship::RelationshipTarget, world::DeferredWorld},
+    prelude::*,
+};
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 /// One `ZTBehPlaceTarget` instruction in progress. Behavior execution owns
 /// the task frames; the placement owner sites, pays for and creates the object.
 #[derive(Component)]
+#[component(on_discard = release_behavior_target_placement_site)]
 pub struct PendingBehaviorTargetPlacement {
     pub execution_id: u64,
     /// The task frame at the placement instruction, re-entered when the
@@ -18,7 +23,6 @@ pub struct PendingBehaviorTargetPlacement {
     /// The task target the object is placed for, restored after the set.
     pub recipient: Entity,
     pub definition: AssetId,
-    pub definition_revision: u64,
     pub stage: BehaviorTargetPlacementStage,
 }
 
@@ -34,12 +38,10 @@ pub enum BehaviorTargetPlacementStage {
     /// The subject plays the placement set toward the site marker.
     Delivering {
         site: BehaviorTargetPlacementSite,
-        marker: Entity,
     },
     /// The set returned; the placement owner pays for and creates the object.
     PuttingDown {
         site: BehaviorTargetPlacementSite,
-        marker: Entity,
         payment: BehaviorTargetPlacementPaymentState,
     },
     Placed,
@@ -52,6 +54,21 @@ pub struct BehaviorTargetPlacementSite {
     pub prefab: Handle<ScenePrefabAsset>,
 }
 
+impl BehaviorTargetPlacementSite {
+    pub fn uses_current_prefab(
+        &self,
+        definitions: WorldDefinitionsView<'_>,
+        definition: AssetId,
+    ) -> bool {
+        definitions.find_object(definition).is_some_and(|object| {
+            self.transform.scale == Vec3::splat(object.prefab_scale)
+                && definitions
+                    .scene(object.prefab)
+                    .is_some_and(|prefab| prefab == self.prefab)
+        })
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum BehaviorTargetPlacementPaymentState {
     Unrequested,
@@ -62,8 +79,20 @@ pub enum BehaviorTargetPlacementPaymentState {
 
 /// The point a placement set docks at while the object is still held.
 #[derive(Component)]
-pub struct BehaviorTargetPlacementSiteMarker {
-    pub actor: Entity,
+#[relationship(relationship_target = BehaviorTargetPlacementMarkers)]
+pub struct BehaviorTargetPlacementSiteOf(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = BehaviorTargetPlacementSiteOf, linked_spawn)]
+pub struct BehaviorTargetPlacementMarkers(Vec<Entity>);
+
+fn release_behavior_target_placement_site(mut world: DeferredWorld, context: HookContext) {
+    let marker = world
+        .get::<BehaviorTargetPlacementMarkers>(context.entity)
+        .and_then(|markers| markers.iter().next());
+    if let Some(marker) = marker {
+        world.commands().entity(marker).try_despawn();
+    }
 }
 
 impl PendingBehaviorTargetPlacement {
@@ -80,10 +109,11 @@ impl PendingBehaviorTargetPlacement {
         task.stack.len() == self.depth && task.is_at_or_nested_under(&self.origin, self.depth)
     }
 
-    pub const fn marker(&self) -> Option<Entity> {
-        match self.stage {
-            BehaviorTargetPlacementStage::Delivering { marker, .. }
-            | BehaviorTargetPlacementStage::PuttingDown { marker, .. } => Some(marker),
+    pub fn site(&self) -> Option<&BehaviorTargetPlacementSite> {
+        match &self.stage {
+            BehaviorTargetPlacementStage::Sited(site)
+            | BehaviorTargetPlacementStage::Delivering { site }
+            | BehaviorTargetPlacementStage::PuttingDown { site, .. } => Some(site),
             _ => None,
         }
     }

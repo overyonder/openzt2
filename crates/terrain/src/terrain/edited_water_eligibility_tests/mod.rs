@@ -119,6 +119,11 @@ fn edited_water_world() -> (World, Entity, Handle<TerrainAsset>) {
     );
     world.insert_resource(MembershipProjection(projection));
     world.init_resource::<Messages<TerrainChanged>>();
+    world.init_resource::<Messages<AssetEvent<TerrainAsset>>>();
+    world.init_resource::<Messages<crate::terrain::water_regions::authored_membership::WaterRegionFactsDiscarded>>();
+    world.add_observer(
+        crate::terrain::water_regions::authored_membership::invalidate_discarded_water_region_facts,
+    );
     world.init_resource::<
         Messages<crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged>,
     >();

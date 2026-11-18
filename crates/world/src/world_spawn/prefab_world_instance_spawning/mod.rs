@@ -1,5 +1,8 @@
+use super::prefab_presentation_render_tree::ReplacedPrefabReloaded;
 use avian3d::prelude::RigidBody;
 use bevy::ecs::entity_disabling::Disabled;
+use bevy::ecs::query::Allow;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::default;
 use bevy::prelude::ChildOf;
 use bevy::prelude::Color;
@@ -9,23 +12,18 @@ use bevy::prelude::Handle;
 use bevy::prelude::PointLight;
 use bevy::prelude::Transform;
 use bevy::prelude::Visibility;
-use bevy::prelude::{
-    warn, AssetEvent, AssetServer, Assets, Children, Component, Has, Local, MessageReader, Query,
-    Res, With,
-};
-use openzt2_world_state::world_spawn::prefab_model_replacement::{
-    PendingPrefabModelReplacements, PrefabModelReplaced,
-};
+use bevy::prelude::{warn, Assets, Component, Has, MessageReader, Query, Res, With};
 use openzt2_game_data::scene_prefab::PrefabEntity;
 use openzt2_game_data::scene_prefab::PrefabLightKind;
+use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
+use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::model_render::ModelExpanded;
 use openzt2_world_state::world_spawn::prefab_presentation_types::{
     PrefabMaterialOverrides, PrefabModel, PrefabRenderable, PrefabShadowPolicy,
 };
-use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
-use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
-use openzt2_game_data::AssetId;
 
+use crate::model_render::world_entity_model_suppression::ModelRenderVisibilityGate;
 use crate::physics::collider_hydration::hydrate_scene_prefab_colliders_into_avian_physics;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
@@ -108,6 +106,7 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
             commands.spawn_empty()
         };
         entity.insert((
+            PrefabInstanceRow(index),
             WorldMember { root: world_root },
             PrefabAuthoredAttachmentIdentifier(AssetId(row.attachment_id.0)),
             transform,
@@ -136,7 +135,10 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
                 DefinitionId(definition),
                 persistent_id,
                 PrefabObjectPresentationAttachmentProjection(definition),
+                PrefabSourceAssetHandle(prefab_handle.clone()),
             ));
+        } else {
+            entity.insert(PrefabInstanceRowOf(root));
         }
         if let Some(cycle) = row.rotation_cycles.first() {
             entity.insert(PrefabAuthoredRotationCycle::from_authored_rotation_cycle(
@@ -173,12 +175,15 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
                 // world-wide directional and ambient lighting.
                 PrefabLightKind::Directional | PrefabLightKind::Ambient => {}
                 PrefabLightKind::Point => {
-                    entity.insert(PointLight {
-                        color,
-                        intensity,
-                        range,
-                        ..default()
-                    });
+                    entity.with_child((
+                        ModelRenderVisibilityGate,
+                        PointLight {
+                            color,
+                            intensity,
+                            range,
+                            ..default()
+                        },
+                    ));
                 }
             }
         }
@@ -189,11 +194,6 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
         attach_prefab_row_renderables(commands, prefab, row, spawned, world_root, visible);
         entities.push(spawned);
     }
-
-    commands.entity(entities[0]).insert((
-        PrefabSourceAssetHandle(prefab_handle.clone()),
-        PrefabInstanceRowEntities(entities.clone().into_boxed_slice()),
-    ));
 
     for (entity, row) in document.entities.iter().enumerate() {
         if let Some(joint) = &row.model_joint_binding {
@@ -238,9 +238,24 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
     spawn_prefab_effect_triggers(commands, prefab, &entities, world_root);
 }
 
-/// The entity hydrated for each prefab row, in row order.
 #[derive(Component)]
-pub(crate) struct PrefabInstanceRowEntities(Box<[Entity]>);
+pub(super) struct PrefabInstanceRow(usize);
+
+#[derive(Component)]
+#[relationship(relationship_target = PrefabInstanceRows)]
+pub(super) struct PrefabInstanceRowOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PrefabInstanceRowOf, linked_spawn)]
+pub(super) struct PrefabInstanceRows(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = PrefabRowRenderables)]
+pub(super) struct PrefabRowRenderableOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PrefabRowRenderableOf, linked_spawn)]
+pub(super) struct PrefabRowRenderables(Vec<Entity>);
 
 /// A renderable to release before its world instance's renderables are
 /// rebuilt. `despawn` marks an entity that existed only to render.
@@ -263,8 +278,8 @@ fn attach_prefab_row_renderables(
     visible: bool,
 ) {
     for renderable in &row.renderables {
-        let renderable_visible =
-            visible && renderable.visibility.0 & ScenePrefabRenderableVisibilityFlags::VISIBLE.0 != 0;
+        let renderable_visible = visible
+            && renderable.visibility.0 & ScenePrefabRenderableVisibilityFlags::VISIBLE.0 != 0;
         let renderable_components =
             crate::world_spawn::prefab_renderable_components::create_prefab_renderable_components(
                 prefab, renderable,
@@ -285,6 +300,7 @@ fn attach_prefab_row_renderables(
                     Visibility::Hidden
                 },
                 ChildOf(spawned),
+                PrefabRowRenderableOf(spawned),
             ));
             child.insert(renderable_components);
             child
@@ -307,43 +323,52 @@ fn attach_prefab_row_renderables(
 /// colliders and the instance's entities stay as they are.
 pub(super) fn begin_rebuilding_world_instance_renderables_after_prefab_reload(
     mut commands: Commands,
-    mut replaced: MessageReader<PrefabModelReplaced>,
-    mut pending: Local<PendingPrefabModelReplacements>,
-    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
-    asset_server: Res<AssetServer>,
-    instances: Query<(Entity, &PrefabSourceAssetHandle, &PrefabInstanceRowEntities)>,
-    children: Query<&Children>,
-    renderables: Query<(), With<PrefabRenderable>>,
+    mut reloaded: MessageReader<ReplacedPrefabReloaded>,
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    instances: Query<(
+        Entity,
+        &PrefabSourceAssetHandle,
+        Option<&PrefabInstanceRows>,
+    )>,
+    row_renderables: Query<&PrefabRowRenderables, Allow<Disabled>>,
+    renderables: Query<(), (With<PrefabRenderable>, Allow<Disabled>)>,
 ) {
-    pending.record(replaced.read().map(|message| message.model_path.clone()));
-    let reloaded =
-        crate::world_spawn::prefab_presentation_render_tree::replaced_prefab_reloads(
-            &mut prefab_events,
-            &mut pending,
-            &asset_server,
-        );
+    let reloaded = reloaded.read().map(|event| event.0).collect::<HashSet<_>>();
     if reloaded.is_empty() {
         return;
     }
-    for (root, prefab, rows) in &instances {
-        if !reloaded.contains(&prefab.0.id()) {
+    for (root, handle, rows) in &instances {
+        if !reloaded.contains(&handle.0.id()) {
             continue;
         }
-        for &row in &rows.0 {
+        let Some(prefab) = prefabs.get(&handle.0) else {
+            continue;
+        };
+        if prefab.canonical_scene_prefab_document().entities.len()
+            != 1 + rows.map_or(0, |rows| rows.0.len())
+        {
+            warn!("reloaded prefab changed its entities; place the object again to see it");
+            continue;
+        }
+        for row in
+            std::iter::once(root).chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
+        {
             if renderables.contains(row) {
                 commands
                     .entity(row)
                     .insert(ReleasePrefabRenderable { despawn: false });
             }
-            for child in children.get(row).into_iter().flatten() {
-                if renderables.contains(*child) && !rows.0.contains(child) {
+            if let Ok(renderables) = row_renderables.get(row) {
+                for &child in &renderables.0 {
                     commands
-                        .entity(*child)
+                        .entity(child)
                         .insert(ReleasePrefabRenderable { despawn: true });
                 }
             }
         }
-        commands.entity(root).insert(PrefabInstanceRenderablesRebuilding);
+        commands
+            .entity(root)
+            .insert(PrefabInstanceRenderablesRebuilding);
     }
 }
 
@@ -356,36 +381,59 @@ pub(super) fn finish_rebuilding_world_instance_renderables(
         (
             Entity,
             &PrefabSourceAssetHandle,
-            &PrefabInstanceRowEntities,
+            Option<&PrefabInstanceRows>,
             &WorldMember,
         ),
         With<PrefabInstanceRenderablesRebuilding>,
     >,
-    released: Query<(Entity, &ReleasePrefabRenderable, &ChildOf, Has<ModelExpanded>)>,
-    visibilities: Query<&Visibility>,
+    released: Query<(&ReleasePrefabRenderable, Has<ModelExpanded>), Allow<Disabled>>,
+    authored_rows: Query<
+        (
+            &PrefabInstanceRow,
+            &Visibility,
+            Option<&PrefabRowRenderables>,
+        ),
+        Allow<Disabled>,
+    >,
 ) {
     for (root, prefab_handle, rows, member) in &instances {
-        let releasing = released
-            .iter()
-            .filter(|(entity, _, parent, _)| {
-                rows.0.contains(entity) || rows.0.contains(&parent.parent())
-            })
-            .collect::<Vec<_>>();
-        if releasing.iter().any(|(_, _, _, expanded)| *expanded) {
+        let rows = || {
+            std::iter::once(root).chain(rows.into_iter().flat_map(|rows| rows.0.iter().copied()))
+        };
+        let row_and_draws = |row| {
+            std::iter::once(row).chain(
+                authored_rows
+                    .get(row)
+                    .ok()
+                    .and_then(|(_, _, draws)| draws)
+                    .into_iter()
+                    .flat_map(|draws| draws.0.iter().copied()),
+            )
+        };
+        if rows()
+            .flat_map(row_and_draws)
+            .any(|entity| released.get(entity).is_ok_and(|(_, expanded)| expanded))
+        {
             continue;
         }
         let Some(prefab) = prefabs.get(&prefab_handle.0) else {
             continue;
         };
         let document = prefab.canonical_scene_prefab_document();
-        if document.entities.len() != rows.0.len() {
-            // A reload that changes the scene's entities needs the object
-            // placed again; its current renderables stay.
+        if document.entities.len() != rows().count() {
             warn!("reloaded prefab changed its entities; place the object again to see it");
-            commands.entity(root).remove::<PrefabInstanceRenderablesRebuilding>();
+            for entity in rows().flat_map(row_and_draws) {
+                commands.entity(entity).remove::<ReleasePrefabRenderable>();
+            }
+            commands
+                .entity(root)
+                .remove::<PrefabInstanceRenderablesRebuilding>();
             continue;
         }
-        for (entity, release, _, _) in releasing {
+        for entity in rows().flat_map(row_and_draws) {
+            let Ok((release, _)) = released.get(entity) else {
+                continue;
+            };
             if release.despawn {
                 commands.entity(entity).despawn();
             } else {
@@ -398,12 +446,25 @@ pub(super) fn finish_rebuilding_world_instance_renderables(
                 )>();
             }
         }
-        for (row, &spawned) in document.entities.iter().zip(&rows.0) {
-            let visible = visibilities
-                .get(spawned)
-                .is_ok_and(|visibility| *visibility != Visibility::Hidden);
-            attach_prefab_row_renderables(&mut commands, prefab, row, spawned, member.root, visible);
+        for spawned in rows() {
+            let Ok((index, visibility, _)) = authored_rows.get(spawned) else {
+                continue;
+            };
+            let Some(row) = document.entities.get(index.0) else {
+                continue;
+            };
+            let visible = *visibility != Visibility::Hidden;
+            attach_prefab_row_renderables(
+                &mut commands,
+                prefab,
+                row,
+                spawned,
+                member.root,
+                visible,
+            );
         }
-        commands.entity(root).remove::<PrefabInstanceRenderablesRebuilding>();
+        commands
+            .entity(root)
+            .remove::<PrefabInstanceRenderablesRebuilding>();
     }
 }

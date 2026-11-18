@@ -8,7 +8,7 @@ pub struct WorldEnvironment {
     pub definition: AssetId,
 }
 
-#[derive(Resource, Default, Clone, Debug)]
+#[derive(Resource, Default, Clone, Debug, PartialEq)]
 pub enum WaterEnvironmentMapSample {
     #[default]
     Unresolved,

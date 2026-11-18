@@ -42,7 +42,12 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
     >,
     roots: Query<&UiDocumentRoot>,
     world_choices: Query<(Entity, Ref<WorldChoice>, &GlobeMarker)>,
-    rows: Query<(Entity, &UiListRow, &WorldChoiceView)>,
+    mut rows: Query<(
+        &UiListRow,
+        Option<&WorldChoiceView>,
+        &mut UiSelected,
+        &mut UiPreviousSelection,
+    )>,
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
     selection: Res<ShellSelection>,
@@ -105,29 +110,30 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
                         .then_with(|| left_label.cmp(right_label))
                 },
             );
-            for (row_entity, row, _) in &rows {
-                if row.list == entity && usize::from(row.index) >= choices.len() {
+            let mut row_entities = vec![None; choices.len().min(usize::from(u16::MAX) + 1)];
+            for row_entity in children.get(entity).into_iter().flatten().copied() {
+                let Ok((row, ..)) = rows.get(row_entity) else {
+                    continue;
+                };
+                if let Some(slot) = row_entities.get_mut(usize::from(row.index)) {
+                    *slot = Some(row_entity);
+                } else {
                     commands.entity(row_entity).despawn();
                 }
             }
-            for (index, (source, label, _)) in choices
-                .into_iter()
-                .take(usize::from(u16::MAX) + 1)
-                .enumerate()
+            for ((index, (source, label, _)), row_entity) in
+                choices.into_iter().enumerate().zip(row_entities)
             {
-                if let Some((row_entity, _, current)) = rows
-                    .iter()
-                    .find(|(_, row, _)| row.list == entity && usize::from(row.index) == index)
+                if let Some((row_entity, (_, current, mut selected, mut previous))) =
+                    row_entity.and_then(|entity| rows.get_mut(entity).ok().map(|row| (entity, row)))
                 {
-                    if current.0 != source {
-                        let selected = world_choices.get(source).is_ok_and(|(_, choice, _)| {
+                    if current.is_none_or(|current| current.0 != source) {
+                        let next = world_choices.get(source).is_ok_and(|(_, choice, _)| {
                             selection.scenario == Some(choice.scenario)
                         });
-                        commands.entity(row_entity).insert((
-                            WorldChoiceView(source),
-                            UiSelected(selected),
-                            UiPreviousSelection::from_current_selection(selected),
-                        ));
+                        commands.entity(row_entity).insert(WorldChoiceView(source));
+                        selected.set_if_neq(UiSelected(next));
+                        previous.synchronize_with_non_authored_selection_change(next);
                     }
                     replace_text_in_list_row_and_descendants(
                         row_entity, label, &children, &mut texts,
@@ -158,7 +164,6 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
                         ),
                         *owner,
                         UiListRow {
-                            list: entity,
                             index: index as u16,
                         },
                         (WorldChoiceView(source), ChildOf(entity)),

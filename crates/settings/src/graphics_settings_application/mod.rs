@@ -23,46 +23,47 @@ pub(super) fn validate_and_accept_requested_graphics_settings(
     }
 }
 
-pub(super) fn apply_accepted_shadow_detail_to_environment_lights(
+pub(super) fn project_shadow_detail_to_environment_lights(
     settings: Res<GraphicsSettings>,
     mut shadow_map: ResMut<DirectionalLightShadowMap>,
-    mut lights: Query<&mut DirectionalLight, With<EnvironmentLight>>,
+    mut lights: Query<(&mut DirectionalLight, Ref<EnvironmentLight>)>,
 ) {
-    let enabled = !matches!(settings.shadow_detail, ShadowDetail::Off);
-    // The source tiers publish no map sizes. Medium, the default
-    // preset, keeps Bevy's 2048 default.
-    let size = match settings.shadow_detail {
-        ShadowDetail::Off | ShadowDetail::Medium => 2048,
-        ShadowDetail::High => 3072,
-        ShadowDetail::Ultra => 4096,
-    };
-    if shadow_map.size != size {
-        shadow_map.size = size;
+    let enabled = settings.shadow_detail != ShadowDetail::Off;
+    if settings.is_changed() {
+        let size = match settings.shadow_detail {
+            ShadowDetail::Off | ShadowDetail::Medium => 2048,
+            ShadowDetail::High => 3072,
+            ShadowDetail::Ultra => 4096,
+        };
+        shadow_map
+            .map_unchanged(|map| &mut map.size)
+            .set_if_neq(size);
     }
-    for mut light in &mut lights {
-        light.shadow_maps_enabled = enabled;
+    for (mut light, environment_light) in &mut lights {
+        if settings.is_changed() || environment_light.is_added() || light.is_added() {
+            light
+                .map_unchanged(|light| &mut light.shadow_maps_enabled)
+                .set_if_neq(enabled);
+        }
     }
 }
 
-pub(super) fn apply_accepted_multisample_count_to_zoo_cameras(
+pub(super) fn project_multisample_count_to_zoo_cameras(
     mut commands: Commands,
     settings: Res<GraphicsSettings>,
-    cameras: Query<Entity, With<ZooCamera>>,
+    mut cameras: Query<(Entity, Ref<ZooCamera>, Option<&mut Msaa>)>,
 ) {
-    // Profiles saved with the earlier default of 8 would stop rendering on
-    // GPUs that support at most 4 samples, so clamp to the guaranteed count.
-    let msaa = Msaa::from_samples(u32::from(settings.multisample_count.min(4)));
-    for camera in &cameras {
-        commands.entity(camera).insert(msaa);
+    // Clamp older profiles to the sample count supported on all devices.
+    let samples = Msaa::from_samples(u32::from(settings.multisample_count.min(4)));
+    for (entity, camera, current) in &mut cameras {
+        if let Some(mut current) = current {
+            if settings.is_changed() || camera.is_added() || current.is_added() {
+                current.set_if_neq(samples);
+            }
+        } else {
+            commands.entity(entity).insert(samples);
+        }
     }
-}
-
-pub(super) fn graphics_settings_changed_or_render_target_was_added(
-    settings: Res<GraphicsSettings>,
-    cameras: Query<(), Added<ZooCamera>>,
-    lights: Query<(), Added<EnvironmentLight>>,
-) -> bool {
-    settings.is_changed() || !cameras.is_empty() || !lights.is_empty()
 }
 
 pub(super) fn apply_accepted_ui_text_shadow_setting(

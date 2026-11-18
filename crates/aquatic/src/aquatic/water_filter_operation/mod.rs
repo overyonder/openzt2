@@ -5,11 +5,14 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
+use openzt2_zoo_state::habitat::habitat_types::{Containment, HabitatMember};
+use openzt2_zoo_state::animal_health::types::Dead;
+use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::aquatic_simulation_types::{
-    AddAquaticWaterDirt, AquaticHome, Tank, TankGeometry, WaterFilter, WaterQuality,
+    AddAquaticWaterDirt, AquaticAnimal, Tank, TankGeometry, WaterFilter, WaterQuality,
 };
 
 /// Dirtiness is the share of a tank's volume that is dirt, so the same amount
@@ -47,21 +50,26 @@ pub(super) fn hydrate_water_filters_from_object_definitions(
 
 pub(super) fn add_animal_dirt_to_home_tank_water(
     mut dirt: MessageReader<AddAquaticWaterDirt>,
-    homes: Query<&AquaticHome>,
+    residents: Query<
+        (&HabitatMember, &Containment),
+        (With<AquaticAnimal>, With<Animal>, Without<Dead>),
+    >,
     mut tanks: Query<(&TankGeometry, &mut WaterQuality), With<Tank>>,
 ) {
     for dirt in dirt.read() {
-        let Some((geometry, mut quality)) = homes
+        let Some((geometry, mut quality)) = residents
             .get(dirt.animal)
             .ok()
-            .and_then(|home| tanks.get_mut(home.0).ok())
+            .filter(|(_, containment)| containment.is_contained)
+            .and_then(|(member, _)| tanks.get_mut(member.habitat_entity).ok())
         else {
             continue;
         };
-        quality.0 = quality
+        let next = quality
             .0
             .min(1000)
             .saturating_sub(dirt_as_water_quality_permille(dirt.amount, geometry.volume));
+        quality.set_if_neq(WaterQuality(next));
     }
 }
 

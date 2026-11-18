@@ -1,22 +1,14 @@
-use super::{SpeciesAsset, SpeciesAssets, SpeciesView, VariantHandle};
+use super::{SpeciesAsset, SpeciesAssets, SpeciesView, normalized_species_model_path};
 use bevy::prelude::*;
 use openzt2_game_data::{
-    species::{Species, SpeciesVariant, SpeciesVariantBinding},
     AssetId,
+    species::{Species, SpeciesVariant, SpeciesVariantBinding},
 };
 
 impl SpeciesAssets {
     /// Pending catalogue batches must finish before a missing saved species is an error.
-    pub fn catalogue_load_is_pending(&self, server: &AssetServer) -> bool {
-        self.revision.is_none()
-            || self.dirty
-            || !self.pending_paths.is_empty()
-            || self.handles.iter().any(|handle| {
-                !matches!(
-                    server.load_state(handle.id()),
-                    bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_)
-                )
-            })
+    pub fn catalogue_load_is_pending(&self, _server: &AssetServer) -> bool {
+        !self.discovered || self.dirty
     }
 
     pub fn get<'a>(&'a self, assets: &'a Assets<SpeciesAsset>) -> Option<SpeciesView<'a>> {
@@ -24,6 +16,9 @@ impl SpeciesAssets {
             handles: &self.loaded_handles,
             by_species: &self.by_species,
             by_variant: &self.by_variant,
+            variants_by_species: &self.variants_by_species,
+            variant_by_model_path: &self.variant_by_model_path,
+            animation_set_owners: &self.animation_set_owners,
             assets,
         })
     }
@@ -51,33 +46,12 @@ impl<'a> SpeciesView<'a> {
             .flat_map(|asset| asset.document.species.iter())
     }
 
-    fn variant(self, declaration: &VariantHandle) -> Option<&'a SpeciesVariant> {
-        self.assets
-            .get(&declaration.document)?
-            .document
-            .variants
-            .get(declaration.index)
-            .map(|binding| &binding.variant)
-    }
-
     pub fn variants(self, species: AssetId) -> impl Iterator<Item = &'a SpeciesVariant> {
-        let has_concrete_adult = self.by_variant.values().any(|declaration| {
-            declaration.species == species
-                && self.variant(declaration).is_some_and(|variant| {
-                    variant.life_stage == openzt2_game_data::species::LifeStage::Adult
-                        && variant.sex != openzt2_game_data::species::Sex::Any
-                })
-        });
-        self.by_variant
-            .values()
-            .filter(move |declaration| declaration.species == species)
-            .filter_map(move |declaration| {
-                let variant = self.variant(declaration)?;
-                (!(has_concrete_adult
-                    && variant.life_stage == openzt2_game_data::species::LifeStage::Adult
-                    && variant.sex == openzt2_game_data::species::Sex::Any))
-                    .then_some(variant)
-            })
+        self.variants_by_species
+            .get(&species)
+            .into_iter()
+            .flatten()
+            .filter_map(move |id| self.find_variant(*id))
     }
 
     pub fn find_variant(self, id: AssetId) -> Option<&'a SpeciesVariant> {
@@ -110,15 +84,15 @@ impl<'a> SpeciesView<'a> {
     /// archive entry can spell the same model with different casing, so the
     /// paths compare by text rather than by their hashed identities.
     pub fn find_variant_by_model_path(self, model_path: &str) -> Option<&'a SpeciesVariant> {
-        let model_path = model_path.replace('\\', "/");
-        self.documents()
-            .flat_map(|asset| &asset.document.variants)
-            .map(|binding| &binding.variant)
-            .find(|variant| {
-                variant
-                    .model
-                    .replace('\\', "/")
-                    .eq_ignore_ascii_case(&model_path)
-            })
+        let model_path = normalized_species_model_path(model_path);
+        let location = self.variant_by_model_path.get(&model_path)?;
+        let variant = &self
+            .assets
+            .get(&location.document)?
+            .document
+            .variants
+            .get(location.index)?
+            .variant;
+        (normalized_species_model_path(&variant.model) == model_path).then_some(variant)
     }
 }

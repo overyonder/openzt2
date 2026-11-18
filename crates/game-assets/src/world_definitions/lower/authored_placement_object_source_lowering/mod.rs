@@ -31,11 +31,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::world_objects::{
     WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
-use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 /// Uses the mainObj scene for spawning. Purchase controls also add a catalogue entry.
@@ -73,7 +73,12 @@ pub(super) fn bind_authored_placement_object(
         );
     }
     let abstract_binder = authored_placement_binder_is_abstract(record);
-    if abstract_binder && record.has_type_token("staff") {
+    if record.has_type_token("staff")
+        && (abstract_binder
+            || record
+                .descendant_with_attribute("event", "msg", "ZT_SETPLACEMENTOBJECT")
+                .is_some())
+    {
         return bind_authored_staff_catalogue(
             record,
             resolved_source_records,
@@ -477,6 +482,10 @@ pub(super) fn bind_authored_placement_object(
     {
         output.document.maintenance_definitions.push(maintenance);
     }
+    output.document.placement_target_facts.insert(
+        id(record.key),
+        super::authored_placement_stomp_lowering::lower_authored_placement_target_facts(record),
+    );
     output.document.object_record_keys.push((
         super::world_definition_source_value_reading_and_conversion::id(record.key),
         record.key.to_string(),

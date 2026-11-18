@@ -3,7 +3,10 @@
 #[cfg(test)]
 mod tests;
 
-use std::{collections::HashMap, ops::RangeInclusive};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::RangeInclusive,
+};
 
 use bevy::{
     asset::AssetId, curve::cubic_splines::CubicSegment, prelude::*, render::storage::ShaderBuffer,
@@ -97,66 +100,105 @@ fn sample_track(keys: &[(f32, CubicSegment<f32>)], time: f32, default: f32) -> f
     segment.position(fraction)
 }
 
-/// Animation start times keyed by material asset.
-#[derive(Resource, Default)]
-pub(super) struct AnimatedTextureCoordinateMaterials(HashMap<AssetId<EffectPassMaterial>, f32>);
+/// Playback begins with the geometry and survives material changes.
+#[derive(Component)]
+pub struct GeometryTextureCoordinateAnimationClock {
+    start_seconds: f32,
+}
+
+impl GeometryTextureCoordinateAnimationClock {
+    pub const fn new(start_seconds: f32) -> Self {
+        Self { start_seconds }
+    }
+}
 
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TextureCoordinateAnimationSet;
 
-#[allow(
-    clippy::needless_pass_by_value,
-    reason = "Bevy systems receive Res system parameters by value"
-)]
+#[derive(Default)]
+pub(super) struct TextureCoordinateAnimationSamples {
+    animated: HashSet<AssetId<EffectPassMaterial>>,
+    geometry_samples: HashMap<(Option<Entity>, usize), Vec<(u16, Mat4)>>,
+}
+
 pub(super) fn advance_texture_coordinate_animations(
     mut events: MessageReader<AssetEvent<EffectPassMaterial>>,
-    mut animated: ResMut<AnimatedTextureCoordinateMaterials>,
+    mut samples: Local<TextureCoordinateAnimationSamples>,
     time: Res<Time>,
+    clocks: Query<&GeometryTextureCoordinateAnimationClock>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     let elapsed = time.elapsed_secs();
+    let TextureCoordinateAnimationSamples {
+        animated,
+        geometry_samples,
+    } = &mut *samples;
     for event in events.read() {
-        match event {
+        match *event {
             AssetEvent::Added { id } | AssetEvent::Modified { id } => {
                 if materials
-                    .get(*id)
-                    .is_some_and(|material| !material.texture_coordinate_animations.is_empty())
+                    .get(id)
+                    .is_some_and(EffectPassMaterial::has_texture_coordinate_animation)
                 {
-                    animated.0.entry(*id).or_insert(elapsed);
+                    animated.insert(id);
                 } else {
-                    animated.0.remove(id);
+                    animated.remove(&id);
                 }
             }
             AssetEvent::Removed { id } => {
-                animated.0.remove(id);
+                animated.remove(&id);
             }
             _ => {}
         }
     }
-    for (id, started) in &animated.0 {
-        let Some(material) = materials.get_mut_untracked(*id) else {
+    geometry_samples.clear();
+    for &id in animated.iter() {
+        let Some(material) = materials.get_mut_untracked(id) else {
             continue;
         };
+        let geometry = material.texture_coordinate_animation_geometry;
+        let started = match geometry {
+            Some(geometry) => {
+                let Ok(clock) = clocks.get(geometry) else {
+                    continue;
+                };
+                clock.start_seconds
+            }
+            None => elapsed,
+        };
+        let curves = &material.texture_coordinate_animations;
+        let matrices = geometry_samples
+            .entry((geometry, curves.as_ptr() as usize))
+            .or_insert_with(|| {
+                let mut values = Vec::<(u16, Mat4)>::new();
+                for animation in curves.iter() {
+                    let transform = animation.transform(elapsed, started);
+                    if let Some((_, value)) = values
+                        .iter_mut()
+                        .find(|(uv_set, _)| *uv_set == animation.uv_set)
+                    {
+                        *value = transform * *value;
+                    } else {
+                        values.push((animation.uv_set, transform));
+                    }
+                }
+                values
+            });
         let mut changed = false;
         for stage in 0..8 {
             if material.fixed_function.values[stage * 5 + 4].x.to_bits() != 2.0_f32.to_bits() {
                 continue;
             }
             let uv_set = material.fixed_function.values[stage * 5 + 3].y.to_bits();
-            let mut next = Mat4::IDENTITY;
-            let mut matched = false;
-            for animation in material
-                .texture_coordinate_animations
+            if let Some((_, next)) = matrices
                 .iter()
-                .filter(|animation| f32::from(animation.uv_set).to_bits() == uv_set)
+                .find(|(set, _)| f32::from(*set).to_bits() == uv_set)
             {
-                next = animation.transform(elapsed, *started) * next;
-                matched = true;
-            }
-            if matched && material.fixed_transforms.values[stage] != next {
-                material.fixed_transforms.values[stage] = next;
-                changed = true;
+                if material.fixed_transforms.values[stage] != *next {
+                    material.fixed_transforms.values[stage] = *next;
+                    changed = true;
+                }
             }
         }
         if changed {

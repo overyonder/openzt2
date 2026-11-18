@@ -3,9 +3,11 @@
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
-use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+
 use openzt2_game_data::AssetId;
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
+use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -60,7 +62,7 @@ pub(super) fn apply_prepared_object_placement_edits(
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
+    (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
     models: Res<Assets<Gltf>>,
     mut placed: Query<(
         &PersistentId,
@@ -85,6 +87,7 @@ pub(super) fn apply_prepared_object_placement_edits(
                     roots.single().ok(),
                     &placement,
                     &mut scratch,
+                    &footprints,
                     &prefabs,
                     &models,
                     &placed,
@@ -112,6 +115,7 @@ pub(super) fn apply_prepared_object_placement_edits(
                             roots.single().ok(),
                             &mut placement,
                             &mut scratch,
+                            &footprints,
                             &prefabs,
                             &models,
                             &mut placed,
@@ -140,6 +144,7 @@ pub(super) fn apply_prepared_object_placement_edits(
                             roots.single().ok(),
                             &mut placement,
                             &mut scratch,
+                            &footprints,
                             &prefabs,
                             &models,
                             &mut placed,
@@ -166,6 +171,7 @@ fn preflight_prepared_object_placement_mutations(
     root: Option<Entity>,
     placement: &PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
+    footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
     models: &Assets<Gltf>,
     placed: &Query<(
@@ -175,18 +181,6 @@ fn preflight_prepared_object_placement_mutations(
         &mut PlacedObjectFootprintOccupancy,
     )>,
 ) -> bool {
-    if edit.mutations.len() == 1
-        && edit.mutations[0].mutation == PreparedObjectPlacementEditMutationKind::Relocate
-    {
-        return true;
-    }
-    if edit
-        .mutations
-        .iter()
-        .any(|mutation| mutation.mutation == PreparedObjectPlacementEditMutationKind::Relocate)
-    {
-        return false;
-    }
     let forward = matches!(
         request.application,
         openzt2_zoo_state::construction::construction_transaction_types::EditApplication::InitialCommit
@@ -198,6 +192,13 @@ fn preflight_prepared_object_placement_mutations(
     for index in indices {
         let mutation = &edit.mutations[index];
         let target = find_prepared_object_placement_mutation_entity(mutation, placement, placed);
+        if mutation.mutation == PreparedObjectPlacementEditMutationKind::Relocate {
+            let Some(entity) = target else {
+                return false;
+            };
+            removed_entities.insert(entity);
+            continue;
+        }
         let creates = object_placement_edit_application_creates_entity(
             mutation.mutation,
             request.application,
@@ -209,9 +210,10 @@ fn preflight_prepared_object_placement_mutations(
             else {
                 return false;
             };
+            let geometry = footprints.resolve(definition, Some(&mutation.prefab));
             if root.is_none()
                 || collect_occupied_placement_cells_for_transform(
-                    definition,
+                    geometry,
                     &mutation.transform,
                     &mut scratch.cells,
                 )
@@ -219,7 +221,7 @@ fn preflight_prepared_object_placement_mutations(
                 || calculate_authored_object_placement_eighth_turns(definition, &mutation.transform)
                     .and_then(|turns| {
                         calculate_object_placement_footprint_origin(
-                            definition,
+                            geometry,
                             &mutation.transform,
                             turns,
                         )
@@ -231,34 +233,22 @@ fn preflight_prepared_object_placement_mutations(
             {
                 return false;
             }
-            let allows_scenery = definition
-                .constraints
-                .contains_all(PlacementConstraints::ALLOW_OVERLAP_SCENERY);
             for cell in mutation.cells.iter().copied() {
                 let existing_blocked = placement
                     .entities_occupying_cell(cell)
                     .filter(|entity| !removed_entities.contains(entity))
                     .any(|entity| {
-                        !allows_scenery
-                            || placed
-                                .get(entity)
-                                .ok()
-                                .and_then(|(_, reference, _, _)| {
-                                    catalogue.find_object(reference.definition)
-                                })
-                                .is_none_or(|object| {
-                                    !matches!(object.kind, WorldObjectKind::Scenery)
-                                })
+                        let target = placed
+                            .get(entity)
+                            .ok()
+                            .map(|(_, reference, _, _)| reference.definition);
+                        object_placement_stomp_action(definition, catalogue, target)
+                            != PlacementStompAction::Allow
                     });
-                let projected_blocked =
-                    projected_created_cells
-                        .get(&cell)
-                        .is_some_and(|definition_id| {
-                            !allows_scenery
-                                || catalogue.find_object(*definition_id).is_none_or(|object| {
-                                    !matches!(object.kind, WorldObjectKind::Scenery)
-                                })
-                        });
+                let projected_blocked = projected_created_cells.get(&cell).is_some_and(|target| {
+                    object_placement_stomp_action(definition, catalogue, Some(*target))
+                        != PlacementStompAction::Allow
+                });
                 if existing_blocked || projected_blocked {
                     return false;
                 }
@@ -275,7 +265,7 @@ fn preflight_prepared_object_placement_mutations(
                     let definition =
                         resolve_object_placeable_definition(catalogue, reference.definition)?;
                     let exact_cells = collect_occupied_placement_cells_for_transform(
-                        definition,
+                        footprints.resolve(definition, Some(&mutation.prefab)),
                         transform,
                         &mut scratch.cells,
                     )
@@ -332,6 +322,7 @@ fn apply_prepared_object_placement_mutation(
     root: Option<Entity>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
+    footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
     models: &Assets<Gltf>,
     placed: &mut Query<(
@@ -353,6 +344,7 @@ fn apply_prepared_object_placement_mutation(
             catalogue,
             placement,
             scratch,
+            footprints,
             placed,
         );
         if accepted && request.application == EditApplication::InitialCommit {
@@ -384,6 +376,7 @@ fn apply_prepared_object_placement_mutation(
             root,
             placement,
             scratch,
+            footprints,
             prefabs,
             models,
             placed,
@@ -403,7 +396,7 @@ fn apply_prepared_object_placement_mutation(
             pending_created_definitions.remove(&entity);
         }
         apply_prepared_placed_object_removal_edit(
-            commands, edit, catalogue, placement, scratch, placed,
+            commands, edit, catalogue, placement, scratch, footprints, placed,
         )
     }
 }

@@ -8,9 +8,7 @@ pub mod source;
 use bevy::{asset::AssetApp, prelude::*};
 
 use self::{
-    audio_asset_index_refresh::{
-        index_loaded_audio_assets, refresh_audio_assets_from_archive_overlay,
-    },
+    audio_asset_index_refresh::{discover_audio_catalogue_sources, publish_loaded_audio_rows},
     audio_asset_types::{AudioAsset, AudioAssets},
     audio_document_asset_loader::AudioDocumentAssetLoader,
 };
@@ -25,10 +23,12 @@ impl Plugin for AudioAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_audio_assets_from_archive_overlay,
-                    index_loaded_audio_assets,
+                    discover_audio_catalogue_sources
+                        .run_if(resource_changed::<crate::asset_source::AssetArchives>),
+                    publish_loaded_audio_rows,
                 )
-                    .chain(),
+                    .chain()
+                    .after(bevy::asset::AssetTrackingSystems),
             );
     }
 }

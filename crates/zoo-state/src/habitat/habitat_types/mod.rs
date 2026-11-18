@@ -28,16 +28,22 @@ pub struct HabitatClimate {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = HabitatMembers)]
 pub struct HabitatMember {
+    #[relationship]
     pub habitat_entity: Entity,
 }
 
+#[derive(Component)]
+#[relationship_target(relationship = HabitatMember)]
+pub struct HabitatMembers(Vec<Entity>);
+
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[require(Containment)]
 pub struct HabitatLocatable;
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Containment {
-    pub habitat_entity: Entity,
     pub is_contained: bool,
 }
 

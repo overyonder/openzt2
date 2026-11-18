@@ -12,6 +12,10 @@ pub(super) struct TerrainDirty;
 #[component(storage = "SparseSet")]
 pub(super) struct TerrainRenderPending(pub(super) TerrainDirtyRegion);
 
+#[derive(Component, PartialEq, Eq)]
+#[component(storage = "SparseSet")]
+pub(super) struct TerrainSurfaceBasePending(pub(super) TerrainDirtyRegion);
+
 /// Inclusive sample bounds of a change and the kinds of change inside them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct TerrainDirtyRegion {
@@ -28,7 +32,6 @@ impl TerrainDirtyFlags {
     pub(super) const HEIGHT: Self = Self(1);
     pub(super) const SURFACE: Self = Self(2);
     pub(super) const WATER: Self = Self(4);
-    pub(super) const COLLISION: Self = Self(8);
 
     pub(super) const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0

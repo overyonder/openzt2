@@ -9,6 +9,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::PrepareCons
 use crate::terrain::terrain_brush_sample_mutation::paint_layers_are_available_for_terrain_brush;
 use crate::terrain::terrain_brush_sample_mutation::painted_water_depth_is_available_for_terrain_brush;
 use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_delta_from_brush_dabs;
+use crate::terrain::terrain_live_brush_application::TerrainBrushDraft;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::TerrainBrushDab;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::TerrainBrushPath;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
@@ -35,20 +36,17 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
         Option<&EditedTerrainSamples>,
         &TerrainChunkId,
     )>,
-    previews: Query<(
-        Entity,
+    mut previews: Query<(
         &TerrainBrushPreview,
         Option<&TerrainBrushPath>,
         &ConstructionPreview,
-        Option<&TerrainEdit>,
+        Option<&mut TerrainBrushDraft>,
     )>,
     mut prepared: MessageWriter<TerrainEditPrepared>,
     mut rejected: MessageWriter<TerrainEditPreparationRejected>,
 ) {
     for request in requests.read() {
-        let Ok((preview_entity, preview, path, construction, live_edit)) =
-            previews.get(request.preview)
-        else {
+        let Ok((preview, path, construction, draft)) = previews.get_mut(request.preview) else {
             continue;
         };
         let cost = match construction.validity {
@@ -68,17 +66,12 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 continue;
             }
         };
-        if live_edit.is_some_and(|edit| !edit.deltas.is_empty()) {
-            let transaction = request.transaction;
-            commands.queue(move |world: &mut World| {
-                let Some(edit) = world.entity_mut(preview_entity).take::<TerrainEdit>() else {
-                    return;
-                };
-                world.entity_mut(transaction).insert((
-                    edit,
-                    crate::terrain::terrain_edit_application::LiveAppliedTerrainEdit,
-                ));
-            });
+        if let Some(mut draft) = draft.filter(|draft| !draft.0.deltas.is_empty()) {
+            let edit = std::mem::take(&mut draft.0);
+            commands.entity(request.transaction).insert((
+                edit,
+                crate::terrain::terrain_edit_application::LiveAppliedTerrainEdit,
+            ));
             prepared.write(TerrainEditPrepared {
                 transaction: request.transaction,
                 cost,

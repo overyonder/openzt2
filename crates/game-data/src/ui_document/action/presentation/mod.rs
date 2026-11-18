@@ -68,6 +68,11 @@ pub enum UiPresentationAction {
         target_node: AssetId,
         source_node: AssetId,
     },
+    FormatTargetNodeLocalizedInteger {
+        target_node: AssetId,
+        localization_key: AssetId,
+        value: i64,
+    },
     SetTargetNodeTextFromLocalizationKey {
         target_node: AssetId,
         localization_key: AssetId,
@@ -118,6 +123,8 @@ pub enum UiPresentationAction {
     },
     ActivateSelectedChildOfTargetNode {
         target_node: AssetId,
+        #[serde(default)]
+        target_role: Option<UiDocumentRole>,
     },
     FocusPreviousOrNextSiblingOfTargetNode {
         target_node: AssetId,
@@ -171,6 +178,7 @@ impl UiPresentationAction {
             | Self::ChangeTargetNodeSliderOrScrollPositionByDelta { target_node, .. }
             | Self::SetTargetNodeImageSourceRectangle { target_node, .. }
             | Self::SetTargetNodeLayoutPosition { target_node, .. }
+            | Self::FormatTargetNodeLocalizedInteger { target_node, .. }
             | Self::SetTargetNodeTextFromLocalizationKey { target_node, .. }
             | Self::SetTargetNodeExpanded { target_node, .. }
             | Self::SelectTargetNode { target_node }
@@ -183,7 +191,7 @@ impl UiPresentationAction {
             | Self::SetTargetNodeCursor { target_node, .. }
             | Self::SetTargetNodeTextLiteral { target_node, .. }
             | Self::SetTargetNodeHoverPresentation { target_node, .. }
-            | Self::ActivateSelectedChildOfTargetNode { target_node }
+            | Self::ActivateSelectedChildOfTargetNode { target_node, .. }
             | Self::FocusPreviousOrNextSiblingOfTargetNode { target_node, .. }
             | Self::ShowOnlyNamedChildOfTargetNode { target_node, .. }
             | Self::MarkTargetNodeForQuery { target_node } => [Some(target_node), None],

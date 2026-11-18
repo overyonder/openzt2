@@ -49,18 +49,17 @@ pub(super) fn register_hide_execution(application: &mut App) {
 /// A failed, replaced or finished task shows its actor again.
 fn show_actors_whose_hiding_ended(
     mut commands: Commands,
-    hidden: Query<(
+    mut hidden: Query<(
         Entity,
         &HiddenForBehavior,
         Option<&BehaviorTaskExecutionState>,
+        Option<&mut Visibility>,
     )>,
 ) {
-    for (actor, hiding, task) in &hidden {
+    for (actor, hiding, task, visibility) in &mut hidden {
         if task.is_none_or(|task| !hiding.owns(task)) {
-            commands
-                .entity(actor)
-                .remove::<HiddenForBehavior>()
-                .insert(Visibility::Inherited);
+            commands.entity(actor).remove::<HiddenForBehavior>();
+            set_hiding_visibility(actor, visibility, Visibility::Inherited, &mut commands);
         }
     }
 }
@@ -78,6 +77,7 @@ fn hide_actors_for_current_hide_actions(
             Option<&HiddenForBehavior>,
             Option<&mut GuestRng>,
             Option<&mut BehaviorRandomStream>,
+            Option<&mut Visibility>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -85,7 +85,7 @@ fn hide_actors_for_current_hide_actions(
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, mut task, hiding, guest_random, behavior_random) in &mut actors {
+    for (actor, mut task, hiding, guest_random, behavior_random, visibility) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -97,10 +97,8 @@ fn hide_actors_for_current_hide_actions(
         };
         if let Some(hiding) = hiding.filter(|hiding| hiding.owns(&task)) {
             if clock.tick >= hiding.until_tick {
-                commands
-                    .entity(actor)
-                    .remove::<HiddenForBehavior>()
-                    .insert(Visibility::Inherited);
+                commands.entity(actor).remove::<HiddenForBehavior>();
+                set_hiding_visibility(actor, visibility, Visibility::Inherited, &mut commands);
                 advance_behavior_task_to_next_action(&mut task, clock.tick);
             }
             continue;
@@ -124,15 +122,26 @@ fn hide_actors_for_current_hide_actions(
         let until_tick = clock
             .tick
             .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
-        commands.entity(actor).insert((
-            HiddenForBehavior {
-                execution_id: task.execution_id,
-                origin: task.create_return_frame_after_action(task.action),
-                depth: task.stack.len(),
-                until_tick,
-            },
-            Visibility::Hidden,
-        ));
+        commands.entity(actor).insert(HiddenForBehavior {
+            execution_id: task.execution_id,
+            origin: task.create_return_frame_after_action(task.action),
+            depth: task.stack.len(),
+            until_tick,
+        });
+        set_hiding_visibility(actor, visibility, Visibility::Hidden, &mut commands);
         task.next_action_tick = until_tick;
+    }
+}
+
+fn set_hiding_visibility(
+    actor: Entity,
+    visibility: Option<Mut<Visibility>>,
+    value: Visibility,
+    commands: &mut Commands,
+) {
+    if let Some(mut visibility) = visibility {
+        visibility.set_if_neq(value);
+    } else {
+        commands.entity(actor).insert(value);
     }
 }

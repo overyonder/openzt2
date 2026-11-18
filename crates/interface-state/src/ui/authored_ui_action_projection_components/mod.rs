@@ -61,41 +61,24 @@ fn canonical_ui_action_records_for_projection_source(
             .get(node as usize)
             .and_then(|node| node.hotkeys.get(hotkey as usize))
             .map_or(&[], |hotkey| std::slice::from_ref(&hotkey.action)),
-        UiActionSource::TimedEvent { .. } => &[],
-    }
-}
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub struct UiPresentationActions(pub UiActionSource);
-
-impl UiPresentationActions {
-    pub fn authored_action_records<'a>(
-        &self,
-        document: &'a UiDocumentAsset,
-    ) -> impl Iterator<Item = &'a UiPresentationActionRecord> {
-        let timed_event = match self.0 {
-            UiActionSource::TimedEvent { node, event } => document
-                .canonical_ui_document()
-                .nodes
-                .get(node as usize)
-                .and_then(|node| {
-                    let UiWidgetRecord::TimedSequence { events } = &node.widget else {
-                        return None;
-                    };
-                    events.get(event as usize).map(|event| &event.action)
-                }),
-            UiActionSource::Node(_) | UiActionSource::Hotkey { .. } => None,
-        };
-        canonical_ui_action_records_for_projection_source(self.0, document)
-            .iter()
-            .filter_map(|action| match action {
-                UiActionRecord::Presentation(record) => Some(record),
-                _ => None,
+        UiActionSource::TimedEvent { node, event } => canonical_ui_document
+            .nodes
+            .get(node as usize)
+            .and_then(|node| {
+                let UiWidgetRecord::TimedSequence { events } = &node.widget else {
+                    return None;
+                };
+                events.get(event as usize)
             })
-            .chain(timed_event)
+            .map_or(&[], |event| std::slice::from_ref(&event.action)),
     }
 }
 
+define_ui_action_projection_component!(
+    UiPresentationActions,
+    UiPresentationActionRecord,
+    Presentation
+);
 define_ui_action_projection_component!(UiShellActions, UiShellActionRecord, Shell);
 define_ui_action_projection_component!(
     UiPopulateCatalogueTypeListActions,
@@ -127,6 +110,11 @@ define_ui_action_projection_component!(
     UiAudioSettingActionRecord,
     AudioSetting
 );
+#[derive(Component)]
+pub struct UiAudioVolumeControl(
+    pub openzt2_game_data::ui_document::action::audio_settings::UiAudioSettingAction,
+);
+
 define_ui_action_projection_component!(
     UiInformationActions,
     UiInformationActionRecord,

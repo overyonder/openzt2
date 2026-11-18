@@ -1,5 +1,5 @@
 use super::super::authored_placement_footprint_lowering::{
-    authored_ground_paths_block_placement, authored_headroom_policy, bind_authored_placeable,
+    authored_headroom_policy, bind_authored_placeable,
 };
 use super::super::world_definition_lowering_tables::WorldDefinitionLoweringTables;
 use crate::source_document::blue_fang_source_document_parsing::parse_blue_fang_source_document;
@@ -74,8 +74,21 @@ fn ground_paths_block_grid_snapped_objects_whose_nearest_path_rule_prevents_them
         ("entities/statue.xml", r#"<BFTypedBinder binderType="statue"><types><entity><scenery><statue/></scenery></entity></types><shared><ZTPlacementData><stompData><prevent><path/></prevent></stompData></ZTPlacementData></shared></BFTypedBinder>"#),
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()).unwrap());
     let index = SourceIndex::build(&documents).unwrap();
-    let blocks =
-        |key: &str| authored_ground_paths_block_placement(&index.find(key).unwrap()).unwrap();
+    use openzt2_game_data::{
+        AssetId, world_definitions::object_placement::placement_stomp_rules::PlacementStompAction,
+    };
+    let blocks = |key: &str| {
+        let rules =
+            super::super::authored_placement_stomp_lowering::lower_authored_placement_stomp_policy(
+                &index.find(key).unwrap(),
+            )
+            .unwrap();
+        rules.grid_snap
+            && rules
+                .action_for_target(&[AssetId::from_key("path")], None)
+                .unwrap_or(PlacementStompAction::Prevent)
+                == PlacementStompAction::Prevent
+    };
     // Scenery's rules don't mention paths, so the root family's allow applies,
     // as the original lets a trash bin sit on a path.
     assert!(!blocks("bin"));

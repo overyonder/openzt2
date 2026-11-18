@@ -1,3 +1,4 @@
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::{
@@ -15,7 +16,10 @@ use openzt2_game_data::particle::{
 };
 use openzt2_world_state::simulation_time::native_visual_random_stream::NativeVisualRandomStream;
 use openzt2_zoo_state::terrain::{
-    terrain_water_presentation_types::{TerrainWaterMembershipIndex, TerrainWaterRegionQuery},
+    terrain_water_presentation_types::{
+        TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionQuery,
+        TerrainWaterRegionRetired, TerrainWaterRegionSource,
+    },
     terrain_water_underwater_particle_types::{
         TerrainWaterBubbleEmitter, TerrainWaterParticleEffects, TerrainWaterSuspensionEmitter,
         TerrainWaterSuspensionVolume,
@@ -63,18 +67,55 @@ fn configured_particle_effects<'a>(
     (suspension, bubbles)
 }
 
+#[derive(SystemParam)]
+pub(in crate::terrain) struct UnderwaterParticleEffectChanges<'w, 's> {
+    terrain: MessageReader<'w, 's, AssetEvent<TerrainAsset>>,
+    effects: MessageReader<'w, 's, AssetEvent<ParticleEffectDocumentAsset>>,
+    changed_regions: Query<
+        'w,
+        's,
+        (),
+        Or<(
+            Changed<TerrainWaterRegionSource>,
+            Changed<TerrainWaterRegionEdit>,
+            Added<TerrainWaterRegionRetired>,
+        )>,
+    >,
+    removed_sources: RemovedComponents<'w, 's, TerrainWaterRegionSource>,
+    removed_edits: RemovedComponents<'w, 's, TerrainWaterRegionEdit>,
+    reactivated: RemovedComponents<'w, 's, TerrainWaterRegionRetired>,
+    removed_indexes: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
     mut commands: Commands,
     phase: Res<State<GamePhase>>,
     settings: Res<GraphicsSettings>,
     terrains: Res<Assets<TerrainAsset>>,
     effects: Res<Assets<ParticleEffectDocumentAsset>>,
-    indexes: Query<&TerrainWaterMembershipIndex>,
+    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
     regions: TerrainWaterRegionQuery,
     roots: Query<(Entity, &ChildOf, &TerrainWaterParticleEffects)>,
+    region_children: Query<&Children>,
     transforms: TransformHelper,
     mut random: ResMut<NativeVisualRandomStream>,
+    mut changes: UnderwaterParticleEffectChanges,
 ) {
+    let changed = (changes.terrain.read().count() > 0)
+        | (changes.effects.read().count() > 0)
+        | !changes.changed_regions.is_empty()
+        | (changes.removed_sources.read().count() > 0)
+        | (changes.removed_edits.read().count() > 0)
+        | (changes.reactivated.read().count() > 0)
+        | (changes.removed_indexes.read().count() > 0);
+    if !changed
+        && !phase.is_changed()
+        && !settings.is_changed()
+        && !indexes.iter().any(|index| index.is_changed())
+    {
+        return;
+    }
     let quality = water_quality(&settings);
     for (entity, parent, state) in &roots {
         let valid = *phase.get() == GamePhase::InGame
@@ -119,11 +160,12 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
             continue;
         };
         let (suspension, bubble_effect) = configured_particle_effects(terrain, water, quality);
-        if roots.iter().any(|(_, parent, state)| {
-            parent.parent() == owner
-                && state.quality == quality
-                && state.suspension_effect.as_ref() == suspension
-                && state.bubble_effect.as_ref() == bubble_effect
+        if region_children.get(owner).is_ok_and(|children| {
+            roots.iter_many(children.iter()).any(|(_, _, state)| {
+                state.quality == quality
+                    && state.suspension_effect.as_ref() == suspension
+                    && state.bubble_effect.as_ref() == bubble_effect
+            })
         }) {
             continue;
         }
@@ -243,11 +285,104 @@ pub(in crate::terrain) fn update_underwater_particle_visibility(
     }
 }
 
+#[derive(Component, PartialEq)]
+pub(in crate::terrain) struct TerrainWaterSuspensionVolumes {
+    volumes: Box<[TerrainWaterSuspensionVolume]>,
+    total_m3: f32,
+}
+
+#[allow(clippy::type_complexity)]
+pub(in crate::terrain) fn project_region_suspension_volumes(
+    mut commands: Commands,
+    terrains: Res<Assets<TerrainAsset>>,
+    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
+    regions: TerrainWaterRegionQuery,
+    changed_regions: Query<
+        (),
+        Or<(
+            Changed<TerrainWaterRegionSource>,
+            Changed<TerrainWaterRegionEdit>,
+        )>,
+    >,
+    mut projected: Query<&mut TerrainWaterSuspensionVolumes>,
+) {
+    for (owner, source) in regions.iter() {
+        let Some((terrain, index)) = terrains.get(source.terrain()).zip(
+            indexes
+                .iter()
+                .find(|index| index.terrain() == source.terrain().id()),
+        ) else {
+            if projected.contains(owner) {
+                commands
+                    .entity(owner)
+                    .remove::<TerrainWaterSuspensionVolumes>();
+            }
+            continue;
+        };
+        let supported = source
+            .biome(terrain)
+            .and_then(|biome| biome.water_presentation.as_ref())
+            .and_then(|water| water.surface_material.configuration.suspension.as_ref())
+            .is_some();
+        if !supported {
+            if projected.contains(owner) {
+                commands
+                    .entity(owner)
+                    .remove::<TerrainWaterSuspensionVolumes>();
+            }
+            continue;
+        }
+        let current = projected.get_mut(owner).ok();
+        if current.is_some() && !index.is_changed() && !changed_regions.contains(owner) {
+            continue;
+        }
+        let grid = terrain.canonical_terrain_grid();
+        let Some(surface) = source.surface_height(terrain) else {
+            continue;
+        };
+        let spacing = grid.units.cell_size_metres * 4.0;
+        let volumes: Box<[_]> = index
+            .accepted_points(owner)
+            .filter(|point| point.x % 4 == 0 && point.y % 4 == 0)
+            .filter_map(|point| {
+                let tile = point / 4;
+                for y in -1..=1 {
+                    for x in -1..=1 {
+                        let neighbor = tile.as_ivec2() + IVec2::new(x, y);
+                        if neighbor.min_element() < 0
+                            || !index.tile_owned_by(neighbor.as_uvec2(), owner)
+                        {
+                            return None;
+                        }
+                    }
+                }
+                let floor = index.slope_tile_center_height(tile, terrain)?;
+                (surface > floor).then_some(TerrainWaterSuspensionVolume {
+                    origin: Vec3::new(
+                        point.x as f32 * grid.units.cell_size_metres,
+                        floor,
+                        -(point.y as f32) * grid.units.cell_size_metres,
+                    ),
+                    size: Vec3::new(spacing, surface - floor, spacing),
+                })
+            })
+            .collect();
+        let total_m3 = volumes.iter().map(|volume| volume.volume_m3()).sum();
+        let next = TerrainWaterSuspensionVolumes { volumes, total_m3 };
+        if let Some(mut current) = current {
+            current.set_if_neq(next);
+        } else {
+            commands.entity(owner).insert(next);
+        }
+    }
+}
+
 pub(in crate::terrain) fn emit_region_underwater_particles(
     time: Res<Time<Virtual>>,
     phase: Res<State<GamePhase>>,
     terrains: Res<Assets<TerrainAsset>>,
     indexes: Query<&TerrainWaterMembershipIndex>,
+    suspension_volumes: Query<&TerrainWaterSuspensionVolumes>,
     regions: TerrainWaterRegionQuery,
     roots: Query<(&ChildOf, &TerrainWaterParticleEffects)>,
     mut suspension_emitters: Query<(
@@ -278,12 +413,6 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         let Some(terrain) = terrains.get(source.terrain()) else {
             continue;
         };
-        let Some(index) = indexes
-            .iter()
-            .find(|index| index.terrain() == source.terrain().id())
-        else {
-            continue;
-        };
         let Some(water) = source
             .biome(terrain)
             .and_then(|biome| biome.water_presentation.as_ref())
@@ -300,7 +429,6 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         else {
             continue;
         };
-        let grid = terrain.canonical_terrain_grid();
         let Some(depth) = source
             .depth_ratio(terrain)
             .map(|depth| depth.clamp(0.0, 1.0))
@@ -313,41 +441,15 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
             1.0
         });
         let density = suspension_emitter_density(emission, quality.quality as usize, depth);
-        let Some(surface) = source.surface_height(terrain) else {
+        let Ok(volumes) = suspension_volumes.get(owner) else {
             continue;
         };
-        let spacing = grid.units.cell_size_metres * 4.0;
-        let volumes: Vec<_> = index
-            .accepted_points(owner)
-            .filter(|point| point.x % 4 == 0 && point.y % 4 == 0)
-            .filter_map(|point| {
-                let tile = point / 4;
-                for y in -1..=1 {
-                    for x in -1..=1 {
-                        let neighbor = tile.as_ivec2() + IVec2::new(x, y);
-                        if neighbor.min_element() < 0
-                            || !index.tile_owned_by(neighbor.as_uvec2(), owner)
-                        {
-                            return None;
-                        }
-                    }
-                }
-                let floor = index.slope_tile_center_height(tile, terrain)?;
-                (surface > floor).then_some(TerrainWaterSuspensionVolume {
-                    origin: Vec3::new(
-                        point.x as f32 * grid.units.cell_size_metres,
-                        floor,
-                        -(point.y as f32) * grid.units.cell_size_metres,
-                    ),
-                    size: Vec3::new(spacing, surface - floor, spacing),
-                })
-            })
-            .collect();
         let mut emitted = Vec::new();
         if emitter.initial_fill {
             append_initial_suspension_emission(
                 &mut emitted,
-                &volumes,
+                &volumes.volumes,
+                volumes.total_m3,
                 density,
                 emitter.particle_radius,
                 &mut random,
@@ -356,7 +458,8 @@ pub(in crate::terrain) fn emit_region_underwater_particles(
         } else if let Some(count) = live.sampled_live_count() {
             append_suspension_density_top_up(
                 &mut emitted,
-                &volumes,
+                &volumes.volumes,
+                volumes.total_m3,
                 density,
                 emitter.particle_radius,
                 count,

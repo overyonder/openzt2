@@ -23,8 +23,8 @@ use self::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitio
 use self::{
     world_definition_asset_loading::WorldDefinitionAssetLoader,
     world_definition_asset_set_refresh_and_indexing::{
+        discover_world_definition_catalogue_sources,
         index_loaded_world_definition_assets_by_identifier_and_singleton_kind,
-        refresh_world_definition_asset_set_after_archive_revision,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
@@ -43,10 +43,11 @@ impl Plugin for WorldDefinitionAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_world_definition_asset_set_after_archive_revision,
+                    discover_world_definition_catalogue_sources,
                     index_loaded_world_definition_assets_by_identifier_and_singleton_kind,
                 )
                     .chain()
+                    .after(bevy::asset::AssetTrackingSystems)
                     .run_if(
                         in_state(GamePhase::Loading)
                             .or_else(in_state(GamePhase::InGame))

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -18,16 +19,22 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
-use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use crate::placement::ground_path_placement_stomp::{
+    GroundPathPlacementStomp, GroundPathStompRemovals,
+};
 use crate::placement::object_placement_request_routing::reject_object_placement_edit_preparation;
+use crate::placement::stomped_object_edit_preparation::{
+    StompablePlacedObject, prepare_stomped_object_removals,
+};
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
+use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_origin_and_quarter_turns;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
-use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
+use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
+use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
+use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
@@ -41,6 +48,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::PlacedObjectReloc
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEdit;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
+use openzt2_zoo_state::topology::topology_edit_types::TopologyEditPrepared;
 
 /// Validates and records one requested placement or relocation transaction.
 pub(super) fn prepare_object_placement_or_relocation_edit(
@@ -64,19 +72,23 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
         ),
         With<RelocatingPlacedObject>,
     >,
-    placed: Query<&PlacedObjectDefinitionReference>,
+    placed: Query<StompablePlacedObject>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    (placement, ground_paths): (
+    (placement, ground_paths, footprints): (
         Res<PlacedObjectFootprintOccupancyIndex>,
-        GroundPathTilesUnderObjectPlacement,
+        GroundPathPlacementStomp,
+        Res<ScenePlacementFootprints>,
     ),
     mut allocator: ResMut<PersistentIdAllocator>,
     mut scratch: ResMut<ObjectPlacementCellCollectionScratch>,
-    mut prepared: MessageWriter<ObjectPlacementEditPrepared>,
+    (mut prepared, mut topology_prepared): (
+        MessageWriter<ObjectPlacementEditPrepared>,
+        MessageWriter<TopologyEditPrepared>,
+    ),
     mut rejected: MessageWriter<ObjectPlacementEditPreparationRejected>,
 ) {
     let ConstructionTool::Place(active_definition) = *tool else {
@@ -145,35 +157,32 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             );
             continue;
         };
-        let footprint = select_authored_footprint_for_eighth_turns(definition, turns);
+        let geometry = footprints.resolve(definition, Some(&prefab.0));
         let terrain = |position: Vec2| {
             let entity = terrain_chunk_at(&terrain_index, position)?;
             let (chunk, edited) = chunks.get(entity).ok()?;
             let asset = terrain_assets.get(&chunk.asset)?;
             sample_terrain(chunk, asset, edited, position)
         };
-        let collides_with_ground_path =
-            ground_paths.object_placement_cell_collides_with_ground_path(definition, catalogue);
+        let path_overlaps = ground_paths.overlaps(definition, catalogue);
         let validity = validate_object_placement_footprint_cells(
-            definition,
-            footprint,
+            geometry,
+            geometry.cells(turns),
             &preview.transform,
             terrain,
             |cell| {
-                collides_with_ground_path(cell)
-                    || object_placement_cell_is_blocked_by_existing_object(
-                        &placement,
-                        cell,
-                        relocation.map(|source| source.0),
-                        definition,
-                        catalogue,
-                        |entity| {
-                            placed
-                                .get(entity)
-                                .ok()
-                                .map(|placeable| placeable.definition)
-                        },
-                    )
+                path_overlaps.prevents_placement(cell)
+                    || placement.entities_occupying_cell(cell).any(|entity| {
+                        Some(entity) != relocation.map(|source| source.0)
+                            && object_placement_stomp_action(
+                                definition,
+                                catalogue,
+                                placed
+                                    .get(entity)
+                                    .ok()
+                                    .map(|(_, placeable, _, _, _)| placeable.definition),
+                            ) == PlacementStompAction::Prevent
+                    })
             },
             ObjectPlacementAuthoritativeFacts {
                 habitat: habitat.map(|member| member.habitat_entity),
@@ -196,7 +205,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             continue;
         };
         let Some(cells) = collect_occupied_placement_cells_for_transform(
-            definition,
+            geometry,
             &preview.transform,
             &mut scratch.cells,
         ) else {
@@ -238,10 +247,9 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                 };
                 let Some(previous_cells) =
                     collect_occupied_placement_cells_for_origin_and_quarter_turns(
-                        select_authored_footprint_for_eighth_turns(
-                            previous_definition,
-                            occupancy.eighth_turns,
-                        ),
+                        footprints
+                            .resolve(previous_definition, Some(&prefab.0))
+                            .cells(occupancy.eighth_turns),
                         occupancy.origin,
                         occupancy.eighth_turns / 2,
                         &mut scratch.cells,
@@ -261,7 +269,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                     previous_cells,
                     PreparedObjectPlacementEditMutationKind::Relocate,
                     Some(source.0),
-                    openzt2_zoo_state::economy::money_types::Money(0),
+                    Money(0),
                 )
             } else {
                 let Ok(id) = allocator.allocate(member.root) else {
@@ -281,21 +289,42 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                     cost,
                 )
             };
+        let Some(mut mutations) = prepare_stomped_object_removals(
+            &cells,
+            definition,
+            catalogue,
+            &footprints,
+            &placement,
+            &placed,
+            |entity| Some(entity) == relocation.map(|source| source.0),
+            &mut scratch.cells,
+        ) else {
+            reject_object_placement_edit_preparation(
+                &mut rejected,
+                request.transaction,
+                PlacementFailure::InvalidTopology,
+            );
+            continue;
+        };
+        let mut removed_paths = GroundPathStompRemovals::default();
+        removed_paths.collect(&path_overlaps, &cells);
+        removed_paths.prepare(request.transaction, &mut commands, &mut topology_prepared);
+        mutations.push(PreparedObjectPlacementMutation {
+            entity: id,
+            definition: preview.definition,
+            transform: preview.transform,
+            cells: cells.into_boxed_slice(),
+            previous_transform,
+            previous_cells: previous_cells.into_boxed_slice(),
+            mutation,
+            applied_entity,
+            preview: Some(request.preview),
+            prefab: prefab.0.clone(),
+        });
         commands
             .entity(request.transaction)
             .insert(PreparedObjectPlacementEdit {
-                mutations: Box::new([PreparedObjectPlacementMutation {
-                    entity: id,
-                    definition: preview.definition,
-                    transform: preview.transform,
-                    cells: cells.into_boxed_slice(),
-                    previous_transform,
-                    previous_cells: previous_cells.into_boxed_slice(),
-                    mutation,
-                    applied_entity,
-                    preview: Some(request.preview),
-                    prefab: prefab.0.clone(),
-                }]),
+                mutations: mutations.into_boxed_slice(),
             });
         prepared.write(ObjectPlacementEditPrepared {
             transaction: request.transaction,

@@ -1,11 +1,14 @@
 use bevy::{
-    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
+    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 
+use openzt2_game_data::localization::LocalizationCatalog;
+
 use super::{
-    blue_fang_localization_catalog_lowering::BlueFangLocalizationCatalogLowering,
+    blue_fang_localization_entry_lowering::lower_blue_fang_localization_entries,
     localization_asset_types::LocalizationAsset,
+    localization_configuration::{LocalizationConfiguration, LocalizationConfigurationLoader},
 };
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
@@ -30,21 +33,22 @@ impl AssetLoader for LocalizationAssetLoader {
         let source_path = load_context.path().path().to_string_lossy();
         let source_document = parse_blue_fang_source_document(AssetPath::new(&source_path), &bytes)
             .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
-        let mut lowering = BlueFangLocalizationCatalogLowering::default();
-        lowering.add_source_document(&source_document)?;
-        let localization_catalog = lowering
-            .finish()
-            .into_iter()
-            .find(|(locale, _)| locale.eq_ignore_ascii_case("en-US"))
-            .map(|(_, localization_catalog)| localization_catalog)
-            .ok_or_else(|| {
-                std::io::Error::new(
-                    std::io::ErrorKind::InvalidData,
-                    "source document contains no English localization",
-                )
-            })?;
+
+        let mut entries = std::collections::BTreeMap::new();
+        for entry in lower_blue_fang_localization_entries(&source_document)? {
+            entries.insert(entry.localization_entry_identifier, entry);
+        }
         Ok(LocalizationAsset::from_localization_catalog(
-            localization_catalog,
+            LocalizationCatalog {
+                locale_identifier: load_context
+                    .path()
+                    .path()
+                    .parent()
+                    .and_then(std::path::Path::file_name)
+                    .map_or_else(String::new, |locale| locale.to_string_lossy().into_owned()),
+                localization_entries: entries.into_values().collect(),
+                localized_month_and_year_format_tokens: Vec::new(),
+            },
         ))
     }
 
@@ -55,6 +59,8 @@ impl AssetLoader for LocalizationAssetLoader {
 
 pub(super) fn register_localization_catalog_asset_and_loader(application: &mut App) {
     application
+        .init_asset::<LocalizationConfiguration>()
+        .init_asset_loader::<LocalizationConfigurationLoader>()
         .init_asset::<LocalizationAsset>()
         .init_asset_loader::<LocalizationAssetLoader>();
 }

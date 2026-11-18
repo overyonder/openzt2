@@ -5,9 +5,6 @@ use openzt2_world_state::animation_graph::animation_presentation_relationship_ty
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
-    InteractionContainerAdmissionOutcome, InteractionContainerRequestResolver,
-};
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 
 #[derive(Event)]
@@ -112,14 +109,6 @@ fn apply_object_animation_command(
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     queries: AttachmentAnimationQueries,
-    mut resolver: InteractionContainerRequestResolver,
-    mut detach_requests: Local<Vec<admission::DetachMembershipRequest>>,
-    mut detach_outcomes: Local<
-        Vec<(
-            admission::DetachAdmission,
-            InteractionContainerAdmissionOutcome,
-        )>,
-    >,
 ) {
     let AttachmentAnimationQueries {
         owners,
@@ -216,7 +205,6 @@ fn apply_object_animation_command(
                     &transforms,
                     &memberships,
                     &mut commands,
-                    &mut admission::DetachMembershipRequests::Inline(&mut detach_requests),
                 ) {
                     warn!(
                         ?actor,
@@ -225,12 +213,6 @@ fn apply_object_animation_command(
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
             }
-            admission::resolve_animation_detach_memberships(
-                &mut detach_requests,
-                &mut detach_outcomes,
-                &mut resolver,
-                &mut commands,
-            );
         }
         _ => {}
     }

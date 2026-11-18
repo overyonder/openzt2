@@ -1,14 +1,18 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::prelude::*;
 
+use super::world_entity_model_suppression::ModelRenderingSuppressed;
 use openzt2_world_state::world_spawn::prefab_ambient_light_contribution::PrefabAmbientLightContribution;
 
 pub(super) fn project_prefab_ambient_light_contributions(
-    contributions: Query<(
-        &PrefabAmbientLightContribution,
-        Option<&RenderLayers>,
-        Option<&InheritedVisibility>,
-    )>,
+    contributions: Query<
+        (
+            &PrefabAmbientLightContribution,
+            Option<&RenderLayers>,
+            Option<&InheritedVisibility>,
+        ),
+        Without<ModelRenderingSuppressed>,
+    >,
     mut ambient: ResMut<GlobalAmbientLight>,
 ) {
     let linear = contributions

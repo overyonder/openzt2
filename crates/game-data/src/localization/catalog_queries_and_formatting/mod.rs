@@ -40,6 +40,26 @@ impl LocalizationCatalog {
         format_arguments: &[LocalizationFormatArgument<'_>],
         target_writer: &mut impl fmt::Write,
     ) -> Result<(), LocalizationFormatError> {
+        self.write_localized_text_with_currency_formatter(
+            localization_entry_id,
+            format_arguments,
+            target_writer,
+            |cents, writer| self.write_localized_currency_amount(cents, true, writer),
+        )
+    }
+
+    /// Formats an entry using the active catalogue's currency symbol.
+    ///
+    /// # Errors
+    ///
+    /// Returns a formatting error for an absent key, invalid argument or writer failure.
+    pub fn write_localized_text_with_currency_formatter<W: fmt::Write>(
+        &self,
+        localization_entry_id: AssetId,
+        format_arguments: &[LocalizationFormatArgument<'_>],
+        target_writer: &mut W,
+        mut currency: impl FnMut(i64, &mut W) -> fmt::Result,
+    ) -> Result<(), LocalizationFormatError> {
         let localization_entry = self
             .find_localization_entry(localization_entry_id)
             .ok_or(LocalizationFormatError::MissingKey)?;
@@ -75,7 +95,7 @@ impl LocalizationCatalog {
                         (
                             LocalizationFormatArgumentKind::Currency,
                             LocalizationFormatArgument::CurrencyCents(cents),
-                        ) => self.write_localized_currency_amount(*cents, true, target_writer),
+                        ) => currency(*cents, target_writer),
                         (
                             LocalizationFormatArgumentKind::Percent,
                             LocalizationFormatArgument::PercentBasisPoints(basis_points),

@@ -21,7 +21,12 @@ pub struct UiNodeId {
 
 /// Identifies the entity which owns one projected UI document instance.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = UiDocumentMembers, allow_self_referential)]
 pub struct UiDocumentOwner(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = UiDocumentOwner)]
+pub struct UiDocumentMembers(Vec<Entity>);
 
 /// Retains the authored source which controls projected visibility.
 #[derive(Component, Debug, Clone, PartialEq, Eq)]

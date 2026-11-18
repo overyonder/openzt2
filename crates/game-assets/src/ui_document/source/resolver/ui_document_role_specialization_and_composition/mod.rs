@@ -142,52 +142,6 @@ pub(super) fn attach_authored_global_hotkey_mode_to_document_role(
     Ok(())
 }
 
-/// Replaces each `<UIHotKeys><file name node/>` reference with the bindings of
-/// that mode, on the node that declares it. Dialogs name their Escape bindings
-/// this way (`esccancel`, `escclose`, `esctextcancel`, ...).
-pub(super) fn include_referenced_authored_hotkey_modes(
-    source: &mut SourceUiDocument,
-    hotkeys: &SourceUiDocument,
-) -> Result<(), UiSourceDocumentGap> {
-    fn include(
-        node: &mut SourceUiNode,
-        hotkeys: &SourceUiDocument,
-        virtual_path: &str,
-    ) -> Result<(), UiSourceDocumentGap> {
-        let span = node.span;
-        let gap = |message: String| UiSourceDocumentGap {
-            family: UiSourceDocumentFamily::Ui,
-            kind: UiSourceDocumentGapKind::UnsupportedVocabulary,
-            virtual_path: virtual_path.to_owned(),
-            span,
-            message,
-        };
-        for reference in std::mem::take(&mut node.hotkey_mode_references) {
-            if reference.file.key() != hotkeys.path.key() {
-                return Err(gap(format!(
-                    "hotkey mode {:?} names unsupported hotkey document {:?}",
-                    reference.mode,
-                    reference.file.key()
-                )));
-            }
-            let mode_node =
-                find_authored_hotkey_mode(hotkeys, &reference.mode).map_err(|count| {
-                    gap(format!(
-                        "hotkey mode {:?} resolved to {count} authored nodes",
-                        reference.mode
-                    ))
-                })?;
-            node.hotkeys.extend(mode_node.hotkeys.iter().cloned());
-        }
-        node.children
-            .iter_mut()
-            .try_for_each(|child| include(child, hotkeys, virtual_path))
-    }
-
-    let virtual_path = source.path.key();
-    include(&mut source.root, hotkeys, &virtual_path)
-}
-
 /// The one mode node with this name, or the number of matches.
 fn find_authored_hotkey_mode<'a>(
     hotkeys: &'a SourceUiDocument,
@@ -211,74 +165,5 @@ fn find_authored_hotkey_mode<'a>(
     match matches.as_slice() {
         [mode_node] => Ok(mode_node),
         matches => Err(matches.len()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::source_document::{
-        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
-    };
-
-    fn hotkey_document() -> SourceUiDocument {
-        let parsed = parse_blue_fang_source_document(
-            AssetPath::new("ui/hotkeys/hotkeys.xml"),
-            br#"<hotkeys>
-                <esctextcancel>
-                    <down code="27" msg="UI_CHILD" data="UIChildData" name="TextButton Cancel">
-                        <child msg="UI_ACTIVATE"/>
-                    </down>
-                </esctextcancel>
-                <gamemode><down code="80" msg="ZT_PAUSE_KEY"/></gamemode>
-            </hotkeys>"#,
-        )
-        .unwrap();
-        SourceUiDocument::parse_hotkey_modes(&parsed).unwrap()
-    }
-
-    fn load_dialog(mode: &str) -> SourceUiDocument {
-        let source = format!(
-            r#"<UILayout name="Load Game Shell" modal="true">
-                <UIHotKeys><file name="UI/hotkeys/hotkeys.xml" node="{mode}"/></UIHotKeys>
-                <children><UIButton name="TextButton Cancel"/></children>
-            </UILayout>"#
-        );
-        let parsed = parse_blue_fang_source_document(
-            AssetPath::new("ui/layout/load.xml"),
-            source.as_bytes(),
-        )
-        .unwrap();
-        SourceUiDocument::parse(&parsed)
-    }
-
-    #[test]
-    fn a_dialog_receives_the_escape_binding_its_hotkey_file_reference_names() {
-        let mut dialog = load_dialog("esctextcancel");
-        assert_eq!(dialog.root.hotkey_mode_references.len(), 1);
-        assert!(dialog.root.hotkeys.is_empty());
-
-        include_referenced_authored_hotkey_modes(&mut dialog, &hotkey_document()).unwrap();
-
-        assert!(dialog.root.hotkey_mode_references.is_empty());
-        let [escape] = dialog.root.hotkeys.as_slice() else {
-            panic!(
-                "expected one Escape binding, found {:?}",
-                dialog.root.hotkeys
-            );
-        };
-        assert_eq!(escape.code, Some(27));
-        assert_eq!(escape.event.message, "UI_CHILD");
-        assert_eq!(
-            escape.event.target_child.as_deref(),
-            Some("TextButton Cancel")
-        );
-        assert!(dialog.root.children[0].hotkeys.is_empty());
-    }
-
-    #[test]
-    fn an_unknown_hotkey_mode_reference_is_rejected() {
-        let mut dialog = load_dialog("escmissing");
-        assert!(include_referenced_authored_hotkey_modes(&mut dialog, &hotkey_document()).is_err());
     }
 }

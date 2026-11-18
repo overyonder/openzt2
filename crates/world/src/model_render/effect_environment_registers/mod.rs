@@ -53,41 +53,111 @@ fn source_from_world(direction: Vec4) -> Vec4 {
 pub(super) fn write_effect_environment_registers(
     ambient_light: Res<GlobalAmbientLight>,
     directional_lights: Query<(
-        &DirectionalLight,
-        &GlobalTransform,
-        &ViewVisibility,
-        &EnvironmentLight,
+        Ref<DirectionalLight>,
+        Ref<GlobalTransform>,
+        Ref<ViewVisibility>,
+        Ref<EnvironmentLight>,
     )>,
-    wind: Single<&AuthoredWindShaderPresentationState, With<WorldEnvironment>>,
-    fogs: Query<&DistanceFog, With<ZooCamera>>,
+    authored_lights: Query<(), With<EnvironmentLight>>,
+    wind: Option<
+        Single<(
+            Ref<AuthoredWindShaderPresentationState>,
+            Ref<WorldEnvironment>,
+        )>,
+    >,
+    fogs: Query<(Ref<DistanceFog>, Ref<ZooCamera>)>,
+    cameras: Query<(), With<ZooCamera>>,
+    mut removed_lights: RemovedComponents<EnvironmentLight>,
+    mut removed_directional_lights: RemovedComponents<DirectionalLight>,
+    mut removed_light_transforms: RemovedComponents<GlobalTransform>,
+    mut removed_light_visibility: RemovedComponents<ViewVisibility>,
+    mut removed_fogs: RemovedComponents<DistanceFog>,
+    mut removed_cameras: RemovedComponents<ZooCamera>,
+    mut removed_winds: RemovedComponents<AuthoredWindShaderPresentationState>,
+    mut removed_environments: RemovedComponents<WorldEnvironment>,
     mut previous: Local<Option<EffectEnvironmentRegisters>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let mut light_rig = light_rig(
-        &ambient_light,
-        directional_lights
+    let removed_light_inputs = (removed_lights.read().count() != 0)
+        | (removed_directional_lights
+            .read()
+            .filter(|entity| authored_lights.contains(*entity))
+            .count()
+            != 0)
+        | (removed_light_transforms
+            .read()
+            .filter(|entity| authored_lights.contains(*entity))
+            .count()
+            != 0)
+        | (removed_light_visibility
+            .read()
+            .filter(|entity| authored_lights.contains(*entity))
+            .count()
+            != 0);
+    let removed_fog_inputs = (removed_fogs
+        .read()
+        .filter(|entity| cameras.contains(*entity))
+        .count()
+        != 0)
+        | (removed_cameras.read().count() != 0);
+    let removed_wind_inputs =
+        (removed_winds.read().count() != 0) | (removed_environments.read().count() != 0);
+
+    let mut registers = previous.unwrap_or_default();
+    if previous.is_none()
+        || removed_light_inputs
+        || ambient_light.is_changed()
+        || directional_lights
             .iter()
-            .map(|(light, transform, visibility, authored)| {
-                (light, transform, visibility.get(), authored)
-            }),
-    );
-    for direction in &mut light_rig[3..6] {
-        *direction = source_from_world(*direction);
+            .any(|(light, transform, visibility, authored)| {
+                light.is_changed()
+                    || transform.is_changed()
+                    || visibility.is_changed()
+                    || authored.is_changed()
+            })
+    {
+        registers.light_rig = light_rig(
+            &ambient_light,
+            directional_lights
+                .iter()
+                .map(|(light, transform, visibility, authored)| {
+                    (
+                        light.into_inner(),
+                        transform.into_inner(),
+                        visibility.get(),
+                        authored.into_inner(),
+                    )
+                }),
+        );
+        for direction in &mut registers.light_rig[3..6] {
+            *direction = source_from_world(*direction);
+        }
     }
-    let fog_distances = fogs
-        .iter()
-        .find_map(|fog| match fog.falloff {
-            FogFalloff::Linear { start, end } => {
-                Some(Vec4::new(start, (end - start).recip(), end, 0.0))
-            }
-            _ => None,
-        })
-        .unwrap_or_default();
-    let registers = EffectEnvironmentRegisters {
-        wind: wind.shader_registers(),
-        light_rig,
-        fog_distances,
-    };
+    if previous.is_none()
+        || removed_fog_inputs
+        || fogs
+            .iter()
+            .any(|(fog, camera)| fog.is_changed() || camera.is_added())
+    {
+        registers.fog_distances = fogs
+            .iter()
+            .find_map(|(fog, _)| match fog.falloff {
+                FogFalloff::Linear { start, end } => {
+                    Some(Vec4::new(start, (end - start).recip(), end, 0.0))
+                }
+                _ => None,
+            })
+            .unwrap_or_default();
+    }
+    if let Some(wind) = wind {
+        let (wind, environment) = wind.into_inner();
+        if previous.is_none() || removed_wind_inputs || wind.is_changed() || environment.is_added()
+        {
+            registers.wind = wind.shader_registers();
+        }
+    } else {
+        registers.wind = [Vec4::ZERO; 7];
+    }
     if previous.as_ref() == Some(&registers) {
         return;
     }

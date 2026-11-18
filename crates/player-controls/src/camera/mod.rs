@@ -22,14 +22,13 @@ use systems::{
     },
     camera_mode_transitions::{
         advance_camera_transition, apply_free_camera_pose, begin_camera_transition,
-        capture_camera_return_state, clear_camera_input_on_return, restore_camera_return_state,
-        validate_camera_mode_targets,
+        clear_camera_input_on_return, restore_camera_return_state, validate_camera_mode_targets,
     },
     camera_motion_reporting::report_camera_motion,
     default_ui_camera_routing::route_default_ui_camera,
     ground_fitted_free_camera_initialization::initialize_ground_fitted_free_camera_from_overhead_focus,
     mouse_look_cursor_projection::project_camera_mouse_look_onto_primary_window_cursor,
-    overhead_camera_advancement::advance_overhead_camera,
+    overhead_camera_advancement::{advance_overhead_camera, CameraFittingSurfaceSample},
     overhead_camera_return_without_snapshot::restore_authored_overhead_camera_without_snapshot,
     overhead_camera_zoom_policy::apply_overhead_camera_zoom_graphics_setting,
     pointer_ray_projection::project_pointer_ray,
@@ -52,7 +51,8 @@ pub(crate) struct CameraUiActionRouting;
 
 impl Plugin for ZooCameraPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<WorldPointerRay>()
+        app.register_required_components::<camera_runtime_state_types::ZooCamera, CameraFittingSurfaceSample>()
+            .init_resource::<WorldPointerRay>()
             .add_message::<SetCameraMode>()
             .add_message::<RestoreCameraMode>()
             .add_message::<FocusCamera>()
@@ -67,9 +67,7 @@ impl Plugin for ZooCameraPlugin {
                         .after(ui_actions::route_camera_ui_actions),
                     project_camera_mouse_look_onto_primary_window_cursor
                         .after(clear_camera_input_on_return),
-                    capture_camera_return_state
-                        .after(crate::immersive_modes::ImmersiveModeTransitions),
-                    begin_camera_transition.after(capture_camera_return_state),
+                    begin_camera_transition.after(crate::immersive_modes::ImmersiveModeTransitions),
                     apply_free_camera_pose
                         .after(begin_camera_transition)
                         .before(restore_authored_overhead_camera_without_snapshot),

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use bevy::{
     asset::RenderAssetUsages,
     camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget},
@@ -7,6 +9,7 @@ use bevy::{
 use openzt2_game_data::scene_prefab::PrefabDirectionalLightKey;
 use openzt2_game_data::scene_prefab::PrefabRailCameraCommand;
 use openzt2_game_data::scene_prefab::PrefabRailCameraKey;
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world::world_spawn::prefab_presentation_render_tree::spawn_prefab_render_tree;
@@ -26,16 +29,31 @@ pub(super) struct UiRailCameraPresentation(pub(super) Handle<ScenePrefabAsset>);
 pub(super) struct UiRailCameraRuntime {
     source: Handle<ScenePrefabAsset>,
     camera: Entity,
-    environment: Entity,
-    lights: Vec<(openzt2_game_data::AssetId, Entity)>,
     keys: Vec<(Vec3, Quat)>,
     elapsed: f32,
     playing: bool,
     commands: [bool; 14],
 }
 
+#[derive(Component, Default, PartialEq)]
+pub(super) struct UiRailClipTime(Option<f32>);
+
 #[derive(Component)]
-pub(super) struct UiRailCameraSceneOwner(Entity);
+pub(super) struct UiRailEnvironment;
+
+#[derive(Component)]
+pub(super) struct UiRailLightTrack {
+    id: AssetId,
+    keys: Vec<PrefabDirectionalLightKey>,
+}
+
+#[derive(Component)]
+#[relationship(relationship_target = UiRailCameraSceneEntities)]
+struct UiRailCameraSceneOwner(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = UiRailCameraSceneOwner, linked_spawn)]
+pub(super) struct UiRailCameraSceneEntities(Vec<Entity>);
 
 #[derive(serde::Deserialize, serde::Serialize)]
 struct SavedRailCamera {
@@ -76,6 +94,7 @@ pub(super) fn hydrate_rail_cameras(
                 Visibility::Inherited,
                 RenderLayers::layer(RAIL_RENDER_LAYER),
                 UiRailCameraSceneOwner(owner),
+                UiRailEnvironment,
                 PrefabAmbientLightContribution {
                     color_linear: Vec3::ZERO,
                     intensity: 0.0,
@@ -116,28 +135,26 @@ pub(super) fn hydrate_rail_cameras(
                 UiRailCameraSceneOwner(owner),
             ))
             .id();
-        let lights = unique_lights(&rail.directional_light_keys)
-            .into_iter()
-            .map(|id| {
-                let entity = commands
-                    .spawn((
-                        Name::new("authored rail directional light"),
-                        DirectionalLight::default(),
-                        Transform::IDENTITY,
-                        RenderLayers::layer(RAIL_RENDER_LAYER),
-                        UiRailCameraSceneOwner(owner),
-                    ))
-                    .id();
-                (id, entity)
-            })
-            .collect();
+        let mut light_tracks = group_light_keys(&rail.directional_light_keys);
+        for id in unique_lights(&rail.directional_light_keys) {
+            commands.spawn((
+                Name::new("authored rail directional light"),
+                DirectionalLight::default(),
+                Transform::IDENTITY,
+                RenderLayers::layer(RAIL_RENDER_LAYER),
+                UiRailCameraSceneOwner(owner),
+                UiRailLightTrack {
+                    id,
+                    keys: light_tracks.remove(&id).unwrap_or_default(),
+                },
+            ));
+        }
         commands.entity(owner).insert((
             ImageNode::new(target),
+            UiRailClipTime::default(),
             UiRailCameraRuntime {
                 source: presentation.0.clone(),
                 camera,
-                environment: scene,
-                lights,
                 keys,
                 elapsed: 0.0,
                 playing: true,
@@ -147,28 +164,19 @@ pub(super) fn hydrate_rail_cameras(
     }
 }
 
-pub(super) fn cleanup_rail_camera_scenes(
-    mut commands: Commands,
-    owners: Query<(), With<UiRailCameraPresentation>>,
-    spawned: Query<(Entity, &UiRailCameraSceneOwner)>,
-) {
-    for (entity, owner) in &spawned {
-        if owners.get(owner.0).is_err() {
-            commands.entity(entity).despawn();
-        }
-    }
-}
-
 pub(super) fn update_rail_cameras(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    mut rails: Query<(&InheritedVisibility, &UiSelected, &mut UiRailCameraRuntime)>,
+    mut rails: Query<(
+        &InheritedVisibility,
+        &UiSelected,
+        &mut UiRailCameraRuntime,
+        &mut UiRailClipTime,
+    )>,
     mut cameras: Query<(&mut Camera, &mut Transform), With<Camera3d>>,
-    mut lights: Query<(&mut DirectionalLight, &mut Transform), Without<Camera3d>>,
-    mut ambient: Query<&mut PrefabAmbientLightContribution>,
 ) {
-    for (visible, active, mut runtime) in &mut rails {
+    for (visible, active, mut runtime, mut clip_time) in &mut rails {
         let camera_is_active = visible.get() && active.0;
         let Ok((mut camera, mut camera_transform)) = cameras.get_mut(runtime.camera) else {
             continue;
@@ -177,6 +185,7 @@ pub(super) fn update_rail_cameras(
             camera.is_active = camera_is_active;
         }
         if !camera_is_active {
+            clip_time.set_if_neq(UiRailClipTime(None));
             continue;
         }
         let Some(prefab) = prefabs.get(&runtime.source) else {
@@ -208,31 +217,81 @@ pub(super) fn update_rail_cameras(
             camera_transform.translation = runtime.keys[segment].0.lerp(runtime.keys[next].0, t);
             camera_transform.rotation = runtime.keys[segment].1.slerp(runtime.keys[next].1, t);
         }
-        let normalized_time = runtime.elapsed.rem_euclid(loop_duration) / loop_duration;
-        if let Some((color, shadow)) = sample_environment(&rail.environment_keys, normalized_time) {
-            let contribution = PrefabAmbientLightContribution {
-                color_linear: Vec3::from_array(color),
-                intensity: 1.0,
-            };
-            if let Ok(mut current) = ambient.get_mut(runtime.environment) {
-                *current = contribution;
-            }
-            for (_, entity) in &runtime.lights {
-                if let Ok((mut light, _)) = lights.get_mut(*entity) {
-                    light.shadow_maps_enabled = shadow > 0.0;
+        clip_time.set_if_neq(UiRailClipTime(Some(
+            runtime.elapsed.rem_euclid(loop_duration) / loop_duration,
+        )));
+    }
+}
+
+pub(super) fn project_rail_lighting(
+    prefabs: Res<Assets<ScenePrefabAsset>>,
+    mut asset_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    rails: Query<(
+        &UiRailCameraPresentation,
+        Ref<UiRailClipTime>,
+        &UiRailCameraSceneEntities,
+    )>,
+    mut ambient: Query<&mut PrefabAmbientLightContribution, With<UiRailEnvironment>>,
+    mut lights: Query<(&mut DirectionalLight, &mut Transform, &mut UiRailLightTrack)>,
+) {
+    let changed_prefabs: std::collections::HashSet<_> = asset_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Modified { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+    for (presentation, clip_time, targets) in &rails {
+        let asset_changed = changed_prefabs.contains(&presentation.0.id());
+        if !clip_time.is_changed() && !asset_changed {
+            continue;
+        }
+        let Some(rail) = prefabs.get(&presentation.0).and_then(|prefab| {
+            prefab
+                .canonical_scene_prefab_document()
+                .rail_camera
+                .as_ref()
+        }) else {
+            continue;
+        };
+        let refreshed_tracks =
+            asset_changed.then(|| group_light_keys(&rail.directional_light_keys));
+        let environment = clip_time
+            .0
+            .and_then(|time| sample_environment(&rail.environment_keys, time));
+        for target in targets.iter() {
+            if let Some((color, _)) = environment {
+                if let Ok(mut current) = ambient.get_mut(target) {
+                    current.set_if_neq(PrefabAmbientLightContribution {
+                        color_linear: Vec3::from_array(color),
+                        intensity: 1.0,
+                    });
                 }
             }
-        }
-        for (id, entity) in &runtime.lights {
-            let Ok((mut light, mut transform)) = lights.get_mut(*entity) else {
+            let Ok((mut light, mut transform, mut track)) = lights.get_mut(target) else {
                 continue;
             };
+            if let Some(tracks) = &refreshed_tracks {
+                track.keys = tracks.get(&track.id).cloned().unwrap_or_default();
+            }
+            if let Some((_, shadow)) = environment {
+                let enabled = shadow > 0.0;
+                if light.shadow_maps_enabled != enabled {
+                    light.shadow_maps_enabled = enabled;
+                }
+            }
             if let Some((color, intensity, direction)) =
-                sample_light(&rail.directional_light_keys, *id, normalized_time)
+                clip_time.0.and_then(|time| sample_light(&track.keys, time))
             {
-                light.color = Color::srgb(color[0], color[1], color[2]);
-                light.illuminance = intensity * 100_000.0;
-                *transform = Transform::IDENTITY.looking_to(Vec3::from_array(direction), Vec3::Y);
+                let color = Color::srgb(color[0], color[1], color[2]);
+                let illuminance = intensity * 100_000.0;
+                if light.color != color || light.illuminance != illuminance {
+                    light.color = color;
+                    light.illuminance = illuminance;
+                }
+                transform.set_if_neq(
+                    Transform::IDENTITY.looking_to(Vec3::from_array(direction), Vec3::Y),
+                );
             }
         }
     }
@@ -259,7 +318,7 @@ fn runtime_key(key: &PrefabRailCameraKey) -> (Vec3, Quat) {
     )
 }
 
-fn unique_lights(keys: &[PrefabDirectionalLightKey]) -> Vec<openzt2_game_data::AssetId> {
+fn unique_lights(keys: &[PrefabDirectionalLightKey]) -> Vec<AssetId> {
     keys.iter().fold(Vec::new(), |mut ids, key| {
         if !ids.contains(&key.light) {
             ids.push(key.light);
@@ -268,14 +327,21 @@ fn unique_lights(keys: &[PrefabDirectionalLightKey]) -> Vec<openzt2_game_data::A
     })
 }
 
+fn group_light_keys(
+    keys: &[PrefabDirectionalLightKey],
+) -> HashMap<AssetId, Vec<PrefabDirectionalLightKey>> {
+    let mut tracks = HashMap::<AssetId, Vec<PrefabDirectionalLightKey>>::new();
+    for key in keys {
+        tracks.entry(key.light).or_default().push(*key);
+    }
+    tracks
+}
+
 fn sample_light(
     keys: &[PrefabDirectionalLightKey],
-    id: openzt2_game_data::AssetId,
     time: f32,
 ) -> Option<([f32; 3], f32, [f32; 3])> {
-    let (first, second, t) = bracket(keys.iter().filter(|key| key.light == id), time, |key| {
-        key.time
-    })?;
+    let (first, second, t) = bracket(keys.iter(), time, |key| key.time)?;
     Some((
         std::array::from_fn(|index| {
             first.diffuse_srgb[index] + (second.diffuse_srgb[index] - first.diffuse_srgb[index]) * t

@@ -15,7 +15,6 @@ use super::container_quantity::{DrinkContainer, FoodContainer, AUTHORED_CONTAINE
 #[derive(Component, Debug, PartialEq, Eq)]
 pub(crate) struct ContainerQuantityResolved {
     pub(crate) definition_id: AssetId,
-    pub(crate) definitions_revision: u64,
 }
 
 pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
@@ -30,7 +29,8 @@ pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
         Option<&DrinkContainer>,
     )>,
 ) {
-    let definitions_revision = active_world_definitions.catalogue_revision();
+    let definitions_changed =
+        active_world_definitions.is_changed() || world_definition_assets.is_changed();
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     for (entity, definition_id, resolved, food, drink) in &objects {
         // A replacement definition must not expose the previous object's
@@ -48,10 +48,9 @@ pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
         let Some(world_definitions) = world_definitions.as_ref() else {
             continue;
         };
-        if resolved.is_some_and(|state| {
-            state.definitions_revision == definitions_revision
-                && state.definition_id == definition_id.0
-        }) {
+        if !definitions_changed
+            && resolved.is_some_and(|state| state.definition_id == definition_id.0)
+        {
             continue;
         }
         let Some(object_definition) = world_definitions.find_object(definition_id.0) else {
@@ -70,7 +69,6 @@ pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
                 .remove::<DrinkContainer>()
                 .insert(ContainerQuantityResolved {
                     definition_id: definition_id.0,
-                    definitions_revision,
                 });
             continue;
         };
@@ -119,7 +117,6 @@ pub(super) fn hydrate_food_and_drink_container_quantities_for_new_world_objects(
         }
         entity_commands.insert(ContainerQuantityResolved {
             definition_id: definition_id.0,
-            definitions_revision,
         });
     }
 }

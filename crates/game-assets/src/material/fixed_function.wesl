@@ -141,31 +141,32 @@ fn coordinates(stage: u32, input: FixedFunctionFragmentInputs, programmable_vert
 }
 
 fn sample_stage(stage: u32, stage_coordinates: vec4<f32>) -> vec4<f32> {
+    let lod_bias = fixed.values[stage * 5u + 4u].z;
     // D3D9 samples a stage by the type of the bound texture: cube textures
     // use three coordinate components and 2D textures use two.
     if ((cube_texture_stages.x & (1u << stage)) != 0u) {
         let direction = stage_coordinates.xyz;
         switch stage {
-            case 0u: { return textureSample(cube_texture0, sampler0, direction); }
-            case 1u: { return textureSample(cube_texture1, sampler1, direction); }
-            case 2u: { return textureSample(cube_texture2, sampler2, direction); }
-            case 3u: { return textureSample(cube_texture3, sampler3, direction); }
-            case 4u: { return textureSample(cube_texture4, sampler4, direction); }
-            case 5u: { return textureSample(cube_texture5, sampler5, direction); }
-            case 6u: { return textureSample(cube_texture6, sampler6, direction); }
-            default: { return textureSample(cube_texture7, sampler7, direction); }
+            case 0u: { return textureSampleBias(cube_texture0, sampler0, direction, lod_bias); }
+            case 1u: { return textureSampleBias(cube_texture1, sampler1, direction, lod_bias); }
+            case 2u: { return textureSampleBias(cube_texture2, sampler2, direction, lod_bias); }
+            case 3u: { return textureSampleBias(cube_texture3, sampler3, direction, lod_bias); }
+            case 4u: { return textureSampleBias(cube_texture4, sampler4, direction, lod_bias); }
+            case 5u: { return textureSampleBias(cube_texture5, sampler5, direction, lod_bias); }
+            case 6u: { return textureSampleBias(cube_texture6, sampler6, direction, lod_bias); }
+            default: { return textureSampleBias(cube_texture7, sampler7, direction, lod_bias); }
         }
     }
     let uv = stage_coordinates.xy;
     switch stage {
-        case 0u: { return textureSample(texture0, sampler0, uv); }
-        case 1u: { return textureSample(texture1, sampler1, uv); }
-        case 2u: { return textureSample(texture2, sampler2, uv); }
-        case 3u: { return textureSample(texture3, sampler3, uv); }
-        case 4u: { return textureSample(texture4, sampler4, uv); }
-        case 5u: { return textureSample(texture5, sampler5, uv); }
-        case 6u: { return textureSample(texture6, sampler6, uv); }
-        default: { return textureSample(texture7, sampler7, uv); }
+        case 0u: { return textureSampleBias(texture0, sampler0, uv, lod_bias); }
+        case 1u: { return textureSampleBias(texture1, sampler1, uv, lod_bias); }
+        case 2u: { return textureSampleBias(texture2, sampler2, uv, lod_bias); }
+        case 3u: { return textureSampleBias(texture3, sampler3, uv, lod_bias); }
+        case 4u: { return textureSampleBias(texture4, sampler4, uv, lod_bias); }
+        case 5u: { return textureSampleBias(texture5, sampler5, uv, lod_bias); }
+        case 6u: { return textureSampleBias(texture6, sampler6, uv, lod_bias); }
+        default: { return textureSampleBias(texture7, sampler7, uv, lod_bias); }
     }
 }
 

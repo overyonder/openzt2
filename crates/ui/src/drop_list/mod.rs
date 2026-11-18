@@ -28,7 +28,7 @@ pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
         let row = std::iter::successors(Some(activation.node), |entity| {
             parents.get(*entity).ok().map(ChildOf::parent)
         })
-        .find_map(|entity| rows.get(entity).ok());
+        .find_map(|entity| rows.get(entity).ok().and_then(|_| parents.get(entity).ok()));
 
         for (list_entity, list, list_owner, policy) in &policies {
             if policy.drop_list_display_node == AssetId::default() {
@@ -38,7 +38,7 @@ pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
                 && policy.opener_node != AssetId::default()
                 && activated.id == policy.opener_node;
             let close = (list_owner == owner && activated.id == list.id)
-                || row.is_some_and(|row| row.list == list_entity);
+                || row.is_some_and(|row| row.parent() == list_entity);
             if !toggle && !close {
                 continue;
             }
@@ -134,7 +134,8 @@ mod tests {
                     index: 0,
                     id: AssetId::from_key("row"),
                 },
-                UiListRow { list, index: 0 },
+                UiListRow { index: 0 },
+                ChildOf(list),
             ))
             .id();
         app.world_mut().write_message(UiNodeActivated {

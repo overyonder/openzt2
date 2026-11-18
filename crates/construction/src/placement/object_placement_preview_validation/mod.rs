@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -16,14 +18,14 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
-use crate::placement::ground_path_object_placement_collision_queries::GroundPathTilesUnderObjectPlacement;
+use crate::placement::ground_path_placement_stomp::GroundPathPlacementStomp;
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_cell_is_blocked_by_existing_object;
-use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
+use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
+use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
+use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
@@ -39,6 +41,7 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     placement: Res<PlacedObjectFootprintOccupancyIndex>,
     topology: Res<TopologyIndex>,
     previews: Query<(
@@ -52,7 +55,8 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
     let authored_inputs_changed = terrain_changes.read().count() != 0
         || terrain_assets.is_changed()
         || definitions.is_changed()
-        || active_definitions.is_changed();
+        || active_definitions.is_changed()
+        || footprints.is_changed();
     let containment_changed = containment
         .read()
         .any(|change| previews.get(change.affected_entity).is_ok());
@@ -78,11 +82,12 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
 pub(super) fn evaluate_requested_object_placement_previews(
     mut requests: MessageReader<EvaluateObjectPlacementPreviewRequest>,
     placement: Res<PlacedObjectFootprintOccupancyIndex>,
-    ground_paths: GroundPathTilesUnderObjectPlacement,
+    ground_paths: GroundPathPlacementStomp,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     habitats: Query<&HabitatMember>,
     placed: Query<&PlacedObjectDefinitionReference>,
@@ -91,13 +96,14 @@ pub(super) fn evaluate_requested_object_placement_previews(
         &mut Transform,
         Option<&ObjectPlacementPreviewPermissionFacts>,
         Option<&PlacedObjectRelocationSource>,
+        Option<&ObjectPlacementPrefabSource>,
     )>,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
     for request in requests.read() {
-        let Ok((mut preview, mut transform, permission, relocation)) =
+        let Ok((mut preview, mut transform, permission, relocation, prefab)) =
             previews.get_mut(request.preview)
         else {
             continue;
@@ -140,35 +146,32 @@ pub(super) fn evaluate_requested_object_placement_previews(
             }
             continue;
         };
-        let footprint = select_authored_footprint_for_eighth_turns(definition, turns);
+        let geometry = footprints.resolve(definition, prefab.map(|source| &source.0));
         let terrain = |position: Vec2| {
             let entity = terrain_chunk_at(&terrain_index, position)?;
             let (chunk, edited) = chunks.get(entity).ok()?;
             let asset = terrain_assets.get(&chunk.asset)?;
             sample_terrain(chunk, asset, edited, position)
         };
-        let collides_with_ground_path =
-            ground_paths.object_placement_cell_collides_with_ground_path(definition, catalogue);
+        let path_overlaps = ground_paths.overlaps(definition, catalogue);
         let validity = validate_object_placement_footprint_cells(
-            definition,
-            footprint,
+            geometry,
+            geometry.cells(turns),
             &request.transform,
             terrain,
             |cell| {
-                collides_with_ground_path(cell)
-                    || object_placement_cell_is_blocked_by_existing_object(
-                        &placement,
-                        cell,
-                        relocation.map(|source| source.0),
-                        definition,
-                        catalogue,
-                        |entity| {
-                            placed
-                                .get(entity)
-                                .ok()
-                                .map(|placeable| placeable.definition)
-                        },
-                    )
+                path_overlaps.prevents_placement(cell)
+                    || placement.entities_occupying_cell(cell).any(|entity| {
+                        Some(entity) != relocation.map(|source| source.0)
+                            && object_placement_stomp_action(
+                                definition,
+                                catalogue,
+                                placed
+                                    .get(entity)
+                                    .ok()
+                                    .map(|placeable| placeable.definition),
+                            ) == PlacementStompAction::Prevent
+                    })
             },
             ObjectPlacementAuthoritativeFacts {
                 habitat: habitats

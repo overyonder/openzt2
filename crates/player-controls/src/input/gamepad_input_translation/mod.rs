@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use bevy::{
     input::gamepad::{Gamepad, GamepadAxis, GamepadButton},
     prelude::*,
@@ -16,8 +18,11 @@ use crate::input::input_execution_types::DeviceControlAxes;
 
 const GAMEPAD_RADIAL_DEAD_ZONE: f32 = 0.20;
 
+#[derive(Component, Default)]
+pub(super) struct GamepadNavigationRepeat(Option<(GameAction, Timer)>);
+
 pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes(
-    connected_gamepads: Query<(Entity, &Gamepad)>,
+    mut connected_gamepads: Query<(Entity, Ref<Gamepad>, &mut GamepadNavigationRepeat)>,
     action_bindings: Res<GameActionInputBindings>,
     real_time: Res<Time<Real>>,
     mut control_axes: ResMut<DeviceControlAxes>,
@@ -28,9 +33,11 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
     modal_input: Res<
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
     >,
-    mut navigation_repeat: Local<Option<(Entity, GameAction, f64)>>,
 ) {
-    for (gamepad_entity, gamepad) in &connected_gamepads {
+    for (gamepad_entity, gamepad, mut navigation_repeat) in &mut connected_gamepads {
+        if gamepad.is_added() {
+            navigation_repeat.0 = None;
+        }
         let ui_navigation = *phase.get()
             != openzt2_game_assets::application_lifecycle::GamePhase::InGame
             || capture.over_ui
@@ -57,11 +64,11 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
             f32::from(game_action_is_held(
                 GameAction::ZoomIn,
                 &action_bindings,
-                gamepad,
+                &gamepad,
             )) - f32::from(game_action_is_held(
                 GameAction::ZoomOut,
                 &action_bindings,
-                gamepad,
+                &gamepad,
             ))
         };
         let menu_direction = if !ui_navigation {
@@ -78,23 +85,32 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
             None
         };
         if let Some(direction) = menu_direction {
-            let now = real_time.elapsed_secs_f64();
-            let previous = *navigation_repeat;
-            let repeated = previous
-                .is_some_and(|(entity, action, _)| entity == gamepad_entity && action == direction);
-            if !repeated || previous.is_some_and(|(_, _, next)| now >= next) {
+            let emit = match &mut navigation_repeat.0 {
+                Some((action, timer)) if *action == direction => {
+                    if timer.tick(real_time.delta()).is_finished() {
+                        timer.set_duration(Duration::from_millis(120));
+                        timer.reset();
+                        true
+                    } else {
+                        false
+                    }
+                }
+                _ => {
+                    navigation_repeat.0 = Some((
+                        direction,
+                        Timer::new(Duration::from_millis(350), TimerMode::Once),
+                    ));
+                    true
+                }
+            };
+            if emit {
                 action_requests.write(ActionRequest {
                     action: direction,
                     source: ActionSource::Controller(gamepad_entity),
                 });
-                *navigation_repeat = Some((
-                    gamepad_entity,
-                    direction,
-                    now + if repeated { 0.12 } else { 0.35 },
-                ));
             }
-        } else if navigation_repeat.is_some_and(|(entity, _, _)| entity == gamepad_entity) {
-            *navigation_repeat = None;
+        } else if navigation_repeat.0.is_some() {
+            navigation_repeat.0 = None;
         }
         if ui_navigation {
             for (button, action) in [
@@ -142,7 +158,7 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
             {
                 continue;
             }
-            if game_action_binding_was_just_pressed_by_gamepad(action_binding, gamepad) {
+            if game_action_binding_was_just_pressed_by_gamepad(action_binding, &gamepad) {
                 action_requests.write(ActionRequest {
                     action: action_binding.action,
                     source: ActionSource::Controller(gamepad_entity),

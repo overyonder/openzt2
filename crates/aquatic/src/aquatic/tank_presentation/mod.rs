@@ -1,4 +1,5 @@
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::gltf::GltfMaterialName;
 use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
@@ -17,9 +18,26 @@ use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid,
 
 use super::aquatic_simulation_types::{Tank, TankGeometry, TankWallTopHeight};
 
-/// The water surface and glass panes drawn for one tank.
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct TankPresentationOf(pub Entity);
+#[derive(Component)]
+#[relationship(relationship_target = TankPresentations)]
+pub(super) struct TankPresentationOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TankPresentationOf, linked_spawn)]
+pub(super) struct TankPresentations(Vec<Entity>);
+
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(super) struct TankPresentationGeometry {
+    floor_height: f32,
+    fallback_wall_height: f32,
+}
+
+#[derive(Component, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum TankPresentationPass {
+    Opaque(Box<str>),
+    Water,
+    Glass,
+}
 
 const WATER_COLOUR: Color = Color::srgba(0.12, 0.38, 0.55, 0.55);
 const GLASS_COLOUR: Color = Color::srgba(0.75, 0.9, 1.0, 0.25);
@@ -39,10 +57,26 @@ pub(super) fn present_changed_tank_water_and_glass(
     active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
     asset_server: Res<AssetServer>,
-    tanks: Query<(Entity, Ref<TankGeometry>, Ref<HabitatRegion>, &WorldMember), With<Tank>>,
+    tanks: Query<
+        (
+            Entity,
+            Ref<TankGeometry>,
+            Ref<HabitatRegion>,
+            &WorldMember,
+            Option<&TankPresentations>,
+        ),
+        With<Tank>,
+    >,
     fences: Query<(&FenceEdge, Option<&TankWallTopHeight>)>,
+    changed_fences: Query<(), Or<(Changed<FenceEdge>, Changed<TankWallTopHeight>)>>,
     nodes: Query<&TopologyNode>,
-    presentations: Query<(Entity, &TankPresentationOf)>,
+    mut presentations: Query<(&mut TankPresentationGeometry, Option<&Children>)>,
+    mut passes: Query<(
+        &TankPresentationPass,
+        &Mesh3d,
+        &mut Transform,
+        &mut Visibility,
+    )>,
 ) {
     let definitions_changed = definitions.is_changed() || active_definitions.is_changed();
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -63,18 +97,40 @@ pub(super) fn present_changed_tank_water_and_glass(
             })
         })
         .clone();
-    for (tank, geometry, region, member) in &tanks {
-        if !definitions_changed
-            && !geometry.is_changed()
-            && !region.is_changed()
-            && presentations.iter().any(|(_, of)| of.0 == tank)
-        {
+    for (tank, geometry, region, member, roots) in &tanks {
+        let previous_root = roots.and_then(|roots| roots.iter().next());
+        let previous = previous_root.and_then(|root| presentations.get(root).ok());
+        let next = TankPresentationGeometry {
+            floor_height: geometry.floor_height,
+            fallback_wall_height: geometry.wall_height,
+        };
+        let outline_changed = previous.is_none() || region.is_changed() || grid.is_changed();
+        let walls_changed = outline_changed
+            || definitions_changed
+            || previous.is_some_and(|(current, _)| *current != next)
+            || region
+                .boundary_fence_entities
+                .iter()
+                .any(|fence| changed_fences.contains(*fence));
+        if !walls_changed && !geometry.is_changed() {
             continue;
         }
-        for (presentation, of) in &presentations {
-            if of.0 == tank {
-                commands.entity(presentation).despawn();
+        let mut existing = std::collections::BTreeMap::new();
+        if let Some((_, Some(children))) = previous {
+            for child in children.iter() {
+                if let Ok((pass, ..)) = passes.get(child) {
+                    existing.insert(pass.clone(), child);
+                }
             }
+        }
+        let water = existing.remove(&TankPresentationPass::Water);
+        if !walls_changed {
+            if let Some((_, _, mut transform, mut visibility)) =
+                water.and_then(|entity| passes.get_mut(entity).ok())
+            {
+                update_tank_water_pose(&geometry, &mut transform, &mut visibility);
+            }
+            continue;
         }
         let Some(walls) = region
             .boundary_fence_entities
@@ -97,6 +153,9 @@ pub(super) fn present_changed_tank_water_and_glass(
             })
             .collect::<Option<Vec<_>>>()
         else {
+            if let Some(root) = previous_root {
+                commands.entity(root).try_despawn();
+            }
             continue;
         };
         let outline = walls.iter().map(|(wall, ..)| *wall).collect::<Vec<_>>();
@@ -114,31 +173,47 @@ pub(super) fn present_changed_tank_water_and_glass(
                     .push((*wall, *top));
             }
         }
-        let water = build_water_surface_mesh(*grid, &outline, *geometry);
-        let glass = build_tank_wall_panel_mesh(&glass_walls, *geometry);
-        let root = commands
-            .spawn((
-                TankPresentationOf(tank),
-                *member,
-                Transform::IDENTITY,
-                Visibility::Inherited,
-            ))
-            .id();
+        let root = if let Some((root, (mut current, _))) =
+            previous_root.and_then(|root| presentations.get_mut(root).ok().map(|data| (root, data)))
+        {
+            current.set_if_neq(next);
+            root
+        } else {
+            commands
+                .spawn((
+                    TankPresentationOf(tank),
+                    next,
+                    *member,
+                    Transform::IDENTITY,
+                    Visibility::Inherited,
+                ))
+                .id()
+        };
         for (material, walls) in opaque_walls {
             let Some(mesh) = build_tank_wall_panel_mesh(&walls, *geometry) else {
                 continue;
             };
+            let key = TankPresentationPass::Opaque(material.into());
+            if let Some((_, handle, ..)) = existing
+                .remove(&key)
+                .and_then(|entity| passes.get(entity).ok())
+            {
+                meshes
+                    .insert(handle.id(), mesh)
+                    .expect("live tank wall mesh");
+                continue;
+            }
             let material_id = AssetId::from_key(material);
-            let material_path = material.to_owned();
-            let handle = asset_server.load::<MaterialAsset>(material_path.clone());
+            let handle = asset_server.load::<MaterialAsset>(material.to_owned());
             commands.spawn((
+                key,
                 Mesh3d(meshes.add(mesh)),
                 GltfMaterialName(material_id.to_lowercase_hexadecimal_string()),
                 ModelExpanded,
                 PrefabMaterialOverrides(
                     vec![PrefabMaterialOverride {
                         material: material_id,
-                        material_path: material_path.into_boxed_str(),
+                        material_path: material.into(),
                         handle: Some(handle),
                     }]
                     .into_boxed_slice(),
@@ -148,29 +223,81 @@ pub(super) fn present_changed_tank_water_and_glass(
                 ChildOf(root),
             ));
         }
-        for (mesh, material) in [(water, &water_material), (glass, &glass_material)] {
-            let Some(mesh) = mesh else {
-                continue;
-            };
+        if let Some((entity, (_, handle, mut transform, mut visibility))) =
+            water.and_then(|entity| passes.get_mut(entity).ok().map(|pass| (entity, pass)))
+        {
+            if outline_changed {
+                if let Some(mesh) = build_water_surface_mesh(*grid, &outline) {
+                    meshes
+                        .insert(handle.id(), mesh)
+                        .expect("live tank water mesh");
+                } else {
+                    commands.entity(entity).despawn();
+                }
+            }
+            update_tank_water_pose(&geometry, &mut transform, &mut visibility);
+        } else if let Some(mesh) = build_water_surface_mesh(*grid, &outline) {
             commands.spawn((
+                TankPresentationPass::Water,
                 Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(material.clone()),
-                Transform::IDENTITY,
+                MeshMaterial3d(water_material.clone()),
+                Transform::from_xyz(0.0, geometry.water_height, 0.0),
+                tank_water_visibility(&geometry),
                 ChildOf(root),
             ));
+        }
+        if let Some(mesh) = build_tank_wall_panel_mesh(&glass_walls, *geometry) {
+            if let Some((_, handle, ..)) = existing
+                .remove(&TankPresentationPass::Glass)
+                .and_then(|entity| passes.get(entity).ok())
+            {
+                meshes
+                    .insert(handle.id(), mesh)
+                    .expect("live tank glass mesh");
+            } else {
+                commands.spawn((
+                    TankPresentationPass::Glass,
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(glass_material.clone()),
+                    Transform::IDENTITY,
+                    ChildOf(root),
+                ));
+            }
+        }
+        for entity in existing.into_values() {
+            commands.entity(entity).despawn();
         }
     }
 }
 
-/// Removes presentations whose tank was removed or demoted.
-pub(super) fn remove_orphaned_tank_presentations(
-    mut commands: Commands,
-    presentations: Query<(Entity, &TankPresentationOf)>,
-    tanks: Query<(), With<Tank>>,
+fn tank_water_visibility(geometry: &TankGeometry) -> Visibility {
+    if geometry.depth() > 0.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    }
+}
+
+fn update_tank_water_pose(
+    geometry: &TankGeometry,
+    transform: &mut Mut<Transform>,
+    visibility: &mut Mut<Visibility>,
 ) {
-    for (presentation, of) in &presentations {
-        if tanks.get(of.0).is_err() {
-            commands.entity(presentation).despawn();
+    transform
+        .reborrow()
+        .map_unchanged(|transform| &mut transform.translation.y)
+        .set_if_neq(geometry.water_height);
+    visibility.set_if_neq(tank_water_visibility(geometry));
+}
+
+pub(super) fn retire_tank_presentation_on_demotion(
+    removed: On<Remove<Tank>>,
+    mut commands: Commands,
+    roots: Query<&TankPresentations>,
+) {
+    if let Ok(roots) = roots.get(removed.entity) {
+        for root in roots.iter() {
+            commands.entity(root).try_despawn();
         }
     }
 }
@@ -210,15 +337,10 @@ pub(super) fn inside_walls(point: Vec2, walls: &[[Vec2; 2]]) -> bool {
         == 1
 }
 
-fn build_water_surface_mesh(
-    grid: TopologyGrid,
-    walls: &[[Vec2; 2]],
-    geometry: TankGeometry,
-) -> Option<Mesh> {
-    if geometry.depth() <= 0.0 || walls.is_empty() {
+fn build_water_surface_mesh(grid: TopologyGrid, walls: &[[Vec2; 2]]) -> Option<Mesh> {
+    if walls.is_empty() {
         return None;
     }
-    let y = geometry.water_height;
     let (minimum, maximum) = walls.iter().flatten().fold(
         (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)),
         |(minimum, maximum), point| (minimum.min(*point), maximum.max(*point)),
@@ -242,7 +364,7 @@ fn build_water_surface_mesh(
                 let triangle = [corners[side], corners[(side + 1) % 4], centre];
                 let centroid = (triangle[0] + triangle[1] + triangle[2]) / 3.0;
                 inside_walls(centroid, walls)
-                    .then(|| triangle.map(|corner| Vec3::new(corner.x, y, corner.y)))
+                    .then(|| triangle.map(|corner| Vec3::new(corner.x, 0.0, corner.y)))
             })
         })
         .collect();

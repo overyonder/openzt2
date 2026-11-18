@@ -5,10 +5,20 @@ use super::world_definition_source_value_reading_and_conversion::{
     asset, asset_list, flags, id, number_or, required, required_number,
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
+use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffJobCapabilityFlags, StaffJobDefinition, StaffJobEffect, StaffJobKind, StaffRoleDefinition,
 };
-use openzt2_game_data::AssetId;
+
+pub(super) fn lower_authored_staff_job_capabilities(
+    record: &RecordView<'_, '_>,
+) -> Result<StaffJobCapabilityFlags, BindError> {
+    StaffJobCapabilityFlags::from_raw_flag_bits(flags(
+        record.value(&["permittedJobs", "jobs"]),
+        staff_job_flag,
+    )? as u32)
+    .ok_or_else(|| BindError::record(record, "staff role contains unknown job capability bits"))
+}
 
 pub(super) fn bind_staff(
     record: &RecordView<'_, '_>,
@@ -34,13 +44,7 @@ pub(super) fn bind_staff(
         wage_cents_per_month: number_or(record, &["wageCentsPerMonth", "wage", "salary"], 0)?,
         move_speed_mps: required_number(record, &["moveSpeedMps", "moveSpeed", "speed"])?,
         navigation_radius_m: required_number(record, &["navigationRadiusM", "radiusM", "radius"])?,
-        permitted_jobs: StaffJobCapabilityFlags::from_raw_flag_bits(flags(
-            record.value(&["permittedJobs", "jobs"]),
-            staff_job_flag,
-        )? as u32)
-        .ok_or_else(|| {
-            BindError::record(record, "staff role contains unknown job capability bits")
-        })?,
+        permitted_jobs: lower_authored_staff_job_capabilities(record)?,
         job_overrides,
         presentation_variants: Vec::new(),
         virtual_nodes: Vec::new(),

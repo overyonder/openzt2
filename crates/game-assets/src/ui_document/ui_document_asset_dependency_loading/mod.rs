@@ -12,7 +12,7 @@ use super::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
     canonical_ui_document: UiDocument,
-    same_source_fragment_handles: &BTreeMap<AssetId, Handle<UiDocumentAsset>>,
+    same_source_fragment_labels: &BTreeMap<AssetId, String>,
     load_context: &mut LoadContext<'_>,
 ) -> UiDocumentAsset {
     let mut texture_image_handles = Vec::new();
@@ -33,14 +33,21 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
                 ));
             }
             UiDependencyKind::InteractiveTexture => {
-                texture_image_handles.push((
-                    dependency.id,
-                    load_context.load(
-                        crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(
-                            &dependency.path,
+                if dependency.path.ends_with(".cur") {
+                    texture_image_handles.push((
+                        dependency.id,
+                        load_context.load(format!("{}#interactive-image", dependency.path)),
+                    ));
+                } else {
+                    texture_image_handles.push((
+                        dependency.id,
+                        load_context.load(
+                            crate::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image(
+                                &dependency.path,
+                            ),
                         ),
-                    ),
-                ));
+                    ));
+                }
                 interactive_texture_metadata_handles
                     .push((dependency.id, load_context.load(dependency.path.clone())));
             }
@@ -49,21 +56,18 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
                     .push((dependency.id, load_context.load(dependency.path.clone())));
             }
             UiDependencyKind::Document => {
-                nested_ui_document_handles.push((
-                    dependency.id,
-                    same_source_fragment_handles
-                        .get(&dependency.id)
-                        .cloned()
-                        .unwrap_or_else(|| {
-                            load_context.load(
-                                dependency
-                                    .path
-                                    .strip_prefix("ui/fragment/")
-                                    .unwrap_or(&dependency.path)
-                                    .to_owned(),
-                            )
-                        }),
-                ));
+                let handle = if let Some(label) = same_source_fragment_labels.get(&dependency.id) {
+                    load_context.get_label_handle::<UiDocumentAsset>(label.as_str())
+                } else {
+                    load_context.load(
+                        dependency
+                            .path
+                            .strip_prefix("ui/fragment/")
+                            .unwrap_or(&dependency.path)
+                            .to_owned(),
+                    )
+                };
+                nested_ui_document_handles.push((dependency.id, handle));
             }
             UiDependencyKind::Audio => {
                 audio_source_handles

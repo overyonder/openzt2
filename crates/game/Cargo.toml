@@ -71,7 +71,6 @@ bevy.workspace = true
 bevy_hanabi.workspace = true
 bevy-inspector-egui = { version = "0.38", optional = true }
 dirs.workspace = true
-indexmap = "2"
 
 # Apple's wgpu backend is Metal; raw Vulkan initialization is unavailable there.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]

@@ -6,24 +6,22 @@ use bevy::{
 use super::super::camera_runtime_state_types::CameraMouseLook;
 use super::super::camera_runtime_state_types::ZooCamera;
 
-/// Hides and locks the primary window cursor while mouse-look is active.
 pub(crate) fn project_camera_mouse_look_onto_primary_window_cursor(
     cameras: Query<(), (With<ZooCamera>, With<CameraMouseLook>)>,
-    mut windows: Query<&mut CursorOptions, With<PrimaryWindow>>,
-    mut was_active: Local<bool>,
+    cursor: Single<&mut CursorOptions, With<PrimaryWindow>>,
 ) {
+    let mut cursor = cursor.into_inner();
     let active = !cameras.is_empty();
-    if active == *was_active {
-        return;
-    }
-    let Ok(mut cursor) = windows.single_mut() else {
-        return;
-    };
-    cursor.visible = !active;
-    cursor.grab_mode = if active {
+    let grab_mode = if active {
         CursorGrabMode::Locked
     } else {
         CursorGrabMode::None
     };
-    *was_active = active;
+    cursor
+        .reborrow()
+        .map_unchanged(|cursor| &mut cursor.visible)
+        .set_if_neq(!active);
+    cursor
+        .map_unchanged(|cursor| &mut cursor.grab_mode)
+        .set_if_neq(grab_mode);
 }

@@ -16,13 +16,13 @@ use super::immersive_mode_policy_types::AllowedInteractionActions;
 use super::immersive_mode_policy_types::HideHudWhileActive;
 use super::immersive_mode_policy_types::InteractionCursor;
 use super::immersive_mode_policy_types::InteractionPrefab;
-use super::immersive_mode_policy_types::PauseSimulationWhileActive;
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ControlledEntity;
 use super::immersive_mode_state_types::EquippedInteractionTool;
 use super::immersive_mode_state_types::ImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonViewAngles;
 use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
+use openzt2_world_state::simulation_time::simulation_control_types::ImmersiveSimulationPauseClaim;
 
 pub(crate) fn find_pending_entry_for_immersive_mode<'a>(
     mode: ImmersiveMode,
@@ -321,7 +321,7 @@ pub(crate) fn attach_authored_immersive_mode_consumer_policies(
         entity.insert(InteractionPrefab { definition, handle });
     }
     if policy.pause_simulation {
-        entity.insert(PauseSimulationWhileActive);
+        entity.insert(ImmersiveSimulationPauseClaim);
     }
     if policy.hide_hud {
         entity.insert(HideHudWhileActive);

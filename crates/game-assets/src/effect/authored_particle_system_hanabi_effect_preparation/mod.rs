@@ -352,10 +352,11 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                 height,
                 columns,
                 rows,
+                minimum_height,
                 ..
             } => {
                 particle_render_modifiers.push(Box::new(SetSizeModifier {
-                    size: Vec3::new(*width, *height, 1.0).into(),
+                    size: Vec3::new(*width, height.max(*minimum_height), 1.0).into(),
                 }));
                 if *columns > 1 || *rows > 1 {
                     particle_render_modifiers.push(Box::new(FlipbookModifier {

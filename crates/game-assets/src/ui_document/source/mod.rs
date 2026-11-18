@@ -1,5 +1,6 @@
 //! Blue Fang UI source resolution and semantic lowering.
 
+mod authored_hotkey_file_references;
 pub mod lower;
 pub mod lowered_ui_document_and_rail_camera_assets;
 pub mod rail_camera;

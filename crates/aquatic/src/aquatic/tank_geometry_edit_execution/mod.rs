@@ -6,6 +6,7 @@ use openzt2_game_assets::world_definitions::{
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
+use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure;
 use openzt2_zoo_state::construction::construction_transaction_types::DomainAckStatus;
@@ -85,6 +86,9 @@ fn edit_after_is_reachable(
                 let Some(mut walls) = bounds.wall_height_images(region, limits) else {
                     return false;
                 };
+                let Some(height_bounds) = bounds.tank_height_bounds(region, limits, &walls) else {
+                    return false;
+                };
                 adjacent_water_limits(&mut walls, limits);
                 if walls.len() != edit.wall_heights.len()
                     || !walls
@@ -100,11 +104,7 @@ fn edit_after_is_reachable(
                 {
                     return false;
                 }
-                bounds
-                    .tank_height_bounds(region, limits)
-                    .is_some_and(|bounds| {
-                        tank_geometry_edit_reaches(edit, edit.after, definitions, limits, bounds)
-                    })
+                tank_geometry_edit_reaches(edit, edit.after, definitions, limits, height_bounds)
             })
     })
 }
@@ -205,7 +205,6 @@ pub(super) fn prepare_tank_geometry_construction_edits(
 /// Applies the requested image and the affected segments' individual wall tops.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_tank_geometry_construction_edits(
-    mut commands: Commands,
     mut requests: MessageReader<CommitTankGeometryEdit>,
     transactions: Query<(
         &TankGeometryEdit,
@@ -223,11 +222,9 @@ pub(super) fn apply_tank_geometry_construction_edits(
     )>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    bounds: TankHeightBoundsQueries,
-    wall_entities: Query<(
-        Entity,
-        &openzt2_world_state::world_spawn::persistent_id_types::PersistentId,
-        &TankWallTopHeight,
+    mut wall_access: ParamSet<(
+        TankHeightBoundsQueries,
+        Query<(&PersistentId, &mut TankWallTopHeight)>,
     )>,
     mut acknowledged: MessageWriter<TankGeometryEditAcknowledged>,
 ) {
@@ -279,6 +276,7 @@ pub(super) fn apply_tank_geometry_construction_edits(
             })
         })
         .filter(|tank| {
+            let bounds = wall_access.p0();
             tanks.get(*tank).is_ok_and(|(_, _, region, ..)| {
                 edit_after_is_reachable(
                     edit,
@@ -307,17 +305,27 @@ pub(super) fn apply_tank_geometry_construction_edits(
             let Ok((_, mut geometry, region, ..)) = tanks.get_mut(tank) else {
                 return false;
             };
-            *geometry = replacement;
+            let mut walls = wall_access.p1();
+            let mut updates = Vec::new();
             for wall in edit.wall_heights.iter() {
                 if wall.before == wall.after {
                     continue;
                 }
+                let Some(entity) = region
+                    .boundary_fence_entities
+                    .iter()
+                    .copied()
+                    .find(|entity| walls.get(*entity).is_ok_and(|(id, _)| *id == wall.id))
+                else {
+                    return false;
+                };
                 let height = if forward { wall.after } else { wall.before };
-                for (entity, id, _) in &wall_entities {
-                    if *id == wall.id && region.boundary_fence_entities.contains(&entity) {
-                        commands.entity(entity).insert(TankWallTopHeight(height));
-                    }
-                }
+                updates.push((entity, TankWallTopHeight(height)));
+            }
+            geometry.set_if_neq(replacement);
+            for (entity, height) in updates {
+                let (_, mut top) = walls.get_mut(entity).expect("validated tank wall");
+                top.set_if_neq(height);
             }
             true
         });

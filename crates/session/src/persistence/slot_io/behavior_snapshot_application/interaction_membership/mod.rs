@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::{ecs::entity::EntityHashSet, prelude::*};
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMember;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
 
 use super::{
     super::behavior_snapshot_types::{BehaviorActorSnapshot, BehaviorSnapshotEntityReference},
@@ -49,7 +49,7 @@ pub(super) fn prepare_behavior_membership_restoration(
     records: &[BehaviorActorSnapshot],
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
     application: &BehaviorSnapshotApplication,
-) -> Result<Vec<(Entity, InteractionContainerMember, bool)>, Failure> {
+) -> Result<Vec<(Entity, InteractionContainerAdmissionRequest, bool)>, Failure> {
     let restored_actors: EntityHashSet = records
         .iter()
         .map(|record| {
@@ -106,9 +106,12 @@ pub(super) fn prepare_behavior_membership_restoration(
         *count += 1;
         restored.push((
             actor,
-            InteractionContainerMember {
+            InteractionContainerAdmissionRequest::Admit {
                 container: target,
-                slot: membership.slot,
+                member: actor,
+                slots: vec![(membership.slot, capacity)],
+                despawn_on_refusal: false,
+                queue_service_slots: Vec::new(),
             },
             membership.docked,
         ));

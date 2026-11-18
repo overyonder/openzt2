@@ -1,11 +1,11 @@
 use super::*;
+use crate::animal_behavior::behavior_container_admission::BehaviorAdmissionInstruction;
 use bevy::ecs::{entity::Entities, world::EntityWorldMut};
 use openzt2_world::world_spawn::prefab_world_instance_spawning::hydrate_loaded_scene_prefab_into_world_instance_root;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
-    InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRecipient,
-    InteractionContainerAdmissionRequest, InteractionContainerAttachmentAdmission,
-    InteractionContainerRequest, InteractionContainerRequestResolver,
+    InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
+    ReleaseInteractionContainerMember,
 };
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier;
 
@@ -23,6 +23,7 @@ pub(super) enum AttachmentAfterAdmission {
 
 pub(super) struct AttachAfterAdmission {
     pub(super) actor: Entity,
+    pub(super) instruction: BehaviorAdmissionInstruction,
     pub(super) attachment: ContainedObject,
     pub(super) visibility: Visibility,
     pub(super) modifier: Option<AssetId>,
@@ -44,6 +45,13 @@ pub(super) enum DetachAdmission {
         transform: GlobalTransform,
         attachment: ContainedObject,
     },
+}
+
+#[derive(EntityEvent)]
+pub(super) struct InteractionContainerAttachmentAdmission {
+    #[event_target]
+    request_entity: Entity,
+    outcome: InteractionContainerAdmissionOutcome,
 }
 
 #[derive(Component)]
@@ -95,12 +103,19 @@ fn request_attachment_admission(
     request: InteractionContainerAdmissionRequest,
     admission: AttachmentAdmission,
 ) {
-    let reply_to = commands
+    let operation = commands
         .spawn(PendingAttachmentAdmission(Some(admission)))
         .id();
-    commands.write_message(InteractionContainerRequest::Admit {
-        admission: request,
-        reply_to: InteractionContainerAdmissionRecipient::Attachment(reply_to),
+    commands.queue(move |world: &mut World| {
+        let Some(pending) = world.get::<PendingAttachmentAdmission>(operation) else {
+            return;
+        };
+        if matches!(&pending.0, Some(AttachmentAdmission::Attach(attach)) if !attach.instruction.is_current(world)) {
+            world.entity_mut(operation).despawn();
+            return;
+        }
+        let outcome = request.commit(world);
+        world.trigger(InteractionContainerAttachmentAdmission { request_entity: operation, outcome });
     });
 }
 
@@ -109,64 +124,24 @@ pub(super) enum DetachMembershipRequest {
     Release { member: Entity, despawn: bool },
 }
 
-pub(super) enum DetachMembershipRequests<'a> {
-    Queued,
-    Inline(&'a mut Vec<DetachMembershipRequest>),
-}
-
-impl DetachMembershipRequests<'_> {
-    pub(super) fn submit(&mut self, request: DetachMembershipRequest, commands: &mut Commands) {
-        match (self, request) {
-            (Self::Inline(requests), request) => requests.push(request),
-            (Self::Queued, DetachMembershipRequest::Admit(request, admission)) => {
-                request_attachment_admission(
-                    commands,
-                    request,
-                    AttachmentAdmission::Detach(admission),
-                );
-            }
-            (Self::Queued, DetachMembershipRequest::Release { member, despawn }) => {
-                commands.write_message(InteractionContainerRequest::Release { member, despawn });
+impl DetachMembershipRequest {
+    pub(super) fn submit(self, commands: &mut Commands) {
+        match self {
+            Self::Admit(request, admission) => request_attachment_admission(
+                commands,
+                request,
+                AttachmentAdmission::Detach(admission),
+            ),
+            Self::Release { member, despawn } => {
+                commands.queue(ReleaseInteractionContainerMember { member, despawn });
             }
         }
     }
-}
-
-pub(super) fn resolve_animation_detach_memberships(
-    requests: &mut Vec<DetachMembershipRequest>,
-    outcomes: &mut Vec<(DetachAdmission, InteractionContainerAdmissionOutcome)>,
-    resolver: &mut InteractionContainerRequestResolver,
-    commands: &mut Commands,
-) {
-    if requests.is_empty() {
-        return;
-    }
-    resolver.begin_batch();
-    for request in requests.drain(..) {
-        match request {
-            DetachMembershipRequest::Admit(request, admission) => {
-                let outcome = resolver.admit(&request, commands);
-                outcomes.push((admission, outcome));
-            }
-            DetachMembershipRequest::Release { member, despawn } => {
-                resolver.release(member, despawn, commands);
-            }
-        }
-    }
-    for (admission, outcome) in outcomes.drain(..) {
-        apply_detach_admission(admission, outcome, commands);
-    }
-}
-
-pub(super) fn attachment_admissions_pending(
-    outcomes: Res<Messages<InteractionContainerAttachmentAdmission>>,
-) -> bool {
-    !outcomes.is_empty()
 }
 
 pub(super) fn apply_object_attachment_admissions(
     mut commands: Commands,
-    mut outcomes: ResMut<Messages<InteractionContainerAttachmentAdmission>>,
+    result: On<InteractionContainerAttachmentAdmission>,
     mut pending: Query<&mut PendingAttachmentAdmission>,
     mut tasks: Query<&mut BehaviorTaskExecutionState>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -174,97 +149,91 @@ pub(super) fn apply_object_attachment_admissions(
     entities: &Entities,
 ) {
     use InteractionContainerAdmissionOutcome::{Granted, Refused};
-    for result in outcomes.drain() {
-        let Ok(mut pending) = pending.get_mut(result.request_entity) else {
-            continue;
-        };
-        let Some(admission) = pending.0.take() else {
-            continue;
-        };
-        commands.entity(result.request_entity).despawn();
-        match (admission, result.outcome) {
-            (AttachmentAdmission::Detach(admission), outcome) => {
-                apply_detach_admission(admission, outcome, &mut commands);
+    let Ok(mut pending) = pending.get_mut(result.request_entity) else {
+        return;
+    };
+    let Some(admission) = pending.0.take() else {
+        return;
+    };
+    commands.entity(result.request_entity).despawn();
+    match (admission, result.outcome) {
+        (AttachmentAdmission::Detach(admission), outcome) => {
+            apply_detach_admission(admission, outcome, &mut commands);
+        }
+        (
+            AttachmentAdmission::Attach(prepared),
+            Granted {
+                member,
+                slot,
+                persistent_id,
+                ..
+            },
+        ) => {
+            let AttachAfterAdmission {
+                actor,
+                instruction: _,
+                attachment,
+                visibility,
+                modifier,
+                spawn,
+                finish,
+            } = prepared;
+            if let Some(spawn) = spawn {
+                let Some(id) = persistent_id else {
+                    commands.entity(member).try_despawn();
+                    return;
+                };
+                if !hydrate_admitted_attachment(member, spawn, id, &prefabs, &mut commands) {
+                    commands.entity(member).try_despawn();
+                    return;
+                }
             }
-            (
-                AttachmentAdmission::Attach(prepared),
-                Granted {
-                    member,
-                    slot,
-                    persistent_id,
-                    ..
-                },
-            ) => {
-                let AttachAfterAdmission {
-                    actor,
-                    attachment,
-                    visibility,
-                    modifier,
-                    spawn,
-                    finish,
-                } = prepared;
-                if let Some(spawn) = spawn {
-                    let Some(id) = persistent_id else {
-                        commands.entity(member).try_despawn();
-                        continue;
-                    };
-                    if !hydrate_admitted_attachment(member, spawn, id, &prefabs, &mut commands) {
-                        commands.entity(member).try_despawn();
-                        continue;
+            if !entities.contains_spawned(actor) {
+                commands
+                    .entity(member)
+                    .try_insert(detach::DestroyedHolderSlot(slot));
+            }
+            if let Some(modifier) = modifier {
+                commands
+                    .entity(actor)
+                    .try_insert(BehaviorLocomotionModifier {
+                        modifier,
+                        item: member,
+                    });
+            }
+            commands.entity(member).try_insert((attachment, visibility));
+            match finish {
+                AttachmentAfterAdmission::Authored { tick, detach } => {
+                    if detach {
+                        commands
+                            .entity(member)
+                            .try_insert(DeliveredAttachmentDetach);
                     }
-                }
-                // A later request in this batch can remove the holder before
-                // the new item has its containment policy attached.
-                if !entities.contains_spawned(actor) {
-                    commands
-                        .entity(member)
-                        .try_insert(detach::DestroyedHolderSlot(slot));
-                }
-                if let Some(modifier) = modifier {
                     commands
                         .entity(actor)
-                        .try_insert(BehaviorLocomotionModifier {
-                            modifier,
-                            item: member,
-                        });
-                }
-                commands.entity(member).try_insert((attachment, visibility));
-                match finish {
-                    AttachmentAfterAdmission::Authored { tick, detach } => {
-                        if detach {
-                            commands
-                                .entity(member)
-                                .try_insert(DeliveredAttachmentDetach);
-                        }
-                        commands
-                            .entity(actor)
-                            .try_remove::<PendingObjectAttachment>();
-                        if let Ok(mut task) = tasks.get_mut(actor) {
-                            advance_behavior_task_to_next_action(&mut task, tick);
-                        }
-                    }
-                    AttachmentAfterAdmission::FoodProp(food) => {
-                        held_food_prop::finish_food_prop_admission(
-                            actor,
-                            member,
-                            food,
-                            &mut tasks,
-                            &mut playback,
-                            &mut commands,
-                        );
+                        .try_remove::<PendingObjectAttachment>();
+                    if let Ok(mut task) = tasks.get_mut(actor) {
+                        advance_behavior_task_to_next_action(&mut task, tick);
                     }
                 }
-            }
-            (AttachmentAdmission::Attach(prepared), outcome) => {
-                if (matches!(outcome, Refused)
-                    || matches!(prepared.finish, AttachmentAfterAdmission::Authored { .. }))
-                    && entities.contains_spawned(prepared.actor)
-                {
-                    mark_behavior_task_for_failure_and_stop_navigation(
-                        prepared.actor,
+                AttachmentAfterAdmission::FoodProp(food) => {
+                    held_food_prop::finish_food_prop_admission(
+                        actor,
+                        member,
+                        food,
+                        &mut tasks,
+                        &mut playback,
                         &mut commands,
                     );
                 }
+            }
+        }
+        (AttachmentAdmission::Attach(prepared), outcome) => {
+            if (matches!(outcome, Refused)
+                || matches!(prepared.finish, AttachmentAfterAdmission::Authored { .. }))
+                && entities.contains_spawned(prepared.actor)
+            {
+                mark_behavior_task_for_failure_and_stop_navigation(prepared.actor, &mut commands);
             }
         }
     }

@@ -12,6 +12,7 @@ pub struct TerrainChanged {
     pub chunk: Entity,
     pub min: UVec2,
     pub max: UVec2,
+    pub ground_height_changed: bool,
 }
 
 /// Rebuilds presentation from the chunk's current authoritative samples.
@@ -20,7 +21,7 @@ pub struct TerrainPresentationRestored {
     pub chunk: Entity,
 }
 
-#[derive(Component, Debug)]
+#[derive(Component, Debug, Default)]
 pub struct TerrainEdit {
     pub deltas: Vec<TerrainEditDelta>,
     pub water_regions:

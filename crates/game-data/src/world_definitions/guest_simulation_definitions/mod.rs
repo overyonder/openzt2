@@ -229,7 +229,7 @@ pub struct GuestGenerationPolicy {
     pub enabled: bool,
     pub use_test_type: bool,
     pub maximum_guests_base: u32,
-    pub maximum_guests_per_half_star: u32,
+    pub maximum_guests_per_star: u32,
     pub spawn_at_entrance: bool,
     /// Authored `DisplacementX`/`DisplacementY`: metres along the entrance
     /// gate's source x and y axes from the gate to where guests appear.
@@ -252,6 +252,15 @@ pub struct GuestGenerationPolicy {
     pub species_adjustment: GuestSpeciesAdjustment,
     pub need_survey: GuestNeedSurveyPolicy,
 }
+
+impl GuestGenerationPolicy {
+    #[must_use]
+    pub fn maximum_guests_at_fame(&self, half_stars: u8) -> u32 {
+        let guests_from_fame = u64::from(self.maximum_guests_per_star) * u64::from(half_stars) / 2;
+        u32::try_from(u64::from(self.maximum_guests_base) + guests_from_fame).unwrap_or(u32::MAX)
+    }
+}
+
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.
 #[allow(
     clippy::derive_partial_eq_without_eq,

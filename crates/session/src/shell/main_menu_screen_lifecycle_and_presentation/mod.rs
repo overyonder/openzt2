@@ -1,4 +1,6 @@
+use super::menu_screen_lifecycle::ShellMenuPage;
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_data::ui_document::{
     document::UiDocumentRole, node_property_binding::UiTextPropertyBindingSource,
 };
@@ -6,7 +8,7 @@ use openzt2_game_data::ui_document::{
 use openzt2_game_assets::texture::source_image_asset_path_selection::select_bevy_image_asset_path_for_blue_fang_source_image;
 use openzt2_interface_state::persistence::profile_types::LoadProfileIndex;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use openzt2_interface_state::shell::shell_screen_presentation_types::MainMenuLogoFallback;
@@ -18,20 +20,15 @@ const MAIN_MENU_LOGO_TEXTURE_PATH: &str = "ui/shared/zoo2logo.dds";
 pub(super) fn create_main_menu_screen_and_request_profile_index(
     mut commands: Commands,
     assets: Res<AssetServer>,
-    old_shell_screens: Query<(Entity, &ShellScreen)>,
     mut selection: ResMut<ShellSelection>,
-    mut requested_ui_roles: ResMut<UiRoleRequests>,
+    mut requested_ui_roles: MessageWriter<ShowUiRole>,
     mut profile_index_load_requests: MessageWriter<LoadProfileIndex>,
+    mut phase_transitions: MessageReader<StateTransitionEvent<GamePhase>>,
 ) {
-    // Menu play buttons choose a mode. Retaining the previous map would route
-    // their activation to a world-start request before map selection opens.
-    *selection = ShellSelection::default();
-    for (entity, _) in &old_shell_screens {
-        commands.entity(entity).despawn();
-    }
     let main_menu_screen_owner = commands
         .spawn((
             ShellScreen::MainMenu,
+            DespawnOnExit(ShellMenuPage::MainMenu),
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -40,27 +37,36 @@ pub(super) fn create_main_menu_screen_and_request_profile_index(
             Visibility::Inherited,
         ))
         .id();
-    commands.spawn((
-        Name::new("main menu logo"),
-        ImageNode::new(
-            assets.load(select_bevy_image_asset_path_for_blue_fang_source_image(
-                MAIN_MENU_LOGO_TEXTURE_PATH,
-            )),
-        ),
-        Node {
-            position_type: PositionType::Absolute,
-            left: percent(40.625),
-            top: percent(17.84),
-            width: percent(18.75),
-            aspect_ratio: Some(1.0),
-            ..default()
-        },
-        GlobalZIndex(10),
-        MainMenuLogoFallback,
-        ChildOf(main_menu_screen_owner),
-    ));
-    requested_ui_roles.request(UiDocumentRole::MainMenu, main_menu_screen_owner);
-    profile_index_load_requests.write(LoadProfileIndex);
+    if phase_transitions
+        .read()
+        .any(|transition| transition.entered == Some(GamePhase::MainMenu))
+    {
+        *selection = ShellSelection::default();
+        commands.spawn((
+            Name::new("main menu logo"),
+            ImageNode::new(
+                assets.load(select_bevy_image_asset_path_for_blue_fang_source_image(
+                    MAIN_MENU_LOGO_TEXTURE_PATH,
+                )),
+            ),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(40.625),
+                top: percent(17.84),
+                width: percent(18.75),
+                aspect_ratio: Some(1.0),
+                ..default()
+            },
+            GlobalZIndex(10),
+            MainMenuLogoFallback,
+            ChildOf(main_menu_screen_owner),
+        ));
+        profile_index_load_requests.write(LoadProfileIndex);
+    }
+    requested_ui_roles.write(ShowUiRole {
+        role: UiDocumentRole::MainMenu,
+        owner: main_menu_screen_owner,
+    });
 }
 
 /// The translated main-menu document owns its presentation once available.
@@ -90,14 +96,5 @@ pub(super) fn project_application_version_into_new_authored_text_bindings(
             text.0.clear();
             text.0.push_str(env!("CARGO_PKG_VERSION"));
         }
-    }
-}
-
-pub(super) fn despawn_shell_screens_when_leaving_main_menu(
-    mut commands: Commands,
-    shell_screens: Query<Entity, With<ShellScreen>>,
-) {
-    for shell_screen in &shell_screens {
-        commands.entity(shell_screen).despawn();
     }
 }

@@ -55,11 +55,13 @@ pub(super) fn apply_scripted_tank_wall_heights(
         if summary.boundary_is_breached || !geometry.is_valid() {
             continue;
         }
-        let (Some(seed_cell), Some(bounds), Some(mut wall_heights)) = (
+        let (Some(seed_cell), Some(mut wall_heights)) = (
             tank_habitat_seed_cell(region),
-            height_queries.tank_height_bounds(region, limits),
             height_queries.wall_height_images(region, limits),
         ) else {
+            continue;
+        };
+        let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
             continue;
         };
         for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {

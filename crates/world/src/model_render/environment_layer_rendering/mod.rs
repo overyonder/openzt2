@@ -1,5 +1,5 @@
+use bevy::app::{HierarchyPropagatePlugin, Propagate, PropagateSet};
 use bevy::core_pipeline::core_3d::Transparent3d;
-use bevy::ecs::entity::EntityHashSet;
 use bevy::ecs::query::QueryItem;
 use bevy::extract::extract_instances::{ExtractInstance, ExtractedInstances};
 use bevy::prelude::*;
@@ -13,84 +13,89 @@ use bevy::render::{
 };
 use openzt2_world_state::model_render::environment_render_layer::EnvironmentRenderLayer;
 
-#[derive(Component, Clone, Copy)]
+#[derive(Component, Clone, Copy, PartialEq)]
 pub(super) struct EnvironmentPrimitiveLayer(EnvironmentRenderLayer);
 
 impl ExtractInstance<bevy::render::RenderApp> for EnvironmentPrimitiveLayer {
     type QueryData = &'static Self;
-    type QueryFilter = ();
+    type QueryFilter = With<Mesh3d>;
     fn extract(item: QueryItem<'_, '_, Self::QueryData>) -> Option<Self> {
         Some(*item)
     }
 }
 
-pub(super) fn project_environment_layers_to_model_primitives(
+#[derive(Component)]
+struct EnvironmentLayerDisablesBatching;
+
+pub(super) fn register_inherited_environment_render_layers(app: &mut App) {
+    app.add_plugins(HierarchyPropagatePlugin::<EnvironmentPrimitiveLayer>::new(PostUpdate))
+        .add_systems(
+            PostUpdate,
+            (
+                publish_environment_render_layer_sources
+                    .after(super::authored_model_material_pass_projection::project_authored_model_material_passes)
+                    .before(PropagateSet::<EnvironmentPrimitiveLayer>::default()),
+                update_environment_primitive_batching
+                    .after(PropagateSet::<EnvironmentPrimitiveLayer>::default()),
+            ),
+        );
+}
+
+fn publish_environment_render_layer_sources(
     mut commands: Commands,
-    changed_roots: Query<Entity, Changed<EnvironmentRenderLayer>>,
-    mut branches: MessageReader<super::model_projection_changes::ModelBranchChanged>,
-    mut removed_layers: RemovedComponents<EnvironmentRenderLayer>,
-    added_meshes: Query<Entity, Added<Mesh3d>>,
-    primitives: Query<Option<&EnvironmentPrimitiveLayer>, With<Mesh3d>>,
-    hierarchy: Query<(Option<&ChildOf>, Option<&EnvironmentRenderLayer>)>,
-    children: Query<&Children>,
-    mut visited: Local<EntityHashSet>,
-    mut pending: Local<Vec<(Entity, Option<EnvironmentRenderLayer>)>>,
+    changed: Query<(Entity, &EnvironmentRenderLayer), Changed<EnvironmentRenderLayer>>,
+    mut removed: RemovedComponents<EnvironmentRenderLayer>,
+    mut sources: Query<&mut Propagate<EnvironmentPrimitiveLayer>>,
 ) {
-    visited.clear();
-    for root in changed_roots
-        .iter()
-        .chain(removed_layers.read())
-        .chain(branches.read().map(|branch| branch.0))
-        .chain(added_meshes.iter())
+    for (entity, &layer) in &changed {
+        let source = Propagate(EnvironmentPrimitiveLayer(layer));
+        if let Ok(mut current) = sources.get_mut(entity) {
+            current.set_if_neq(source);
+        } else {
+            commands.entity(entity).insert(source);
+        }
+    }
+    for entity in removed.read() {
+        if !changed.contains(entity) {
+            if let Ok(mut target) = commands.get_entity(entity) {
+                target.remove::<Propagate<EnvironmentPrimitiveLayer>>();
+            }
+        }
+    }
+}
+
+fn update_environment_primitive_batching(
+    mut commands: Commands,
+    added: Query<
+        Entity,
+        (
+            With<Mesh3d>,
+            With<EnvironmentPrimitiveLayer>,
+            Without<NoAutomaticBatching>,
+            Or<(Added<EnvironmentPrimitiveLayer>, Added<Mesh3d>)>,
+        ),
+    >,
+    mut removed: RemovedComponents<EnvironmentPrimitiveLayer>,
+    own_batching: Query<
+        (),
+        (
+            With<EnvironmentLayerDisablesBatching>,
+            Without<EnvironmentPrimitiveLayer>,
+        ),
+    >,
+) {
+    for entity in &added {
+        commands
+            .entity(entity)
+            .insert((NoAutomaticBatching, EnvironmentLayerDisablesBatching));
+    }
+    for entity in removed
+        .read()
+        .filter(|&entity| own_batching.contains(entity))
     {
-        if visited.contains(&root) {
-            continue;
-        }
-        let Ok((parent, layer)) = hierarchy.get(root) else {
-            continue;
-        };
-        let mut inherited = layer.copied();
-        let mut ancestor = parent.map(ChildOf::parent);
-        while inherited.is_none() {
-            let Some(entity) = ancestor else { break };
-            let Ok((parent, layer)) = hierarchy.get(entity) else {
-                break;
-            };
-            inherited = layer.copied();
-            ancestor = parent.map(ChildOf::parent);
-        }
-        pending.push((root, inherited));
-        while let Some((entity, layer)) = pending.pop() {
-            if !visited.insert(entity) {
-                continue;
-            }
-            if let Ok(descendants) = children.get(entity) {
-                pending.extend(descendants.iter().map(|child| {
-                    let own_layer = hierarchy
-                        .get(child)
-                        .ok()
-                        .and_then(|(_, layer)| layer.copied());
-                    (child, own_layer.or(layer))
-                }));
-            }
-            let Ok(previous) = primitives.get(entity) else {
-                continue;
-            };
-            match layer {
-                Some(layer) if previous.is_none_or(|previous| previous.0 != layer) => {
-                    // Preserve individual layer boundaries through GPU preparation.
-                    commands
-                        .entity(entity)
-                        .insert((EnvironmentPrimitiveLayer(layer), NoAutomaticBatching));
-                }
-                None if previous.is_some() => {
-                    commands
-                        .entity(entity)
-                        .remove::<EnvironmentPrimitiveLayer>();
-                }
-                _ => {}
-            }
-        }
+        commands
+            .entity(entity)
+            .remove::<(NoAutomaticBatching, EnvironmentLayerDisablesBatching)>();
     }
 }
 

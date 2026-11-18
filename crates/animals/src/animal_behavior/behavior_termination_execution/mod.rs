@@ -93,15 +93,19 @@ pub(super) fn execute_animal_termination_actions(
 pub(super) fn hide_animals_after_authored_removal_period(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    animals: Query<(Entity, &AuthoredAnimalRemovalTick), With<Dead>>,
+    mut animals: Query<(Entity, &AuthoredAnimalRemovalTick, Option<&mut Visibility>), With<Dead>>,
 ) {
-    for (animal, removal) in &animals {
+    for (animal, removal, visibility) in &mut animals {
         if clock.tick >= removal.0 {
             // Keep the canonical identity for genealogy and death-event consumers.
             commands
                 .entity(animal)
-                .insert(Visibility::Hidden)
                 .remove::<AuthoredAnimalRemovalTick>();
+            if let Some(mut visibility) = visibility {
+                visibility.set_if_neq(Visibility::Hidden);
+            } else {
+                commands.entity(animal).insert(Visibility::Hidden);
+            }
         }
     }
 }

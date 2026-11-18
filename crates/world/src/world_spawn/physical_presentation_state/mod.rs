@@ -1,159 +1,162 @@
-#[cfg(test)]
-use openzt2_game_data::AssetId;
-use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 pub(super) mod child_lifecycle;
+
 use bevy::prelude::*;
-use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_data::{world_definitions::world_objects::WorldObjectPresentationControllerDefinition, AssetId};
+use openzt2_world_state::world_spawn::physical_presentation_state::{
+    PhysicalPresentationOperation, PhysicalPresentationRequest,
+};
+use std::collections::VecDeque;
+
+#[derive(Component)]
+#[relationship(relationship_target = ObjectPhysicalPresentationControllers)]
+pub(super) struct ObjectPhysicalPresentationControllerOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ObjectPhysicalPresentationControllerOf, linked_spawn)]
+pub(super) struct ObjectPhysicalPresentationControllers(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct PhysicalPresentationControllerDefinition {
+    pub(super) object: AssetId,
+    pub(super) controller_index: usize,
+}
+
+#[derive(Component)]
+pub(super) struct SelectedPhysicalPresentationState(pub(super) Option<usize>);
+
+#[derive(Component, Default)]
+pub(super) struct QueuedPhysicalPresentationStates(VecDeque<usize>);
+
+#[derive(Component)]
+pub(super) struct PendingPhysicalPresentationChild;
+
+#[derive(Component)]
+#[relationship(relationship_target = ActivePhysicalPresentationChild)]
+pub(super) struct PhysicalPresentationChildOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PhysicalPresentationChildOf, linked_spawn)]
+pub(super) struct ActivePhysicalPresentationChild(pub(super) Entity);
 
 pub(super) fn apply_physical_presentation_requests(
     mut commands: Commands,
     mut requests: MessageReader<PhysicalPresentationRequest>,
-    mut pending: Local<Vec<PhysicalPresentationRequest>>,
-    definitions: Res<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>,
-    assets: Res<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>,
-    settings: Option<Res<openzt2_game_assets::graphics_settings_types::GraphicsSettings>>,
-    mut owners: Query<(&openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection, &mut PhysicalPresentationControllers)>,
-    presentation_owners: Query<(), With<openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection>>,
+    definitions: Res<WorldDefinitions>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    settings: Option<Res<GraphicsSettings>>,
+    owners: Query<&ObjectPhysicalPresentationControllers>,
+    mut controllers: Query<(
+        &PhysicalPresentationControllerDefinition,
+        &ObjectPhysicalPresentationControllerOf,
+        &mut SelectedPhysicalPresentationState,
+        &mut QueuedPhysicalPresentationStates,
+        Option<&ActivePhysicalPresentationChild>,
+        Has<PendingPhysicalPresentationChild>,
+    )>,
 ) {
-    pending.extend(requests.read().copied());
     let Some(definitions) = definitions.get(&assets) else {
         return;
     };
-    pending.retain(|request| {
-        let Ok((identity, mut controllers)) = owners.get_mut(request.owner) else {
-            return presentation_owners.contains(request.owner);
+    let animations_enabled = settings
+        .as_ref()
+        .is_none_or(|settings| settings.physical_animations);
+    for request in requests.read() {
+        let targets = match request.operation {
+            PhysicalPresentationOperation::ChildPeriodFinished { ref controller, .. } => {
+                std::slice::from_ref(controller)
+            }
+            _ => match owners.get(request.owner) {
+                Ok(controllers) => &controllers.0,
+                Err(_) => continue,
+            },
         };
-        let Some(definition) = definitions.find_object(identity.0) else {
-            return true;
-        };
-        if controllers.apply(
-            &definition.presentation_attachments,
-            &request.operation,
-            settings
-                .as_ref()
-                .is_none_or(|settings| settings.physical_animations),
-        ) {
-            commands
-                .entity(request.owner)
-                .insert(PendingPhysicalPresentationProjection);
-        }
-        false
-    });
-}
-
-// State selection and queued transitions for authored child presentations.
-
-use openzt2_game_data::world_definitions::world_objects::WorldObjectPresentationControllerDefinition;
-use std::collections::VecDeque;
-
-#[derive(Component, Default)]
-pub(crate) struct PhysicalPresentationControllers {
-    controllers: Vec<ControllerPlayback>,
-}
-
-#[derive(Default)]
-struct ControllerPlayback {
-    selected: Option<usize>,
-    projected_child: Option<Entity>,
-    queued: VecDeque<usize>,
-    dirty: bool,
-}
-
-#[derive(Component)]
-pub(crate) struct PendingPhysicalPresentationProjection;
-
-impl PhysicalPresentationControllers {
-    pub(crate) fn from_definitions(
-        definitions: &[WorldObjectPresentationControllerDefinition],
-    ) -> Self {
-        Self {
-            controllers: definitions
-                .iter()
-                .map(|definition| ControllerPlayback {
-                    selected: definition.initial_state.and_then(|initial| {
-                        definition
-                            .states
-                            .iter()
-                            .position(|state| state.state == initial)
-                    }),
-                    dirty: true,
-                    ..default()
-                })
-                .collect(),
-        }
-    }
-
-    pub(crate) fn apply(
-        &mut self,
-        definitions: &[WorldObjectPresentationControllerDefinition],
-        operation: &PhysicalPresentationOperation,
-        animations_enabled: bool,
-    ) -> bool {
-        let mut changed = false;
-        for (playback, definition) in self.controllers.iter_mut().zip(definitions) {
-            match *operation {
-                PhysicalPresentationOperation::Set(state)
-                | PhysicalPresentationOperation::Push(state) => {
-                    if !animations_enabled && !definition.overrides_animation_setting {
-                        continue;
-                    }
-                    let Some(index) = definition
-                        .states
-                        .iter()
-                        .position(|entry| entry.state == state)
-                    else {
-                        continue;
-                    };
-                    if matches!(operation, PhysicalPresentationOperation::Push(_)) {
-                        playback.queued.push_back(index);
-                    } else {
-                        playback.selected = Some(index);
-                        playback.dirty = true;
-                    }
-                    changed = true;
-                }
-                PhysicalPresentationOperation::Completed(child)
-                | PhysicalPresentationOperation::Looped(child) => {
-                    // Ignore late notifications from a replaced child presentation.
-                    if playback.dirty || playback.projected_child != Some(child) {
-                        continue;
-                    }
-                    let next = playback.queued.pop_front();
-                    if next.is_some()
-                        || matches!(operation, PhysicalPresentationOperation::Completed(_))
-                    {
-                        playback.selected = next.or_else(|| {
-                            definition.default_state.and_then(|default_state| {
-                                definition
-                                    .states
-                                    .iter()
-                                    .position(|entry| entry.state == default_state)
-                            })
-                        });
-                        playback.dirty = true;
-                        changed = true;
-                    }
+        for &target in targets {
+            let Ok((identity, owner, mut selected, mut queued, active, pending)) =
+                controllers.get_mut(target)
+            else {
+                continue;
+            };
+            if owner.0 != request.owner {
+                continue;
+            }
+            let Some(definition) = definitions.find_object(identity.object).and_then(|object| {
+                object
+                    .presentation_attachments
+                    .get(identity.controller_index)
+            }) else {
+                continue;
+            };
+            let previous_child = if pending || selected.is_changed() {
+                None
+            } else {
+                active.map(|active| active.0)
+            };
+            if let Some(next) = apply_controller_operation(
+                definition,
+                &mut queued.0,
+                previous_child,
+                request.operation,
+                animations_enabled,
+            ) {
+                selected.0 = next;
+                if !pending {
+                    commands
+                        .entity(target)
+                        .insert(PendingPhysicalPresentationChild);
                 }
             }
         }
-        changed
     }
+}
 
-    pub(crate) fn pending(
-        &self,
-    ) -> impl Iterator<Item = (usize, Option<usize>, Option<Entity>)> + '_ {
-        self.controllers
-            .iter()
-            .enumerate()
-            .filter(|(_, state)| state.dirty)
-            .map(|(index, state)| (index, state.selected, state.projected_child))
+fn apply_controller_operation(
+    definition: &WorldObjectPresentationControllerDefinition,
+    queued: &mut VecDeque<usize>,
+    active_child: Option<Entity>,
+    operation: PhysicalPresentationOperation,
+    animations_enabled: bool,
+) -> Option<Option<usize>> {
+    match operation {
+        PhysicalPresentationOperation::Set(state) | PhysicalPresentationOperation::Push(state) => {
+            if !animations_enabled && !definition.overrides_animation_setting {
+                return None;
+            }
+            let index = physical_presentation_state_index(definition, state)?;
+            if matches!(operation, PhysicalPresentationOperation::Push(_)) {
+                queued.push_back(index);
+                None
+            } else {
+                Some(Some(index))
+            }
+        }
+        PhysicalPresentationOperation::ChildPeriodFinished { child, looping, .. } => {
+            if active_child != Some(child) {
+                return None;
+            }
+            let next = queued.pop_front();
+            if next.is_none() && looping {
+                return None;
+            }
+            Some(next.or_else(|| {
+                definition
+                    .default_state
+                    .and_then(|state| physical_presentation_state_index(definition, state))
+            }))
+        }
     }
+}
 
-    pub(crate) fn projected(&mut self, controller: usize, child: Option<Entity>) {
-        let playback = &mut self.controllers[controller];
-        playback.projected_child = child;
-        playback.dirty = false;
-    }
+pub(super) fn physical_presentation_state_index(
+    controller: &WorldObjectPresentationControllerDefinition,
+    state: AssetId,
+) -> Option<usize> {
+    controller
+        .states
+        .iter()
+        .position(|entry| entry.state == state)
 }
 
 #[cfg(test)]
@@ -161,8 +164,9 @@ mod tests {
     use super::*;
     use openzt2_game_data::world_definitions::world_objects::WorldObjectPresentationAttachmentDefinition;
 
-    fn sign_controller() -> WorldObjectPresentationControllerDefinition {
-        WorldObjectPresentationControllerDefinition {
+    #[test]
+    fn set_is_immediate_push_is_fifo_and_completion_returns_to_default() {
+        let definition = WorldObjectPresentationControllerDefinition {
             initial_state: Some(AssetId::from_key("idle")),
             default_state: Some(AssetId::from_key("idle")),
             overrides_animation_setting: false,
@@ -180,53 +184,38 @@ mod tests {
                     child_animation: None,
                 })
                 .into(),
-        }
-    }
-
-    #[test]
-    fn set_is_immediate_push_is_fifo_and_completion_returns_to_default() {
-        let definitions = [sign_controller()];
-        let mut playback = PhysicalPresentationControllers::from_definitions(&definitions);
+        };
         let mut world = World::new();
+        let controller = world.spawn_empty().id();
         let initial = world.spawn_empty().id();
-        playback.projected(0, Some(initial));
-        assert!(playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Push(AssetId::from_key("extra")),
-            true
-        ));
-        assert_eq!(playback.pending().count(), 0);
-        assert!(playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Set(AssetId::from_key("used")),
-            true
-        ));
-        assert_eq!(playback.pending().next().expect("switch").1, Some(1));
-        assert!(!playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Completed(initial),
-            true
-        ));
         let used = world.spawn_empty().id();
-        playback.projected(0, Some(used));
-        assert!(playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Looped(used),
-            true
-        ));
-        assert_eq!(playback.pending().next().expect("queue").1, Some(2));
         let extra = world.spawn_empty().id();
-        playback.projected(0, Some(extra));
-        assert!(!playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Looped(extra),
-            true
-        ));
-        assert!(playback.apply(
-            &definitions,
-            &PhysicalPresentationOperation::Completed(extra),
-            true
-        ));
-        assert_eq!(playback.pending().next().expect("default").1, Some(0));
+        let mut queued = VecDeque::new();
+        let mut operate = |child, operation| {
+            apply_controller_operation(&definition, &mut queued, child, operation, true)
+        };
+        let finish = |child, looping| PhysicalPresentationOperation::ChildPeriodFinished {
+            controller,
+            child,
+            looping,
+        };
+        assert_eq!(
+            operate(
+                Some(initial),
+                PhysicalPresentationOperation::Push(AssetId::from_key("extra"))
+            ),
+            None
+        );
+        assert_eq!(
+            operate(
+                Some(initial),
+                PhysicalPresentationOperation::Set(AssetId::from_key("used"))
+            ),
+            Some(Some(1))
+        );
+        assert_eq!(operate(Some(used), finish(initial, false)), None);
+        assert_eq!(operate(Some(used), finish(used, true)), Some(Some(2)));
+        assert_eq!(operate(Some(extra), finish(extra, true)), None);
+        assert_eq!(operate(Some(extra), finish(extra, false)), Some(Some(0)));
     }
 }

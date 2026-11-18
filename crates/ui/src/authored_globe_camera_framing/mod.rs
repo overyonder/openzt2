@@ -1,13 +1,13 @@
+use super::authored_globe_model_bounds::UiGlobeModelBounds;
 use super::authored_globe_presentation_types::UiGlobeCamera;
 use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
+use super::authored_globe_presentation_types::UiGlobeRenderScene;
 use super::authored_globe_presentation_types::UiGlobeSceneOwner;
 use crate::authored_globe_presentation_types::UiGlobePresentation;
 use bevy::camera::Viewport;
-use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy::window::PrimaryWindow;
-use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
 pub(crate) fn update_globe_camera_viewports(
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -69,72 +69,57 @@ pub(crate) fn update_globe_camera_viewports(
 }
 
 pub(crate) fn frame_globe_cameras(
-    models: Res<Assets<Gltf>>,
-    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
-    meshes: Res<Assets<Mesh>>,
-    prefabs: Query<(&PrefabModel, &GlobalTransform), With<UiGlobePrimaryRenderable>>,
-    mut cameras: Query<&mut Transform, With<UiGlobeCamera>>,
+    prefabs: Query<(
+        &UiGlobePrimaryRenderable,
+        &UiGlobeModelBounds,
+        &GlobalTransform,
+    )>,
+    scenes: Query<&UiGlobeRenderScene>,
+    mut cameras: Query<(&UiGlobeSceneOwner, &mut Transform), With<UiGlobeCamera>>,
 ) {
-    let Some((center, radius)) =
-        transformed_model_bounds(&models, &gltf_meshes, &meshes, &prefabs, None)
-    else {
-        return;
-    };
-    for mut transform in &mut cameras {
-        // The physical globe fills nine tenths of its authored viewport,
-        // leaving room for markers whose meshes extend beyond the sphere.
+    for (owner, mut transform) in &mut cameras {
+        let Ok(scene) = scenes.get(owner.0) else {
+            continue;
+        };
+        let Some((center, radius)) = transformed_model_bounds(&prefabs, scene.world, None) else {
+            continue;
+        };
         let distance = radius / (std::f32::consts::FRAC_PI_8.tan()) * 1.1;
-        // The authored BFPhysObj is at source Y=+100 and is viewed from the
-        // origin toward +Y. Source-to-Bevy conversion maps that axis to -Z,
-        // so the equivalent camera belongs on the positive-Z hemisphere.
-        let requested_transform =
+        let pose =
             Transform::from_translation(center + Vec3::Z * distance).looking_at(center, Vec3::Y);
-        if *transform != requested_transform {
-            *transform = requested_transform;
-        }
+        transform.set_if_neq(pose);
     }
 }
 
 pub(super) fn transformed_model_bounds(
-    models: &Assets<Gltf>,
-    gltf_meshes: &Assets<bevy::gltf::GltfMesh>,
-    meshes: &Assets<Mesh>,
-    prefabs: &Query<(&PrefabModel, &GlobalTransform), With<UiGlobePrimaryRenderable>>,
+    prefabs: &Query<(
+        &UiGlobePrimaryRenderable,
+        &UiGlobeModelBounds,
+        &GlobalTransform,
+    )>,
+    globe_world: Entity,
     relative_to: Option<&GlobalTransform>,
 ) -> Option<(Vec3, f32)> {
-    prefabs.iter().fold(None, |bounds, (prefab, transform)| {
-        let Some(model) = prefab.handle.as_ref().and_then(|handle| models.get(handle)) else {
-            return bounds;
-        };
-        let transform = relative_to.map_or(*transform, |parent| {
-            GlobalTransform::from(parent.affine().inverse() * transform.affine())
-        });
-        let scale = transform
-            .to_scale_rotation_translation()
-            .0
-            .abs()
-            .max_element();
-        openzt2_game_assets::model::model_asset_queries::loaded_gltf_model_aggregate_local_bounds(
-            model,
-            gltf_meshes,
-            meshes,
-        )
-        .into_iter()
-        .fold(bounds, |bounds, (minimum, maximum)| {
-            let local_center = (minimum + maximum) * 0.5;
-            let half_extents = (maximum - minimum) * 0.5;
-            let center = transform.transform_point(local_center);
-            // Globe meshes are spherical but their generic model bound stores
-            // the enclosing AABB diagonal as `radius`. Framing with that value
-            // leaves the authored globe sqrt(3) too small inside its bezel.
-            let radius = (half_extents.max_element() * scale).max(0.001);
-            Some(match bounds {
-                None => (center, radius),
-                Some((old_center, old_radius)) => (
-                    old_center,
-                    old_radius.max(old_center.distance(center) + radius),
-                ),
-            })
+    prefabs
+        .iter()
+        .filter(|(owner, _, _)| owner.0 == globe_world)
+        .map(|(_, bounds, transform)| {
+            let transform = transform.affine();
+            let transform =
+                relative_to.map_or(transform, |parent| parent.affine().inverse() * transform);
+            let scale = transform
+                .to_scale_rotation_translation()
+                .0
+                .abs()
+                .max_element();
+            let center = transform.transform_point3((bounds.minimum + bounds.maximum) * 0.5);
+            let radius = ((bounds.maximum - bounds.minimum).max_element() * 0.5 * scale).max(0.001);
+            (center, radius)
         })
-    })
+        .reduce(|(center, radius), (other_center, other_radius)| {
+            (
+                center,
+                radius.max(center.distance(other_center) + other_radius),
+            )
+        })
 }

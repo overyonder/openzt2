@@ -2,9 +2,13 @@
 //! playing the placement set at the chosen site and continuing afterwards.
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use bevy::prelude::*;
+use bevy::{
+    ecs::{message::MessageCursor, relationship::RelationshipTarget},
+    prelude::*,
+};
 use openzt2_game_assets::{
     behavior::behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection},
+    scene_prefab::ScenePrefabAsset,
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -29,8 +33,91 @@ use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
 use super::behavior_target_placement_types as types;
 use types::{
-    BehaviorTargetPlacementSiteMarker, BehaviorTargetPlacementStage, PendingBehaviorTargetPlacement,
+    BehaviorTargetPlacementMarkers, BehaviorTargetPlacementSiteOf, BehaviorTargetPlacementStage,
+    PendingBehaviorTargetPlacement,
 };
+
+pub(super) fn invalidate_obsolete_behavior_target_placement_sites(
+    definitions: Res<WorldDefinitions>,
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    prefab_events: Option<Res<Messages<AssetEvent<ScenePrefabAsset>>>>,
+    mut cursor: Local<MessageCursor<AssetEvent<ScenePrefabAsset>>>,
+    markers: Query<&BehaviorTargetPlacementMarkers>,
+    mut placements: Query<(
+        Entity,
+        &WorldMember,
+        &mut BehaviorTaskExecutionState,
+        &mut PendingBehaviorTargetPlacement,
+    )>,
+    mut commands: Commands,
+) {
+    let changed_prefabs = prefab_events
+        .as_deref()
+        .map(|events| {
+            cursor
+                .read(events)
+                .filter_map(|event| match *event {
+                    AssetEvent::Modified { id } | AssetEvent::Removed { id } => Some(id),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let definitions_changed = definitions.is_changed() || definition_assets.is_changed();
+    if changed_prefabs.is_empty() && !definitions_changed {
+        return;
+    }
+    let catalogue = definitions.get(&definition_assets);
+    for (actor, world, mut task, mut pending) in &mut placements {
+        if !pending.owns(&task, world) {
+            continue;
+        }
+        let definition = pending.definition;
+        if let BehaviorTargetPlacementStage::Siting { prefab } = &mut pending.stage {
+            if definitions_changed {
+                if let Some(catalogue) = catalogue {
+                    let current = catalogue
+                        .find_object(definition)
+                        .and_then(|object| catalogue.scene(object.prefab));
+                    if *prefab != current {
+                        *prefab = current;
+                    }
+                }
+            }
+            continue;
+        }
+        let Some(site) = pending.site() else {
+            continue;
+        };
+        if changed_prefabs.contains(&site.prefab.id())
+            || (definitions_changed
+                && catalogue.is_some_and(|catalogue| {
+                    !site.uses_current_prefab(catalogue, pending.definition)
+                }))
+        {
+            restore_placement_recipient(actor, &pending, &markers, &mut task);
+            let next_action_tick = task.next_action_tick;
+            task.restore_suspended_instruction(&pending.origin, pending.depth, next_action_tick);
+            fail_placement(actor, &mut commands);
+        }
+    }
+}
+
+fn restore_placement_recipient(
+    actor: Entity,
+    pending: &PendingBehaviorTargetPlacement,
+    markers: &Query<&BehaviorTargetPlacementMarkers>,
+    task: &mut BehaviorTaskExecutionState,
+) {
+    if task.target.is_some_and(|target| {
+        markers
+            .get(actor)
+            .is_ok_and(|markers| markers.iter().any(|marker| marker == target))
+    }) {
+        task.target = Some(pending.recipient);
+        task.interaction_slot = None;
+    }
+}
 
 pub(super) fn prepare_and_finish_behavior_target_placements(
     mut commands: Commands,
@@ -66,6 +153,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
         ),
         With<PendingBehaviorTaskFailure>,
     >,
+    markers: Query<&BehaviorTargetPlacementMarkers>,
     obsolete: Query<
         Entity,
         (
@@ -83,18 +171,16 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
     // A failing placement set leaves the task's failure outcome addressed to
     // the recipient, not to the site it was walking to.
     for (actor, pending, mut task) in &mut failing {
-        restore_placement_recipient(pending, &mut task);
+        restore_placement_recipient(actor, pending, &markers, &mut task);
         commands
             .entity(actor)
             .remove::<PendingBehaviorTargetPlacement>();
     }
     for (actor, mut task, world, pending, species, staff, guest) in &mut actors {
         if let Some(mut pending) = pending {
-            if !pending.owns(&task, world)
-                || pending.definition_revision != definitions.catalogue_revision()
-            {
+            if !pending.owns(&task, world) {
                 // A replaced or interrupted task never receives the object.
-                restore_placement_recipient(&pending, &mut task);
+                restore_placement_recipient(actor, &pending, &markers, &mut task);
                 commands
                     .entity(actor)
                     .remove::<PendingBehaviorTargetPlacement>();
@@ -104,7 +190,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 .get(pending.recipient)
                 .is_ok_and(|(recipient_world, _)| recipient_world.root == pending.root)
             {
-                restore_placement_recipient(&pending, &mut task);
+                restore_placement_recipient(actor, &pending, &markers, &mut task);
                 fail_placement(actor, &mut commands);
                 continue;
             }
@@ -152,7 +238,7 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                             site.transform,
                             // Docking may read the site before transform propagation.
                             GlobalTransform::from(site.transform),
-                            BehaviorTargetPlacementSiteMarker { actor },
+                            BehaviorTargetPlacementSiteOf(actor),
                         ))
                         .id();
                     task.program = action.placement_behavior_set;
@@ -164,14 +250,13 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                     task.target = Some(marker);
                     task.interaction_slot = None;
                     task.next_action_tick = clock.tick.saturating_add(1);
-                    pending.stage = BehaviorTargetPlacementStage::Delivering { site, marker };
+                    pending.stage = BehaviorTargetPlacementStage::Delivering { site };
                 }
-                BehaviorTargetPlacementStage::Delivering { site, marker } => {
+                BehaviorTargetPlacementStage::Delivering { site } => {
                     task.target = Some(pending.recipient);
                     task.interaction_slot = None;
                     pending.stage = BehaviorTargetPlacementStage::PuttingDown {
                         site,
-                        marker,
                         payment: types::BehaviorTargetPlacementPaymentState::Unrequested,
                     };
                 }
@@ -223,37 +308,8 @@ pub(super) fn prepare_and_finish_behavior_target_placements(
                 root: world.root,
                 recipient,
                 definition,
-                definition_revision: definitions.catalogue_revision(),
                 stage: BehaviorTargetPlacementStage::Siting { prefab: None },
             });
-    }
-}
-
-/// A marker lives only while its placement is delivering or putting down.
-pub(super) fn despawn_orphaned_behavior_target_placement_site_markers(
-    mut commands: Commands,
-    markers: Query<(Entity, &BehaviorTargetPlacementSiteMarker)>,
-    placements: Query<&PendingBehaviorTargetPlacement>,
-) {
-    for (marker, owner) in &markers {
-        if placements
-            .get(owner.actor)
-            .ok()
-            .and_then(PendingBehaviorTargetPlacement::marker)
-            != Some(marker)
-        {
-            commands.entity(marker).despawn();
-        }
-    }
-}
-
-fn restore_placement_recipient(
-    pending: &PendingBehaviorTargetPlacement,
-    task: &mut BehaviorTaskExecutionState,
-) {
-    if pending.marker().is_some() && task.target == pending.marker() {
-        task.target = Some(pending.recipient);
-        task.interaction_slot = None;
     }
 }
 

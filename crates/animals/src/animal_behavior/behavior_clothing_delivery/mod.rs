@@ -31,7 +31,10 @@ pub(super) fn finish_clothing_delivery(
     )>,
     children: Query<&Children>,
     presentations: Query<&PrefabPresentation>,
-    renderables: Query<(&PrefabMaterialOverrides, Option<&PrefabClothingTextures>)>,
+    mut renderables: Query<(
+        &PrefabMaterialOverrides,
+        Option<&mut PrefabClothingTextures>,
+    )>,
     entities: Query<()>,
 ) {
     for (actor, delivery, task, failed) in &mut actors {
@@ -146,7 +149,16 @@ pub(super) fn finish_clothing_delivery(
             continue;
         }
         for (root, clothing) in updates {
-            commands.entity(root).insert(clothing);
+            let Ok((_, existing)) = renderables.get_mut(root) else {
+                continue;
+            };
+            if let Some(mut existing) = existing {
+                if existing.0 != clothing.0 {
+                    *existing = clothing;
+                }
+            } else {
+                commands.entity(root).insert(clothing);
+            }
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);
         commands.entity(actor).remove::<PendingClothingDelivery>();

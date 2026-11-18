@@ -173,15 +173,21 @@ mod tests {
             events.iter().map(|event| event.due_ms).collect::<Vec<_>>(),
             [0, 0, 2000, 3000, 3500]
         );
-        assert!(matches!(events[0].action.action,
+        let action = |index: usize| match &events[index].action {
+            openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record) => {
+                &record.action
+            }
+            _ => panic!("expected presentation action"),
+        };
+        assert!(matches!(action(0),
             UiPresentationAction::SetTargetNodeSelectionAndTimedSequencesActive { target_node, active: false, .. }
-            if target_node == UiDocumentRole::node_id(UiDocumentRole::MainMenu, "railcam")));
-        assert!(matches!(events[1].action.action,
+            if *target_node == UiDocumentRole::node_id(UiDocumentRole::MainMenu, "railcam")));
+        assert!(matches!(action(1),
             UiPresentationAction::SetTargetNodeVisible { target_node, visible: true }
-            if target_node == UiDocumentRole::node_id(UiDocumentRole::MainMenu, "background")));
-        assert!(matches!(events[4].action.action,
+            if *target_node == UiDocumentRole::node_id(UiDocumentRole::MainMenu, "background")));
+        assert!(matches!(action(4),
             UiPresentationAction::SetTargetNodeSelectionAndTimedSequencesActive { target_node, active: true, .. }
-            if target_node == timeline.id));
+            if *target_node == timeline.id));
         Ok(())
     }
 }

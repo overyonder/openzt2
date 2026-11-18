@@ -11,6 +11,9 @@ pub struct PhysicalPresentationRequest {
 pub enum PhysicalPresentationOperation {
     Set(AssetId),
     Push(AssetId),
-    Completed(Entity),
-    Looped(Entity),
+    ChildPeriodFinished {
+        controller: Entity,
+        child: Entity,
+        looping: bool,
+    },
 }

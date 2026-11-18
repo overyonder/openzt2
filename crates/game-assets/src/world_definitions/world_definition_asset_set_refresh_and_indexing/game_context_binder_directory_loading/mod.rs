@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-pub(in crate::world_definitions) fn load_game_context_binder_directories(
+pub(crate) fn load_game_context_binder_directories(
     archives: &AssetArchives,
 ) -> io::Result<BTreeSet<PathBuf>> {
     let path = "config/gamectxt.xml";

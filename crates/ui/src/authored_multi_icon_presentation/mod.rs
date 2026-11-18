@@ -26,13 +26,14 @@ pub(crate) fn present_multi_icons(
             &UiDocumentOwner,
             &UiMultiIconPolicy,
             &UiValue,
+            &mut UiSourceRect,
             Option<&mut ImageNode>,
             &mut Visibility,
         ),
         Changed<UiValue>,
     >,
 ) {
-    for (entity, node, owner, _, value, image_node, mut visibility) in &mut icons {
+    for (entity, node, owner, _, value, mut source, image_node, mut visibility) in &mut icons {
         let Some(index) = usize::try_from(value.0).ok() else {
             *visibility = Visibility::Hidden;
             continue;
@@ -79,19 +80,18 @@ pub(crate) fn present_multi_icons(
                     })
                 })
         };
-        if let Some(rect) = rect {
-            commands.entity(entity).insert(UiSourceRect([
+        source.set_if_neq(UiSourceRect(rect.map_or([0, 0, -1, -1], |rect| {
+            [
                 rect.min.x as i32,
                 rect.min.y as i32,
                 rect.width() as i32,
                 rect.height() as i32,
-            ]));
-        } else {
-            commands.entity(entity).remove::<UiSourceRect>();
-        }
-        if let Some(mut image_node) = image_node {
-            image_node.image = image;
-            image_node.rect = rect;
+            ]
+        })));
+        if let Some(image_node) = image_node {
+            image_node
+                .map_unchanged(|node| &mut node.image)
+                .set_if_neq(image);
         } else {
             commands.entity(entity).insert(ImageNode {
                 image,

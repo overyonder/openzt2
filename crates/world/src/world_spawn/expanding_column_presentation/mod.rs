@@ -55,35 +55,42 @@ pub fn spawn_expanding_column_presentation(
     let mut previous_piece = base_entity;
     let mut previous_attachment = column.base_attachment;
     for (index, piece) in pieces.into_iter().enumerate() {
-        commands
-            .entity(piece)
-            .insert(PendingExpandingColumnPieceAttachment {
-                previous_piece,
+        commands.entity(piece).insert((
+            ExpandingColumnPieceFollows(previous_piece),
+            PendingExpandingColumnPieceAttachment {
                 previous_attachment,
                 own_attachment: column.repeating_attachment,
                 vertical_offset: if index == 0 { -excess_height } else { 0.0 },
                 rotation: Quat::IDENTITY,
                 warned: false,
-            });
+            },
+        ));
         previous_piece = piece;
         previous_attachment = column.repeating_next_attachment;
     }
-    commands
-        .entity(top_entity)
-        .insert(PendingExpandingColumnPieceAttachment {
-            previous_piece,
+    commands.entity(top_entity).insert((
+        ExpandingColumnPieceFollows(previous_piece),
+        PendingExpandingColumnPieceAttachment {
             previous_attachment,
             own_attachment: column.top_attachment,
             vertical_offset: if count == 0 { -excess_height } else { 0.0 },
             rotation: top_rotation,
             warned: false,
-        });
+        },
+    ));
     true
 }
 
 #[derive(Component)]
+#[relationship(relationship_target = ExpandingColumnPieceSuccessor)]
+pub(super) struct ExpandingColumnPieceFollows(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ExpandingColumnPieceFollows)]
+pub(super) struct ExpandingColumnPieceSuccessor(Entity);
+
+#[derive(Component)]
 pub(super) struct PendingExpandingColumnPieceAttachment {
-    previous_piece: Entity,
     previous_attachment: AssetId,
     own_attachment: AssetId,
     vertical_offset: f32,
@@ -94,80 +101,59 @@ pub(super) struct PendingExpandingColumnPieceAttachment {
 pub(super) fn align_expanding_column_piece_attachments(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    pieces: Query<(&Transform, &PrefabPresentation)>,
-    mut pending: Query<(
-        Entity,
-        &PrefabPresentation,
-        &mut PendingExpandingColumnPieceAttachment,
-    )>,
+    predecessors: Query<(Entity, &ExpandingColumnPieceFollows)>,
+    successors: Query<&ExpandingColumnPieceSuccessor>,
+    mut pieces: Query<(&mut Transform, &PrefabPresentation)>,
+    mut pending: Query<&mut PendingExpandingColumnPieceAttachment>,
 ) {
-    let pending_entities = pending
-        .iter()
-        .map(|(entity, _, _)| entity)
-        .collect::<std::collections::HashSet<_>>();
-    for (entity, presentation, mut attachment) in &mut pending {
-        if pending_entities.contains(&attachment.previous_piece) {
+    for (first_unaligned, predecessor) in &predecessors {
+        if predecessors.contains(predecessor.0) {
             continue;
         }
-        let Ok((previous_transform, previous_presentation)) = pieces.get(attachment.previous_piece)
-        else {
-            continue;
-        };
-        let (Some(previous_prefab), Some(prefab)) = (
-            prefabs.get(&previous_presentation.0),
-            prefabs.get(&presentation.0),
-        ) else {
-            continue;
-        };
-        let (Some(previous_attachment), Some(own_attachment)) = (
-            prefab_attachment_transform(previous_prefab, attachment.previous_attachment),
-            prefab_attachment_transform(prefab, attachment.own_attachment),
-        ) else {
-            if !attachment.warned {
-                warn!(
-                    ?entity,
-                    "expanding column references an absent model attachment"
-                );
-                attachment.warned = true;
-            }
-            continue;
-        };
-        let offset = Transform::from_xyz(0.0, attachment.vertical_offset, 0.0)
-            .with_rotation(attachment.rotation);
-        let transform = Transform::from_matrix(
-            previous_transform.to_matrix()
-                * previous_attachment
-                * offset.to_matrix()
-                * own_attachment.inverse(),
-        );
-        commands
-            .entity(entity)
-            .insert(transform)
-            .remove::<PendingExpandingColumnPieceAttachment>();
-    }
-}
-
-fn prefab_attachment_transform(prefab: &ScenePrefabAsset, attachment: AssetId) -> Option<Mat4> {
-    if attachment == AssetId::default() {
-        return Some(Mat4::IDENTITY);
-    }
-    let entities = &prefab.canonical_scene_prefab_document().entities;
-    let mut index = entities
-        .iter()
-        .position(|entity| entity.attachment_id == attachment)?;
-    let mut transform = Mat4::IDENTITY;
-    for _ in 0..entities.len() {
-        let entity = entities.get(index)?;
-        transform =
-            openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored(
-                &entity.transform,
-            )
-            .to_matrix()
-                * transform;
-        if entity.parent == u32::MAX {
-            return Some(transform);
+        let mut previous_piece = predecessor.0;
+        let mut entity = first_unaligned;
+        while let Ok(mut attachment) = pending.get_mut(entity) {
+            let Ok([(previous_transform, previous_presentation), (mut transform, presentation)]) =
+                pieces.get_many_mut([previous_piece, entity])
+            else {
+                break;
+            };
+            let (Some(previous_prefab), Some(prefab)) = (
+                prefabs.get(&previous_presentation.0),
+                prefabs.get(&presentation.0),
+            ) else {
+                break;
+            };
+            let (Some(previous_attachment), Some(own_attachment)) = (
+                previous_prefab.prefab_attachment_transform(attachment.previous_attachment),
+                prefab.prefab_attachment_transform(attachment.own_attachment),
+            ) else {
+                if !attachment.warned {
+                    warn!(
+                        ?entity,
+                        "expanding column references an absent model attachment"
+                    );
+                    attachment.warned = true;
+                }
+                break;
+            };
+            let offset = Transform::from_xyz(0.0, attachment.vertical_offset, 0.0)
+                .with_rotation(attachment.rotation);
+            *transform = Transform::from_matrix(
+                previous_transform.to_matrix()
+                    * previous_attachment
+                    * offset.to_matrix()
+                    * own_attachment.inverse(),
+            );
+            commands.entity(entity).remove::<(
+                ExpandingColumnPieceFollows,
+                PendingExpandingColumnPieceAttachment,
+            )>();
+            let Ok(successor) = successors.get(entity) else {
+                break;
+            };
+            previous_piece = entity;
+            entity = successor.0;
         }
-        index = entity.parent as usize;
     }
-    None
 }

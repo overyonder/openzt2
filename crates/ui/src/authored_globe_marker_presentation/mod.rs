@@ -1,5 +1,5 @@
 use super::authored_globe_camera_framing::transformed_model_bounds;
-use super::authored_globe_presentation_types::UiGlobeMarkerProjected;
+use super::authored_globe_model_bounds::UiGlobeModelBounds;
 use super::authored_globe_presentation_types::UiGlobePrefab;
 use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
 use super::authored_globe_presentation_types::UiGlobeRenderScene;
@@ -8,20 +8,18 @@ use crate::authored_globe_presentation_types::UiGlobeMarkerAnchor;
 use crate::authored_globe_presentation_types::UiGlobeMarkerVisual;
 use crate::authored_globe_presentation_types::UiGlobePresentation;
 use crate::authored_globe_presentation_types::UiGlobeSceneAssets;
-use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use openzt2_interface_state::shell::shell_selection_types::GlobeMarker;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
+use openzt2_interface_state::shell::shell_selection_types::{
+    WorldChoiceMarkerView, WorldChoiceMarkers,
+};
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 
 pub(crate) fn project_globe_markers(
     mut commands: Commands,
-    models: Res<Assets<Gltf>>,
-    gltf_meshes: Res<Assets<bevy::gltf::GltfMesh>>,
-    meshes: Res<Assets<Mesh>>,
     globes: Query<(
         Entity,
         &UiGlobePresentation,
@@ -29,23 +27,26 @@ pub(crate) fn project_globe_markers(
         &UiGlobeRenderScene,
         &UiDocumentOwner,
     )>,
-    prefabs: Query<(&PrefabModel, &GlobalTransform), With<UiGlobePrimaryRenderable>>,
+    prefabs: Query<(
+        &UiGlobePrimaryRenderable,
+        &UiGlobeModelBounds,
+        &GlobalTransform,
+    )>,
     transforms: Query<&GlobalTransform>,
-    markers: Query<(Entity, &GlobeMarker), Without<UiGlobeMarkerProjected>>,
+    markers: Query<(Entity, &GlobeMarker), Without<WorldChoiceMarkers>>,
 ) {
+    if markers.is_empty() {
+        return;
+    }
     let Some((_globe_entity, globe, scene_assets, scene, owner)) = globes.iter().next() else {
         return;
     };
     let Ok(world_transform) = transforms.get(scene.world) else {
         return;
     };
-    let Some((center, radius)) = transformed_model_bounds(
-        &models,
-        &gltf_meshes,
-        &meshes,
-        &prefabs,
-        Some(world_transform),
-    ) else {
+    let Some((center, radius)) =
+        transformed_model_bounds(&prefabs, scene.world, Some(world_transform))
+    else {
         return;
     };
     for (choice_entity, marker) in &markers {
@@ -63,8 +64,8 @@ pub(crate) fn project_globe_markers(
             .spawn((
                 Name::new("map location marker anchor"),
                 UiGlobeMarkerAnchor,
+                WorldChoiceMarkerView(choice_entity),
                 UiSelected(false),
-                WorldChoiceView(choice_entity),
                 *owner,
                 // world-scenario catalog stores the direction on the authored globe, not a
                 // model-space position. This entity is an ECS transform
@@ -87,7 +88,6 @@ pub(crate) fn project_globe_markers(
                     primary: false,
                 },
                 UiGlobeMarkerVisual { selected: false },
-                WorldChoiceView(choice_entity),
                 *owner,
                 // The normal flag is built around source Y=-25 while the
                 // Earth mesh has an authored radius of 25 after NIF scaling.
@@ -109,7 +109,6 @@ pub(crate) fn project_globe_markers(
                     primary: false,
                 },
                 UiGlobeMarkerVisual { selected: true },
-                WorldChoiceView(choice_entity),
                 *owner,
                 Transform::from_translation(
                     marker_rotation.inverse()
@@ -121,9 +120,6 @@ pub(crate) fn project_globe_markers(
                 ChildOf(rendered_marker),
             ));
         }
-        commands
-            .entity(choice_entity)
-            .insert(UiGlobeMarkerProjected);
     }
 }
 
@@ -131,27 +127,27 @@ pub(crate) fn project_globe_markers(
 /// modes flag every map and ring the selected one.
 pub(crate) fn present_globe_marker_selection(
     selection: Option<Res<ShellSelection>>,
-    anchors: Query<(&WorldChoiceView, &UiSelected), With<UiGlobeMarkerAnchor>>,
-    mut visuals: Query<
-        (&WorldChoiceView, &UiGlobeMarkerVisual, &mut Visibility),
-        Without<PrefabModel>,
-    >,
+    anchors: Query<(Ref<UiSelected>, &Children), With<UiGlobeMarkerAnchor>>,
+    mut visuals: Query<(&UiGlobeMarkerVisual, &mut Visibility), Without<PrefabModel>>,
 ) {
-    let campaign = selection.is_some_and(|selection| {
+    let campaign = selection.as_ref().is_some_and(|selection| {
         selection.mode == Some(openzt2_world_state::game_session_types::WorldSessionMode::Campaign)
     });
-    for (view, selected) in &anchors {
-        for (visual_view, visual, mut visibility) in &mut visuals {
-            if visual_view.0 != view.0 {
-                continue;
-            }
-            let requested = if selected.0 || !(visual.selected || campaign) {
-                Visibility::Inherited
-            } else {
-                Visibility::Hidden
-            };
-            if *visibility != requested {
-                *visibility = requested;
+    for (selected, children) in &anchors {
+        if !selected.is_changed()
+            && !selection
+                .as_ref()
+                .is_some_and(|selection| selection.is_changed())
+        {
+            continue;
+        }
+        for child in children {
+            if let Ok((visual, mut visibility)) = visuals.get_mut(*child) {
+                visibility.set_if_neq(if selected.0 || !(visual.selected || campaign) {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
             }
         }
     }

@@ -114,7 +114,7 @@ pub(super) fn bind_guest_policy(
         enabled: required_bool(record, &["On"])?,
         use_test_type: required_bool(record, &["UseAITestType"])?,
         maximum_guests_base: required_number(record, &["MaxGuestsBase"])?,
-        maximum_guests_per_half_star: required_number::<u32>(record, &["MaxGuestsPerStar"])? / 2,
+        maximum_guests_per_star: required_number(record, &["MaxGuestsPerStar"])?,
         spawn_at_entrance: required_bool(record, &["SpawnAtEntrance"])?,
         arrival_offset_m: array_required(record, &["DisplacementX", "DisplacementY"])?,
         departure_offset_m: array_required(record, &["DisplacementXLeave", "DisplacementYLeave"])?,

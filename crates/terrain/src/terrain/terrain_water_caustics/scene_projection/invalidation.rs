@@ -65,7 +65,6 @@ pub(super) enum BoundInput {
 pub(in crate::terrain) struct BoundCache {
     pub(super) deps: Dependencies<BoundInput>,
     pub(super) regions: Dependencies<Entity>,
-    pub(super) spheres: HashMap<Entity, Option<PrefabBoundingSphere>>,
     pub(super) active: bool,
 }
 

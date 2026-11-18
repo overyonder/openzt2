@@ -67,7 +67,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     scene_prefabs: Res<Assets<ScenePrefabAsset>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    renderer_targets: Option<Res<AuthoredTerrainWaterRendererTargets>>,
+    renderer_targets: Query<&AuthoredTerrainWaterRendererTargets>,
     terrain_chunks: Query<
         (
             Entity,
@@ -179,7 +179,7 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             }
             continue;
         };
-        let Some(renderer_targets) = renderer_targets.as_deref() else {
+        let Ok(renderer_targets) = renderer_targets.single() else {
             continue;
         };
         let _rebuild_span = info_span!("rebuild_chunk_water_surfaces").entered();
@@ -280,18 +280,19 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             .iter()
             .filter(|(_, source)| source.terrain().id() == chunk.asset.id())
             .collect::<Vec<_>>();
+        let medium_detail = graphics_settings.water_detail == FourLevelGraphicsDetail::Medium;
+        let low_detail =
+            graphics_settings.water_detail == FourLevelGraphicsDetail::Low || medium_detail;
         let Some(mesh_groups) = construct_terrain_water_surface_and_waterfall_mesh_groups(
             chunk,
             terrain_asset,
             edited_samples,
             &membership,
             &sources,
+            !low_detail,
         ) else {
             continue;
         };
-        let medium_detail = graphics_settings.water_detail == FourLevelGraphicsDetail::Medium;
-        let low_detail =
-            graphics_settings.water_detail == FourLevelGraphicsDetail::Low || medium_detail;
         if low_detail {
             let Some(low_groups) = construct_terrain_water_low_detail_mesh_groups(
                 chunk,
@@ -435,7 +436,10 @@ pub(super) fn project_changed_terrain_water_surfaces_and_waterfalls(
             else {
                 continue;
             };
-            let mesh = meshes.add(mesh_group.surface_mesh);
+            let Some(mesh) = mesh_group.surface_mesh else {
+                continue;
+            };
+            let mesh = meshes.add(mesh);
             let wave_key = TerrainWaterWaveStateKey(mesh_group.region_owner);
             let scum = presentation
                 .surface_material

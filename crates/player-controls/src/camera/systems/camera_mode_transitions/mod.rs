@@ -42,39 +42,6 @@ pub(crate) fn clear_camera_input_on_return(
     }
 }
 
-pub(crate) fn capture_camera_return_state(
-    mut commands: Commands,
-    mut requests: MessageReader<SetCameraMode>,
-    camera: Single<
-        (
-            Entity,
-            &CameraMode,
-            &CameraDefinition,
-            &Transform,
-            &OverheadRig,
-            Option<&CameraReturnState>,
-        ),
-        With<ZooCamera>,
-    >,
-    subjects: Query<&GlobalTransform, Without<ZooCamera>>,
-) {
-    if camera.5.is_some() || *camera.1 != CameraMode::Overhead {
-        return;
-    }
-    if requests.read().any(|request| {
-        request.mode.is_immersive()
-            && requested_duration_is_valid(request.transition_seconds)
-            && mode_target_exists(request.mode, &subjects)
-    }) {
-        commands.entity(camera.0).insert(CameraReturnState {
-            mode: *camera.1,
-            definition: camera.2 .0,
-            transform: *camera.3,
-            overhead: camera.4.clone(),
-        });
-    }
-}
-
 pub(crate) fn begin_camera_transition(
     mut commands: Commands,
     mut modes: MessageReader<SetCameraMode>,
@@ -84,12 +51,13 @@ pub(crate) fn begin_camera_transition(
     mut camera: Single<
         (
             Entity,
-            &Transform,
+            &mut Transform,
             &mut CameraMode,
             &mut CameraDefinition,
             &mut OverheadRig,
             &CameraBounds,
             &CameraTuning,
+            Option<&CameraReturnState>,
         ),
         With<ZooCamera>,
     >,
@@ -98,6 +66,8 @@ pub(crate) fn begin_camera_transition(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    let mut has_return_state = camera.7.is_some();
+    let mut entered_overhead = false;
     for request in modes.read() {
         if !requested_duration_is_valid(request.transition_seconds) {
             continue;
@@ -110,27 +80,34 @@ pub(crate) fn begin_camera_transition(
             f32::from(definition.offset_m[1]) + camera.6.parenting_offset_m,
             f32::from(definition.offset_m[2]),
         );
-        let Some(to) = mode_target(request.mode, camera.1, &subjects, offset) else {
+        let Some(to) = mode_target(request.mode, &camera.1, &subjects, offset) else {
             continue;
         };
+        if *camera.2 == CameraMode::Overhead && request.mode.is_immersive() && !has_return_state {
+            commands.entity(camera.0).insert(CameraReturnState {
+                mode: *camera.2,
+                definition: camera.3 .0,
+                transform: *camera.1,
+                overhead: camera.4.clone(),
+            });
+            has_return_state = true;
+        }
+        entered_overhead = request.mode == CameraMode::Overhead;
         *camera.2 = request.mode;
         camera.3 .0 = request.definition;
         commands
             .entity(camera.0)
             .remove::<RemoveReturnStateOnComplete>();
+        let entity = camera.0;
         apply_requested_transition(
             &mut commands,
-            camera.0,
-            camera.1,
+            entity,
+            &mut camera.1,
             to,
             request.transition_seconds,
         );
     }
-    // `capture_camera_return_state` runs first so it can observe the original
-    // mode. If every request was rejected, discard that speculative snapshot;
-    // processing the whole batch first avoids an invalid request erasing a
-    // later valid immersive transition in the same frame.
-    if *camera.2 == CameraMode::Overhead {
+    if entered_overhead && has_return_state {
         commands.entity(camera.0).remove::<CameraReturnState>();
     }
 
@@ -146,13 +123,20 @@ pub(crate) fn begin_camera_transition(
         let delta = camera.4.focus - previous_focus;
         let mut to = *camera.1;
         to.translation += Vec3::new(delta.x, 0.0, delta.y);
+        let entity = camera.0;
         apply_requested_transition(
             &mut commands,
-            camera.0,
-            camera.1,
+            entity,
+            &mut camera.1,
             to,
             request.transition_seconds,
         );
+        if request.transition_seconds.is_none() && has_return_state {
+            commands
+                .entity(entity)
+                .remove::<CameraReturnState>()
+                .remove::<RemoveReturnStateOnComplete>();
+        }
     }
 }
 
@@ -201,7 +185,7 @@ pub(crate) fn restore_camera_return_state(
     mut camera: Single<
         (
             Entity,
-            &Transform,
+            &mut Transform,
             &mut CameraMode,
             &mut CameraDefinition,
             &mut OverheadRig,
@@ -218,20 +202,23 @@ pub(crate) fn restore_camera_return_state(
         camera.3 .0 = camera.5.definition;
         *camera.4 = camera.5.overhead.clone();
         if valid_duration(request.transition_seconds).is_some() {
+            let entity = camera.0;
+            let target = camera.5.transform;
             apply_requested_transition(
                 &mut commands,
-                camera.0,
-                camera.1,
-                camera.5.transform,
+                entity,
+                &mut camera.1,
+                target,
                 request.transition_seconds,
             );
             commands
                 .entity(camera.0)
                 .insert(RemoveReturnStateOnComplete);
         } else if request.transition_seconds.is_none() {
+            let target = camera.5.transform;
+            *camera.1 = target;
             commands
                 .entity(camera.0)
-                .insert(camera.5.transform)
                 .remove::<CameraTransition>()
                 .remove::<RemoveReturnStateOnComplete>()
                 .remove::<CameraReturnState>();
@@ -322,18 +309,10 @@ pub(super) fn mode_target(
     }
 }
 
-pub(super) fn mode_target_exists(
-    mode: CameraMode,
-    subjects: &Query<&GlobalTransform, Without<ZooCamera>>,
-) -> bool {
-    mode.subject()
-        .is_none_or(|entity| subjects.get(entity).is_ok())
-}
-
 pub(super) fn apply_requested_transition(
     commands: &mut Commands,
     entity: Entity,
-    from: &Transform,
+    from: &mut Transform,
     to: Transform,
     duration: Option<f32>,
 ) {
@@ -348,10 +327,8 @@ pub(super) fn apply_requested_transition(
             });
         }
         None if duration.is_none() => {
-            commands
-                .entity(entity)
-                .insert(to)
-                .remove::<CameraTransition>();
+            *from = to;
+            commands.entity(entity).remove::<CameraTransition>();
         }
         None => {}
     }

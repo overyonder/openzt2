@@ -1,23 +1,33 @@
-use std::collections::BTreeMap;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
 use bevy::{
-    asset::{AssetLoadFailedEvent, LoadState},
+    asset::{AssetId as BevyAssetId, AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::AssetId;
+use openzt2_game_data::{AssetId, localization::LocalizationDateFormatToken};
+
+use crate::asset_source::{ArchiveOverlayChanged, AssetArchives};
 
 use super::{
-    blue_fang_localization_locale_recognition::source_path_contains_english_localization,
+    blue_fang_localization_date_format_tokenization::tokenize_blue_fang_localization_date_format,
     loaded_localization_queries::LoadedLocalizationView,
     localization_asset_types::LocalizationAsset,
+    localization_configuration::{LOCALE_CONFIGURATION_PATH, LocalizationConfiguration},
 };
 
 #[derive(Resource, Default)]
 pub struct LocalizationPrecedenceIndex {
-    indexed_archive_revision: Option<u64>,
-    localization_index_is_dirty: bool,
+    configuration_handle: Option<Handle<LocalizationConfiguration>>,
+    configuration: LocalizationConfiguration,
+    discovered: bool,
+    pending: BTreeSet<BevyAssetId<LocalizationAsset>>,
+    failed: BTreeSet<BevyAssetId<LocalizationAsset>>,
     localization_asset_handles: Vec<Handle<LocalizationAsset>>,
     localization_entry_asset_index: BTreeMap<AssetId, Handle<LocalizationAsset>>,
+    month_year_tokens: Vec<LocalizationDateFormatToken>,
 }
 
 impl LocalizationPrecedenceIndex {
@@ -36,110 +46,170 @@ impl LocalizationPrecedenceIndex {
         self.localization_entry_asset_index
             .extend(identifiers.into_iter().map(|id| (id, handle.clone())));
         self.localization_asset_handles.push(handle);
-        self.indexed_archive_revision.get_or_insert(0);
-        self.localization_index_is_dirty = false;
+        self.discovered = true;
+        self.update_month_year_format(assets);
     }
 
     pub fn has_pending_catalogue_loads(
         &self,
-        asset_server: &AssetServer,
-        assets: &Assets<LocalizationAsset>,
+        _asset_server: &AssetServer,
+        _assets: &Assets<LocalizationAsset>,
     ) -> bool {
-        self.indexed_archive_revision.is_none()
-            || self.localization_index_is_dirty
-            || self.has_unsettled_assets(asset_server, assets)
-    }
-
-    fn has_unsettled_assets(
-        &self,
-        server: &AssetServer,
-        assets: &Assets<LocalizationAsset>,
-    ) -> bool {
-        self.localization_asset_handles.iter().any(|handle| {
-            !assets.contains(handle.id())
-                && !matches!(
-                    server.get_load_state(handle.id()),
-                    Some(LoadState::Failed(_))
-                )
-        })
+        !self.discovered || !self.pending.is_empty()
     }
 
     pub fn borrow_loaded_localization_view<'a>(
         &'a self,
-        localization_assets: &'a Assets<LocalizationAsset>,
+        assets: &'a Assets<LocalizationAsset>,
     ) -> Option<LoadedLocalizationView<'a>> {
-        (!self.localization_index_is_dirty && !self.localization_asset_handles.is_empty())
-            .then_some(LoadedLocalizationView::new(self, localization_assets))
+        (self.discovered && self.pending.is_empty() && !self.localization_asset_handles.is_empty())
+            .then_some(LoadedLocalizationView::new(self, assets))
     }
 
     pub(super) fn find_asset_for_localization_entry<'a>(
-        &'a self,
-        localization_assets: &'a Assets<LocalizationAsset>,
-        localization_entry_identifier: AssetId,
+        &self,
+        assets: &'a Assets<LocalizationAsset>,
+        identifier: AssetId,
     ) -> Option<&'a LocalizationAsset> {
-        localization_assets.get(
-            self.localization_entry_asset_index
-                .get(&localization_entry_identifier)?,
-        )
+        assets.get(self.localization_entry_asset_index.get(&identifier)?)
     }
 
-    pub(super) fn localization_asset_handles(&self) -> &[Handle<LocalizationAsset>] {
-        &self.localization_asset_handles
+    pub(super) fn configuration(&self) -> &LocalizationConfiguration {
+        &self.configuration
     }
-}
 
-pub(super) fn load_english_localization_assets_after_archive_revision(
-    archives: Res<crate::asset_source::AssetArchives>,
-    asset_server: Res<AssetServer>,
-    mut localization_precedence_index: ResMut<LocalizationPrecedenceIndex>,
-) {
-    let archive_revision = archives.revision();
-    if localization_precedence_index.indexed_archive_revision == Some(archive_revision) {
-        return;
+    pub(super) fn month_year_tokens(&self) -> &[LocalizationDateFormatToken] {
+        &self.month_year_tokens
     }
-    localization_precedence_index.localization_asset_handles = archives
-        .resolved_paths()
-        .1
-        .iter()
-        .filter(|path| source_path_contains_english_localization(&path.to_string_lossy()))
-        .map(|path| asset_server.load(path.clone()))
-        .collect();
-    localization_precedence_index
-        .localization_entry_asset_index
-        .clear();
-    localization_precedence_index.localization_index_is_dirty = true;
-    localization_precedence_index.indexed_archive_revision = Some(archive_revision);
+
+    fn update_month_year_format(&mut self, assets: &Assets<LocalizationAsset>) {
+        let format_id = self.configuration.month_year;
+        self.month_year_tokens = self
+            .find_asset_for_localization_entry(assets, format_id)
+            .and_then(|asset| {
+                asset
+                    .localization_catalog
+                    .find_plain_localized_text(format_id)
+            })
+            .map_or_else(Vec::new, tokenize_blue_fang_localization_date_format);
+    }
 }
 
 pub(super) fn index_loaded_localization_entries_after_asset_events(
-    mut localization_asset_events: MessageReader<AssetEvent<LocalizationAsset>>,
-    mut failures: MessageReader<AssetLoadFailedEvent<LocalizationAsset>>,
+    archives: Res<AssetArchives>,
     server: Res<AssetServer>,
-    localization_assets: Res<Assets<LocalizationAsset>>,
-    mut localization_precedence_index: ResMut<LocalizationPrecedenceIndex>,
+    configurations: Res<Assets<LocalizationConfiguration>>,
+    assets: Res<Assets<LocalizationAsset>>,
+    mut events: MessageReader<AssetEvent<LocalizationAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<LocalizationAsset>>,
+    mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
+    default_configuration: Local<LocalizationConfiguration>,
+    mut index: ResMut<LocalizationPrecedenceIndex>,
 ) {
-    let assets_changed = localization_asset_events
-        .read()
-        .any(|event| !matches!(event, AssetEvent::Unused { .. }));
-    let failed = failures.read().count() != 0;
-    if assets_changed || failed {
-        localization_precedence_index.localization_index_is_dirty = true;
+    let configuration_path = Path::new(LOCALE_CONFIGURATION_PATH);
+    let mut discovery_changed = false;
+    if archives.is_changed() {
+        let handle = archives
+            .source_exists(configuration_path)
+            .then(|| server.load(configuration_path));
+        if index.configuration_handle != handle {
+            index.configuration_handle = handle;
+            discovery_changed = true;
+        }
     }
-    if !localization_precedence_index.localization_index_is_dirty
-        || localization_precedence_index.has_unsettled_assets(&server, &localization_assets)
+    let mut catalogue_sources_changed = false;
+    for change in overlay_changes.read().flat_map(|overlay| &overlay.changes) {
+        catalogue_sources_changed |= index
+            .configuration
+            .selects_string_table(&change.normalized_asset_path);
+    }
+    let configuration = if let Some(handle) = index.configuration_handle.as_ref() {
+        if matches!(
+            server.get_load_state(handle.id()),
+            Some(LoadState::Failed(_))
+        ) {
+            &*default_configuration
+        } else if let Some(configuration) = configurations.get(handle) {
+            configuration
+        } else {
+            for _ in events.read() {}
+            for _ in failures.read() {}
+            return;
+        }
+    } else {
+        &*default_configuration
+    };
+    if !index.discovered
+        || discovery_changed
+        || catalogue_sources_changed
+        || index.configuration != *configuration
     {
+        let handles = archives
+            .resolved_paths()
+            .1
+            .iter()
+            .filter(|path| configuration.selects_string_table(path))
+            .map(|path| server.load(path.clone()))
+            .collect::<Vec<_>>();
+        if !index.discovered
+            || index.localization_asset_handles != handles
+            || index.configuration != *configuration
+        {
+            index.pending = handles
+                .iter()
+                .map(Handle::id)
+                .filter(|id| {
+                    !assets.contains(*id)
+                        && !matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))
+                })
+                .collect();
+            index.failed = handles
+                .iter()
+                .map(Handle::id)
+                .filter(|id| matches!(server.get_load_state(*id), Some(LoadState::Failed(_))))
+                .collect();
+            index.localization_asset_handles = handles;
+            index.configuration = configuration.clone();
+            index.discovered = true;
+            discovery_changed = true;
+        }
+    }
+    let mut changed = discovery_changed;
+    for event in events.read() {
+        let id = match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                id
+            }
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
+        };
+        if index
+            .localization_asset_handles
+            .iter()
+            .any(|handle| handle.id() == id)
+        {
+            changed = true;
+            index.pending.remove(&id);
+            index.failed.remove(&id);
+        }
+    }
+    for failure in failures.read() {
+        if index
+            .localization_asset_handles
+            .iter()
+            .any(|handle| handle.id() == failure.id)
+        {
+            changed |= index.pending.remove(&failure.id);
+            changed |= index.failed.insert(failure.id);
+        }
+    }
+    if !changed || !index.pending.is_empty() {
         return;
     }
-    localization_precedence_index.localization_entry_asset_index = localization_precedence_index
+    index.localization_entry_asset_index = index
         .localization_asset_handles
         .iter()
-        .filter(|handle| {
-            !matches!(
-                server.get_load_state(handle.id()),
-                Some(LoadState::Failed(_))
-            )
-        })
-        .filter_map(|handle| localization_assets.get(handle).map(|asset| (handle, asset)))
+        .filter(|handle| !index.failed.contains(&handle.id()))
+        .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
         .flat_map(|(handle, asset)| {
             asset
                 .localization_catalog
@@ -148,9 +218,8 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
                 .map(move |entry| (entry.localization_entry_identifier, handle.clone()))
         })
         .collect();
-    localization_precedence_index.localization_index_is_dirty = false;
+    index.update_month_year_format(&assets);
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,7 +229,7 @@ mod tests {
     };
     use bevy::{
         app::TaskPoolPlugin,
-        asset::{io::AssetSourceId, AssetPlugin},
+        asset::{AssetPlugin, io::AssetSourceId},
     };
     use std::{
         io,

@@ -2,8 +2,8 @@
 
 use crate::AssetId;
 
-mod automatic_placement_bounds;
 mod object_placement_flag_operations;
+pub mod placement_stomp_rules;
 
 #[derive(Clone, Copy, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 #[serde(transparent)]
@@ -46,7 +46,7 @@ impl Default for PlacementSurfacePolicy {
 #[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "height modification, moving and automatic footprints, and ground-path blocking are independent authored placement rules"
+    reason = "height modification, moving and automatic footprints, are independent authored placement rules"
 )]
 pub struct PlaceableDefinition {
     pub id: AssetId,
@@ -71,10 +71,8 @@ pub struct PlaceableDefinition {
     /// The authored `ZTPlacementData autoFootprint` rule derives the cell
     /// footprint from the scene-prefab collision/model bounds.
     pub automatic_footprint: bool,
-    /// Grid-snapped objects whose authored `stompData` prevents the `path`
-    /// entity type collide with ground path tiles under their footprint.
     #[serde(default)]
-    pub ground_paths_block_placement: bool,
+    pub stomp: placement_stomp_rules::PlacementStompPolicy,
     /// Authored `adjacentToWater`: the object must face water within
     /// `ADJACENT_WATER_REACH_METRES` of its origin.
     #[serde(default)]

@@ -1,5 +1,9 @@
 use bevy::prelude::*;
 
+/// Current pose of the active zoo camera, sampled before water presentation.
+#[derive(Component, Clone, Copy, PartialEq)]
+pub struct TerrainWaterCameraPose(pub Option<GlobalTransform>);
+
 /// Camera-dependent water presentation; region entities remain authoritative.
 #[derive(Resource, Default)]
 pub struct TerrainWaterViewState {

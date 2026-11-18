@@ -12,7 +12,7 @@ use bevy::{
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
-        renderer::{RenderContext, RenderDevice, ViewQuery},
+        renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery},
         view::ViewDepthStencilTexture,
         Render, RenderApp, RenderSystems,
     },
@@ -71,6 +71,7 @@ impl Plugin for WaterRayOcclusionPlugin {
 }
 
 struct ViewQueryBuffers {
+    vertices: wgpu::Buffer,
     query: wgpu::QuerySet,
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
@@ -95,6 +96,7 @@ fn query_water_ray_occlusion(
     )>,
     mut commands: Commands,
     mut context: RenderContext,
+    queue: Res<RenderQueue>,
 ) {
     let (entity, request, depth, gpu) = view.into_inner();
     let Some(gpu) = gpu else {
@@ -135,18 +137,9 @@ fn query_water_ray_occlusion(
     let Some(state) = state.as_ref() else {
         return;
     };
-    let vertices: Vec<u8> = [0, 1, 2, 2, 1, 3]
-        .into_iter()
-        .flat_map(|index| request.clip_corners[index].to_array())
-        .flat_map(f32::to_ne_bytes)
-        .collect();
-    let vertices = context.render_device().wgpu_device().create_buffer_init(
-        &wgpu::util::BufferInitDescriptor {
-            label: Some("water ray occlusion vertices"),
-            contents: &vertices,
-            usage: wgpu::BufferUsages::VERTEX,
-        },
-    );
+    let vertices = [0, 1, 2, 2, 1, 3]
+        .map(|index| request.clip_corners[index].to_array().map(f32::to_ne_bytes));
+    queue.write_buffer(&state.vertices, 0, vertices.as_flattened().as_flattened());
     {
         let mut pass = context
             .command_encoder()
@@ -159,7 +152,7 @@ fn query_water_ray_occlusion(
                 multiview_mask: None,
             });
         pass.set_pipeline(&state.pipeline);
-        pass.set_vertex_buffer(0, vertices.slice(..));
+        pass.set_vertex_buffer(0, state.vertices.slice(..));
         pass.begin_occlusion_query(0);
         pass.draw(0..6, 0..1);
         pass.end_occlusion_query();
@@ -228,6 +221,12 @@ fn create_view_query(
         cache: None,
     });
     ViewQueryBuffers {
+        vertices: device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water ray occlusion vertices"),
+            size: 6 * 16,
+            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }),
         query: device.create_query_set(&wgpu::QuerySetDescriptor {
             label: Some("water ray visibility"),
             ty: wgpu::QueryType::Occlusion,

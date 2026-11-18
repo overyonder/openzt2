@@ -15,8 +15,7 @@ pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
             TerrainDirtyFlags::default(),
             |mut changed_terrain_properties, (sample_before_change, sample_after_change)| {
                 if sample_before_change.height_cm != sample_after_change.height_cm {
-                    changed_terrain_properties |=
-                        TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::COLLISION;
+                    changed_terrain_properties |= TerrainDirtyFlags::HEIGHT;
                 }
                 if sample_before_change.blend != sample_after_change.blend
                     || sample_before_change.ground_cover != sample_after_change.ground_cover
@@ -30,8 +29,7 @@ pub(super) fn determine_terrain_dirty_flags_from_changed_samples(
                     || sample_before_change.water_affiliation
                         != sample_after_change.water_affiliation
                 {
-                    changed_terrain_properties |=
-                        TerrainDirtyFlags::WATER | TerrainDirtyFlags::COLLISION;
+                    changed_terrain_properties |= TerrainDirtyFlags::WATER;
                 }
                 changed_terrain_properties
             },

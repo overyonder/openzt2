@@ -1,30 +1,29 @@
+use std::collections::HashSet;
+
 use bevy::prelude::*;
 use openzt2_game_data::{world_scenario::WorldMapSupportedGameModeFlags, AssetId};
 
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
-use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
 use openzt2_interface_state::shell::shell_selection_types::GlobeMarker;
 use openzt2_interface_state::shell::shell_selection_types::ShellScreen;
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
 use openzt2_interface_state::shell::shell_selection_types::WorldChoice;
-use openzt2_interface_state::shell::shell_selection_types::WorldChoiceView;
 
 pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
     mut commands: Commands,
     selection: Res<ShellSelection>,
     active_catalogue: Res<WorldScenarios>,
     catalogues: Res<Assets<WorldScenarioDocumentAsset>>,
-    screens: Query<(Entity, Ref<ShellScreen>)>,
-    existing_choices: Query<(Entity, &WorldChoice, &GlobeMarker, &ChildOf)>,
-    views: Query<(Entity, &WorldChoiceView, Option<&ChildOf>, Has<UiListRow>)>,
+    screens: Query<(Entity, Ref<ShellScreen>, Option<&Children>)>,
+    existing_choices: Query<(&WorldChoice, &GlobeMarker)>,
 ) {
     if !active_catalogue.is_changed()
         && !catalogues.is_changed()
         && !selection.is_changed()
-        && screens.iter().all(|(_, screen)| !screen.is_added())
+        && screens.iter().all(|(_, screen, _)| !screen.is_added())
     {
         return;
     }
@@ -32,7 +31,7 @@ pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
     let Some(catalogue) = active_catalogue.get(&catalogues) else {
         return;
     };
-    for (owner, screen) in &screens {
+    for (owner, screen, children) in &screens {
         if !matches!(
             *screen,
             ShellScreen::Globe { .. } | ShellScreen::MapSelect { .. }
@@ -63,48 +62,32 @@ pub(super) fn hydrate_launchable_world_choices_from_active_scenario_catalogue(
                     .map(|location| (scenario, map, location.globe_marker))
             })
             .collect::<Vec<_>>();
-        for (entity, current, marker, parent) in &existing_choices {
-            if parent.parent() != owner
-                || choices.iter().any(|(scenario, map, position)| {
-                    current.mode == mode
-                        && current.scenario == *scenario
-                        && current.map == map.id
-                        && marker.0 == *position
-                })
-            {
+        let key = |scenario: AssetId, map: AssetId, marker: [i16; 2]| (scenario, map, marker);
+        let desired = choices
+            .iter()
+            .map(|(scenario, map, marker)| key(*scenario, map.id, *marker))
+            .collect::<HashSet<_>>();
+        let mut retained = HashSet::new();
+        for child in children.into_iter().flatten().copied() {
+            let Ok((current, marker)) = existing_choices.get(child) else {
                 continue;
+            };
+            let choice = key(current.scenario, current.map, marker.0);
+            if current.mode != mode || !desired.contains(&choice) || !retained.insert(choice) {
+                commands.entity(child).despawn();
             }
-            for (view_entity, view, parent, is_list_row) in &views {
-                if !is_list_row
-                    && view.0 == entity
-                    && !parent.is_some_and(|parent| {
-                        views
-                            .get(parent.parent())
-                            .is_ok_and(|(_, parent_view, _, _)| parent_view.0 == entity)
-                    })
-                {
-                    commands.entity(view_entity).despawn();
-                }
-            }
-            commands.entity(entity).despawn();
         }
-        for (scenario, map, globe_marker) in &choices {
-            if existing_choices.iter().any(|(_, choice, marker, parent)| {
-                parent.parent() == owner
-                    && choice.mode == mode
-                    && choice.scenario == *scenario
-                    && choice.map == map.id
-                    && marker.0 == *globe_marker
-            }) {
+        for (scenario, map, globe_marker) in choices {
+            if !retained.insert(key(scenario, map.id, globe_marker)) {
                 continue;
             }
             commands.spawn((
                 WorldChoice {
-                    scenario: *scenario,
+                    scenario,
                     map: AssetId(map.id.0),
                     mode,
                 },
-                GlobeMarker(*globe_marker),
+                GlobeMarker(globe_marker),
                 ChildOf(owner),
             ));
         }

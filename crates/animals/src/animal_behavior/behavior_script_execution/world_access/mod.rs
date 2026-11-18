@@ -1,12 +1,14 @@
 //! World state that authored behavior scripts read and change through
 //! `queryObject` managers and entity tables, such as `CompostPoo.lua`.
 
-use bevy::{ecs::system::SystemParam, prelude::*};
+use bevy::{ecs::{entity::EntityHashMap, system::SystemParam}, prelude::*};
 use openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
+use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
+use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorKilledTarget;
 use openzt2_zoo_state::economy::account_transaction_types::{
     Account, TransactionCompleted, TransactionKind, TransactionRejected, TransactionRequest,
@@ -25,14 +27,47 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 #[derive(Component)]
 pub(in crate::animal_behavior) struct BehaviorScriptTransaction;
 
-/// Script effects, applied after the script returns in the order it made them.
+pub(super) enum BehaviorScriptEffect {
+    Presentation(PhysicalPresentationRequest),
+    Crate(Entity),
+    Compost(Entity, f32),
+    Income(f64),
+    Mate(Entity, Option<Entity>),
+    Disease(Entity, DiseaseAttribute),
+}
+
+/// Structural changes only, visible to later scripts before Commands apply.
 #[derive(Default)]
-pub(super) struct BehaviorScriptWorldChanges {
-    pub(super) poo_levels: Vec<(Entity, f32)>,
-    pub(super) incomes: Vec<f64>,
-    /// `BFAI_CLEAR_RELATIONSHIP` / `BFAI_ADD_RELATIONSHIP` for `mate`.
-    pub(super) mates: Vec<(Entity, Option<Entity>)>,
-    pub(super) diseases: Vec<(Entity, DiseaseAttribute)>,
+pub(super) struct BehaviorScriptStructuralEdits {
+    compost: EntityHashMap<f32>,
+    mates: EntityHashMap<Option<Entity>>,
+    diseases: EntityHashMap<bool>,
+}
+
+impl BehaviorScriptStructuralEdits {
+    pub(super) fn poo_level(&self, world: &BehaviorScriptWorldAccess, entity: Entity) -> f32 {
+        self.compost
+            .get(&entity)
+            .copied()
+            .unwrap_or_else(|| world.poo_levels.get(entity).map_or(0.0, |level| level.0))
+    }
+
+    pub(super) fn mate(
+        &self,
+        world: &BehaviorScriptWorldAccess,
+        effects: &[BehaviorScriptEffect],
+        entity: Entity,
+    ) -> Option<Entity> {
+        effects
+            .iter()
+            .rev()
+            .find_map(|effect| match *effect {
+                BehaviorScriptEffect::Mate(owner, mate) if owner == entity => Some(mate),
+                _ => None,
+            })
+            .or_else(|| self.mates.get(&entity).copied())
+            .unwrap_or_else(|| world.mates.get(entity).ok().map(|mate| mate.0))
+    }
 }
 
 /// An authored disease attribute a script wrote.
@@ -57,11 +92,13 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
             &'static WorldMember,
         ),
     >,
-    poo_levels: Query<'w, 's, &'static CompostPooLevel>,
+    poo_levels: Query<'w, 's, &'static mut CompostPooLevel>,
     killed: Query<'w, 's, &'static BehaviorKilledTarget>,
-    transactions: MessageWriter<'w, TransactionRequest>,
+    mates: Query<'w, 's, &'static mut Mate>,
+    diseases: Query<'w, 's, &'static mut Disease>,
     clock: Res<'w, ZooClock>,
-    tokens: Query<'w, 's, (&'static BehaviorSelfToken, &'static ChildOf)>,
+    tokens: Query<'w, 's, &'static BehaviorSelfToken>,
+    token_owners: Query<'w, 's, &'static Children>,
     lineage: Query<'w, 's, (Entity, &'static Parents)>,
     life_stages: Query<'w, 's, &'static AnimalLifeStage>,
     animals: Query<
@@ -71,7 +108,6 @@ pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
             &'static AnimalSex,
             &'static SpeciesHandle,
             Option<&'static Name>,
-            Option<&'static Mate>,
         ),
     >,
     species_assets: Res<'w, Assets<SpeciesAsset>>,
@@ -146,9 +182,16 @@ impl BehaviorScriptWorldAccess<'_, '_> {
     /// `BFAI_HAS_TOKEN`: whether the entity holds a live token of this name.
     pub(super) fn has_token(&self, entity: Entity, name: &str) -> bool {
         let name = AssetId::from_key(&name.to_ascii_lowercase());
-        self.tokens.iter().any(|(token, holder)| {
-            holder.parent() == entity && token.name == name && self.clock.tick < token.expires_at
-        })
+        self.tokens
+            .iter_many(
+                self.token_owners
+                    .get(entity)
+                    .ok()
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            )
+            .any(|token| token.name == name && self.clock.tick < token.expires_at)
     }
 
     /// `BFAI_GET_RELATED_ENTITIES` `child`: the animals whose mother or father
@@ -161,13 +204,12 @@ impl BehaviorScriptWorldAccess<'_, '_> {
             .collect()
     }
 
-    /// `BFAI_GET_RELATED_ENTITY` `mother`, `father` and `mate`. Parentage
+    /// `BFAI_GET_RELATED_ENTITY` `mother` and `father`. Parentage
     /// comes from `Parents`, as do the relations derived from it.
     pub(super) fn related(&self, entity: Entity, relation: &str) -> Option<Entity> {
         match relation {
             "mother" => self.lineage.get(entity).ok()?.1.mother,
             "father" => self.lineage.get(entity).ok()?.1.father,
-            "mate" => self.animals.get(entity).ok()?.3.map(|mate| mate.0),
             _ => None,
         }
     }
@@ -183,7 +225,7 @@ impl BehaviorScriptWorldAccess<'_, '_> {
     /// `BFG_GET_ATTR_STRING` `s_Endangerment` and `s_name` of an animal.
     pub(super) fn animal_string(&self, entity: Entity, name: &str) -> Option<String> {
         use openzt2_game_data::species::ConservationStatus;
-        let (_, species, animal_name, _) = self.animals.get(entity).ok()?;
+        let (_, species, animal_name) = self.animals.get(entity).ok()?;
         match name {
             "s_name" => Some(animal_name.map_or_else(String::new, |name| name.as_str().to_owned())),
             "s_Endangerment" => {
@@ -216,79 +258,129 @@ impl BehaviorScriptWorldAccess<'_, '_> {
             .map(|stage| stage.0 == openzt2_game_data::species::LifeStage::Adult)
     }
 
-    pub(super) fn poo_level(&self, entity: Entity) -> f32 {
-        self.poo_levels.get(entity).map_or(0.0, |level| level.0)
-    }
-
     pub(super) fn apply(
         &mut self,
         commands: &mut Commands,
         actor: Entity,
-        changes: BehaviorScriptWorldChanges,
+        effects: Vec<BehaviorScriptEffect>,
+        pending: &mut BehaviorScriptStructuralEdits,
     ) {
-        for (entity, mate) in changes.mates {
-            if let Ok(mut entity) = commands.get_entity(entity) {
-                match mate {
-                    Some(mate) => entity.insert(Mate(mate)),
-                    None => entity.remove::<Mate>(),
+        for effect in effects {
+            match effect {
+                BehaviorScriptEffect::Presentation(request) => {
+                    commands.write_message(request);
+                }
+                BehaviorScriptEffect::Crate(entity) => {
+                    commands.entity(entity).try_insert(WorldEntityIsCrated);
+                }
+                BehaviorScriptEffect::Compost(entity, level) => {
+                    if !pending.compost.contains_key(&entity) {
+                        if let Ok(mut current) = self.poo_levels.get_mut(entity) {
+                            if current.0.to_bits() != level.to_bits() {
+                                current.0 = level;
+                            }
+                            continue;
+                        }
+                    }
+                    commands.entity(entity).try_insert(CompostPooLevel(level));
+                    pending.compost.insert(entity, level);
+                }
+                BehaviorScriptEffect::Mate(entity, mate) => {
+                    if let Some(mate) = mate {
+                        if !pending.mates.contains_key(&entity) {
+                            if let Ok(mut current) = self.mates.get_mut(entity) {
+                                current.set_if_neq(Mate(mate));
+                                continue;
+                            }
+                        }
+                        commands.entity(entity).try_insert(Mate(mate));
+                    } else {
+                        commands.entity(entity).try_remove::<Mate>();
+                    }
+                    pending.mates.insert(entity, mate);
+                }
+                BehaviorScriptEffect::Disease(entity, attribute) => {
+                    self.apply_disease_attribute(
+                        commands,
+                        entity,
+                        attribute,
+                        &mut pending.diseases,
+                    );
+                }
+                BehaviorScriptEffect::Income(income) => {
+                    let Some(amount) = authored_currency_to_money(income) else {
+                        warn!(
+                            ?actor,
+                            income, "behavior script income is not a valid amount"
+                        );
+                        continue;
+                    };
+                    let mut operation = commands.spawn(BehaviorScriptTransaction);
+                    if let Ok((_, _, _, world)) = self.objects.get(actor) {
+                        operation.insert(*world);
+                    }
+                    let operation = operation.id();
+                    // `ZT_GENERIC_TRANSACTION` "destroy" books an object sale.
+                    commands.write_message(TransactionRequest {
+                        operation,
+                        debit: Account::External,
+                        credit: Account::Zoo,
+                        amount,
+                        kind: TransactionKind::Refund,
+                        subject: None,
+                    });
+                }
+            }
+        }
+    }
+
+    fn apply_disease_attribute(
+        &mut self,
+        commands: &mut Commands,
+        entity: Entity,
+        attribute: DiseaseAttribute,
+        pending: &mut EntityHashMap<bool>,
+    ) {
+        let present = pending
+            .get(&entity)
+            .copied()
+            .unwrap_or_else(|| self.diseases.contains(entity));
+        match attribute {
+            DiseaseAttribute::Diseased(true) if !present => {
+                commands.entity(entity).try_insert(Disease {
+                    definition: AssetId::default(),
+                    elapsed_ticks: 0,
+                    severity_permille: 0,
+                    hint_level: 0,
+                });
+                pending.insert(entity, true);
+            }
+            DiseaseAttribute::Diseased(false) if present => {
+                commands.entity(entity).try_remove::<Disease>();
+                pending.insert(entity, false);
+            }
+            DiseaseAttribute::Name(name) if present => {
+                let definition = if name == "None" {
+                    AssetId::default()
+                } else {
+                    AssetId::from_key(&canonicalize_source_document_record_key(&name))
                 };
-            }
-        }
-        for (entity, attribute) in changes.diseases {
-            let Ok(mut entity) = commands.get_entity(entity) else {
-                continue;
-            };
-            match attribute {
-                DiseaseAttribute::Diseased(true) => {
-                    entity.insert_if_new(Disease {
-                        definition: AssetId::default(),
-                        elapsed_ticks: 0,
-                        severity_permille: 0,
-                        hint_level: 0,
-                    });
-                }
-                DiseaseAttribute::Diseased(false) => {
-                    entity.remove::<Disease>();
-                }
-                // The name is the shipped `ZTDisease name`, such as "ExtinctFlu".
-                DiseaseAttribute::Name(name) => {
-                    entity.entry::<Disease>().and_modify(move |mut disease| {
-                        disease.definition = if name == "None" {
-                            AssetId::default()
-                        } else {
-                            AssetId::from_key(&canonicalize_source_document_record_key(&name))
-                        };
-                    });
+                if pending.contains_key(&entity) {
+                    commands
+                        .entity(entity)
+                        .entry::<Disease>()
+                        .and_modify(move |mut disease| {
+                            if disease.definition != definition {
+                                disease.definition = definition;
+                            }
+                        });
+                } else if let Ok(mut disease) = self.diseases.get_mut(entity) {
+                    if disease.definition != definition {
+                        disease.definition = definition;
+                    }
                 }
             }
-        }
-        for (entity, level) in changes.poo_levels {
-            if let Ok(mut entity) = commands.get_entity(entity) {
-                entity.insert(CompostPooLevel(level));
-            }
-        }
-        let world = self.objects.get(actor).map(|(_, _, _, world)| *world).ok();
-        for income in changes.incomes {
-            let Some(amount) = authored_currency_to_money(income) else {
-                warn!(
-                    ?actor,
-                    income, "behavior script income is not a valid amount"
-                );
-                continue;
-            };
-            let mut operation = commands.spawn(BehaviorScriptTransaction);
-            if let Some(world) = world {
-                operation.insert(world);
-            }
-            // `ZT_GENERIC_TRANSACTION` "destroy" books an object sale.
-            self.transactions.write(TransactionRequest {
-                operation: operation.id(),
-                debit: Account::External,
-                credit: Account::Zoo,
-                amount,
-                kind: TransactionKind::Refund,
-                subject: None,
-            });
+            _ => {}
         }
     }
 }

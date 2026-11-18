@@ -7,7 +7,7 @@ use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{io::Reader, AssetLoader, LoadContext},
+    asset::{AssetLoader, LoadContext, io::Reader},
     prelude::*,
 };
 use std::{io, path::Path};
@@ -37,7 +37,10 @@ impl AssetLoader for WorldDefinitionAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_world_definition", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_world_definition", skip_all)
+    )]
     async fn load(
         &self,
         reader: &mut dyn Reader,
@@ -92,7 +95,8 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &actor_manifest_resolution_index,
                 &resolved_models,
             )?;
-        if binder_source_index_revision.is_some_and(|revision| revision != self.archives.revision())
+        if binder_source_index_revision
+            .is_some_and(|revision| revision != self.archives.binder_source_version())
         {
             return Err(io::Error::other(
                 "archive revision changed while loading authored binder dependencies",

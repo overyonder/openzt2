@@ -1,10 +1,16 @@
-//! Archive-revision discovery and precedence indexing for world-scenario assets.
+//! Archive discovery and precedence indexing for world-scenario assets.
 
-use std::{collections::BTreeMap, path::Path};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+};
 
-use bevy::prelude::*;
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
 
-use crate::asset_source::AssetArchives;
+use crate::asset_source::{ArchiveCatalogue, AssetArchives};
 
 use super::{
     world_scenario_asset_set_state_and_borrowing_queries::{
@@ -13,7 +19,7 @@ use super::{
     world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset,
 };
 
-fn scenario_catalogue_path(path: &Path) -> bool {
+pub(crate) fn scenario_catalogue_path(path: &Path) -> bool {
     let path = path
         .to_string_lossy()
         .replace('\\', "/")
@@ -30,25 +36,29 @@ fn scenario_catalogue_path(path: &Path) -> bool {
         || matches!(path.as_str(), "maps/index.xml" | "maps/scenario/index.xml")
 }
 
-pub(super) fn refresh_world_scenario_asset_set_after_archive_revision(
+pub(super) fn refresh_world_scenario_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     mut scenarios: ResMut<WorldScenarios>,
+    mut previous: Local<Option<std::sync::Arc<[z2f::ResolvedArchiveEntry]>>>,
 ) {
-    let revision = archives.revision();
-    if scenarios.revision == Some(revision) {
+    let sources = archives.catalogue_sources(ArchiveCatalogue::Scenarios);
+    if previous
+        .as_ref()
+        .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &sources))
+    {
         return;
     }
-    scenarios.handles = archives
-        .resolved_paths()
-        .1
+    let handles = sources
         .iter()
-        .cloned()
-        .filter(|path| scenario_catalogue_path(path))
-        .map(|path| server.load(path))
-        .collect();
-    scenarios.revision = Some(revision);
-    scenarios.dirty = true;
+        .map(|entry| server.load(entry.normalized_asset_path.clone()))
+        .collect::<Vec<_>>();
+    if !scenarios.discovered || scenarios.handles != handles {
+        scenarios.handles = handles;
+        scenarios.discovery_changed = true;
+        scenarios.discovered = true;
+    }
+    *previous = Some(sources);
 }
 
 pub fn index_loaded_world_scenario_assets_by_identifier(
@@ -56,27 +66,36 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     mut scenarios: ResMut<WorldScenarios>,
     mut events: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
+    mut failures: MessageReader<AssetLoadFailedEvent<WorldScenarioDocumentAsset>>,
 ) {
-    let changed = events.read().any(|event| match event {
-        AssetEvent::Added { id }
-        | AssetEvent::Modified { id }
-        | AssetEvent::Removed { id }
-        | AssetEvent::LoadedWithDependencies { id }
-        | AssetEvent::Unused { id } => {
-            scenarios.handles.iter().any(|handle| handle.id() == *id)
-                || scenarios.handles.iter().any(|handle| {
-                    assets.get(handle).is_some_and(|asset| {
-                        asset
-                            .campaign_scenarios
-                            .iter()
-                            .any(|scenario| scenario.handle.id() == *id)
-                    })
-                })
+    let mut changed = scenarios.discovery_changed;
+    let is_relevant = |id| {
+        scenarios.published_dependencies.contains(&id)
+            || scenarios.handles.iter().any(|handle| handle.id() == id)
+    };
+    let mut failed = scenarios.failed.clone();
+    for event in events.read() {
+        let (id, available) = match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } => (id, true),
+            AssetEvent::Removed { id } => (id, false),
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
+        };
+        if is_relevant(id) {
+            changed = true;
+            if available {
+                failed.remove(&id);
+            }
         }
-    });
-    if !scenarios.dirty && !changed {
+    }
+    for failure in failures.read() {
+        if is_relevant(failure.id) {
+            changed |= failed.insert(failure.id);
+        }
+    }
+    if !changed {
         return;
     }
+    let mut published_dependencies = BTreeSet::new();
     let mut maps = BTreeMap::new();
     let mut locations = BTreeMap::new();
     let mut starts = BTreeMap::new();
@@ -89,6 +108,14 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
     let mut textures = BTreeMap::new();
     let mut start_paths = BTreeMap::new();
     for handle in &scenarios.handles {
+        if failed.contains(&handle.id())
+            || matches!(
+                server.get_load_state(handle.id()),
+                Some(LoadState::Failed(_))
+            )
+        {
+            continue;
+        }
         let Some(asset) = assets.get(handle) else {
             continue;
         };
@@ -117,6 +144,16 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
             );
         });
         asset.campaign_scenarios.iter().for_each(|scenario| {
+            let dependency = scenario.handle.id();
+            published_dependencies.insert(dependency);
+            if failed.contains(&dependency)
+                || matches!(
+                    server.get_load_state(dependency),
+                    Some(LoadState::Failed(_))
+                )
+            {
+                return;
+            }
             if let Some(record) = assets
                 .get(&scenario.handle)
                 .and_then(|asset| asset.document.scenarios.first())
@@ -176,16 +213,32 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
     scenarios.terrains = terrains;
     scenarios.textures = textures;
     scenarios.start_paths = start_paths;
-    // Partial indexes remain usable for browsing, but only a complete pass can
-    // publish readiness for consumers that hydrate the catalogue's full contents.
-    let pending_documents = scenarios.catalogue_document_handles(&assets).any(|handle| {
-        !assets.contains(handle.id())
-            && !matches!(
-                server.load_state(handle.id()),
-                bevy::asset::LoadState::Failed(_)
-            )
-    });
-    scenarios.dirty = pending_documents;
+    scenarios.discovery_changed = false;
+    let required = scenarios
+        .handles
+        .iter()
+        .map(Handle::id)
+        .chain(published_dependencies.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let pending = required
+        .iter()
+        .copied()
+        .filter(|id| {
+            !assets.contains(*id)
+                && !failed.contains(id)
+                && !matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))
+        })
+        .collect();
+    failed.retain(|id| required.contains(id));
+    failed.extend(
+        required
+            .iter()
+            .copied()
+            .filter(|id| matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))),
+    );
+    scenarios.pending = pending;
+    scenarios.failed = failed;
+    scenarios.published_dependencies = published_dependencies;
 }
 
 #[cfg(test)]
@@ -193,20 +246,19 @@ mod tests {
     use super::*;
     use crate::world_scenario::world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetHandle;
     use openzt2_game_data::{
+        AssetId,
         world_scenario::{
             ScenarioCampaignRecord, ScenarioDefinitionRecord, ScenarioRecordFlags,
             WorldScenarioDocument,
         },
-        AssetId,
     };
 
     #[test]
     fn campaign_index_publishes_its_dependency_records_only_after_the_dependency_arrives() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
-            .init_resource::<Assets<WorldScenarioDocumentAsset>>()
+            .init_asset::<WorldScenarioDocumentAsset>()
             .init_resource::<WorldScenarios>()
-            .add_message::<AssetEvent<WorldScenarioDocumentAsset>>()
             .add_systems(Update, index_loaded_world_scenario_assets_by_identifier);
         let campaign_id = AssetId([1; 16]);
         let authored_key = AssetId([2; 16]);
@@ -241,16 +293,20 @@ mod tests {
         let scenarios = app.world().resource::<WorldScenarios>();
         // The campaign label remains browsable while its independently loaded
         // scenario is pending. Full-catalogue consumers cannot publish yet.
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .campaign(campaign_id)
-            .is_some());
-        assert!(scenarios
-            .get(assets)
-            .unwrap()
-            .scenario(authored_key)
-            .is_none());
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .campaign(campaign_id)
+                .is_some()
+        );
+        assert!(
+            scenarios
+                .get(assets)
+                .unwrap()
+                .scenario(authored_key)
+                .is_none()
+        );
         assert!(!scenarios.catalogue_documents_are_loaded(assets));
         app.world_mut()
             .resource_mut::<Assets<WorldScenarioDocumentAsset>>()
@@ -272,6 +328,7 @@ mod tests {
                 }),
             )
             .unwrap();
+        app.update();
         app.update();
         let assets = app.world().resource::<Assets<WorldScenarioDocumentAsset>>();
         let scenarios = app.world().resource::<WorldScenarios>();

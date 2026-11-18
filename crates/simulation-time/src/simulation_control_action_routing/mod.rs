@@ -31,13 +31,13 @@ pub(super) fn route_pause_game_action_to_simulation_control_requests(
 }
 
 pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_requests(
-    mut commands: Commands,
     mut activated_ui_nodes: MessageReader<UiNodeActivated>,
     mut game_actions: MessageReader<ActionRequest>,
     hotkey_input: openzt2_ui::authored_hotkey_keyboard_activation::AuthoredHotkeyGameplayInputOverlap,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     simulation_action_nodes: Query<(&UiSimulationActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
+    mut temporary_holds: Query<&mut AuthoredUiTemporarySimulationPause>,
     simulation_control: Option<Res<SimulationControl>>,
     mut requested_pause_changes: MessageWriter<SimulationPauseRequest>,
 ) {
@@ -72,12 +72,11 @@ pub(super) fn route_authored_ui_simulation_actions_to_simulation_control_request
                     }
                 }
                 UiSimulationAction::SetTemporarySimulationPauseHeld { held } => {
-                    if simulation_control.is_none() {
-                        continue;
+                    if simulation_control.is_some() {
+                        if let Ok(mut claim) = temporary_holds.get_mut(activated_ui_node.node) {
+                            claim.set_if_neq(AuthoredUiTemporarySimulationPause(*held));
+                        }
                     }
-                    commands
-                        .entity(activated_ui_node.node)
-                        .insert(AuthoredUiTemporarySimulationPause(*held));
                 }
                 UiSimulationAction::ToggleSimulationPaused => {
                     // The same physical pause chord also has an authored HUD

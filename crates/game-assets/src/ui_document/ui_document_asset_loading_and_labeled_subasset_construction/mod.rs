@@ -77,37 +77,34 @@ impl AssetLoader for UiDocumentAssetLoader {
                 "UI document has no lowered root",
             )
         })?;
-        let remaining_ui_documents = canonical_ui_documents.collect::<Vec<_>>();
-        let mut same_source_fragment_handles = BTreeMap::new();
-        for canonical_ui_document in remaining_ui_documents
+        let labeled_documents = canonical_ui_documents
+            .map(|document| {
+                let label = match document.role {
+                    UiDocumentRole::Fragment => {
+                        format!("Fragment/{}", document.id.to_lowercase_hexadecimal_string())
+                    }
+                    role => format!("Role/{}", role.stable_key()),
+                };
+                (label, document)
+            })
+            .collect::<Vec<_>>();
+        let fragment_labels = labeled_documents
             .iter()
-            .filter(|document| document.role == UiDocumentRole::Fragment)
-            .cloned()
-        {
-            let asset_id = canonical_ui_document.id;
-            let label = format!("Fragment/{}", asset_id.to_lowercase_hexadecimal_string());
-            let fragment_asset = create_ui_document_asset_and_load_typed_dependencies(
-                canonical_ui_document,
-                &same_source_fragment_handles,
-                load_context,
-            );
-            let fragment_handle = load_context.add_labeled_asset(label, fragment_asset);
-            same_source_fragment_handles.insert(asset_id, fragment_handle);
-        }
-        for canonical_ui_document in remaining_ui_documents {
-            if canonical_ui_document.role != UiDocumentRole::Fragment {
-                let label = format!("Role/{}", canonical_ui_document.role.stable_key());
-                let role_asset = create_ui_document_asset_and_load_typed_dependencies(
-                    canonical_ui_document,
-                    &same_source_fragment_handles,
-                    load_context,
-                );
-                load_context.add_labeled_asset(label, role_asset);
-            }
+            .filter(|(_, document)| document.role == UiDocumentRole::Fragment)
+            .map(|(label, document)| (document.id, label.clone()))
+            .collect::<BTreeMap<_, _>>();
+        for (label, document) in labeled_documents {
+            load_context.labeled_asset_scope(label, |context| {
+                Ok::<_, io::Error>(create_ui_document_asset_and_load_typed_dependencies(
+                    document,
+                    &fragment_labels,
+                    context,
+                ))
+            })?;
         }
         Ok(create_ui_document_asset_and_load_typed_dependencies(
             root_ui_document,
-            &same_source_fragment_handles,
+            &fragment_labels,
             load_context,
         ))
     }

@@ -5,7 +5,6 @@ use bevy::camera::CameraProjection;
 use bevy::math::Vec3A;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
-use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
@@ -26,6 +25,7 @@ use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfac
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfaceRegion;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterWaveStateKey;
 use openzt2_zoo_state::terrain::terrain_water_underwater_particle_types::TerrainWaterRegionLight;
+use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterCameraPose;
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
     TerrainWaterRegionFade, TerrainWaterRegionVisibility, TerrainWaterViewState,
 };
@@ -66,14 +66,14 @@ pub(super) fn initialize_authored_terrain_water_region_material_state(
 pub(super) fn advance_authored_terrain_water_surface_effect_state(
     time: Res<Time>,
     mut random: ResMut<NativeVisualRandomStream>,
-    mut targets: Option<ResMut<AuthoredTerrainWaterRendererTargets>>,
+    mut targets: Query<&mut AuthoredTerrainWaterRendererTargets>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     mut waves: Query<(Entity, &mut NativeTerrainWaterGeometricWaveShaderState)>,
     regions: TerrainWaterRegionQuery,
     mut scrolls: Query<(Entity, &mut TerrainWaterScumScroll)>,
     mut low_textures: Query<(Entity, &mut TerrainWaterLowDetailTextureState)>,
 ) {
-    let Some(ref mut targets) = targets else {
+    let Ok(mut targets) = targets.single_mut() else {
         return;
     };
     targets.elapsed_seconds += time.delta_secs();
@@ -172,9 +172,10 @@ pub(super) fn advance_authored_terrain_water_surface_effect_state(
 
 pub(super) fn update_authored_terrain_water_surface_visibility(
     mut commands: Commands,
-    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
-    zoo_camera: Query<(Entity, &Camera, &Projection), With<ZooCamera>>,
-    transforms: TransformHelper,
+    zoo_camera: Query<
+        (&Projection, Option<&TerrainWaterCameraPose>),
+        (With<ZooCamera>, With<Camera>),
+    >,
     waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
     groups: Query<&TerrainWaterSurfaceRegion>,
     region_sources: TerrainWaterRegionQuery,
@@ -234,19 +235,10 @@ pub(super) fn update_authored_terrain_water_surface_visibility(
                 .remove::<WaterWakePresentationPath>();
         }
     }
-    let frustum = zoo_camera
-        .single()
-        .ok()
-        .filter(|(_, camera, _)| {
-            camera.is_active
-                && *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::InGame
-        })
-        .and_then(|(entity, _, projection)| {
-            transforms
-                .compute_global_transform(entity)
-                .ok()
-                .map(|transform| projection.compute_frustum(&transform))
-        });
+    let frustum = zoo_camera.single().ok().and_then(|(projection, pose)| {
+        pose.and_then(|pose| pose.0)
+            .map(|transform| projection.compute_frustum(&transform))
+    });
     for (surface, key, parent, mut visibility, _, kind) in &mut surfaces {
         let active_owner = groups
             .get(parent.parent())
@@ -295,14 +287,14 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
     environment_map: Option<Res<WaterEnvironmentMapSample>>,
     waves: Query<&NativeTerrainWaterGeometricWaveShaderState>,
     phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
-    mut targets: Option<ResMut<AuthoredTerrainWaterRendererTargets>>,
+    mut targets: Query<&mut AuthoredTerrainWaterRendererTargets>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    zoo_camera: Query<(Entity, &Camera, Ref<Projection>), With<ZooCamera>>,
+    zoo_camera: Query<(&Camera, Ref<Projection>, Option<&TerrainWaterCameraPose>), With<ZooCamera>>,
     scene_bounds: Query<(&Aabb, &GlobalTransform, Option<&RenderLayers>), With<Mesh3d>>,
-    mut camera_transforms: ParamSet<(
-        TransformHelper,
-        Query<(&mut Camera, &mut Projection, &mut Transform), Without<ZooCamera>>,
-    )>,
+    mut camera_transforms: Query<
+        (&mut Camera, &mut Projection, &mut Transform),
+        Without<ZooCamera>,
+    >,
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     region_sources: TerrainWaterRegionQuery,
@@ -325,23 +317,14 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         With<AuthoredTerrainWaterSurfaceEffectPass>,
     >,
 ) {
-    let Some(ref mut targets) = targets else {
+    let Ok(mut targets) = targets.single_mut() else {
         return;
     };
     let camera = zoo_camera
         .single()
         .ok()
-        .filter(|(_, camera, _)| {
-            camera.is_active
-                && *phase.get() == openzt2_game_assets::application_lifecycle::GamePhase::InGame
-        })
-        .and_then(|(entity, camera, projection)| {
-            // Update runs before Bevy's transform propagation. Read the current
-            // hierarchy, not last frame's GlobalTransform, when deciding demand.
-            camera_transforms
-                .p0()
-                .compute_global_transform(entity)
-                .ok()
+        .and_then(|(camera, projection, pose)| {
+            pose.and_then(|pose| pose.0)
                 .map(|transform| (camera, projection, transform))
         });
     targets.active_water_plane_height = view
@@ -435,7 +418,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         targets.refraction_camera,
         targets.fallback_reflection_camera,
     ] {
-        if let Ok((mut camera, _, _)) = camera_transforms.p1().get_mut(entity) {
+        if let Ok((mut camera, _, _)) = camera_transforms.get_mut(entity) {
             let active = enabled
                 && (entity != targets.refraction_camera || refraction_enabled)
                 && (entity != targets.reflection_camera
@@ -464,7 +447,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             targets.refraction_camera,
             targets.fallback_reflection_camera,
         ] {
-            if let Ok((mut camera, _, _)) = camera_transforms.p1().get_mut(entity) {
+            if let Ok((mut camera, _, _)) = camera_transforms.get_mut(entity) {
                 camera.is_active = false;
             }
         }
@@ -528,9 +511,8 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         bounds_maximum,
         true,
     );
-    if let Ok((mut camera, mut projection, mut transform)) = camera_transforms
-        .p1()
-        .get_mut(targets.fallback_reflection_camera)
+    if let Ok((mut camera, mut projection, mut transform)) =
+        camera_transforms.get_mut(targets.fallback_reflection_camera)
     {
         camera.is_active = fallback_enabled && fallback_capture.is_some();
         if let Some((frame, capture, extent)) = &fallback_capture {
@@ -547,7 +529,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
             targets.refraction_camera,
             targets.fallback_reflection_camera,
         ] {
-            if let Ok((mut camera, _, _)) = camera_transforms.p1().get_mut(entity) {
+            if let Ok((mut camera, _, _)) = camera_transforms.get_mut(entity) {
                 camera.is_active = false;
             }
         }
@@ -562,7 +544,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         false,
     );
     if let Ok((mut camera, mut projection, mut transform)) =
-        camera_transforms.p1().get_mut(targets.refraction_camera)
+        camera_transforms.get_mut(targets.refraction_camera)
     {
         camera.is_active = refraction_enabled && refraction_capture.is_some();
         if let Some((capture_transform, capture_projection, _)) = &refraction_capture {
@@ -571,7 +553,7 @@ pub(super) fn update_authored_terrain_water_renderer_inputs(
         }
     }
     if let Ok((_, mut projection, mut transform)) =
-        camera_transforms.p1().get_mut(targets.reflection_camera)
+        camera_transforms.get_mut(targets.reflection_camera)
     {
         *projection = Projection::custom(reflection_projection.clone());
         transform.set_if_neq(reflected_transform);

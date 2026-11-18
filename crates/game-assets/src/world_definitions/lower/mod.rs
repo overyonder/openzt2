@@ -818,6 +818,7 @@ pub mod authored_path_source_lowering;
 pub mod authored_placement_footprint_lowering;
 pub mod authored_placement_footprint_types;
 pub mod authored_placement_object_source_lowering;
+mod authored_placement_stomp_lowering;
 pub mod authored_staff_and_animal_catalogue_lowering;
 pub mod authored_transaction_lowering;
 pub mod biome_definition_and_detail_source_lowering;

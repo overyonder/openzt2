@@ -1,5 +1,6 @@
 mod invalidation;
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::entity::EntityHashMap;
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
@@ -290,6 +291,10 @@ fn local_bound(
     Some(result)
 }
 
+#[derive(Component, PartialEq)]
+pub(in crate::terrain) struct SceneCausticWorldBound(Option<PrefabBoundingSphere>);
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn project_scene_caustic_targets(
     mut commands: Commands,
     roots: Query<(
@@ -310,6 +315,7 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
     mut water: WaterChanges,
     mut cache: Local<BoundCache>,
     targets: Query<Entity, With<TerrainWaterCausticSceneTarget>>,
+    mut world_bounds: Query<(Entity, &mut SceneCausticWorldBound)>,
 ) {
     if !indexes.iter().any(|index| index.has_water_sides()) || regions.iter().next().is_none() {
         if cache.active {
@@ -334,11 +340,14 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
         dirty.insert(root);
     }
     let mut membership = HashSet::new();
+    let mut added_bounds = EntityHashMap::default();
     for root in dirty {
         let Ok((_, policy, _)) = roots.get(root) else {
             cache.deps.remove(root);
             cache.regions.remove(root);
-            cache.spheres.remove(&root);
+            if world_bounds.contains(root) {
+                commands.entity(root).remove::<SceneCausticWorldBound>();
+            }
             if targets.contains(root) {
                 commands
                     .entity(root)
@@ -367,7 +376,12 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
                 ))
             });
         cache.deps.record(root, context.inputs.into_inner());
-        cache.spheres.insert(root, sphere);
+        if let Ok((_, mut bound)) = world_bounds.get_mut(root) {
+            bound.set_if_neq(SceneCausticWorldBound(sphere));
+        } else {
+            added_bounds.insert(root, sphere);
+            commands.entity(root).insert(SceneCausticWorldBound(sphere));
+        }
         membership.insert(root);
     }
     let removed_index = changes.gone_index.read().count() != 0;
@@ -380,7 +394,7 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
         .filter_map(changed_asset)
         .any(|id| indexes.iter().any(|index| index.terrain() == id));
     if removed_index || changed_terrain || indexes.iter().any(|index| index.is_changed()) {
-        membership.extend(cache.spheres.keys().copied());
+        membership.extend(world_bounds.iter().map(|(root, _)| root));
     }
     for root in membership {
         let Ok((_, _, old)) = roots.get(root) else {
@@ -388,7 +402,10 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
         };
         let mut region_inputs = HashSet::new();
         let target = (|| {
-            let bound = cache.spheres.get(&root)?.as_ref()?;
+            let bound = added_bounds
+                .get(&root)
+                .copied()
+                .or_else(|| world_bounds.get(root).ok().map(|(_, bound)| bound.0))??;
             let center = Vec3::from_array(bound.center);
             for index in &indexes {
                 let asset = terrains.get(index.terrain())?;

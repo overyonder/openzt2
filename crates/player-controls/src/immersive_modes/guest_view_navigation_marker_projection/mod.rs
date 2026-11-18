@@ -5,7 +5,9 @@ use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 
-use super::guest_view_navigation_marker_types::GuestViewNavigationMarkerPresentation;
+use super::guest_view_navigation_marker_types::{
+    GuestViewNavigationMarkerOf, GuestViewNavigationMarkerPresentation, GuestViewNavigationMarkers,
+};
 use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ImmersiveMode;
 use crate::immersive_modes::immersive_control_execution_types::GuestViewControl;
@@ -26,7 +28,8 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     >,
     parents: Query<&ChildOf>,
     transforms: Query<&GlobalTransform>,
-    marker_presentations: Query<(Entity, &GuestViewNavigationMarkerPresentation)>,
+    marker_presentations: Query<&GuestViewNavigationMarkerPresentation>,
+    markers: Query<&GuestViewNavigationMarkers>,
     mut gizmos: ResMut<Assets<GizmoAsset>>,
     mut commands: Commands,
 ) {
@@ -51,31 +54,27 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
                 })
         },
     ) else {
-        retire_navigation_marker_presentations_for_guest_view_controller(
-            controller_entity,
-            &marker_presentations,
-            &mut gizmos,
-            &mut commands,
-        );
+        despawn_projected_navigation_markers(markers.get(controller_entity).ok(), &mut commands);
         count.0 = 0;
         return;
     };
     let Ok(target_transform) = transforms.get(hit.entity) else {
         return;
     };
-    if marker_presentations.iter().any(|(_, presentation)| {
-        presentation.controller_entity == controller_entity
-            && presentation.targeted_entity == hit.entity
-            && !active_navigation.is_changed()
-    }) {
+    let existing = markers.get(controller_entity).ok();
+    if !active_navigation.is_changed()
+        && existing
+            .into_iter()
+            .flat_map(|markers| markers.iter())
+            .any(|entity| {
+                marker_presentations
+                    .get(entity)
+                    .is_ok_and(|presentation| presentation.targeted_entity == hit.entity)
+            })
+    {
         return;
     }
-    retire_navigation_marker_presentations_for_guest_view_controller(
-        controller_entity,
-        &marker_presentations,
-        &mut gizmos,
-        &mut commands,
-    );
+    despawn_projected_navigation_markers(existing, &mut commands);
     let world = target_transform.translation();
     let position_cm = (world * 100.0).round().as_ivec3().to_array();
     let mut nearest_navigation_positions =
@@ -118,10 +117,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     }
     let asset = gizmos.add(asset);
     commands.spawn((
+        GuestViewNavigationMarkerOf(controller_entity),
         GuestViewNavigationMarkerPresentation {
-            controller_entity,
             targeted_entity: hit.entity,
-            gizmo_asset: asset.clone(),
         },
         Transform::IDENTITY,
         Visibility::Visible,
@@ -146,35 +144,20 @@ fn entity_has_ancestor(mut entity: Entity, ancestor: Entity, parents: &Query<&Ch
     false
 }
 
-pub(super) fn retire_navigation_marker_presentations_without_guest_view_controllers(
-    guest_view_controllers: Query<(), With<GuestViewControl>>,
-    marker_presentations: Query<(Entity, &GuestViewNavigationMarkerPresentation)>,
-    mut gizmos: ResMut<Assets<GizmoAsset>>,
+pub(super) fn drop_navigation_markers_when_guest_view_ends(
+    removed: On<Remove<GuestViewControl>>,
+    markers: Query<&GuestViewNavigationMarkers>,
     mut commands: Commands,
 ) {
-    for (entity, presentation) in &marker_presentations {
-        if guest_view_controllers
-            .get(presentation.controller_entity)
-            .is_err()
-        {
-            gizmos.remove(presentation.gizmo_asset.id());
-            commands.entity(entity).despawn();
-        }
-    }
+    despawn_projected_navigation_markers(markers.get(removed.entity).ok(), &mut commands);
 }
 
-fn retire_navigation_marker_presentations_for_guest_view_controller(
-    controller_entity: Entity,
-    marker_presentations: &Query<(Entity, &GuestViewNavigationMarkerPresentation)>,
-    gizmos: &mut Assets<GizmoAsset>,
+fn despawn_projected_navigation_markers(
+    markers: Option<&GuestViewNavigationMarkers>,
     commands: &mut Commands,
 ) {
-    for (entity, presentation) in marker_presentations
-        .iter()
-        .filter(|(_, presentation)| presentation.controller_entity == controller_entity)
-    {
-        gizmos.remove(presentation.gizmo_asset.id());
-        commands.entity(entity).despawn();
+    for marker in markers.into_iter().flat_map(|markers| markers.iter()) {
+        commands.entity(marker).try_despawn();
     }
 }
 

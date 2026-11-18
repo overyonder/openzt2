@@ -18,16 +18,12 @@ fn rebuilt_world_instance_receives_model_policy_before_visibility_collection() {
     .register_type::<Transform>()
     .register_type::<GlobalTransform>()
     .register_type::<TransformTreeChanged>()
-    .add_observer(invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready)
     .add_systems(
         PostUpdate,
-        (
-            project_model_scene_visibility_and_shadow_policy
-                .before(VisibilitySystems::CheckVisibility),
-            assert_portrait_mesh_policy_at_visibility_collection
-                .in_set(VisibilitySystems::CheckVisibility),
-        ),
+        assert_portrait_mesh_policy_at_visibility_collection
+            .in_set(VisibilitySystems::CheckVisibility),
     );
+    register_inherited_model_draw_shadow_policy(&mut app);
 
     let mut scene = World::new();
     scene.spawn(Mesh3d::default());
@@ -38,20 +34,12 @@ fn rebuilt_world_instance_receives_model_policy_before_visibility_collection() {
     let model = app
         .world_mut()
         .spawn((
-            PrefabModel {
-                model: Default::default(),
-                model_path: "fixture.gltf".into(),
-                handle: None,
-                scene_name: None,
-                material_name: None,
-            },
             PrefabShadowPolicy {
                 casts: false,
                 receives: false,
                 visible_in_reflections: false,
             },
             RenderLayers::layer(29),
-            ModelExpanded,
             WorldAssetRoot(scene.clone()),
         ))
         .id();

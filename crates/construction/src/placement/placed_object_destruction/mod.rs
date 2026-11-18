@@ -5,6 +5,8 @@ use bevy::asset::LoadState;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_game_assets::effect::SpawnCompleteParticleEffectDocument;
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -47,11 +49,15 @@ pub(super) fn ruin_destroyed_placed_objects(
     mut requests: MessageReader<DestroyPlacedObject>,
     // Smashed objects whose ruin prefab is still loading.
     mut pending: Local<Vec<(Entity, Option<(AssetId, Handle<ScenePrefabAsset>)>)>>,
-    mut world_assets: ResMut<Assets<WorldDefinitionAsset>>,
+    world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     server: Res<AssetServer>,
-    (prefabs, models): (Res<Assets<ScenePrefabAsset>>, Res<Assets<Gltf>>),
-    members: Query<&WorldMember>,
+    (prefabs, models, footprints): (
+        Res<Assets<ScenePrefabAsset>>,
+        Res<Assets<Gltf>>,
+        Res<ScenePlacementFootprints>,
+    ),
+    members: Query<(&WorldMember, Option<&PrefabSourceAssetHandle>)>,
     (mut placement, mut scratch, mut allocator): (
         ResMut<PlacedObjectFootprintOccupancyIndex>,
         ResMut<ObjectPlacementCellCollectionScratch>,
@@ -75,21 +81,6 @@ pub(super) fn ruin_destroyed_placed_objects(
             pending.push((request.entity, None));
         }
     }
-    // A ruin's footprint comes from its model's bounds once that has loaded;
-    // nothing else hydrates it before the ruin is put down.
-    for (ruin, handle) in pending.iter().filter_map(|(_, prefab)| prefab.as_ref()) {
-        if let Some(bounds) = prefabs.get(handle).and_then(|prefab| {
-            prefab
-                .canonical_scene_prefab_document()
-                .automatic_placement_bounds_xz
-        }) {
-            world_definitions.apply_source_lowered_automatic_placement_bounds(
-                &mut world_assets,
-                *ruin,
-                bounds,
-            );
-        }
-    }
     let Some(catalogue) = world_definitions.get(&world_assets) else {
         return;
     };
@@ -110,9 +101,10 @@ pub(super) fn ruin_destroyed_placed_objects(
                 }
             }
         }
-        let Ok(root) = members.get(*building).map(|member| member.root) else {
+        let Ok((member, building_prefab)) = members.get(*building) else {
             return false;
         };
+        let root = member.root;
         let ruin = catalogue
             .find_object(definition)
             .and_then(|object| object.destruction.as_ref())
@@ -158,8 +150,12 @@ pub(super) fn ruin_destroyed_placed_objects(
                             .canonical_scene_prefab_document()
                             .automatic_placement_bounds_xz
                             .is_some()
-                            && resolve_object_placeable_definition(catalogue, *ruin)
-                                .is_some_and(|placeable| placeable.footprint.is_empty()))
+                            && resolve_object_placeable_definition(catalogue, *ruin).is_some_and(
+                                |placeable| {
+                                    placeable.automatic_footprint
+                                        && !footprints.has_scene_bounds(handle)
+                                },
+                            ))
                             || first_missing_prefab_collider_model_asset_id(loaded, &models)
                                 .is_some_and(|model| {
                                     loaded
@@ -200,7 +196,7 @@ pub(super) fn ruin_destroyed_placed_objects(
             return false;
         };
         if let Some(cells) = collect_occupied_placement_cells_for_transform(
-            placeable,
+            footprints.resolve(placeable, building_prefab.map(|source| &source.0)),
             &transform,
             &mut scratch.cells,
         ) {
@@ -255,7 +251,7 @@ pub(super) fn ruin_destroyed_placed_objects(
             return false;
         };
         let Some(cells) = collect_occupied_placement_cells_for_transform(
-            ruin_placeable,
+            footprints.resolve(ruin_placeable, Some(&handle)),
             &transform,
             &mut scratch.cells,
         )
@@ -295,6 +291,7 @@ pub(super) fn ruin_destroyed_placed_objects(
             Some(root),
             &mut placement,
             &mut scratch,
+            &footprints,
             &prefabs,
             &models,
             &placed,

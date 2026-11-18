@@ -6,6 +6,9 @@ use crate::source_document::ordered_source_document_types::{
     OrderedSourceDocument, OrderedSourceDocumentSpan,
 };
 
+use super::super::authored_hotkey_file_references::{
+    collect_authored_hotkey_file_paths, expand_authored_hotkey_files,
+};
 use super::super::ui_source_document_gap::{
     UiSourceDocumentFamily, UiSourceDocumentGap, UiSourceDocumentGapKind,
 };
@@ -58,6 +61,11 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
             winners.insert(document.path.key(), (precedence, *document));
             winners
         });
+    let hotkey_documents = selected_source_document_winners_by_path
+        .iter()
+        .filter(|(_, (_, document))| document.root.name.eq_ignore_ascii_case("hotkeys"))
+        .map(|(path, (_, document))| (path.clone(), *document))
+        .collect::<BTreeMap<_, _>>();
     let mut parsed_ui_source_documents_by_path = BTreeMap::new();
     let mut selected_source_documents_in_resolution_order =
         selected_source_document_winners_by_path
@@ -154,9 +162,17 @@ pub(in crate::ui_document::source) fn resolve_selected_ui_source_documents_to_ro
                 icons.push((expansion_index, icon));
             }
         }
-        if path != "ztapp4.xml" && !path.starts_with("ui/") {
+        if path != "ztapp4.xml" && !path.starts_with("ui/") && !hotkey_documents.contains_key(&path)
+        {
             continue;
         }
+        let expanded;
+        let document = if collect_authored_hotkey_file_paths(document).is_empty() {
+            document
+        } else {
+            expanded = expand_authored_hotkey_files(document, &hotkey_documents)?;
+            &expanded
+        };
         match parse_and_normalize_blue_fang_ui_source_document(document) {
             Ok(mut source) => {
                 source.diagnostics.clear();

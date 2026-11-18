@@ -19,7 +19,8 @@ use openzt2_zoo_state::{
         behavior_synchronized_set_types::SynchronizedBehaviorOwner,
         behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken},
         interaction_container_membership::{
-            DockedAtInteractionContainer, InteractionContainerMember,
+            requests::InteractionContainerAdmissionOutcome, DockedAtInteractionContainer,
+            InteractionContainerMember,
         },
     },
     behavior_task_execution_types::{BehaviorTaskExecutionPhase, SynchronizedBehaviorParticipant},
@@ -294,11 +295,15 @@ pub(super) fn restore_behavior_actor_snapshots(
         }
     }
     for (actor, membership, docked) in restored_membership {
-        let mut actor = commands.entity(actor);
-        actor.insert(membership);
-        if docked {
-            actor.insert(DockedAtInteractionContainer);
-        }
+        commands.queue(move |world: &mut World| {
+            if matches!(
+                membership.commit(world),
+                InteractionContainerAdmissionOutcome::Granted { .. }
+            ) && docked
+            {
+                world.entity_mut(actor).insert(DockedAtInteractionContainer);
+            }
+        });
     }
     for (record, prepared) in records.iter().zip(prepared) {
         apply_prepared_behavior_actor(commands, record, prepared, &identities, application);

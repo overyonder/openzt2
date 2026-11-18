@@ -1,8 +1,14 @@
 use bevy::prelude::*;
 
 #[derive(Component)]
+#[relationship(relationship_target = GuestViewNavigationMarkers)]
+pub(super) struct GuestViewNavigationMarkerOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = GuestViewNavigationMarkerOf, linked_spawn)]
+pub(super) struct GuestViewNavigationMarkers(Vec<Entity>);
+
+#[derive(Component)]
 pub(super) struct GuestViewNavigationMarkerPresentation {
-    pub controller_entity: Entity,
-    pub targeted_entity: Entity,
-    pub gizmo_asset: Handle<GizmoAsset>,
+    pub(super) targeted_entity: Entity,
 }

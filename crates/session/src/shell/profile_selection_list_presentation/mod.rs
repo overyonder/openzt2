@@ -42,15 +42,15 @@ pub(super) fn request_authored_profile_selection_list_row_count(
 pub(super) fn project_profile_index_entries_into_authored_rows(
     mut commands: Commands,
     index: Res<ProfileIndex>,
-    rows: Query<(Entity, Ref<UiListRow>)>,
+    rows: Query<(Entity, Ref<UiListRow>, &ChildOf)>,
     lists: Query<&UiListPolicy>,
     children: Query<&Children>,
     bindings: Query<&UiTextBinding>,
     mut texts: Query<&mut Text>,
 ) {
-    for (row_entity, row) in &rows {
+    for (row_entity, row, parent) in &rows {
         if !lists
-            .get(row.list)
+            .get(parent.parent())
             .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::ProfileIndex)
         {
             continue;

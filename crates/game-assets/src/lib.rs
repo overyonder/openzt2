@@ -6,6 +6,7 @@ pub mod asset_source;
 pub mod audio;
 pub mod behavior;
 pub mod effect;
+pub mod graphics_settings_presets;
 pub mod graphics_settings_types;
 pub mod localization;
 pub mod lua_script;

@@ -1,6 +1,7 @@
 use bevy::prelude::*;
 use openzt2_zoo_state::terrain::{
-    terrain_chunk_types::TerrainChunk, terrain_edit_types::TerrainPresentationRestored,
+    terrain_chunk_types::TerrainChunk, terrain_collision_rebuilding_types::TerrainCollisionPending,
+    terrain_edit_types::TerrainPresentationRestored,
 };
 
 use super::{
@@ -22,13 +23,15 @@ pub(super) fn mark_restored_terrain_chunks_for_presentation_rebuilding(
         };
         let min = UVec2::ZERO;
         let max = UVec2::splat(u32::from(last_sample));
-        let flags =
-            TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::SURFACE | TerrainDirtyFlags::COLLISION;
+        let flags = TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::SURFACE;
         queue_terrain_render_refresh(
             &mut commands,
             request.chunk,
             TerrainDirtyRegion { min, max, flags },
         );
-        commands.entity(request.chunk).insert(TerrainDirty);
+        commands
+            .entity(request.chunk)
+            .insert(TerrainDirty)
+            .insert_if_new(TerrainCollisionPending);
     }
 }

@@ -3,13 +3,14 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
+    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -31,7 +32,10 @@ use openzt2_game_data::{
         guest_simulation_definitions::*,
         immersive_mode_policy::*,
         need_adjustment::NeedAdjustmentPolicy,
-        object_placement::*,
+        object_placement::{
+            placement_stomp_rules::{PlacementStompPolicy, PlacementTargetFacts},
+            *,
+        },
         paths_and_tile_surfaces::*,
         simulation_time::*,
         staff_management::*,
@@ -39,7 +43,6 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
-    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -150,7 +153,7 @@ pub(super) enum SingletonKind {
 #[derive(Resource, Default)]
 pub struct WorldDefinitions {
     pub(super) server: Option<AssetServer>,
-    pub(super) revision: Option<u64>,
+    pub(super) binder_source_version: u64,
     pub(super) dirty: bool,
     pub(super) handles: Vec<Handle<WorldDefinitionAsset>>,
     pub(super) fame_documents: Vec<Handle<WorldDefinitionAsset>>,
@@ -165,7 +168,6 @@ pub struct WorldDefinitions {
     pub(super) catalogue_authored_purchase_order: Vec<(usize, AssetId)>,
     pub(super) catalogue_by_definition: std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
     pub(super) research_by_definition: std::sync::OnceLock<BTreeMap<AssetId, AssetId>>,
-    pub(super) catalogue_revision: u64,
     pub(super) topology_cell_size_cm: u16,
     /// Whether an indexed handle lacked its asset. Indexing reruns whenever
     /// the definition assets change, so views need not rescan every handle.
@@ -173,26 +175,6 @@ pub struct WorldDefinitions {
 }
 
 impl WorldDefinitions {
-    pub fn apply_source_lowered_automatic_placement_bounds(
-        &self,
-        assets: &mut ResMut<Assets<WorldDefinitionAsset>>,
-        definition: AssetId,
-        bounds_xz: [[f32; 2]; 2],
-    ) {
-        // Hydration must mutate the same precedence winner used by find_placeable.
-        let Some(owner) = self.records.get(&(DefinitionKind::Placeable, definition)) else {
-            return;
-        };
-        if assets.get(owner).is_some_and(|asset| {
-            asset.automatic_placement_definition_needs_source_lowered_bounds(definition, bounds_xz)
-        }) {
-            assets
-                .get_mut(owner)
-                .expect("automatic placement owner came from this asset set")
-                .apply_source_lowered_automatic_placement_bounds(definition, bounds_xz);
-        }
-    }
-
     pub fn loading_progress(&self) -> (usize, usize) {
         (
             self.completed_loads.load(Ordering::Relaxed),
@@ -202,10 +184,6 @@ impl WorldDefinitions {
 
     pub fn is_complete(&self) -> bool {
         self.complete
-    }
-
-    pub const fn catalogue_revision(&self) -> u64 {
-        self.catalogue_revision
     }
 
     #[must_use]
@@ -400,6 +378,24 @@ impl<'a> WorldDefinitionsView<'a> {
             .iter()
             .rev()
             .filter_map(|handle| self.assets.get(handle))
+    }
+
+    pub fn path_stomp_policy(self, id: AssetId) -> Option<&'a PlacementStompPolicy> {
+        let owner = self.records.get(&(DefinitionKind::Path, id))?;
+        self.assets
+            .get(owner)?
+            .document
+            .path_stomp_policies
+            .get(&id)
+    }
+
+    pub fn placement_target_facts(self, id: AssetId) -> Option<&'a PlacementTargetFacts> {
+        let owner = self.records.get(&(DefinitionKind::Object, id))?;
+        self.assets
+            .get(owner)?
+            .document
+            .placement_target_facts
+            .get(&id)
     }
 
     finder!(find_object, Object, objects, WorldObjectDefinition);

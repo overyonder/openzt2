@@ -8,6 +8,7 @@ use openzt2_game_data::{
     },
     AssetId,
 };
+use std::collections::BTreeMap;
 
 pub mod authored_particle_system_hanabi_effect_preparation;
 pub mod effect_asset_loading;
@@ -15,7 +16,6 @@ pub mod effect_document_runtime_queries;
 pub mod effect_instance_runtime_systems;
 pub mod effect_instance_spawning_and_preparation;
 pub mod effect_runtime_types;
-pub mod effect_source_reloading;
 pub mod explicit_particle_emission;
 pub mod hanabi_custom_particle_modifiers;
 pub mod legacy_nif_hanabi_effect_preparation;
@@ -30,28 +30,26 @@ pub mod particle_system_source_node_traversal;
 pub mod particle_system_source_scalar_reading;
 pub mod particle_system_source_vector_reading;
 pub mod particle_wave_surface;
-pub mod preparation;
-pub mod prepared_effect_asset_cache;
+pub(crate) mod prepared_effect_emitters;
 pub mod source;
 use effect_asset_loading::EffectAssetLoader;
 use effect_instance_runtime_systems::{
-    bind_loaded_material_textures_to_pending_effect_instances,
-    bind_loaded_named_meshes_to_pending_effect_instances,
-    retire_effect_instances_after_calculated_finite_lifetime,
+    activate_authored_particle_spawners_for_emission_window,
+    apply_authored_particle_emission_and_close_finished_spawners,
+    confirm_particle_readbacks_before_draining_collision_children,
+    retire_drained_particle_effect_trees, retire_empty_particle_effect_document_roots,
     select_effect_simulation_delta_time_from_authored_clock,
-    stop_effect_instances_attached_to_requested_entities,
-    update_controlled_effect_emission_from_authored_timing,
 };
 use effect_instance_spawning_and_preparation::{
-    enqueue_requested_effect_instances_for_preparation,
-    prepare_pending_effect_instances_from_loaded_authored_assets,
+    enqueue_requested_effect_instances_for_preparation, reconcile_loaded_particle_effect_instances,
 };
-use effect_source_reloading::refresh_prepared_effect_assets_from_source_changes;
-use prepared_effect_asset_cache::PreparedHanabiEffectAssets;
 
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct ParticleEffectDocumentAsset {
     pub particle_document: ParticleDocument,
+    roots: Vec<AssetId>,
+    #[dependency]
+    prepared_emitters: BTreeMap<AssetId, prepared_effect_emitters::PreparedParticleEmitter>,
 }
 
 #[derive(Component, Clone, Debug)]
@@ -91,6 +89,7 @@ pub struct ParticleEffectAssetAndRuntimePlugin;
 impl Plugin for ParticleEffectAssetAndRuntimePlugin {
     fn build(&self, app: &mut App) {
         app.init_asset::<ParticleEffectDocumentAsset>()
+            .add_plugins(particle_plane_binding::ParticleEffectPlaneBindingPlugin)
             .add_systems(
                 PostUpdate,
                 effect_instance_runtime_systems::align_attached_particle_effects_to_world_axes
@@ -98,7 +97,6 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
                     .before(bevy::transform::TransformSystems::Propagate),
             )
             .init_asset_loader::<EffectAssetLoader>()
-            .init_resource::<PreparedHanabiEffectAssets>()
             .add_message::<SpawnParticleEffectEmitter>()
             .add_message::<SpawnCompleteParticleEffectDocument>()
             .add_message::<StopParticleEffectsAttachedToEntity>()
@@ -106,32 +104,43 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             .add_systems(
                 Update,
                 (
-                    refresh_prepared_effect_assets_from_source_changes,
                     enqueue_requested_effect_instances_for_preparation,
                     explicit_particle_emission::prepare_explicit_particle_emitters,
-                    prepare_pending_effect_instances_from_loaded_authored_assets,
-                    explicit_particle_emission::retain_explicit_particle_emitters,
-                    stop_effect_instances_attached_to_requested_entities,
-                    bind_loaded_material_textures_to_pending_effect_instances,
-                    bind_loaded_named_meshes_to_pending_effect_instances,
-                    select_effect_simulation_delta_time_from_authored_clock,
-                    retire_effect_instances_after_calculated_finite_lifetime,
+                    reconcile_loaded_particle_effect_instances,
+                    effect_instance_runtime_systems::stop_requested_particle_effect_children
+                        .run_if(
+                            bevy::ecs::schedule::common_conditions::on_message::<
+                                StopParticleEffectsAttachedToEntity,
+                            >,
+                        ),
                 )
                     .chain(),
             )
             .add_systems(
                 PostUpdate,
-                (
-                    update_controlled_effect_emission_from_authored_timing,
-                    explicit_particle_emission::upload_explicit_particle_emission_points,
-                )
-                    .chain()
-                    .after(bevy_hanabi::prelude::EffectSystems::TickSpawners),
+                select_effect_simulation_delta_time_from_authored_clock
+                    .before(activate_authored_particle_spawners_for_emission_window),
             )
             .add_systems(
                 PostUpdate,
-                particle_plane_binding::upload_particle_effect_planes
-                    .before(bevy_hanabi::EffectSystems::UpdatePropertiesFromAsset),
+                activate_authored_particle_spawners_for_emission_window
+                    .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                    .after(bevy_hanabi::EffectSystems::CompileEffects)
+                    .before(bevy_hanabi::EffectSystems::TickSpawners),
+            )
+            .add_systems(
+                PostUpdate,
+                (
+                    explicit_particle_emission::upload_explicit_particle_emission_points,
+                    (
+                        apply_authored_particle_emission_and_close_finished_spawners,
+                        confirm_particle_readbacks_before_draining_collision_children,
+                        retire_drained_particle_effect_trees,
+                        retire_empty_particle_effect_document_roots,
+                    )
+                        .chain(),
+                )
+                    .after(bevy_hanabi::EffectSystems::TickSpawners),
             )
             .add_systems(
                 PostUpdate,

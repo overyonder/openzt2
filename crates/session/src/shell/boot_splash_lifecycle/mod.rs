@@ -6,7 +6,7 @@ use bevy::{
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_interface_state::ui::ui_document_asset_load_failure::UiDocumentAssetLoadFailed;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 
 use openzt2_interface_state::shell::shell_screen_presentation_types::ShellUiCamera;
 use openzt2_interface_state::shell::shell_screen_presentation_types::{
@@ -21,7 +21,7 @@ pub(super) fn create_boot_splash_screen_and_shell_cameras(
     shell_ui_cameras: Query<(), With<ShellUiCamera>>,
     shell_clear_cameras: Query<(), With<ShellClearCamera>>,
     menu_backdrops: Query<(), With<MainMenuBackdrop>>,
-    mut requested_ui_roles: ResMut<UiRoleRequests>,
+    mut requested_ui_roles: MessageWriter<ShowUiRole>,
 ) {
     if shell_clear_cameras.is_empty() {
         commands.spawn((
@@ -61,12 +61,22 @@ pub(super) fn create_boot_splash_screen_and_shell_cameras(
         let backdrop = commands
             .spawn((MainMenuBackdrop, Visibility::Inherited, GlobalZIndex(-1)))
             .id();
-        requested_ui_roles.request(UiDocumentRole::MainMenuBackdrop, backdrop);
+        requested_ui_roles.write(ShowUiRole {
+            role: UiDocumentRole::MainMenuBackdrop,
+            owner: backdrop,
+        });
     }
     let splash_screen_owner = commands
-        .spawn((ShellScreen::Splash, Visibility::Inherited))
+        .spawn((
+            ShellScreen::Splash,
+            Visibility::Inherited,
+            DespawnOnExit(GamePhase::Boot),
+        ))
         .id();
-    requested_ui_roles.request(UiDocumentRole::Splash, splash_screen_owner);
+    requested_ui_roles.write(ShowUiRole {
+        role: UiDocumentRole::Splash,
+        owner: splash_screen_owner,
+    });
 }
 
 pub(super) fn enter_main_menu_after_splash_completion_or_ui_document_asset_load_failure(

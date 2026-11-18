@@ -8,23 +8,39 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 };
 use openzt2_zoo_state::terrain::terrain_water_view_state::TerrainWaterViewState;
 use openzt2_zoo_state::terrain::terrain_water_view_state::{
-    TerrainWaterRegionFade, TerrainWaterRegionVisibility,
+    TerrainWaterCameraPose, TerrainWaterRegionFade, TerrainWaterRegionVisibility,
 };
 
-pub(super) fn update_camera_terrain_water_membership(
+pub(super) fn sample_terrain_water_camera_pose(
+    mut commands: Commands,
     phase: Res<State<GamePhase>>,
-    cameras: Query<(Entity, &Camera), With<ZooCamera>>,
+    mut cameras: Query<(Entity, &Camera, Option<&mut TerrainWaterCameraPose>), With<ZooCamera>>,
     transforms: TransformHelper,
+) {
+    let Ok((entity, camera, pose)) = cameras.single_mut() else {
+        return;
+    };
+    let transform = if camera.is_active && *phase.get() == GamePhase::InGame {
+        transforms.compute_global_transform(entity).ok()
+    } else {
+        None
+    };
+    let next = TerrainWaterCameraPose(transform);
+    if let Some(mut pose) = pose {
+        pose.set_if_neq(next);
+    } else {
+        commands.entity(entity).insert(next);
+    }
+}
+
+pub(super) fn update_camera_terrain_water_membership(
+    cameras: Query<Option<&TerrainWaterCameraPose>, (With<ZooCamera>, With<Camera>)>,
     indexes: Query<&TerrainWaterMembershipIndex>,
     regions: TerrainWaterRegionQuery,
     assets: Res<Assets<TerrainAsset>>,
     mut view: ResMut<TerrainWaterViewState>,
 ) {
-    let camera = cameras
-        .single()
-        .ok()
-        .filter(|(_, camera)| camera.is_active && *phase.get() == GamePhase::InGame)
-        .and_then(|(entity, _)| transforms.compute_global_transform(entity).ok());
+    let camera = cameras.single().ok().flatten().and_then(|pose| pose.0);
     let Some(camera) = camera else {
         view.update_camera(None, None);
         return;
@@ -43,9 +59,7 @@ pub(super) fn update_camera_terrain_water_membership(
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn update_terrain_water_view_selection(
-    phase: Res<State<GamePhase>>,
-    cameras: Query<(Entity, &Camera, &Projection), With<ZooCamera>>,
-    transforms: TransformHelper,
+    cameras: Query<(&Projection, Option<&TerrainWaterCameraPose>), (With<ZooCamera>, With<Camera>)>,
     indexes: Query<&TerrainWaterMembershipIndex>,
     mut regions: Query<(
         Entity,
@@ -56,18 +70,13 @@ pub(super) fn update_terrain_water_view_selection(
     assets: Res<Assets<TerrainAsset>>,
     mut view: ResMut<TerrainWaterViewState>,
 ) {
-    let Some((entity, _, Projection::Perspective(projection))) = cameras
-        .single()
-        .ok()
-        .filter(|(_, camera, _)| camera.is_active && *phase.get() == GamePhase::InGame)
+    let Ok((Projection::Perspective(projection), Some(TerrainWaterCameraPose(Some(camera))))) =
+        cameras.single()
     else {
         view.update_selection(None, false);
         return;
     };
-    let (Ok(camera), Ok(index)) = (
-        transforms.compute_global_transform(entity),
-        indexes.single(),
-    ) else {
+    let Ok(index) = indexes.single() else {
         view.update_selection(None, false);
         return;
     };

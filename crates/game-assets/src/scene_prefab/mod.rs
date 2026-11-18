@@ -9,6 +9,7 @@ use openzt2_game_data::{
     scene_prefab::{ScenePrefabAssetDependencyKind, ScenePrefabDocument},
     AssetId,
 };
+use std::collections::BTreeMap;
 
 use crate::{
     animation::animation_set_asset_types::AnimationSetAsset, effect::ParticleEffectDocumentAsset,
@@ -17,6 +18,7 @@ use crate::{
 #[derive(Asset, TypePath, Debug)]
 pub struct ScenePrefabAsset {
     document: ScenePrefabDocument,
+    attachment_transforms: BTreeMap<AssetId, Option<Mat4>>,
     model_paths: Box<[(AssetId, Box<str>)]>,
     collider_models: Box<[(AssetId, Handle<Gltf>)]>,
     material_paths: Box<[(AssetId, Box<str>)]>,
@@ -28,6 +30,7 @@ impl ScenePrefabAsset {
     #[cfg(any(test, feature = "testing"))]
     pub fn from_test_document(document: ScenePrefabDocument) -> Self {
         Self {
+            attachment_transforms: collect_prefab_attachment_transforms(&document),
             document,
             model_paths: Box::new([]),
             collider_models: Box::new([]),
@@ -39,6 +42,16 @@ impl ScenePrefabAsset {
 
     pub fn canonical_scene_prefab_document(&self) -> &ScenePrefabDocument {
         &self.document
+    }
+
+    pub fn prefab_attachment_transform(&self, attachment_id: AssetId) -> Option<Mat4> {
+        if attachment_id == AssetId::default() {
+            return Some(Mat4::IDENTITY);
+        }
+        self.attachment_transforms
+            .get(&attachment_id)
+            .copied()
+            .flatten()
     }
 
     pub fn loaded_model_asset_handle(&self, asset_id: AssetId) -> Option<&Handle<Gltf>> {
@@ -97,6 +110,7 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         ScenePrefabAssetDependencyKind::Animation,
     );
     ScenePrefabAsset {
+        attachment_transforms: collect_prefab_attachment_transforms(&document),
         document,
         model_paths,
         collider_models,
@@ -104,6 +118,36 @@ pub fn create_scene_prefab_asset_and_load_dependencies(
         effects,
         animations,
     }
+}
+
+fn collect_prefab_attachment_transforms(
+    prefab: &ScenePrefabDocument,
+) -> BTreeMap<AssetId, Option<Mat4>> {
+    let mut attachments = BTreeMap::new();
+    for (index, entity) in prefab.entities.iter().enumerate() {
+        if entity.attachment_id == AssetId::default() {
+            continue;
+        }
+        attachments.entry(entity.attachment_id).or_insert_with(|| {
+            let mut index = index;
+            let mut transform = Mat4::IDENTITY;
+            for _ in 0..prefab.entities.len() {
+                let entity = prefab.entities.get(index)?;
+                let local = &entity.transform;
+                transform = Mat4::from_scale_rotation_translation(
+                    Vec3::from_array(local.scale),
+                    Quat::from_array(local.rotation_xyzw),
+                    Vec3::from_array(local.translation_m),
+                ) * transform;
+                if entity.parent == u32::MAX {
+                    return Some(transform);
+                }
+                index = entity.parent as usize;
+            }
+            None
+        });
+    }
+    attachments
 }
 
 fn collect_scene_prefab_dependency_paths_of_asset_kind(

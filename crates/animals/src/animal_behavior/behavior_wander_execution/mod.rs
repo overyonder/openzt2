@@ -37,7 +37,7 @@ use openzt2_zoo_state::{
 };
 
 use openzt2_zoo_state::behavior_task_execution_types::{
-    BehaviorEvasionNavigation, BehaviorWanderNavigation,
+    BehaviorEvasionNavigation, BehaviorEvasionSteering, BehaviorWanderNavigation,
 };
 
 pub(super) fn register_wander_execution(application: &mut App) {
@@ -117,6 +117,7 @@ fn execute_current_wander_actions(
             Has<Dead>,
             Has<Staff>,
             Has<openzt2_zoo_state::animal_health::types::Escaped>,
+            Option<&mut StaffSubmergedDepth>,
         ),
         Or<(With<Animal>, With<Staff>)>,
     >,
@@ -136,6 +137,7 @@ fn execute_current_wander_actions(
         dead,
         staff,
         escaped,
+        mut submerged_depth,
     ) in &mut animals
     {
         let mut task = task;
@@ -154,6 +156,7 @@ fn execute_current_wander_actions(
                 .entity(actor)
                 .remove::<(BehaviorWanderNavigation, StaffSubmergedDepth)>();
             wandering = None;
+            submerged_depth = None;
         }
         let Some(task) = task
             .as_deref_mut()
@@ -365,7 +368,11 @@ fn execute_current_wander_actions(
         if staff && mode == Some(&LocomotionMode::Swim) && action.maximum_depth_m > 0.0 {
             let depth = action.minimum_depth_m
                 + (action.maximum_depth_m - action.minimum_depth_m) * random.0.unit_f32();
-            commands.entity(actor).insert(StaffSubmergedDepth(depth));
+            if let Some(mut submerged_depth) = submerged_depth {
+                submerged_depth.set_if_neq(StaffSubmergedDepth(depth));
+            } else {
+                commands.entity(actor).insert(StaffSubmergedDepth(depth));
+            }
         }
         if let Some(wandering) = wandering.as_deref_mut() {
             wandering.request_id = Some(request_id);
@@ -421,8 +428,9 @@ fn execute_current_evasion_actions(
             Entity,
             &GlobalTransform,
             Option<&mut BehaviorTaskExecutionState>,
-            Option<&Destination>,
+            Option<&mut Destination>,
             Option<&BehaviorEvasionNavigation>,
+            Option<&mut BehaviorEvasionSteering>,
             &mut BehaviorRandomStream,
             Has<PendingBehaviorTaskFailure>,
             Has<WorldEntityIsCrated>,
@@ -432,14 +440,14 @@ fn execute_current_evasion_actions(
         Or<(With<Animal>, With<Staff>)>,
     >,
 ) {
-    use openzt2_zoo_state::behavior_task_execution_types::BehaviorEvasionSteering;
     let definitions = definitions.get(&definition_assets);
     for (
         actor,
         transform,
         task,
-        destination,
+        mut destination,
         evading,
+        mut steering,
         mut random,
         failing,
         crated,
@@ -452,13 +460,17 @@ fn execute_current_evasion_actions(
             .filter(|evading| !immobilized && task.as_ref().is_some_and(|task| evading.owns(task)));
         if evading.is_some() && current.is_none() {
             if evading.is_some_and(|evading| {
-                destination.is_some_and(|destination| destination.request_id == evading.request_id)
+                destination
+                    .as_ref()
+                    .is_some_and(|destination| destination.request_id == evading.request_id)
             }) {
                 commands.entity(actor).remove::<Destination>();
+                destination = None;
             }
             commands
                 .entity(actor)
                 .remove::<(BehaviorEvasionNavigation, BehaviorEvasionSteering)>();
+            steering = None;
         }
         let Some(mut task) =
             task.filter(|task| !immobilized && task.next_action_tick <= clock.tick)
@@ -526,7 +538,9 @@ fn execute_current_evasion_actions(
         let clear = !target_near && !entity_near;
         if clear || timed_out {
             if current.is_some_and(|evading| {
-                destination.is_some_and(|destination| destination.request_id == evading.request_id)
+                destination
+                    .as_ref()
+                    .is_some_and(|destination| destination.request_id == evading.request_id)
             }) {
                 commands.entity(actor).remove::<Destination>();
             }
@@ -545,19 +559,33 @@ fn execute_current_evasion_actions(
         if direction.length_squared() <= f32::EPSILON {
             direction = Vec2::new(random.0.unit_f32() * 2.0 - 1.0, -1.0);
         }
-        commands.entity(actor).insert(BehaviorEvasionSteering {
+        let steering_value = BehaviorEvasionSteering {
             request_id,
             direction,
             obstacle_radius_m: action.obstacle_radius_m,
             avoid_water: action.avoid_water,
             avoid_land: action.avoid_land,
-        });
-        if destination.is_none_or(|destination| destination.request_id != request_id) {
-            commands.entity(actor).insert(Destination {
+        };
+        if let Some(mut steering) = steering {
+            steering.set_if_neq(steering_value);
+        } else {
+            commands.entity(actor).insert(steering_value);
+        }
+        if current.is_none()
+            || destination
+                .as_ref()
+                .is_none_or(|destination| destination.request_id != request_id)
+        {
+            let destination_value = Destination {
                 request_id,
                 world: position + Vec3::new(direction.x, 0.0, direction.y).normalize_or_zero(),
                 arrival_radius_m: 0.0,
-            });
+            };
+            if let Some(mut destination) = destination {
+                destination.set_if_neq(destination_value);
+            } else {
+                commands.entity(actor).insert(destination_value);
+            }
         }
         if current.is_none() {
             let ticks = action
@@ -565,22 +593,15 @@ fn execute_current_evasion_actions(
                 .as_nanos()
                 .saturating_mul(u128::from(definitions.timing().fixed_hz))
                 .div_ceil(1_000_000_000);
-            commands.entity(actor).insert((
-                BehaviorEvasionNavigation {
-                    execution_id: task.execution_id,
-                    origin: task.create_return_frame_after_action(task.action),
-                    depth: task.stack.len(),
-                    until_tick: clock
-                        .tick
-                        .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
-                    request_id,
-                },
-                Destination {
-                    request_id,
-                    world: position + Vec3::new(direction.x, 0.0, direction.y).normalize_or_zero(),
-                    arrival_radius_m: 0.0,
-                },
-            ));
+            commands.entity(actor).insert(BehaviorEvasionNavigation {
+                execution_id: task.execution_id,
+                origin: task.create_return_frame_after_action(task.action),
+                depth: task.stack.len(),
+                until_tick: clock
+                    .tick
+                    .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
+                request_id,
+            });
         }
     }
 }

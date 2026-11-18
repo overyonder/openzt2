@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    archive_overlay::winning_archive_entry_for_path,
-    paths::normalize_asset_path_for_case_insensitive_archive_lookup, ArchiveSet,
+    ArchiveReadEntry, ArchiveSet, archive_overlay::winning_archive_entry_for_path,
+    paths::normalize_asset_path_for_case_insensitive_archive_lookup,
 };
 
 impl ArchiveSet {
@@ -48,20 +48,42 @@ impl ArchiveSet {
         path: &Path,
         maximum_byte_count: usize,
     ) -> io::Result<Vec<u8>> {
-        let path = normalize_asset_path_for_case_insensitive_archive_lookup(path);
+        let winner = self
+            .resolve_archive_read_entry(path)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))?;
+        self.read_resolved_archive_entry(winner, maximum_byte_count)
+    }
+
+    pub fn resolve_archive_read_entry(&self, path: &Path) -> Option<ArchiveReadEntry> {
+        let normalized = normalize_asset_path_for_case_insensitive_archive_lookup(path);
         let state = self
             .overlay_state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let winner = winning_archive_entry_for_path(&state, &path)
-            .cloned()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, path.display().to_string()))?;
-        drop(state);
-        let mut archive = self.open_zip_archives[winner.archive_priority_index]
-            .lock()
-            .map_err(|_| io::Error::other("Z2F archive lock poisoned"))?;
+        let winner = winning_archive_entry_for_path(&state, &normalized)?;
+        Some(ArchiveReadEntry {
+            archive_priority_index: winner.archive_priority_index,
+            zip_entry_ordinal: winner.zip_entry_index,
+        })
+    }
+
+    /// Reads the immutable entry previously selected by this archive set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the entry cannot be read or exceeds the byte limit.
+    pub fn read_resolved_archive_entry(
+        &self,
+        winner: ArchiveReadEntry,
+        maximum_byte_count: usize,
+    ) -> io::Result<Vec<u8>> {
+        let mut archive = self
+            .open_zip_archives
+            .get(winner.archive_priority_index)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unknown Z2F archive"))?
+            .clone();
         let mut entry = archive
-            .by_index(winner.zip_entry_index)
+            .by_index(winner.zip_entry_ordinal)
             .map_err(io::Error::other)?;
         let capacity = usize::try_from(entry.size())
             .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "Z2F entry is too large"))?;
@@ -83,7 +105,6 @@ impl ArchiveSet {
             ));
         }
         drop(entry);
-        drop(archive);
         Ok(bytes)
     }
 

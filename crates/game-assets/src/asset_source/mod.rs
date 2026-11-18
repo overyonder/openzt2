@@ -11,7 +11,10 @@ use bevy::{
         AssetReader, AssetReaderError, AssetSourceBuilder, AssetSourceEvent, AssetWatcher,
         PathStream, Reader, VecReader,
     },
-    prelude::Resource,
+    prelude::{
+        App, DetectChangesMut, First, IntoScheduleConfigs, Message, MessageWriter, Plugin, ResMut,
+        Resource, resource_changed,
+    },
     tasks::futures_lite::stream,
 };
 
@@ -32,7 +35,7 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         .ok_or_else(|| std::io::Error::other("Z2F archive has no installation directory"))?;
     let files = Arc::new(z2f::ArchiveSet::open(enabled_archive_paths)?);
     let events = Arc::new(Mutex::new(None));
-    let resolved = Arc::new(Mutex::new(ResolvedPaths::default()));
+    let resolved = Arc::new(RwLock::new(resolve_archive_discovery(&files, None, &[])));
     let shared_source_byte_cache = Arc::new(RwLock::new(SharedSourceByteCache::default()));
     let watcher_events = Arc::clone(&events);
     let archives = AssetArchives {
@@ -42,7 +45,10 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         resolved,
         shared_source_byte_cache,
         live_model_replacements: Arc::default(),
+        pending_overlay_changes: Vec::new(),
+        world_definition_discovery: Arc::default(),
     };
+    archives.refresh_world_definition_discovery(None);
     let reader_archives = archives.clone();
     Ok((
         AssetSourceBuilder::new(move || {
@@ -65,7 +71,9 @@ pub struct AssetArchives {
     files: Arc<z2f::ArchiveSet>,
     installation_root: PathBuf,
     events: Arc<Mutex<Option<async_channel::Sender<AssetSourceEvent>>>>,
-    resolved: Arc<Mutex<ResolvedPaths>>,
+    resolved: Arc<RwLock<ResolvedArchiveDiscovery>>,
+    pending_overlay_changes: Vec<z2f::ResolvedAssetChange>,
+    world_definition_discovery: Arc<RwLock<WorldDefinitionDiscovery>>,
     shared_source_byte_cache: Arc<RwLock<SharedSourceByteCache>>,
     /// glTF models sent from an editor while the game runs, by the native
     /// model path they replace. They last until restored or the game exits.
@@ -77,43 +85,121 @@ const MAXIMUM_SINGLE_SHARED_SOURCE_BYTE_CACHE_ENTRY_BYTES: usize = 1024 * 1024;
 
 #[derive(Default)]
 struct SharedSourceByteCache {
-    paths_read_once: BTreeSet<PathBuf>,
-    bytes_by_path: BTreeMap<PathBuf, Arc<[u8]>>,
+    entries_read_once: BTreeSet<z2f::ArchiveReadEntry>,
+    bytes_by_entry: BTreeMap<z2f::ArchiveReadEntry, Arc<[u8]>>,
     retained_bytes: usize,
 }
 
 impl SharedSourceByteCache {
-    fn get(&self, path: &Path) -> Option<Vec<u8>> {
-        self.bytes_by_path
-            .get(path)
-            .map(|bytes| bytes.as_ref().to_vec())
-    }
-
-    fn retain_after_read(&mut self, path: &Path, bytes: &[u8]) {
-        if self.bytes_by_path.contains_key(path)
-            || self.paths_read_once.insert(path.to_owned())
-            || bytes.len() > MAXIMUM_SINGLE_SHARED_SOURCE_BYTE_CACHE_ENTRY_BYTES
+    fn retain_reused_entry(&mut self, entry: z2f::ArchiveReadEntry, bytes: &[u8]) {
+        if bytes.len() > MAXIMUM_SINGLE_SHARED_SOURCE_BYTE_CACHE_ENTRY_BYTES
             || self.retained_bytes.saturating_add(bytes.len())
                 > MAXIMUM_SHARED_SOURCE_BYTE_CACHE_BYTES
+            || self.bytes_by_entry.contains_key(&entry)
+            || self.entries_read_once.insert(entry)
         {
             return;
         }
-        self.retained_bytes = self.retained_bytes.saturating_add(bytes.len());
-        self.bytes_by_path.insert(path.to_owned(), Arc::from(bytes));
+        self.retained_bytes += bytes.len();
+        self.bytes_by_entry.insert(entry, Arc::from(bytes));
     }
+}
 
-    fn invalidate(&mut self, path: &Path) {
-        self.paths_read_once.remove(path);
-        if let Some(bytes) = self.bytes_by_path.remove(path) {
-            self.retained_bytes = self.retained_bytes.saturating_sub(bytes.len());
+#[derive(Clone, Copy)]
+pub(crate) enum ArchiveCatalogue {
+    Audio,
+    Scenarios,
+    Species,
+    Scripts,
+}
+
+impl ArchiveCatalogue {
+    const ALL: [Self; 4] = [Self::Audio, Self::Scenarios, Self::Species, Self::Scripts];
+
+    fn contains(self, path: &Path) -> bool {
+        match self {
+            Self::Audio => crate::audio::audio_asset_index_refresh::is_audio_catalogue_source(path),
+            Self::Scenarios => crate::world_scenario::world_scenario_asset_set_refresh_and_indexing::scenario_catalogue_path(path),
+            Self::Species => crate::species::species_asset_set_refresh_and_indexing::is_species_catalogue_source(path),
+            Self::Scripts => crate::lua_script::lua_script_archive_path_index::path_has_lua_script_asset_extension(path),
         }
     }
 }
 
-#[derive(Default)]
-struct ResolvedPaths {
-    revision: Option<u64>,
+struct ResolvedArchiveDiscovery {
+    revision: u64,
     paths: Arc<[PathBuf]>,
+    catalogues: [Arc<[z2f::ResolvedArchiveEntry]>; ArchiveCatalogue::ALL.len()],
+}
+
+fn resolve_archive_discovery(
+    files: &z2f::ArchiveSet,
+    previous: Option<&ResolvedArchiveDiscovery>,
+    changes: &[z2f::ResolvedAssetChange],
+) -> ResolvedArchiveDiscovery {
+    let (revision, entries) = files.resolved_winning_entries();
+    let paths = entries
+        .iter()
+        .map(|entry| entry.normalized_asset_path.clone())
+        .collect::<Vec<_>>()
+        .into();
+    let catalogues = ArchiveCatalogue::ALL.map(|catalogue| {
+        if let Some(previous) = previous {
+            if !changes
+                .iter()
+                .any(|change| catalogue.contains(&change.normalized_asset_path))
+            {
+                return Arc::clone(&previous.catalogues[catalogue as usize]);
+            }
+        }
+        entries
+            .iter()
+            .filter(|entry| catalogue.contains(&entry.normalized_asset_path))
+            .cloned()
+            .collect::<Vec<_>>()
+            .into()
+    });
+    ResolvedArchiveDiscovery {
+        revision,
+        paths,
+        catalogues,
+    }
+}
+
+#[derive(Default)]
+struct WorldDefinitionDiscovery {
+    binder_directories: BTreeSet<PathBuf>,
+    binder_source_version: u64,
+    entries: Arc<[z2f::ResolvedArchiveEntry]>,
+}
+
+#[derive(Message)]
+pub struct ArchiveOverlayChanged {
+    pub changes: Vec<z2f::ResolvedAssetChange>,
+}
+
+pub(super) struct ArchiveOverlayPublicationPlugin;
+
+impl Plugin for ArchiveOverlayPublicationPlugin {
+    fn build(&self, app: &mut App) {
+        app.add_message::<ArchiveOverlayChanged>().add_systems(
+            First,
+            publish_archive_overlay_changes.run_if(resource_changed::<AssetArchives>),
+        );
+    }
+}
+
+fn publish_archive_overlay_changes(
+    mut archives: ResMut<AssetArchives>,
+    mut changes: MessageWriter<ArchiveOverlayChanged>,
+) {
+    if !archives.pending_overlay_changes.is_empty() {
+        changes.write(ArchiveOverlayChanged {
+            changes: std::mem::take(
+                &mut archives.bypass_change_detection().pending_overlay_changes,
+            ),
+        });
+    }
 }
 
 impl AssetArchives {
@@ -121,29 +207,34 @@ impl AssetArchives {
         let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(path);
         #[cfg(feature = "tracing")]
         let _read = bevy::log::info_span!("read_asset_source", path = %path.display()).entered();
-        let cached = self
-            .shared_source_byte_cache
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .get(&path);
-        let (source, result) = if let Some(bytes) = cached {
-            ("memory-cache", Ok(bytes))
-        } else if self.files.contains(&path) {
-            ("archive", self.files.read(&path))
+        let (source, result) = if let Some(entry) = self.files.resolve_archive_read_entry(&path) {
+            let cached = self
+                .shared_source_byte_cache
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .bytes_by_entry
+                .get(&entry)
+                .cloned();
+            if let Some(bytes) = cached {
+                ("memory-cache", Ok(bytes.as_ref().to_vec()))
+            } else {
+                let result = self.files.read_resolved_archive_entry(entry, usize::MAX);
+                if let Ok(bytes) = &result {
+                    self.shared_source_byte_cache
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .retain_reused_entry(entry, bytes);
+                }
+                ("archive", result)
+            }
         } else {
             (
                 "loose",
                 self.resolve_loose_path(&path).and_then(std::fs::read),
             )
         };
-        if source != "memory-cache" {
-            if let Ok(bytes) = &result {
-                self.shared_source_byte_cache
-                    .write()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .retain_after_read(&path, bytes);
-            }
-        }
+        #[cfg(not(feature = "tracing"))]
+        let _ = source;
         #[cfg(feature = "tracing")]
         if let Ok(bytes) = &result {
             bevy::log::debug!(target: "openzt2_profile_counts", source, bytes = bytes.len(), "asset read");
@@ -155,34 +246,115 @@ impl AssetArchives {
         self.files.overlay_revision()
     }
 
+    pub(crate) fn source_exists(&self, path: &Path) -> bool {
+        self.files.contains(path)
+            || self
+                .resolve_loose_path(path)
+                .is_ok_and(|path| path.is_file())
+    }
+
     pub fn resolved_winning_entry(&self, path: &Path) -> Option<z2f::ResolvedArchiveEntry> {
         self.files.resolved_winning_entry(path)
     }
 
     pub fn resolved_paths(&self) -> (u64, Arc<[PathBuf]>) {
-        let revision = self.files.overlay_revision();
-        {
-            let cached = self
-                .resolved
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if cached.revision == Some(revision) {
-                return (revision, Arc::clone(&cached.paths));
-            }
-        }
-        let (revision, entries) = self.files.resolved_winning_entries();
-        let paths = entries
-            .into_iter()
-            .map(|entry| entry.normalized_asset_path)
-            .collect::<Vec<_>>();
-        let paths = Arc::<[PathBuf]>::from(paths);
-        let mut cached = self
+        let discovery = self
             .resolved
-            .lock()
+            .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cached.revision = Some(revision);
-        cached.paths = Arc::clone(&paths);
-        (revision, paths)
+        (discovery.revision, Arc::clone(&discovery.paths))
+    }
+
+    pub(crate) fn catalogue_sources(
+        &self,
+        catalogue: ArchiveCatalogue,
+    ) -> Arc<[z2f::ResolvedArchiveEntry]> {
+        let discovery = self
+            .resolved
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(&discovery.catalogues[catalogue as usize])
+    }
+
+    pub(crate) fn world_definition_sources(&self) -> (u64, Arc<[z2f::ResolvedArchiveEntry]>) {
+        let discovery = self
+            .world_definition_discovery
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (
+            discovery.binder_source_version,
+            Arc::clone(&discovery.entries),
+        )
+    }
+
+    pub(crate) fn binder_source_version(&self) -> u64 {
+        self.world_definition_sources().0
+    }
+
+    fn refresh_world_definition_discovery(&self, changes: Option<&[z2f::ResolvedAssetChange]>) {
+        use crate::world_definitions::world_definition_asset_set_refresh_and_indexing::{
+            game_context_binder_directory_loading::load_game_context_binder_directories,
+            world_definition_source_path,
+        };
+
+        let mut world = self
+            .world_definition_discovery
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let game_context_changed = changes.is_none_or(|changes| {
+            changes
+                .iter()
+                .any(|change| change.normalized_asset_path == Path::new("config/gamectxt.xml"))
+        });
+        if game_context_changed {
+            world.binder_directories =
+                load_game_context_binder_directories(self).unwrap_or_else(|error| {
+                    if error.kind() != std::io::ErrorKind::NotFound {
+                        bevy::log::warn!(%error, "could not read game context binder directories");
+                    }
+                    BTreeSet::new()
+                });
+        }
+        let binder_sources_changed = game_context_changed
+            || changes.is_some_and(|changes| {
+                changes.iter().any(|change| {
+                    change
+                        .normalized_asset_path
+                        .parent()
+                        .is_some_and(|parent| world.binder_directories.contains(parent))
+                        && change
+                            .normalized_asset_path
+                            .extension()
+                            .is_some_and(|extension| extension == "xml")
+                })
+            });
+        if binder_sources_changed {
+            world.binder_source_version = self.revision();
+        }
+        if binder_sources_changed
+            || changes.is_some_and(|changes| {
+                changes.iter().any(|change| {
+                    world_definition_source_path(
+                        &change.normalized_asset_path,
+                        &world.binder_directories,
+                    )
+                })
+            })
+        {
+            world.entries = self
+                .files
+                .resolved_winning_entries()
+                .1
+                .into_iter()
+                .filter(|entry| {
+                    world_definition_source_path(
+                        &entry.normalized_asset_path,
+                        &world.binder_directories,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into();
+        }
     }
 
     pub fn first_enabled_archive_entry_order(&self, path: &Path) -> Option<[u64; 2]> {
@@ -331,7 +503,7 @@ impl AssetArchives {
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
                         "asset path must stay within the installation directory",
-                    ))
+                    ));
                 }
             };
             depth += 1;
@@ -496,20 +668,25 @@ impl AssetArchives {
     /// Changes one archive and returns every physical or compatibility Bevy
     /// asset path notified through the source watcher.
     pub fn set_archive_enabled(
-        &self,
+        &mut self,
         archive: usize,
         enabled: bool,
     ) -> std::io::Result<Vec<PathBuf>> {
         let changed = self.files.set_archive_enabled(archive, enabled)?;
+        let revision = self.files.overlay_revision();
         {
-            let mut cache = self
-                .shared_source_byte_cache
+            let mut discovery = self
+                .resolved
                 .write()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            for change in &changed {
-                cache.invalidate(&change.normalized_asset_path);
+            if discovery.revision != revision {
+                *discovery = resolve_archive_discovery(&self.files, Some(&discovery), &changed);
             }
         }
+        if !changed.is_empty() {
+            self.refresh_world_definition_discovery(Some(&changed));
+        }
+        self.pending_overlay_changes.extend(changed.iter().cloned());
         let changed_bevy_asset_paths = changed
             .iter()
             .flat_map(|change| {
@@ -677,12 +854,12 @@ pub(crate) mod tests {
     use bevy::{
         app::TaskPoolPlugin,
         asset::{
-            io::{AssetSourceId, Reader},
             Asset, AssetApp, AssetLoader, AssetPlugin, AssetServer, Assets, Handle, LoadContext,
+            io::{AssetSourceId, Reader},
         },
         prelude::{App, TypePath},
     };
-    use zip::{write::SimpleFileOptions, ZipWriter};
+    use zip::{ZipWriter, write::SimpleFileOptions};
 
     use super::create_bevy_asset_source_for_enabled_z2f_archives;
 
@@ -830,8 +1007,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks(
-    ) -> std::io::Result<()> {
+    fn ui_references_prefer_exact_loose_paths_before_archive_basename_fallbacks()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive(
             "x300_000.z2f",
@@ -882,7 +1059,7 @@ pub(crate) mod tests {
             &[("document.parent", b"document"), ("helper.dep", b"base")],
         )?;
         let modification = directory.archive("mod.z2f", &[("helper.dep", b"mod")])?;
-        let (source, archives) =
+        let (source, mut archives) =
             create_bevy_asset_source_for_enabled_z2f_archives(vec![base, modification])?;
         let mut app = App::new();
         app.register_asset_source(AssetSourceId::Default, source)
@@ -909,12 +1086,12 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes(
-    ) -> std::io::Result<()> {
+    fn archive_toggle_reloads_compatible_image_handle_when_physical_dds_winner_changes()
+    -> std::io::Result<()> {
         let directory = TestDirectory::new()?;
         let base = directory.archive("x300_000.z2f", &[("image.dds", b"base")])?;
         let modification = directory.archive("mod.z2f", &[("image.dds", b"mod")])?;
-        let (source, archives) =
+        let (source, mut archives) =
             create_bevy_asset_source_for_enabled_z2f_archives(vec![base, modification])?;
         let mut app = App::new();
         app.register_asset_source(AssetSourceId::Default, source)
@@ -960,7 +1137,7 @@ pub(crate) mod tests {
         )?;
         let modification =
             directory.archive("mod.z2f", &[("effects/shared.fxh", b"replacement")])?;
-        let (_, archives) =
+        let (_, mut archives) =
             create_bevy_asset_source_for_enabled_z2f_archives(vec![base, modification])?;
         let parent = Path::new("effects/novel.fx");
         let include = archives

@@ -74,6 +74,7 @@ pub fn apply_settled_placement_purchase_for_test(
             Some(root),
             &mut occupancy,
             &mut scratch,
+            &openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints::default(),
             &prefabs,
             &models,
             &placed,

@@ -23,7 +23,7 @@ pub(super) struct ConstructedTerrainWaterMeshGroup {
     pub(super) horizontal_minimum: Vec2,
     pub(super) horizontal_maximum: Vec2,
     pub(super) maximum_absolute_input_height: f32,
-    pub(super) surface_mesh: Mesh,
+    pub(super) surface_mesh: Option<Mesh>,
     pub(super) waterfall_mesh_groups: Vec<ConstructedTerrainWaterfallMeshGroup>,
 }
 
@@ -205,12 +205,14 @@ impl TerrainWaterMeshBuffers {
         self,
         waterfall_presentation: Option<&TerrainWaterfall>,
     ) -> ConstructedTerrainWaterMeshGroup {
-        let mut surface_mesh = Mesh::new(
-            PrimitiveTopology::TriangleList,
-            RenderAssetUsages::default(),
-        );
-        surface_mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, self.surface_positions);
-        surface_mesh.insert_indices(Indices::U32(self.surface_indices));
+        let surface_mesh = (!self.surface_indices.is_empty()).then(|| {
+            Mesh::new(
+                PrimitiveTopology::TriangleList,
+                RenderAssetUsages::default(),
+            )
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, self.surface_positions)
+            .with_inserted_indices(Indices::U32(self.surface_indices))
+        });
         let waterfall_mesh_groups = waterfall_presentation.map_or_else(Vec::new, |presentation| {
             construct_contiguous_terrain_waterfall_mesh_groups(self.waterfall_strips, presentation)
         });
@@ -232,12 +234,17 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
     edited_samples: Option<&EditedTerrainSamples>,
     membership: &TerrainWaterMembershipIndex,
     sources: &[(Entity, TerrainWaterRegionView<'_>)],
+    geometric_surface: bool,
 ) -> Option<Vec<ConstructedTerrainWaterMeshGroup>> {
     if membership.terrain() != chunk.asset.id() {
         return None;
     }
     let cell_count_per_side = usize::from(chunk.side.saturating_sub(1));
     let mut mesh_buffers_by_region = Vec::<TerrainWaterMeshBuffers>::new();
+    let waterfall = terrain_asset.canonical_terrain_grid().waterfall.as_ref();
+    if !geometric_surface && waterfall.is_none() {
+        return Some(Vec::new());
+    }
     let cells_per_chunk = u32::from(terrain_asset.terrain_chunk_cells_per_side()?);
     if cells_per_chunk == 0 || cells_per_chunk % 4 != 0 {
         return None;
@@ -249,23 +256,38 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
         }
         let mut buffers =
             TerrainWaterMeshBuffers::new(owner, source.surface_height(terrain_asset)?);
+        let mut draw = false;
         for tile in membership.render_tiles(owner) {
             if (tile * 4 / cells_per_chunk).as_ivec2() != chunk.source_coord {
                 continue;
             }
-            let patch = construct_terrain_water_geometric_wake_tile(
-                terrain_asset,
-                membership,
-                owner,
-                source,
-                tile,
-            )?;
-            buffers.add_horizontal_water_patch(patch)?;
+            if geometric_surface {
+                let patch = construct_terrain_water_geometric_wake_tile(
+                    terrain_asset,
+                    membership,
+                    owner,
+                    source,
+                    tile,
+                )?;
+                draw |= !patch.indices.is_empty();
+                buffers.add_horizontal_water_patch(patch)?;
+            } else {
+                membership.selector_codes(tile)?;
+                draw |= membership.side_owners(tile)?.contains(&Some(owner));
+            }
         }
-        if !buffers.surface_indices.is_empty() {
+        if draw {
             mesh_buffers_by_region.push(buffers);
         }
     }
+    let Some(waterfall) = waterfall else {
+        return Some(
+            mesh_buffers_by_region
+                .into_iter()
+                .map(|buffers| buffers.finish(None))
+                .collect(),
+        );
+    };
     for z in 0..cell_count_per_side {
         for x in 0..cell_count_per_side {
             let local_minimum = Vec2::new(x as f32, z as f32) * chunk.spacing_m;
@@ -335,15 +357,10 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
                 if center_water_height <= bottom_height + 0.01 {
                     continue;
                 }
-                let Some(waterfall_presentation) =
-                    terrain_asset.canonical_terrain_grid().waterfall.as_ref()
-                else {
-                    continue;
-                };
                 let top_heights = edge.map(|corner| {
                     sample_terrain(chunk, terrain_asset, edited_samples, chunk.origin + corner)
                         .map(|sample| {
-                            if waterfall_presentation.float_on_water {
+                            if waterfall.float_on_water {
                                 sample.water_height_m.unwrap_or(center_water_height)
                             } else {
                                 sample.height_m
@@ -363,10 +380,7 @@ pub(super) fn construct_terrain_water_surface_and_waterfall_mesh_groups(
     Some(
         mesh_buffers_by_region
             .into_iter()
-            .filter(|mesh_buffers| !mesh_buffers.surface_indices.is_empty())
-            .map(|mesh_buffers| {
-                mesh_buffers.finish(terrain_asset.canonical_terrain_grid().waterfall.as_ref())
-            })
+            .map(|mesh_buffers| mesh_buffers.finish(Some(waterfall)))
             .collect(),
     )
 }

@@ -1,236 +1,116 @@
 use bevy::asset::AssetId;
-use bevy::mesh::VertexAttributeValues;
+use bevy::ecs::entity::EntityHashSet;
+use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
+use openzt2_world_state::{
+    model_render::ModelExpanded, world_spawn::prefab_model_tint::PrefabModelTint,
+};
 
-use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
-use openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint;
+use super::authored_model_material_pass_projection::AuthoredModelStandardMaterial;
+use super::configured_model_effect_materials::ModelMaterialInputOwner;
 
-use openzt2_world_state::model_render::ModelExpanded;
+pub(super) type TintedStandardMaterialKey = (AssetId<StandardMaterial>, [u32; 3]);
 
-#[derive(Component)]
-pub(super) struct ProjectedPrefabTintMaterial {
-    handle: Handle<StandardMaterial>,
-    authored_base_color: Color,
-}
-
-type EffectTintAssets<'w> = (
-    ResMut<'w, Assets<EffectPassMaterial>>,
-    ResMut<'w, Assets<bevy::render::storage::ShaderBuffer>>,
-);
-
-/// The material a model without vertex colours draws with untinted.
-#[derive(Component)]
-pub(super) struct ProjectedPrefabTintEffectMaterial {
-    original: Handle<EffectPassMaterial>,
-}
-
-#[derive(Component)]
-pub struct ProjectedPrefabTintMesh {
-    handle: Handle<Mesh>,
-    authored_vertex_colors: Box<[[f32; 4]]>,
-}
-
-impl ProjectedPrefabTintMesh {
-    /// Borrows the retained projection inputs without retaining the source asset.
-    pub fn mesh_and_authored_colors(&self) -> (AssetId<Mesh>, &[[f32; 4]]) {
-        (self.handle.id(), &self.authored_vertex_colors)
-    }
-}
-
-pub(super) fn project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors(
+pub(super) fn project_model_tints_onto_standard_materials(
     mut commands: Commands,
-    roots: Query<(Entity, Ref<ModelExpanded>, Option<Ref<PrefabModelTint>>)>,
-    hierarchy: Query<(Option<&PrefabModelTint>, Option<&ChildOf>)>,
-    children: Query<&Children>,
-    primitives: Query<(
+    mut primitives: Query<(
         Entity,
-        Option<&Mesh3d>,
-        Option<&MeshMaterial3d<StandardMaterial>>,
-        Option<&MeshMaterial3d<EffectPassMaterial>>,
-        Option<&ProjectedPrefabTintMaterial>,
-        Option<&ProjectedPrefabTintMesh>,
-        Option<&ProjectedPrefabTintEffectMaterial>,
+        Mut<MeshMaterial3d<StandardMaterial>>,
+        Option<&mut AuthoredModelStandardMaterial>,
+        Option<Ref<ModelMaterialInputOwner<PrefabModelTint>>>,
+        Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
     )>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    (mut effect_materials, mut shader_buffers): EffectTintAssets,
+    tints: Query<Ref<PrefabModelTint>>,
+    mut removed_tints: RemovedComponents<ModelMaterialInputOwner<PrefabModelTint>>,
+    mut removed_models: RemovedComponents<ModelMaterialInputOwner<ModelExpanded>>,
+    mut assets: ResMut<Assets<StandardMaterial>>,
+    mut events: MessageReader<AssetEvent<StandardMaterial>>,
+    mut variants: Local<HashMap<TintedStandardMaterialKey, AssetId<StandardMaterial>>>,
 ) {
-    for (root, expanded, root_tint) in &roots {
-        if !expanded.is_added() && root_tint.as_ref().is_none_or(|tint| !tint.is_changed()) {
+    let changed_assets = events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                Some(id)
+            }
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    if !changed_assets.is_empty() {
+        variants.retain(|(source, _), output| {
+            !changed_assets.contains(source) && assets.contains(*output)
+        });
+    }
+    let removed = removed_tints
+        .read()
+        .chain(removed_models.read())
+        .collect::<EntityHashSet>();
+    for (entity, mut binding, authored, owner, model) in &mut primitives {
+        if owner.is_none() && authored.is_none() {
             continue;
         }
-        let Some(tint) = find_nearest_prefab_model_tint_in_ancestor_hierarchy(root, &hierarchy)
-        else {
+        let source = authored
+            .as_ref()
+            .filter(|authored| authored.rendered_material == binding.id())
+            .map_or_else(|| binding.0.clone(), |authored| authored.source.clone());
+        let tint = owner.as_ref().and_then(|owner| tints.get(owner.0).ok());
+        if !binding.is_changed()
+            && !changed_assets.contains(&source.id())
+            && !removed.contains(&entity)
+            && !owner.as_ref().is_some_and(|owner| owner.is_changed())
+            && !model.as_ref().is_some_and(|model| model.is_changed())
+            && !tint.as_ref().is_some_and(|tint| tint.is_changed())
+        {
+            continue;
+        }
+        let tint = tint.filter(|tint| tint.0 != Color::WHITE && model.is_some());
+        let Some(tint) = tint else {
+            if authored.is_some() {
+                binding.set_if_neq(MeshMaterial3d(source));
+                commands
+                    .entity(entity)
+                    .remove::<AuthoredModelStandardMaterial>();
+            }
             continue;
         };
-        for entity in
-            std::iter::once(root).chain(children.iter_descendants_depth_first::<Children>(root))
+        let tint = tint.0.to_srgba();
+        let key = (
+            source.id(),
+            [tint.red, tint.green, tint.blue].map(f32::to_bits),
+        );
+        let target = if let Some(target) = variants
+            .get(&key)
+            .and_then(|&id| assets.get_strong_handle(id))
         {
-            let Ok((
-                entity,
-                mesh,
-                standard,
-                effect,
-                projected_material,
-                projected_mesh,
-                projected_effect,
-            )) = primitives.get(entity)
-            else {
+            target
+        } else {
+            let Some(mut material) = assets.get(&source).cloned() else {
                 continue;
             };
-            if let Some(effect) = effect {
-                // A sky station or tower has no vertex colours to multiply.
-                if projected_mesh.is_none() && !mesh_has_vertex_colors(mesh, &meshes) {
-                    tint_effect_material(
-                        &mut commands,
-                        entity,
-                        projected_effect.map_or_else(|| effect.0.clone(), |p| p.original.clone()),
-                        tint.0,
-                        &mut effect_materials,
-                        &mut shader_buffers,
-                    );
-                    continue;
-                }
-                if let Some(projected_mesh) = projected_mesh {
-                    if let Some(mut mesh) = meshes.get_mut(&projected_mesh.handle) {
-                        multiply_authored_mesh_vertex_colors_by_rgb_tint(
-                            &mut mesh,
-                            &projected_mesh.authored_vertex_colors,
-                            tint.0,
-                        );
-                    }
-                } else if let Some(mut mesh) =
-                    mesh.and_then(|source| meshes.get(&source.0)).cloned()
-                {
-                    let Some(VertexAttributeValues::Float32x4(authored_vertex_colors)) =
-                        mesh.attribute(Mesh::ATTRIBUTE_COLOR)
-                    else {
-                        continue;
-                    };
-                    let authored_vertex_colors = authored_vertex_colors.clone().into_boxed_slice();
-                    multiply_authored_mesh_vertex_colors_by_rgb_tint(
-                        &mut mesh,
-                        &authored_vertex_colors,
-                        tint.0,
-                    );
-                    let handle = meshes.add(mesh);
-                    commands.entity(entity).insert((
-                        Mesh3d(handle.clone()),
-                        ProjectedPrefabTintMesh {
-                            handle,
-                            authored_vertex_colors,
-                        },
-                    ));
-                }
-                continue;
-            }
-            if let Some(projected_material) = projected_material {
-                if let Some(mut material) = materials.get_mut(&projected_material.handle) {
-                    multiply_authored_standard_material_base_color_by_rgb_tint(
-                        &mut material,
-                        projected_material.authored_base_color,
-                        tint.0,
-                    );
-                }
-            } else if let Some(mut material) = standard
-                .and_then(|source| materials.get(&source.0))
-                .cloned()
-            {
-                let authored_base_color = material.base_color;
-                multiply_authored_standard_material_base_color_by_rgb_tint(
-                    &mut material,
-                    authored_base_color,
-                    tint.0,
-                );
-                let handle = materials.add(material);
-                commands.entity(entity).insert((
-                    MeshMaterial3d(handle.clone()),
-                    ProjectedPrefabTintMaterial {
-                        handle,
-                        authored_base_color,
-                    },
-                ));
-            }
-        }
-    }
-}
-
-fn find_nearest_prefab_model_tint_in_ancestor_hierarchy(
-    mut entity: Entity,
-    hierarchy: &Query<(Option<&PrefabModelTint>, Option<&ChildOf>)>,
-) -> Option<PrefabModelTint> {
-    loop {
-        let Ok((tint, parent)) = hierarchy.get(entity) else {
-            return None;
+            let color = material.base_color.to_srgba();
+            material.base_color = Color::srgba(
+                color.red * tint.red,
+                color.green * tint.green,
+                color.blue * tint.blue,
+                color.alpha,
+            );
+            let target = assets.add(material);
+            variants.insert(key, target.id());
+            target
         };
-        if tint.is_some() {
-            return tint.copied();
+        if let Some(mut authored) = authored {
+            if authored.source != source || authored.rendered_material != target.id() {
+                authored.source = source;
+                authored.rendered_material = target.id();
+            }
+        } else {
+            commands
+                .entity(entity)
+                .insert(AuthoredModelStandardMaterial {
+                    source,
+                    rendered_material: target.id(),
+                });
         }
-        entity = parent?.parent();
+        binding.set_if_neq(MeshMaterial3d(target));
     }
-}
-
-fn multiply_authored_mesh_vertex_colors_by_rgb_tint(
-    mesh: &mut Mesh,
-    authored_vertex_colors: &[[f32; 4]],
-    tint: Color,
-) {
-    let Some(VertexAttributeValues::Float32x4(colors)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
-    else {
-        return;
-    };
-    let tint = tint.to_srgba();
-    for (color, authored) in colors.iter_mut().zip(authored_vertex_colors) {
-        color[0] = authored[0] * tint.red;
-        color[1] = authored[1] * tint.green;
-        color[2] = authored[2] * tint.blue;
-        color[3] = authored[3];
-    }
-}
-
-fn multiply_authored_standard_material_base_color_by_rgb_tint(
-    material: &mut StandardMaterial,
-    authored_base_color: Color,
-    tint: Color,
-) {
-    let authored = authored_base_color.to_srgba();
-    let tint = tint.to_srgba();
-    material.base_color = Color::srgba(
-        authored.red * tint.red,
-        authored.green * tint.green,
-        authored.blue * tint.blue,
-        authored.alpha,
-    );
-}
-
-/// Draws a model without vertex colours with a copy of its material tinted
-/// `tint`, or with its own material again for white.
-fn tint_effect_material(
-    commands: &mut Commands,
-    entity: Entity,
-    original: Handle<EffectPassMaterial>,
-    tint: Color,
-    effect_materials: &mut Assets<EffectPassMaterial>,
-    shader_buffers: &mut Assets<bevy::render::storage::ShaderBuffer>,
-) {
-    let material = if tint == Color::WHITE {
-        Some(original.clone())
-    } else {
-        effect_materials.get(&original).cloned().and_then(|source| {
-            source
-                .clone_tinted(tint.to_srgba().to_vec4(), shader_buffers)
-                .map(|tinted| effect_materials.add(tinted))
-        })
-    };
-    if let Some(material) = material {
-        commands.entity(entity).insert((
-            MeshMaterial3d(material),
-            ProjectedPrefabTintEffectMaterial { original },
-        ));
-    }
-}
-
-fn mesh_has_vertex_colors(mesh: Option<&Mesh3d>, meshes: &Assets<Mesh>) -> bool {
-    mesh.and_then(|source| meshes.get(&source.0))
-        .is_some_and(|mesh| mesh.attribute(Mesh::ATTRIBUTE_COLOR).is_some())
 }

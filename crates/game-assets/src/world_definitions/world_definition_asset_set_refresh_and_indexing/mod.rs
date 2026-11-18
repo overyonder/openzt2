@@ -6,22 +6,25 @@ use std::{
 };
 
 use bevy::{asset::AssetLoadFailedEvent, prelude::*};
-use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
+use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
 
 use crate::asset_source::AssetArchives;
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
+        DefinitionKind, SingletonKind, WorldDefinitions, kind_range,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
+        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
     },
     world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,
 };
 
-fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathBuf>) -> bool {
+pub(crate) fn world_definition_source_path(
+    path: &Path,
+    binder_directories: &BTreeSet<PathBuf>,
+) -> bool {
     let supported = path.extension().is_some_and(|extension| {
         ["xml", "dl", "maxml", "zt2", "trk", "old"]
             .iter()
@@ -107,34 +110,31 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
     )
 }
 
-pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
+pub(super) fn discover_world_definition_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
+    mut previous_sources: Local<Option<std::sync::Arc<[z2f::ResolvedArchiveEntry]>>>,
 ) {
-    // Mutable access marks the resource changed, and many systems redo their
-    // work when it changes, so write only when the server is missing.
+    if !archives.is_changed() && previous_sources.is_some() {
+        return;
+    }
+    let (binder_version, sources) = archives.world_definition_sources();
+    if previous_sources
+        .as_ref()
+        .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &sources))
+    {
+        return;
+    }
     if definitions.server.is_none() {
         definitions.server = Some(server.clone());
     }
-    let revision = archives.revision();
-    if definitions.revision == Some(revision) {
-        return;
-    }
-    let binder_directories =
-        game_context_binder_directory_loading::load_game_context_binder_directories(&archives)
-            .unwrap_or_else(|error| {
-                warn!(%error, "could not read game context binder directories");
-                BTreeSet::new()
-            });
-    let mut paths = archives
-        .resolved_paths()
-        .1
+    let mut paths = sources
         .iter()
-        .cloned()
-        .filter(|path| world_definition_source_path(path, &binder_directories))
+        .map(|entry| entry.normalized_asset_path.clone())
         .collect::<Vec<_>>();
+    *previous_sources = Some(sources);
     let additive_zoopedia_entry_collection_owner_path = paths
         .iter()
         .filter(|path| {
@@ -173,7 +173,7 @@ pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
     for (identifier, asset) in assets.iter() {
         if !asset
             .authored_binder_source_index_revision
-            .is_some_and(|loaded_revision| loaded_revision != revision)
+            .is_some_and(|loaded_revision| loaded_revision != binder_version)
             || !matches!(
                 server.get_load_state(identifier),
                 Some(bevy::asset::LoadState::Loaded)
@@ -213,7 +213,7 @@ pub(super) fn refresh_world_definition_asset_set_after_archive_revision(
             std::sync::Arc::clone(&definitions.completed_loads),
         ),
     );
-    definitions.revision = Some(revision);
+    definitions.binder_source_version = binder_version;
     definitions.dirty = true;
 }
 
@@ -221,6 +221,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut load_failures: MessageReader<AssetLoadFailedEvent<WorldDefinitionAsset>>,
+    mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
 ) {
     let mut binder_consumer_failed = false;
@@ -228,6 +229,15 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         binder_consumer_failed |= assets
             .get(failure.id)
             .is_some_and(|asset| asset.authored_binder_source_index_revision.is_some());
+    }
+    let mut changed = false;
+    for event in events.read() {
+        match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                changed |= definitions.handles.iter().any(|handle| handle.id() == id);
+            }
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => {}
+        }
     }
     if definitions.dirty {
         if let Some(task) = definitions.loading_task.as_mut() {
@@ -254,14 +264,14 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
             ) && assets.get(handle).is_some_and(|asset| {
                 asset
                     .authored_binder_source_index_revision
-                    .is_some_and(|revision| Some(revision) != definitions.revision)
+                    .is_some_and(|revision| revision != definitions.binder_source_version)
             })
         }) {
             // A cached load guard can finish before reload starts. Publication
             // of the current binder-index revision, or failure, is required.
             return;
         }
-    } else if !assets.is_changed() && !binder_consumer_failed {
+    } else if !changed && !binder_consumer_failed {
         return;
     }
 
@@ -394,12 +404,6 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         })
         .cloned()
         .collect();
-    if definitions.catalogue_authored_purchase_order != catalogue_authored_purchase_order
-        || definitions.unlock_definition_identifiers_by_target
-            != unlock_definition_identifiers_by_target
-    {
-        definitions.catalogue_revision = definitions.catalogue_revision.wrapping_add(1);
-    }
     definitions.records = records;
     definitions.catalogue_by_definition.take();
     definitions.research_by_definition.take();

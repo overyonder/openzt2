@@ -3,7 +3,7 @@ use super::{
     globe_presentation::UiGlobePresentationDefinition,
     node_layout::UiNodeRegionDefinition,
     overview_map_presentation::{UiMapColorsRecord, UiMapLayerRecord},
-    timed_presentation::{UiLocalizedCountdownRecord, UiTimedEventRecord},
+    timed_presentation::UiTimedEventRecord,
     widget_control::{
         UiAxis, UiButtonRecord, UiDragOperation, UiGridRecord, UiSliderRecord, UiTextRecord,
         UiTooltipPresentation,
@@ -83,17 +83,8 @@ pub enum UiWidgetRecord {
     MultiIcon {
         entries: Vec<UiImageEntryRecord>,
     },
-    LocalizedCountdown(UiLocalizedCountdownRecord),
     TimedSequence {
         events: Vec<UiTimedEventRecord>,
-    },
-    EarthquakeTrigger,
-    EarthquakeRunner,
-    FirstPersonCountdown {
-        three: AssetId,
-        two: AssetId,
-        one: AssetId,
-        go: AssetId,
     },
     ButtonPulser {
         target: AssetId,

@@ -43,7 +43,7 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
     mut cameras: Query<
         (
             Entity,
-            &Transform,
+            &mut Transform,
             &mut CameraMode,
             &mut CameraDefinition,
             &mut OverheadRig,
@@ -62,7 +62,7 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
         ) else {
             continue;
         };
-        for (entity, transform, mut mode, mut selected, mut rig, member) in &mut cameras {
+        for (entity, mut transform, mut mode, mut selected, mut rig, member) in &mut cameras {
             // Repeated overhead selection does not reset an existing rig.
             // Snapshot-bearing cameras are excluded before exact restoration
             // consumes and removes their saved pose later in this schedule.
@@ -108,7 +108,7 @@ pub(crate) fn restore_authored_overhead_camera_without_snapshot(
             apply_requested_transition(
                 &mut commands,
                 entity,
-                transform,
+                &mut transform,
                 target,
                 request.transition_seconds,
             );

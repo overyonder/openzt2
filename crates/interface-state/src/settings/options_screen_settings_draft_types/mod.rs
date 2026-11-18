@@ -5,7 +5,7 @@ use super::display_settings_types::DisplaySettings;
 
 /// Options-screen working copy. Accepted renderer resources remain unchanged
 /// until the authored accept action publishes replacement requests.
-#[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OptionsScreenDisplayGraphicsAndOnlineMessageDraft {
     pub display: DisplaySettings,
     pub graphics: GraphicsSettings,

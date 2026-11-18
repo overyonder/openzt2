@@ -46,7 +46,7 @@ pub struct TerrainWaterBubbleEmitter {
 }
 
 /// A derived emission volume; terrain membership and source rows remain authoritative.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TerrainWaterSuspensionVolume {
     pub origin: Vec3,
     pub size: Vec3,

@@ -47,11 +47,18 @@ pub fn derive_enclosed_habitat_regions_from_fence_segments(
 ) -> Vec<DerivedHabitatRegion> {
     let expanded =
         expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(fence_segments);
+    derive_enclosed_habitats_from_cardinal_boundaries(&expanded, changed_topology_bounds)
+}
+
+pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
+    expanded: &[HabitatFenceSegment],
+    changed_topology_bounds: IRect,
+) -> Vec<DerivedHabitatRegion> {
     if expanded.is_empty() {
         return Vec::new();
     }
     let relevant = collect_connected_fence_segments_intersecting_changed_bounds(
-        &expanded,
+        expanded,
         changed_topology_bounds,
     );
     if relevant.is_empty() {
@@ -166,7 +173,7 @@ pub fn derive_enclosed_habitat_regions_from_fence_segments(
     regions
 }
 
-fn expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(
+pub(super) fn expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(
     segments: &[HabitatFenceSegment],
 ) -> Vec<HabitatFenceSegment> {
     let mut result = Vec::new();

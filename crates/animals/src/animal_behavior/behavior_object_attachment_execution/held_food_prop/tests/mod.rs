@@ -1,4 +1,5 @@
 use super::*;
+use crate::animal_behavior::behavior_container_admission::add_test_container_member;
 
 #[test]
 fn authored_food_prop_action_keeps_its_detach_continuation() {
@@ -72,12 +73,7 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
             completed: false,
         },
     ));
-    app.world_mut()
-        .entity_mut(item)
-        .insert(InteractionContainerMember {
-            container: actor,
-            slot: 3,
-        });
+    add_test_container_member(app.world_mut(), actor, item, 3);
     let controller = app
         .world_mut()
         .spawn((

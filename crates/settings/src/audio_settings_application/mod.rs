@@ -7,6 +7,6 @@ pub(super) fn replace_accepted_audio_settings_from_requests(
     mut current: ResMut<AudioSettings>,
 ) {
     for request in requests.read() {
-        *current = request.0;
+        current.set_if_neq(request.0);
     }
 }

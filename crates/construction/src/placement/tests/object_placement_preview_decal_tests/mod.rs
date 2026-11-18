@@ -38,6 +38,7 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
         .init_resource::<Assets<TerrainAsset>>()
         .add_message::<TerrainChanged>()
         .add_message::<TerrainPresentationRestored>()
+        .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
         .add_systems(
             Update,
             rebuild_object_placement_preview_footprint_and_grid_decals,

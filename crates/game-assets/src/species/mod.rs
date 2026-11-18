@@ -13,8 +13,8 @@ use crate::world_asset_preparation::WorldAssetPreparation;
 use self::{
     species_asset_loading::SpeciesAssetLoader,
     species_asset_set_refresh_and_indexing::{
+        discover_species_catalogue_sources,
         index_loaded_species_assets_by_species_and_variant_identifier,
-        refresh_species_asset_set_after_archive_revision,
     },
     species_asset_types::{SpeciesAsset, SpeciesAssets},
 };
@@ -29,10 +29,11 @@ impl Plugin for SpeciesAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_species_asset_set_after_archive_revision,
+                    discover_species_catalogue_sources,
                     index_loaded_species_assets_by_species_and_variant_identifier,
                 )
                     .chain()
+                    .after(bevy::asset::AssetTrackingSystems)
                     .run_if(
                         in_state(GamePhase::Loading)
                             .or_else(in_state(GamePhase::InGame))

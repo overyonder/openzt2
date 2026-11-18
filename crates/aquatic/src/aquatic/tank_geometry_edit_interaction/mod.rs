@@ -158,13 +158,13 @@ pub(super) fn update_tank_geometry_gesture(
     else {
         return;
     };
-    let (Some(seed_cell), Some(bounds)) = (
+    let (Some(seed_cell), Some(mut wall_heights)) = (
         tank_habitat_seed_cell(region),
-        height_queries.tank_height_bounds(region, limits),
+        height_queries.wall_height_images(region, limits),
     ) else {
         return;
     };
-    let Some(mut wall_heights) = height_queries.wall_height_images(region, limits) else {
+    let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
         return;
     };
     for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {

@@ -16,6 +16,22 @@ use bevy::{
 };
 
 impl EffectPassMaterial {
+    pub fn has_texture_coordinate_animation(&self) -> bool {
+        !self.texture_coordinate_animations.is_empty()
+    }
+
+    pub fn bind_texture_coordinate_animation_geometry(
+        &mut self,
+        geometry: Entity,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) {
+        if self.has_texture_coordinate_animation() {
+            self.texture_coordinate_animation_geometry = Some(geometry);
+            self.uniform_buffer_assets.fixed_transforms =
+                buffers.add(shader_buffer_from_uniform_value(&self.fixed_transforms));
+        }
+    }
+
     pub fn has_fixed_function_reflection_projection(&self) -> bool {
         self.model_reflection_projections
             .iter()
@@ -197,11 +213,14 @@ impl EffectPassMaterial {
         self.evaluated_sampler_states[target_stage] = source.evaluated_sampler_states[source_stage];
         let coordinate_index = source.fixed_function.values[source_stage * 5 + 3].y;
         let transform_flags = source.fixed_function.values[source_stage * 5 + 4].x;
+        let lod_bias = source.fixed_function.values[source_stage * 5 + 4].z;
         if self.fixed_function.values[target_stage * 5 + 3].y != coordinate_index
             || self.fixed_function.values[target_stage * 5 + 4].x != transform_flags
+            || self.fixed_function.values[target_stage * 5 + 4].z != lod_bias
         {
             self.fixed_function.values[target_stage * 5 + 3].y = coordinate_index;
             self.fixed_function.values[target_stage * 5 + 4].x = transform_flags;
+            self.fixed_function.values[target_stage * 5 + 4].z = lod_bias;
             self.dirty_fixed_function = true;
         }
         let transform = source.fixed_transforms.values[source_stage];

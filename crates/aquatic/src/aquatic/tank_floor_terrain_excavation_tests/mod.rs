@@ -9,7 +9,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::{
 use openzt2_zoo_state::terrain::terrain_edit_rectangle_operations::{
     apply_terrain_sample_rectangle, materialize_complete_edited_terrain_sample_overlay,
 };
-use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit;
+use openzt2_zoo_state::terrain::terrain_edit_types::{TerrainChanged, TerrainEdit};
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, TopologyGrid, TopologyNode};
 
 use super::aquatic_simulation_types::{Tank, TankGeometry};
@@ -94,6 +94,7 @@ fn a_tank_floor_is_dug_into_the_terrain_and_filled_back_when_the_tank_goes() {
         openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     >>()
     .init_resource::<TopologyGrid>()
+    .add_message::<TerrainChanged>()
     .add_message::<RestoreTankFloorTerrain>()
     .add_observer(queue_terrain_restoration_after_tank_removal)
     .add_systems(Update, excavate_changed_tank_floors);

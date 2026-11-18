@@ -2,7 +2,6 @@
 //! it gives one qualifying animal a disease's `token`; the disease's own tasks
 //! and scripts then make the animal sick, spread it and heal it.
 
-use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::{
     WorldDefinitions, WorldDefinitionsView,
@@ -37,7 +36,8 @@ pub(super) fn expose_animals_to_authored_diseases(
     subject_types: AnimalBehaviorSubjectTypes,
     animals: Query<(Entity, AnimalCandidateFacts, Has<Disease>), (With<Animal>, Without<Dead>)>,
     objects: Query<(&'static DefinitionId, &'static GlobalTransform), Without<Animal>>,
-    tokens: Query<(&BehaviorSelfToken, &ChildOf)>,
+    tokens: Query<&BehaviorSelfToken>,
+    token_owners: Query<&Children>,
 ) {
     let Some(view) = definitions.get(&definition_assets) else {
         return;
@@ -58,10 +58,6 @@ pub(super) fn expose_animals_to_authored_diseases(
         PersistentId(clock.tick / interval),
         RngDomain::Disease,
     );
-    let held = tokens
-        .iter()
-        .map(|(token, parent)| (parent.parent(), token.name))
-        .collect::<HashSet<_>>();
     let world = DiseaseExposureWorld {
         view,
         subject_types: &subject_types,
@@ -84,7 +80,16 @@ pub(super) fn expose_animals_to_authored_diseases(
             .iter()
             .filter(|(animal, facts, diseased)| {
                 !diseased
-                    && !held.contains(&(*animal, disease.token))
+                    && !tokens
+                        .iter_many(
+                            token_owners
+                                .get(*animal)
+                                .ok()
+                                .into_iter()
+                                .flatten()
+                                .copied(),
+                        )
+                        .any(|held| held.name == disease.token)
                     && world.qualifies(*animal, facts, disease)
             })
             .map(|(animal, ..)| animal)
@@ -219,7 +224,8 @@ pub(super) fn clear_authored_disease_tokens_when_cured(
     cured: On<Remove<Disease>>,
     mut commands: Commands,
     diseases: Query<&Disease>,
-    tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf)>,
+    tokens: Query<(Entity, &BehaviorSelfToken)>,
+    token_owners: Query<&Children>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     definitions: Res<WorldDefinitions>,
 ) {
@@ -236,8 +242,11 @@ pub(super) fn clear_authored_disease_tokens_when_cured(
     else {
         return;
     };
-    for (token, held, parent) in &tokens {
-        if parent.parent() == cured.entity && disease.clear_tokens.contains(&held.name) {
+    let Ok(children) = token_owners.get(cured.entity) else {
+        return;
+    };
+    for (token, held) in tokens.iter_many(children.into_iter().copied()) {
+        if disease.clear_tokens.contains(&held.name) {
             commands.entity(token).despawn();
         }
     }

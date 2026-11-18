@@ -1,49 +1,26 @@
-use std::collections::HashSet;
-
-use bevy::prelude::*;
+use bevy::{asset::AssetChanged, prelude::*};
 
 use super::authored_ui_visual_types::UiSourceRect;
 
 /// Resolves authored sampling bounds when an image or its source rectangle
 /// changes. Native sprite binding clips oversized source regions to the loaded
 /// texture before UV normalization; destination widget dimensions stay intact.
-pub(super) fn resolve_authored_image_source_rectangles_after_image_changes(
+pub(super) fn project_changed_authored_image_source_rectangles(
     images: Res<Assets<Image>>,
-    mut image_events: MessageReader<AssetEvent<Image>>,
-    mut nodes: ParamSet<(
-        Query<(&UiSourceRect, &mut ImageNode), Or<(Changed<UiSourceRect>, Changed<ImageNode>)>>,
-        Query<(&UiSourceRect, &mut ImageNode)>,
-    )>,
+    mut nodes: Query<
+        (&UiSourceRect, &mut ImageNode),
+        Or<(
+            Changed<UiSourceRect>,
+            Changed<ImageNode>,
+            AssetChanged<ImageNode>,
+        )>,
+    >,
 ) {
-    let changed_images: HashSet<_> = image_events
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id } => Some(*id),
-            _ => None,
-        })
-        .collect();
-    for (source, mut node) in &mut nodes.p0() {
+    for (source, node) in &mut nodes {
         if let Some(image) = images.get(&node.image) {
             let rectangle = resolve_authored_source_rectangle(source.0, image.size());
-            if node.rect != Some(rectangle) {
-                node.rect = Some(rectangle);
-            }
-        }
-    }
-    if changed_images.is_empty() {
-        return;
-    }
-    for (source, mut node) in &mut nodes.p1() {
-        if !changed_images.contains(&node.image.id()) {
-            continue;
-        }
-        if let Some(image) = images.get(&node.image) {
-            let rectangle = resolve_authored_source_rectangle(source.0, image.size());
-            if node.rect != Some(rectangle) {
-                node.rect = Some(rectangle);
-            }
+            node.map_unchanged(|node| &mut node.rect)
+                .set_if_neq(Some(rectangle));
         }
     }
 }

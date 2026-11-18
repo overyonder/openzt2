@@ -51,18 +51,24 @@ fn every_slider_reproduces_the_source_presets_and_has_a_label_per_level() {
 #[test]
 fn moving_a_slider_changes_only_the_draft() {
     let mut app = App::new();
-    app.add_message::<UiNodeActivated>()
-        .insert_resource(OptionsScreenDisplayGraphicsAndOnlineMessageDraft {
+    app.add_message::<UiNodeActivated>().add_systems(
+        Update,
+        copy_changed_graphics_detail_slider_levels_into_settings_draft,
+    );
+    let owner = app
+        .world_mut()
+        .spawn(OptionsScreenDisplayGraphicsAndOnlineMessageDraft {
             graphics: GraphicsSettings::from_source_high_detail_preset(),
             ..default()
         })
-        .add_systems(
-            Update,
-            copy_changed_graphics_detail_slider_levels_into_settings_draft,
-        );
+        .id();
     let slider = app
         .world_mut()
-        .spawn((GraphicsDetailSetting::ViewDistance, UiValue(2)))
+        .spawn((
+            GraphicsDetailSetting::ViewDistance,
+            UiValue(2),
+            ChildOf(owner),
+        ))
         .id();
     app.world_mut().write_message(UiNodeActivated {
         source: ActionSource::System,
@@ -73,7 +79,8 @@ fn moving_a_slider_changes_only_the_draft() {
 
     let draft = app
         .world()
-        .resource::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>();
+        .get::<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>(owner)
+        .unwrap();
     assert_eq!(
         draft.graphics,
         GraphicsSettings {

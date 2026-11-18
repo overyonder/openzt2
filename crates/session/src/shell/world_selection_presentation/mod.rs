@@ -224,7 +224,7 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
         return;
     }
     for (view, mut selected) in &mut selectable {
-        let Ok(choice) = choices.get(view.0) else {
+        let Some(choice) = view.choice().and_then(|choice| choices.get(choice).ok()) else {
             continue;
         };
         let value =

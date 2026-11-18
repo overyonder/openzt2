@@ -4,6 +4,8 @@ use avian3d::prelude::RigidBody;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+
 use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -38,6 +40,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     root: Option<Entity>,
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
+    footprints: &ScenePlacementFootprints,
     prefabs: &Assets<ScenePrefabAsset>,
     models: &Assets<Gltf>,
     placed: &Query<(
@@ -54,8 +57,9 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
     let Some(definition) = resolve_object_placeable_definition(catalogue, edit.definition) else {
         return false;
     };
+    let geometry = footprints.resolve(definition, Some(&edit.prefab));
     let exact_cells = collect_occupied_placement_cells_for_transform(
-        definition,
+        geometry,
         &edit.transform,
         &mut scratch.cells,
     )
@@ -94,7 +98,7 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
         return false;
     };
     let Some(origin) =
-        calculate_object_placement_footprint_origin(definition, &edit.transform, turns)
+        calculate_object_placement_footprint_origin(geometry, &edit.transform, turns)
     else {
         return false;
     };

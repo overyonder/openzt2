@@ -14,6 +14,7 @@ use crate::source_document::{
 };
 
 use super::{
+    authored_hotkey_file_references::collect_authored_hotkey_file_paths,
     resolver::resolution_profile::SelectedUiSourceResolutionProfile,
     ui_template_source_path_discovery::collect_referenced_ui_template_source_paths,
 };
@@ -80,18 +81,25 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
         .await?;
     }
 
+    let mut scanned_hotkey_references = 0;
     loop {
-        let unplanned_template_source_paths = collect_referenced_ui_template_source_paths(
+        let hotkey_paths = source_documents[scanned_hotkey_references..]
+            .iter()
+            .flat_map(collect_authored_hotkey_file_paths)
+            .collect::<BTreeSet<_>>();
+        scanned_hotkey_references = source_documents.len();
+        let unplanned_source_paths = collect_referenced_ui_template_source_paths(
             &source_documents,
             template_declaration_paths,
         )
         .into_iter()
+        .chain(hotkey_paths)
         .filter(|source_path| !planned_source_paths.contains(&AssetPath::new(source_path).key()))
         .collect::<Vec<_>>();
-        if unplanned_template_source_paths.is_empty() {
+        if unplanned_source_paths.is_empty() {
             break;
         }
-        for template_source_path in unplanned_template_source_paths {
+        for template_source_path in unplanned_source_paths {
             load_ui_source_document_once(
                 &mut source_documents,
                 &mut planned_source_paths,

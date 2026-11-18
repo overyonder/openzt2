@@ -21,6 +21,7 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
         stack: Default::default(),
     };
     let wait = ActiveQueueWait {
+        execution_id: task.execution_id,
         origin: task.create_return_frame_after_action(2),
         stack_depth: 0,
         target,

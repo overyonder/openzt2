@@ -4,8 +4,8 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 
 use super::simulation_control_types::{
-    AuthoredUiTemporarySimulationPause, SetSimulationSpeed, SimulationControl,
-    SimulationControlChanged, SimulationPauseRequest,
+    AuthoredUiTemporarySimulationPause, ImmersiveSimulationPauseClaim, SetSimulationSpeed,
+    SimulationControl, SimulationControlChanged, SimulationPauseRequest, UiDocumentPauseTransfer,
 };
 
 pub(crate) fn apply_requested_simulation_control_changes(
@@ -60,39 +60,49 @@ pub(crate) fn apply_requested_simulation_control_changes(
     });
 }
 
-/// Reconcile the surviving authored holds together, after UI routing/commands
-/// have applied transfers and document teardown.
-pub(super) fn reconcile_authored_ui_temporary_pause_holds(
-    temporary_holds: Query<(Entity, &AuthoredUiTemporarySimulationPause)>,
-    parents: Query<&ChildOf>,
-    visibility: Query<&Visibility>,
-    owners: Query<()>,
-    pending_roles: Res<
-        openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests,
+pub(super) fn project_active_simulation_pause_claims(
+    temporary_holds: Query<(
+        Entity,
+        AnyOf<(
+            &AuthoredUiTemporarySimulationPause,
+            &UiDocumentPauseTransfer,
+        )>,
+        &InheritedVisibility,
+    )>,
+    immersive_holds: Query<(), With<ImmersiveSimulationPauseClaim>>,
+    authored_visibility: Query<
+        &Visibility,
+        With<openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner>,
     >,
+    visibility: Query<&Visibility>,
+    parents: Query<&ChildOf>,
     mut simulation_control: ResMut<SimulationControl>,
     mut control_changes: MessageWriter<SimulationControlChanged>,
 ) {
-    let shown = |node| {
-        std::iter::successors(Some(node), |entity| {
-            parents.get(*entity).ok().map(ChildOf::parent)
-        })
-        .all(|entity| {
-            !visibility
-                .get(entity)
-                .is_ok_and(|value| *value == Visibility::Hidden)
-        })
-    };
+    // Authored controls inherit visibility. Explicitly forced-visible nodes
+    // still lose their temporary pause when an authored ancestor is hidden.
+    let forced_visibility = authored_visibility
+        .iter()
+        .any(|visibility| *visibility == Visibility::Visible);
     let held = temporary_holds
         .iter()
-        .any(|(node, intent)| intent.0 && shown(node))
-        || pending_roles
-            .temporary_pause_transfer_owners()
-            .any(|owner| owners.contains(owner) && shown(owner));
-    if simulation_control.temporary_ui_pause_hold_matches_current_control(held) {
-        return;
-    }
-    if simulation_control.set_temporary_ui_pause_held(held) {
+        .any(|(node, (claim, transfer), inherited)| {
+            (claim.is_some_and(AuthoredUiTemporarySimulationPause::hold_is_requested)
+                || transfer.is_some_and(|transfer| transfer.0))
+                && inherited.get()
+                && (!forced_visibility
+                    || std::iter::once(node)
+                        .chain(parents.iter_ancestors::<ChildOf>(node))
+                        .all(|ancestor| {
+                            !visibility
+                                .get(ancestor)
+                                .is_ok_and(|visibility| *visibility == Visibility::Hidden)
+                        }))
+        });
+    let immersive = !immersive_holds.is_empty();
+    if !simulation_control.pause_claims_match(held, immersive)
+        && simulation_control.project_pause_claims(held, immersive)
+    {
         control_changes.write(SimulationControlChanged {
             speed_tier: simulation_control.speed_tier,
             paused: simulation_control.paused,

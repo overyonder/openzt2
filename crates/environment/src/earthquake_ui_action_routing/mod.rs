@@ -9,9 +9,10 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
-use super::environment_state_types::Earthquake;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiScenarioActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
+
+use super::environment_state_types::{Earthquake, EarthquakeRefreshed};
 
 pub(super) fn route_authored_earthquake_ui_actions_to_world_environment_state(
     mut commands: Commands,
@@ -19,7 +20,7 @@ pub(super) fn route_authored_earthquake_ui_actions_to_world_environment_state(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     scenario_action_nodes: Query<(&UiScenarioActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    world_environments: Query<(Entity, Option<&Earthquake>), With<WorldEnvironment>>,
+    world_environments: Query<Entity, With<WorldEnvironment>>,
 ) {
     for activated_ui_node in activated_ui_nodes.read() {
         let Ok((authored_scenario_actions, ui_document_owner)) =
@@ -39,26 +40,16 @@ pub(super) fn route_authored_earthquake_ui_actions_to_world_environment_state(
             if activated_ui_node.trigger != authored_scenario_action.trigger {
                 continue;
             }
-            match &authored_scenario_action.action {
-                UiScenarioAction::TriggerEarthquake => {
-                    for (world_environment_entity, current_earthquake) in &world_environments {
-                        commands
-                            .entity(world_environment_entity)
-                            .insert(current_earthquake.copied().unwrap_or_default());
-                    }
+            let refresh = match &authored_scenario_action.action {
+                UiScenarioAction::TriggerEarthquake => false,
+                UiScenarioAction::RefreshEarthquake => true,
+                _ => continue,
+            };
+            for entity in &world_environments {
+                commands.entity(entity).insert_if_new(Earthquake);
+                if refresh {
+                    commands.trigger(EarthquakeRefreshed { entity });
                 }
-                UiScenarioAction::RefreshEarthquake => {
-                    for (world_environment_entity, current_earthquake) in &world_environments {
-                        commands
-                            .entity(world_environment_entity)
-                            .insert(Earthquake {
-                                refresh_generation: current_earthquake
-                                    .map_or(0, |earthquake| earthquake.refresh_generation)
-                                    .wrapping_add(1),
-                            });
-                    }
-                }
-                _ => {}
             }
         }
     }

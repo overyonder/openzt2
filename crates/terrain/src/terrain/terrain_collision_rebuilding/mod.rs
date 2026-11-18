@@ -6,30 +6,12 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 
-use crate::terrain::terrain_change_tracking_types::TerrainDirty;
-use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainChunkCollisionSurface;
 use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionBudget;
 use openzt2_zoo_state::terrain::terrain_collision_rebuilding_types::TerrainCollisionPending;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_terrain_sample_height_centimetres;
-
-pub(super) fn mark_changed_terrain_chunk_collisions_pending(
-    mut commands: Commands,
-    changed: Query<
-        Entity,
-        (
-            With<TerrainRenderChunk>,
-            Changed<TerrainDirty>,
-            Without<TerrainCollisionPending>,
-        ),
-    >,
-) {
-    for entity in &changed {
-        commands.entity(entity).insert(TerrainCollisionPending);
-    }
-}
 
 pub(super) fn rebuild_pending_terrain_chunk_collisions_within_tick_budget(
     mut commands: Commands,

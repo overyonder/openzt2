@@ -1,8 +1,9 @@
-use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path, sync::Arc};
 
 use bevy::prelude::*;
 
 use super::lua_script_asset_loading::LuaScriptAsset;
+use crate::asset_source::{ArchiveCatalogue, AssetArchives};
 
 struct IndexedLuaScriptAssetHandle {
     path: String,
@@ -12,7 +13,7 @@ struct IndexedLuaScriptAssetHandle {
 #[derive(Resource)]
 pub struct LuaScriptArchivePathIndex {
     archives: crate::asset_source::AssetArchives,
-    indexed_archive_revision: Option<u64>,
+    discovered: bool,
     handles_by_normalized_path: BTreeMap<String, IndexedLuaScriptAssetHandle>,
 }
 
@@ -22,7 +23,7 @@ impl FromWorld for LuaScriptArchivePathIndex {
             archives: world
                 .resource::<crate::asset_source::AssetArchives>()
                 .clone(),
-            indexed_archive_revision: None,
+            discovered: false,
             handles_by_normalized_path: BTreeMap::new(),
         }
     }
@@ -34,7 +35,7 @@ impl LuaScriptArchivePathIndex {
         asset_server: &AssetServer,
         assets: &Assets<LuaScriptAsset>,
     ) -> bool {
-        self.indexed_archive_revision.is_none()
+        !self.discovered
             || self.handles_by_normalized_path.values().any(|script| {
                 !assets.contains(script.handle.id())
                     && !matches!(
@@ -60,33 +61,32 @@ impl LuaScriptArchivePathIndex {
     }
 }
 
-pub(super) fn refresh_lua_script_archive_path_index_after_archive_revision(
-    asset_server: Res<AssetServer>,
-    mut lua_script_archive_path_index: ResMut<LuaScriptArchivePathIndex>,
+pub(super) fn discover_lua_script_archive_paths(
+    archives: Res<AssetArchives>,
+    server: Res<AssetServer>,
+    mut index: ResMut<LuaScriptArchivePathIndex>,
+    mut previous: Local<Option<Arc<[z2f::ResolvedArchiveEntry]>>>,
 ) {
-    let (archive_revision, resolved_archive_paths) =
-        lua_script_archive_path_index.archives.resolved_paths();
-    if lua_script_archive_path_index.indexed_archive_revision == Some(archive_revision) {
+    let sources = archives.catalogue_sources(ArchiveCatalogue::Scripts);
+    if previous
+        .as_ref()
+        .is_some_and(|previous| Arc::ptr_eq(previous, &sources))
+    {
         return;
     }
-    lua_script_archive_path_index.handles_by_normalized_path = resolved_archive_paths
+    index.handles_by_normalized_path = sources
         .iter()
-        .filter(|path| path_has_lua_script_asset_extension(path))
-        .map(|path| {
-            let path = path.to_string_lossy().replace('\\', "/");
-            (
-                normalized_lua_script_archive_path(Path::new(&path)),
-                IndexedLuaScriptAssetHandle {
-                    handle: asset_server.load(path.clone()),
-                    path,
-                },
-            )
+        .map(|source| {
+            let path = source.normalized_asset_path.to_string_lossy().into_owned();
+            let handle = server.load(source.normalized_asset_path.clone());
+            (path.clone(), IndexedLuaScriptAssetHandle { path, handle })
         })
         .collect();
-    lua_script_archive_path_index.indexed_archive_revision = Some(archive_revision);
+    index.discovered = true;
+    *previous = Some(sources);
 }
 
-fn path_has_lua_script_asset_extension(path: &Path) -> bool {
+pub(crate) fn path_has_lua_script_asset_extension(path: &Path) -> bool {
     path.extension().is_some_and(|extension| {
         extension.eq_ignore_ascii_case("lua")
             || extension.eq_ignore_ascii_case("bin")

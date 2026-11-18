@@ -7,21 +7,36 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_prefab_collider_model_asset_id;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use super::immersive_mode_policy_types::{InteractionPrefab, InteractionPrefabVisual};
+use super::immersive_mode_policy_types::{
+    InteractionPrefab, InteractionPrefabVisual, InteractionPrefabVisuals,
+};
 
 /// Keeps the current visual until its replacement prefab and models are loaded.
+#[derive(Component)]
+pub(super) struct ProjectedImmersivePrefab(Handle<ScenePrefabAsset>);
+
 pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
-    prefab_policies: Query<(Entity, &InteractionPrefab)>,
+    prefab_policies: Query<(
+        Entity,
+        &InteractionPrefab,
+        Option<&InteractionPrefabVisuals>,
+    )>,
     scene_prefab_assets: Res<Assets<ScenePrefabAsset>>,
     gltf_assets: Res<Assets<Gltf>>,
     world_roots: Query<Entity, With<WorldRoot>>,
-    existing_prefab_visuals: Query<(Entity, &InteractionPrefabVisual)>,
+    existing_prefab_visuals: Query<&ProjectedImmersivePrefab>,
     mut commands: Commands,
 ) {
-    for (controller_entity, interaction_prefab) in &prefab_policies {
-        if existing_prefab_visuals.iter().any(|(_, visual)| {
-            visual.owner == controller_entity && visual.prefab == *interaction_prefab
-        }) {
+    for (controller_entity, interaction_prefab, existing) in &prefab_policies {
+        if existing
+            .into_iter()
+            .flat_map(|visuals| visuals.iter())
+            .any(|entity| {
+                existing_prefab_visuals
+                    .get(entity)
+                    .is_ok_and(|prefab| prefab.0 == interaction_prefab.handle)
+            })
+        {
             continue;
         }
         let Some(scene_prefab_asset) = scene_prefab_assets.get(&interaction_prefab.handle) else {
@@ -34,10 +49,8 @@ pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
         let Ok(world_root_entity) = world_roots.single() else {
             continue;
         };
-        for (prefab_visual_entity, prefab_visual) in &existing_prefab_visuals {
-            if prefab_visual.owner == controller_entity {
-                commands.entity(prefab_visual_entity).despawn();
-            }
+        for entity in existing.into_iter().flat_map(|visuals| visuals.iter()) {
+            commands.entity(entity).despawn();
         }
         let prefab_root_entity = spawn_loaded_scene_prefab_as_world_instance(
             &mut commands,
@@ -51,32 +64,21 @@ pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
             None,
             RigidBody::Static,
         );
-        commands
-            .entity(prefab_root_entity)
-            .insert(InteractionPrefabVisual {
-                owner: controller_entity,
-                prefab: interaction_prefab.clone(),
-            });
+        commands.entity(prefab_root_entity).insert((
+            InteractionPrefabVisual(controller_entity),
+            ProjectedImmersivePrefab(interaction_prefab.handle.clone()),
+        ));
     }
 }
 
-pub(super) fn retire_prefab_visuals_without_immersive_mode_prefab_owner(
-    prefab_policy_owners: Query<(), With<InteractionPrefab>>,
-    prefab_visuals: Query<(Entity, &InteractionPrefabVisual)>,
+pub(super) fn remove_immersive_prefab_on_policy_removal(
+    removed: On<Remove<InteractionPrefab>>,
+    children: Query<&InteractionPrefabVisuals>,
     mut commands: Commands,
 ) {
-    for (prefab_visual_entity, prefab_visual) in &prefab_visuals {
-        if prefab_policy_owners.get(prefab_visual.owner).is_err() {
-            commands.entity(prefab_visual_entity).despawn();
+    if let Ok(children) = children.get(removed.entity) {
+        for entity in children.iter() {
+            commands.entity(entity).try_despawn();
         }
-    }
-}
-
-pub(super) fn retire_all_immersive_mode_prefab_visuals_when_leaving_gameplay(
-    prefab_visuals: Query<Entity, With<InteractionPrefabVisual>>,
-    mut commands: Commands,
-) {
-    for prefab_visual_entity in &prefab_visuals {
-        commands.entity(prefab_visual_entity).despawn();
     }
 }

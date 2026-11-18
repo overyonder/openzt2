@@ -1,6 +1,6 @@
 //! Archive-precedence scenario asset-set state and borrowing canonical-record queries.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
@@ -15,8 +15,11 @@ pub(super) struct ScenarioDocumentHandle {
 
 #[derive(Resource, Default)]
 pub struct WorldScenarios {
-    pub(super) revision: Option<u64>,
-    pub(super) dirty: bool,
+    pub(super) discovered: bool,
+    pub(super) discovery_changed: bool,
+    pub(super) pending: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
+    pub(super) failed: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
+    pub(super) published_dependencies: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
     pub(super) handles: Vec<Handle<WorldScenarioDocumentAsset>>,
     pub(super) locations: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
     pub(super) maps: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
@@ -35,25 +38,8 @@ impl WorldScenarios {
     #[cfg(any(test, feature = "testing"))]
     pub fn queue_test_document(&mut self, handle: Handle<WorldScenarioDocumentAsset>) {
         self.handles.push(handle);
-        self.revision.get_or_insert(0);
-        self.dirty = true;
-    }
-
-    pub(super) fn catalogue_document_handles<'a>(
-        &'a self,
-        assets: &'a Assets<WorldScenarioDocumentAsset>,
-    ) -> impl Iterator<Item = &'a Handle<WorldScenarioDocumentAsset>> {
-        self.handles.iter().chain(
-            self.handles
-                .iter()
-                .filter_map(|handle| assets.get(handle))
-                .flat_map(|asset| {
-                    asset
-                        .campaign_scenarios
-                        .iter()
-                        .map(|scenario| &scenario.handle)
-                }),
-        )
+        self.discovered = true;
+        self.discovery_changed = true;
     }
 
     #[cfg(any(test, feature = "testing"))]
@@ -87,64 +73,53 @@ impl WorldScenarios {
         for set in &document.photo_challenge_sets {
             self.photo_sets.insert(set.id, handle.clone());
         }
-        self.revision.get_or_insert(0);
+        self.discovered = true;
         self.handles.push(handle);
     }
 
     pub fn has_pending_document_loads(
         &self,
-        asset_server: &AssetServer,
-        assets: &Assets<WorldScenarioDocumentAsset>,
+        _asset_server: &AssetServer,
+        _assets: &Assets<WorldScenarioDocumentAsset>,
     ) -> bool {
-        self.dirty
-            || self.revision.is_none()
-            || self.catalogue_document_handles(assets).any(|handle| {
-                !assets.contains(handle.id())
-                    && !matches!(
-                        asset_server.load_state(handle.id()),
-                        bevy::asset::LoadState::Failed(_)
-                    )
-            })
-    }
-
-    pub fn revision(&self) -> Option<u64> {
-        self.revision
+        self.has_pending_document_loads_from_publication()
     }
 
     pub fn catalogue_documents_are_loaded(
         &self,
-        assets: &Assets<WorldScenarioDocumentAsset>,
+        _assets: &Assets<WorldScenarioDocumentAsset>,
     ) -> bool {
-        !self.dirty
+        !self.has_pending_document_loads_from_publication()
+            && self.failed.is_empty()
             && !self.handles.is_empty()
-            && self
-                .catalogue_document_handles(assets)
-                .all(|handle| assets.contains(handle.id()))
     }
 
     pub fn catalogue_document_load_has_failed(
         &self,
-        asset_server: &AssetServer,
-        assets: &Assets<WorldScenarioDocumentAsset>,
+        _asset_server: &AssetServer,
+        _assets: &Assets<WorldScenarioDocumentAsset>,
     ) -> bool {
-        self.catalogue_document_handles(assets).any(|handle| {
-            matches!(
-                asset_server.load_state(handle.id()),
-                bevy::asset::LoadState::Failed(_)
-            )
-        })
+        !self.failed.is_empty()
+    }
+
+    fn has_pending_document_loads_from_publication(&self) -> bool {
+        !self.discovered || self.discovery_changed || !self.pending.is_empty()
     }
 
     pub fn get<'a>(
         &'a self,
         assets: &'a Assets<WorldScenarioDocumentAsset>,
     ) -> Option<WorldScenariosView<'a>> {
-        (!self.maps.is_empty() || !self.campaigns.is_empty() || !self.scenarios.is_empty())
-            .then_some(WorldScenariosView {
-                owner: self,
-                assets,
-                documents: [None; 2],
-            })
+        (!self.maps.is_empty()
+            || !self.campaigns.is_empty()
+            || !self.scenarios.is_empty()
+            || !self.photo_challenges.is_empty()
+            || !self.photo_sets.is_empty())
+        .then_some(WorldScenariosView {
+            owner: self,
+            assets,
+            documents: [None; 2],
+        })
     }
 }
 

@@ -6,6 +6,7 @@ use bevy::gltf::Gltf;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -30,7 +31,6 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::placement::object_placement_definition_queries::authored_object_entrance_definitions;
 use openzt2_zoo_state::placement::object_placement_definition_queries::object_placeable_definition_is_unlocked;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_definition_queries::select_authored_footprint_for_eighth_turns;
 use openzt2_zoo_state::placement::object_placement_headroom_diagnostic_types::ObjectPlacementBlockingHeadroomRay;
 use openzt2_zoo_state::placement::object_placement_headroom_diagnostic_types::ObjectPlacementHeadroomChunkObservation;
 use openzt2_zoo_state::placement::object_placement_headroom_diagnostic_types::ObjectPlacementHeadroomDiagnosticState;
@@ -206,7 +206,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
     sites: openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    prefabs: Res<Assets<ScenePrefabAsset>>,
+    (prefabs, footprints): (Res<Assets<ScenePrefabAsset>>, Res<ScenePlacementFootprints>),
     models: Res<Assets<Gltf>>,
     mut diagnostics: Option<ResMut<ObjectPlacementHeadroomDiagnosticState>>,
     mut previews: Query<(
@@ -234,10 +234,11 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         else {
             continue;
         };
+        let geometry = footprints.resolve(definition, Some(&prefab_source.0));
         let constraints = definition.constraints;
         let pose = calculate_authored_object_placement_eighth_turns(definition, &preview.transform)
             .and_then(|turns| {
-                calculate_object_placement_footprint_origin(definition, &preview.transform, turns)
+                calculate_object_placement_footprint_origin(geometry, &preview.transform, turns)
                     .map(|origin| (origin, turns))
             });
         let topology_valid = pose.is_some_and(|(origin, turns)| {
@@ -266,7 +267,8 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
                             .any(|cell| topology.paths.contains_key(&cell))
                     });
             let has_wall = !constraints.contains_all(PlacementConstraints::REQUIRE_WALL)
-                || select_authored_footprint_for_eighth_turns(definition, turns)
+                || geometry
+                    .cells(turns)
                     .iter()
                     .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
                     .any(|cell| {
@@ -299,7 +301,8 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
         let mut blocking_ray = None;
         let headroom_valid = clearance_m <= f32::EPSILON
             || pose.is_some_and(|(origin, turns)| {
-                select_authored_footprint_for_eighth_turns(definition, turns)
+                geometry
+                    .cells(turns)
                     .iter()
                     .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
                     .all(|cell| {
@@ -390,12 +393,18 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             // Moving a placed object is free, so only purchases need the cash.
             affordable: relocation.is_some()
                 || unlimited_cash.is_some()
-                || cash.0 .0 >= definition.price_cents,
+                || cash.0.0 >= definition.price_cents,
             topology_valid,
             headroom_valid,
             surface_valid,
             prefab_ready: prefabs.get(&prefab_source.0).is_some_and(|prefab| {
-                first_missing_prefab_collider_model_asset_id(prefab, &models).is_none()
+                (!definition.automatic_footprint
+                    || prefab
+                        .canonical_scene_prefab_document()
+                        .automatic_placement_bounds_xz
+                        .is_none()
+                    || footprints.has_scene_bounds(&prefab_source.0))
+                    && first_missing_prefab_collider_model_asset_id(prefab, &models).is_none()
             }),
         };
         if *permission != next {

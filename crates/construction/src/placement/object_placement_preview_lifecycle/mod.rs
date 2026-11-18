@@ -1,9 +1,10 @@
 //! Creates, hydrates, synchronizes, and animates object-placement previews.
 
 use bevy::prelude::*;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::SpeciesVariant;
-use openzt2_game_data::AssetId;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
@@ -322,18 +323,20 @@ pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
     cursors: Query<Ref<ConstructionCursor>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    footprints: Res<ScenePlacementFootprints>,
     mut previews: Query<(
         &mut ConstructionPreview,
         &mut Transform,
         &mut ObjectPlacementPreviewMotion,
         &mut Visibility,
+        Option<&ObjectPlacementPrefabSource>,
     )>,
 ) {
     let Ok(cursor) = cursors.single() else { return };
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
-    for (mut preview, mut transform, mut motion, mut visibility) in &mut previews {
+    for (mut preview, mut transform, mut motion, mut visibility, prefab) in &mut previews {
         let was_hidden = *visibility == Visibility::Hidden;
         let next_visibility = if cursor.over_terrain {
             Visibility::Inherited
@@ -361,9 +364,10 @@ pub(super) fn synchronize_object_placement_preview_with_construction_cursor(
         let snapped = if let Some(definition) =
             resolve_object_placeable_definition(catalogue, preview.definition)
         {
-            let Some(snapped) =
-                snap_object_placement_transform_to_authored_grid(definition, requested_transform)
-            else {
+            let Some(snapped) = snap_object_placement_transform_to_authored_grid(
+                footprints.resolve(definition, prefab.map(|source| &source.0)),
+                requested_transform,
+            ) else {
                 continue;
             };
             snapped

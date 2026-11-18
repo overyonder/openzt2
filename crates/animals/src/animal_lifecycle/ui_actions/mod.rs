@@ -24,6 +24,7 @@ pub(super) fn consume_animal_ui_actions(
     roots: Query<&UiDocumentRoot>,
     selected: Res<SelectedEntity>,
     animals: Query<Has<ReleaseRestricted>, With<Animal>>,
+    mut catalogue_genders: Query<&mut AnimalCatalogueGender>,
     mut outgoing_adoptions: MessageWriter<PlaceAnimalForAdoption>,
     mut releases: MessageWriter<ReleaseAnimal>,
     mut decline_adoption_offers: MessageWriter<DeclineCurrentAnimalAdoptionOffers>,
@@ -49,7 +50,11 @@ pub(super) fn consume_animal_ui_actions(
                         UiAnimalGender::Female => openzt2_game_data::species::Sex::Female,
                         UiAnimalGender::Male => openzt2_game_data::species::Sex::Male,
                     };
-                    commands.entity(owner.0).insert(AnimalCatalogueGender(sex));
+                    if let Ok(mut gender) = catalogue_genders.get_mut(owner.0) {
+                        gender.set_if_neq(AnimalCatalogueGender(sex));
+                    } else {
+                        commands.entity(owner.0).insert(AnimalCatalogueGender(sex));
+                    }
                 }
                 UiAnimalAction::PutSelectedAnimalUpForAdoption => {
                     if let Some(animal) = selected

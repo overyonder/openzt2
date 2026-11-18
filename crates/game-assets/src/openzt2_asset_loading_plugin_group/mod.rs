@@ -7,10 +7,12 @@ pub struct OpenZt2AssetLoadingPluginGroup;
 impl PluginGroup for OpenZt2AssetLoadingPluginGroup {
     fn build(self) -> PluginGroupBuilder {
         PluginGroupBuilder::start::<Self>()
+            .add(super::asset_source::ArchiveOverlayPublicationPlugin)
             .add(super::animation::AnimationAssetLoadingPlugin)
             .add(super::audio::AudioAssetPlugin)
             .add(super::behavior::BehaviorDocumentAssetPlugin)
             .add(super::effect::ParticleEffectAssetAndRuntimePlugin)
+            .add(super::graphics_settings_presets::GraphicsSettingsPresetAssetPlugin)
             .add(super::localization::LocalizationAssetPlugin)
             .add(super::lua_script::LuaScriptAssetLoadingPlugin)
             .add(super::material::MaterialAssetPlugin)

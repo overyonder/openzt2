@@ -19,7 +19,6 @@ use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
-use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
 use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
@@ -31,7 +30,10 @@ use std::{
 
 mod world_access;
 pub(super) use world_access::remove_settled_behavior_script_transactions;
-use world_access::{BehaviorScriptWorldAccess, BehaviorScriptWorldChanges, DiseaseAttribute};
+use world_access::{
+    BehaviorScriptEffect, BehaviorScriptStructuralEdits, BehaviorScriptWorldAccess,
+    DiseaseAttribute,
+};
 
 #[derive(Default)]
 pub(super) struct BehaviorScriptContexts {
@@ -77,8 +79,8 @@ pub(super) fn execute_authored_behavior_script_actions(
     >,
     entities: Query<()>,
     mut world: BehaviorScriptWorldAccess,
-    mut presentation_requests: MessageWriter<PhysicalPresentationRequest>,
 ) {
+    let mut structural_edits = BehaviorScriptStructuralEdits::default();
     for (actor, mut task) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
@@ -111,12 +113,10 @@ pub(super) fn execute_authored_behavior_script_actions(
                     loaded: RefCell::new(BTreeSet::new()),
                 });
         let path_stack = RefCell::new(Vec::new());
-        let output = RefCell::new(Vec::new());
-        let output_requests = &output;
         let textures = RefCell::new(Vec::new());
-        let crated = RefCell::new(Vec::new());
-        let script_changes = RefCell::new(BehaviorScriptWorldChanges::default());
-        let changes = &script_changes;
+        let script_effects = RefCell::new(Vec::new());
+        let effects = &script_effects;
+        let pending_edits = &structural_edits;
         let execution_id = task.execution_id;
         let world_view = &world;
         let result = vm.lua.scope(|scope| -> mlua::Result<Option<String>> {
@@ -194,7 +194,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         "unmapped behavior transaction {category} {amount}"
                                     )));
                                 }
-                                changes.borrow_mut().incomes.push(amount);
+                                effects
+                                    .borrow_mut()
+                                    .push(BehaviorScriptEffect::Income(amount));
                                 Ok(())
                             })?,
                         )?,
@@ -254,13 +256,19 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "unmapped behavior float attribute {name}"
                                 )));
                             }
-                            Ok(changes
+                            Ok(effects
                                 .borrow()
-                                .poo_levels
                                 .iter()
                                 .rev()
-                                .find_map(|(written, level)| (*written == entity).then_some(*level))
-                                .unwrap_or_else(|| world_view.poo_level(entity)))
+                                .find_map(|effect| match *effect {
+                                    BehaviorScriptEffect::Compost(written, level)
+                                        if written == entity =>
+                                    {
+                                        Some(level)
+                                    }
+                                    _ => None,
+                                })
+                                .unwrap_or_else(|| pending_edits.poo_level(world_view, entity)))
                         })?,
                     )?;
                     table.set(
@@ -274,7 +282,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "unmapped behavior float attribute {name}"
                                 )));
                             }
-                            changes.borrow_mut().poo_levels.push((entity, level));
+                            effects
+                                .borrow_mut()
+                                .push(BehaviorScriptEffect::Compost(entity, level));
                             Ok(())
                         })?,
                     )?;
@@ -282,7 +292,6 @@ pub(super) fn execute_authored_behavior_script_actions(
                         "sendMessage",
                         scope.create_function(
                             move |lua, (subject, message, value): (Table, String, mlua::Value)| {
-                                let output = output_requests;
                                 let entity = subject_entity(&subject)?;
                                 let text = || -> mlua::Result<String> {
                                     lua.unpack::<String>(value.clone())
@@ -291,14 +300,18 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     "BFG_SETPHYSANIM" | "BFG_PUSHPHYSANIM" => {
                                         let state =
                                             AssetId::from_key(&text()?.to_ascii_lowercase());
-                                        output.borrow_mut().push(PhysicalPresentationRequest {
-                                            owner: entity,
-                                            operation: if message == "BFG_SETPHYSANIM" {
-                                                PhysicalPresentationOperation::Set(state)
-                                            } else {
-                                                PhysicalPresentationOperation::Push(state)
-                                            },
-                                        });
+                                        effects.borrow_mut().push(
+                                            BehaviorScriptEffect::Presentation(
+                                                PhysicalPresentationRequest {
+                                                    owner: entity,
+                                                    operation: if message == "BFG_SETPHYSANIM" {
+                                                        PhysicalPresentationOperation::Set(state)
+                                                    } else {
+                                                        PhysicalPresentationOperation::Push(state)
+                                                    },
+                                                },
+                                            ),
+                                        );
                                         Ok(mlua::Value::Nil)
                                     }
                                     // `canreproduce.lua`: pregnancy tokens and young children.
@@ -307,7 +320,17 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     )),
                                     // `justgavebirth.lua`: parents, mates and children.
                                     "BFAI_GET_RELATED_ENTITY" => {
-                                        match world_view.related(entity, &text()?) {
+                                        let relation = text()?;
+                                        let related = if relation == "mate" {
+                                            pending_edits.mate(
+                                                world_view,
+                                                &effects.borrow(),
+                                                entity,
+                                            )
+                                        } else {
+                                            world_view.related(entity, &relation)
+                                        };
+                                        match related {
                                             Some(related) => {
                                                 Ok(mlua::Value::UserData(lua.create_userdata(
                                                     BehaviorScriptEntityReference(related),
@@ -322,7 +345,10 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         let related = if text()? == "child" {
                                             world_view.children(entity)
                                         } else {
-                                            world_view.related(entity, "mate").into_iter().collect()
+                                            pending_edits
+                                                .mate(world_view, &effects.borrow(), entity)
+                                                .into_iter()
+                                                .collect()
                                         };
                                         let found = lua.create_table()?;
                                         for (index, child) in related.into_iter().enumerate() {
@@ -339,7 +365,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                     }
                                     // `setmates.lua`: one mate per animal.
                                     "BFAI_CLEAR_RELATIONSHIP" if text()? == "mate" => {
-                                        changes.borrow_mut().mates.push((entity, None));
+                                        effects
+                                            .borrow_mut()
+                                            .push(BehaviorScriptEffect::Mate(entity, None));
                                         Ok(mlua::Value::Nil)
                                     }
                                     "BFAI_ADD_RELATIONSHIP" => {
@@ -367,7 +395,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                             )));
                                         }
                                         let mate = subject_entity(&relationship.get("target")?)?;
-                                        changes.borrow_mut().mates.push((entity, Some(mate)));
+                                        effects
+                                            .borrow_mut()
+                                            .push(BehaviorScriptEffect::Mate(entity, Some(mate)));
                                         Ok(mlua::Value::Nil)
                                     }
                                     _ => Err(mlua::Error::runtime(format!(
@@ -437,10 +467,10 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         "unmapped behavior boolean attribute {name}"
                                     )));
                                 }
-                                changes
-                                    .borrow_mut()
-                                    .diseases
-                                    .push((entity, DiseaseAttribute::Diseased(value)));
+                                effects.borrow_mut().push(BehaviorScriptEffect::Disease(
+                                    entity,
+                                    DiseaseAttribute::Diseased(value),
+                                ));
                                 Ok(())
                             },
                         )?,
@@ -455,10 +485,10 @@ pub(super) fn execute_authored_behavior_script_actions(
                                         "unmapped behavior string attribute {name}"
                                     )));
                                 }
-                                changes
-                                    .borrow_mut()
-                                    .diseases
-                                    .push((entity, DiseaseAttribute::Name(value)));
+                                effects.borrow_mut().push(BehaviorScriptEffect::Disease(
+                                    entity,
+                                    DiseaseAttribute::Name(value),
+                                ));
                                 Ok(())
                             },
                         )?,
@@ -473,9 +503,9 @@ pub(super) fn execute_authored_behavior_script_actions(
                                 )));
                             }
                             let reference: AnyUserData = subject.get("entity")?;
-                            crated
-                                .borrow_mut()
-                                .push(reference.borrow::<BehaviorScriptEntityReference>()?.0);
+                            effects.borrow_mut().push(BehaviorScriptEffect::Crate(
+                                reference.borrow::<BehaviorScriptEntityReference>()?.0,
+                            ));
                             Ok(())
                         })?,
                     )?;
@@ -495,7 +525,11 @@ pub(super) fn execute_authored_behavior_script_actions(
             let mut index = 1;
             // Native BFBehScriptParams serializes present Subject, Target and
             // Object children in that order, followed by string parameters.
-            for (name, entity) in [("Subject", Some(actor)), ("Target", task.target())] {
+            for (name, entity) in [
+                ("Subject", Some(actor)),
+                ("Target", task.target()),
+                ("Object", task.object),
+            ] {
                 if let Some(entity) = entity {
                     let argument = vm.lua.create_table()?;
                     argument.set("name", name)?;
@@ -523,13 +557,12 @@ pub(super) fn execute_authored_behavior_script_actions(
         });
         // Native sends messages as the script executes, including messages
         // preceding a later script error; retain that ordering and effect.
-        for request in output.into_inner() {
-            presentation_requests.write(request);
-        }
-        for entity in crated.into_inner() {
-            commands.entity(entity).insert(WorldEntityIsCrated);
-        }
-        world.apply(&mut commands, actor, script_changes.into_inner());
+        world.apply(
+            &mut commands,
+            actor,
+            script_effects.into_inner(),
+            &mut structural_edits,
+        );
         match result {
             Ok(Some(result)) if result != "error" && result != "failure" => {
                 let textures = textures.into_inner();

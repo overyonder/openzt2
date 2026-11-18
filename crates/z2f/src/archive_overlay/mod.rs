@@ -3,15 +3,16 @@ use std::{
     fs::File,
     io,
     path::{Path, PathBuf},
-    sync::{Mutex, RwLock},
+    sync::RwLock,
 };
 
 use zip::ZipArchive;
 
 use crate::{
-    paths::normalize_asset_path_for_case_insensitive_archive_lookup, ArchiveSet,
-    EnabledArchiveOverlayState, ResolvedArchiveEntry, ResolvedAssetChange, ResolvedAssetChangeKind,
-    WinningArchiveEntryLocation, Z2fArchiveEnabledStatus, REQUIRED_ARCHIVES,
+    ArchiveSet, EnabledArchiveOverlayState, REQUIRED_ARCHIVES, ResolvedArchiveEntry,
+    ResolvedAssetChange, ResolvedAssetChangeKind, WinningArchiveEntryLocation,
+    Z2fArchiveEnabledStatus, paths::normalize_asset_path_for_case_insensitive_archive_lookup,
+    positional_archive_reader::PositionalArchiveReader,
 };
 
 impl ArchiveSet {
@@ -38,9 +39,10 @@ impl ArchiveSet {
                     format!("Cannot open {}: {error}", path.display()),
                 )
             })?;
-            let mut archive = ZipArchive::new(file).map_err(|error| {
-                io::Error::other(format!("Cannot read {}: {error}", path.display()))
-            })?;
+            let mut archive =
+                ZipArchive::new(PositionalArchiveReader::new(file)?).map_err(|error| {
+                    io::Error::other(format!("Cannot read {}: {error}", path.display()))
+                })?;
             let archive_priority_index = open_zip_archives.len();
             let mut archive_entries = BTreeMap::new();
             for entry_index in 0..archive.len() {
@@ -61,7 +63,7 @@ impl ArchiveSet {
                 );
             }
             archive_names.push(name);
-            open_zip_archives.push(Mutex::new(archive));
+            open_zip_archives.push(archive);
             archive_entries_by_normalized_path.push(archive_entries);
         }
         let archive_enabled_states = vec![true; open_zip_archives.len()];
@@ -151,6 +153,15 @@ impl ArchiveSet {
         );
         let old_aliases = std::mem::take(&mut state.unique_basename_aliases);
         let aliases = collect_unique_basename_aliases(&winners);
+        let introduction_order_changes = self.archive_entries_by_normalized_path
+            [archive_priority_index]
+            .keys()
+            .filter(|path| {
+                !self.archive_entries_by_normalized_path[..archive_priority_index]
+                    .iter()
+                    .zip(&state.archive_enabled_states)
+                    .any(|(entries, enabled)| *enabled && entries.contains_key(*path))
+            });
         let changed_paths = old_winners
             .keys()
             .chain(winners.keys())
@@ -161,6 +172,7 @@ impl ArchiveSet {
                     .chain(aliases.keys())
                     .filter(|path| old_aliases.get(*path) != aliases.get(*path)),
             )
+            .chain(introduction_order_changes)
             .cloned()
             .collect::<BTreeSet<_>>();
         let changed = changed_paths

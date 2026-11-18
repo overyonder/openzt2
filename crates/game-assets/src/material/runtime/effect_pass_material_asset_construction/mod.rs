@@ -364,13 +364,17 @@ fn create_effect_pass_material_asset(
             0..40 => {
                 let texture_stage = index / 5;
                 let first = (index % 5) * 4;
-                UVec4::from_array(std::array::from_fn(|component| {
+                let mut register = UVec4::from_array(std::array::from_fn(|component| {
                     state.stages[texture_stage]
                         .get(first + component)
                         .copied()
                         .unwrap_or_default()
                 }))
-                .as_vec4()
+                .as_vec4();
+                if first == 16 {
+                    register.z = state.samplers[texture_stage].lod_bias();
+                }
+                register
             }
             40..45 => state.material[index - 40],
             45 => UVec4::new(
@@ -503,6 +507,7 @@ fn create_effect_pass_material_asset(
         transform_inputs.push(Vec4::ZERO);
     }
     let material = EffectPassMaterial {
+        texture_coordinate_animation_geometry: None,
         texture_coordinate_animations: std::sync::Arc::clone(texture_coordinate_animations),
         lighting_state_is_authored: state.lighting_state_is_authored || material_lighting.is_some(),
         fixed_function,
@@ -608,8 +613,8 @@ fn create_effect_pass_material_asset(
             fragment_entry_point: fragment_entry,
             cull_face: state.cull,
             polygon_mode: state.polygon,
-            depth_write_enabled: state.depth_write,
-            depth_compare: state.depth_compare,
+            depth_write_enabled: state.effective_depth_state().0,
+            depth_compare: state.effective_depth_state().1,
             blend_state: blend,
             color_writes: state.color_writes,
         },

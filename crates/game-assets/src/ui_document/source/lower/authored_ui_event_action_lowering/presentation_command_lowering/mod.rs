@@ -299,18 +299,20 @@ pub(super) fn lower_presentation_command(
                 hover_presented: false,
             },
         })),
-        "UI_REPRESS" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
-            trigger,
-            action: UiPresentationAction::ActivateSelectedChildOfTargetNode {
-                target_node: role_target(event, input)
-                    .or_else(|| {
-                        (role == UiDocumentRole::InGameHud && event.target_child.as_deref().is_some_and(|target| target.eq_ignore_ascii_case("multi list tabs"))).then_some(UiDocumentRole::MultiList)
-                    })
-                    .filter(|target_role| *target_role != role)
-                    .and_then(|target_role| event.target_child.as_deref().or(event.string.as_deref()).map(|target| UiDocumentRole::node_id(target_role, target)))
-                    .unwrap_or_else(|| target_node(event, role, current)),
-            },
-        })),
+        "UI_REPRESS" => {
+            let target_role = role_target(event, input)
+                .or_else(|| {
+                    (role == UiDocumentRole::InGameHud && event.target_child.as_deref().is_some_and(|target| target.eq_ignore_ascii_case("multi list tabs"))).then_some(UiDocumentRole::MultiList)
+                })
+                .filter(|target_role| *target_role != role);
+            let target_node = target_role
+                .and_then(|target_role| event.target_child.as_deref().or(event.string.as_deref()).map(|target| UiDocumentRole::node_id(target_role, target)))
+                .unwrap_or_else(|| target_node(event, role, current));
+            Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
+                trigger,
+                action: UiPresentationAction::ActivateSelectedChildOfTargetNode { target_node, target_role },
+            }))
+        }
         "UI_SET_NEXT" | "UI_SET_PREVIOUS" => Ok(UiActionRecord::Presentation(UiPresentationActionRecord {
             trigger,
             action: UiPresentationAction::FocusPreviousOrNextSiblingOfTargetNode {

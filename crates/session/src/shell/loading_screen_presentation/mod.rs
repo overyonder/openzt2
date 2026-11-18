@@ -18,27 +18,26 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 
 pub(super) fn show_authored_loading_screen(
     mut commands: Commands,
-    mut roles: ResMut<UiRoleRequests>,
+    mut roles: MessageWriter<ShowUiRole>,
 ) {
     let owner = commands
-        .spawn((LoadingScreen, Visibility::Inherited, GlobalZIndex(100)))
+        .spawn((
+            LoadingScreen,
+            Visibility::Inherited,
+            GlobalZIndex(100),
+            DespawnOnExit(openzt2_game_assets::application_lifecycle::GamePhase::Loading),
+        ))
         .id();
-    roles.request(UiDocumentRole::Loading, owner);
-}
-
-pub(super) fn close_authored_loading_screen(
-    mut commands: Commands,
-    screens: Query<Entity, With<LoadingScreen>>,
-) {
-    for screen in &screens {
-        commands.entity(screen).despawn();
-    }
+    roles.write(ShowUiRole {
+        role: UiDocumentRole::Loading,
+        owner: owner,
+    });
 }
 
 #[allow(clippy::too_many_arguments)]

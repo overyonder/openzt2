@@ -18,27 +18,26 @@ pub(crate) struct InteractionPrefab {
     pub(crate) handle: Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
 }
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct InteractionCursorVisual {
-    pub(crate) owner: Entity,
-}
+#[derive(Component)]
+#[relationship(relationship_target = InteractionCursorVisuals)]
+pub(super) struct InteractionCursorVisual(pub(super) Entity);
 
-#[derive(Component, Debug, Clone, PartialEq, Eq)]
-pub(crate) struct InteractionPrefabVisual {
-    pub(crate) owner: Entity,
-    pub(crate) prefab: InteractionPrefab,
-}
+#[derive(Component)]
+#[relationship_target(relationship = InteractionCursorVisual, linked_spawn)]
+pub(super) struct InteractionCursorVisuals(Vec<Entity>);
 
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RestoreSimulationPause(pub(crate) bool);
+#[derive(Component)]
+#[relationship(relationship_target = InteractionPrefabVisuals)]
+pub(super) struct InteractionPrefabVisual(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = InteractionPrefabVisual, linked_spawn)]
+pub(super) struct InteractionPrefabVisuals(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct ModeHiddenHud {
     pub(crate) previous: Visibility,
 }
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct PauseSimulationWhileActive;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct HideHudWhileActive;

@@ -70,22 +70,20 @@ pub struct GraphicsSettings {
     pub effects: GraphicsEffectQuality,
 }
 
-impl GraphicsSettings {
-    /// Source `detailLevel = 3`, compiled from the `high` column of the final
-    /// expansion `ui/options/settings.xml`.
-    pub const fn from_source_highest_detail_preset() -> Self {
+impl Default for GraphicsSettings {
+    fn default() -> Self {
         Self {
-            multisample_count: 1,
+            multisample_count: 4,
             environment_detail: ThreeLevelGraphicsDetail::High,
             ambient_effects: true,
             skybox_quality: 2,
             lighting_detail: ThreeLevelGraphicsDetail::High,
             shadow_detail: ShadowDetail::Ultra,
-            specular_effects: false,
+            specular_effects: true,
             terrain_resolution: ThreeLevelGraphicsDetail::High,
             terrain_texture_size: ThreeLevelGraphicsDetail::High,
             water_detail: FourLevelGraphicsDetail::Ultra,
-            detail_objects: EnvironmentalDetailObjectDensity::Medium,
+            detail_objects: EnvironmentalDetailObjectDensity::High,
             object_detail: ThreeLevelGraphicsDetail::High,
             physical_animations: true,
             prop_attachments: true,
@@ -94,91 +92,12 @@ impl GraphicsSettings {
             animation_detail: ThreeLevelGraphicsDetail::High,
             view_distance: ThreeLevelGraphicsDetail::High,
             max_overhead_zoom: ThreeLevelGraphicsDetail::High,
-            screen_detail: false,
+            screen_detail: true,
             ui_text_shadows: true,
             ui_text_textures: true,
             shader_detail: ThreeLevelGraphicsDetail::High,
-            water_reflections: false,
-            effects: GraphicsEffectQuality::High,
-        }
-    }
-
-    /// Source `detailLevel = 2`, compiled from the `medium` column.
-    pub const fn from_source_high_detail_preset() -> Self {
-        Self {
-            multisample_count: 1,
-            environment_detail: ThreeLevelGraphicsDetail::Medium,
-            ambient_effects: true,
-            skybox_quality: 2,
-            lighting_detail: ThreeLevelGraphicsDetail::Medium,
-            shadow_detail: ShadowDetail::Medium,
-            specular_effects: false,
-            terrain_resolution: ThreeLevelGraphicsDetail::Medium,
-            terrain_texture_size: ThreeLevelGraphicsDetail::Medium,
-            water_detail: FourLevelGraphicsDetail::Medium,
-            detail_objects: EnvironmentalDetailObjectDensity::Medium,
-            object_detail: ThreeLevelGraphicsDetail::Medium,
-            physical_animations: true,
-            prop_attachments: true,
-            object_texture_detail: ThreeLevelGraphicsDetail::Medium,
-            texture_replacement: true,
-            animation_detail: ThreeLevelGraphicsDetail::Medium,
-            view_distance: ThreeLevelGraphicsDetail::Medium,
-            max_overhead_zoom: ThreeLevelGraphicsDetail::Medium,
-            screen_detail: false,
-            ui_text_shadows: false,
-            ui_text_textures: false,
-            shader_detail: ThreeLevelGraphicsDetail::Medium,
-            water_reflections: false,
-            effects: GraphicsEffectQuality::High,
-        }
-    }
-
-    /// Source `detailLevel = 1`, compiled from the `low` column.
-    pub const fn from_source_medium_detail_preset() -> Self {
-        Self {
-            multisample_count: 1,
-            environment_detail: ThreeLevelGraphicsDetail::Low,
-            ambient_effects: false,
-            skybox_quality: 1,
-            lighting_detail: ThreeLevelGraphicsDetail::Low,
-            shadow_detail: ShadowDetail::Off,
-            specular_effects: false,
-            terrain_resolution: ThreeLevelGraphicsDetail::Low,
-            terrain_texture_size: ThreeLevelGraphicsDetail::Low,
-            water_detail: FourLevelGraphicsDetail::Low,
-            detail_objects: EnvironmentalDetailObjectDensity::Off,
-            object_detail: ThreeLevelGraphicsDetail::Low,
-            physical_animations: false,
-            prop_attachments: false,
-            object_texture_detail: ThreeLevelGraphicsDetail::Low,
-            texture_replacement: false,
-            animation_detail: ThreeLevelGraphicsDetail::Low,
-            view_distance: ThreeLevelGraphicsDetail::Low,
-            max_overhead_zoom: ThreeLevelGraphicsDetail::Low,
-            screen_detail: false,
-            ui_text_shadows: false,
-            ui_text_textures: false,
-            shader_detail: ThreeLevelGraphicsDetail::Low,
-            water_reflections: false,
-            effects: GraphicsEffectQuality::Low,
-        }
-    }
-}
-
-impl Default for GraphicsSettings {
-    fn default() -> Self {
-        // Use every detail setting's maximum, including features which the
-        // original high preset left disabled. Saved player choices override it.
-        // Multisampling stays at 4, the most WebGPU guarantees for every
-        // colour format; Apple GPUs reject 8 and stop rendering.
-        Self {
-            multisample_count: 4,
-            specular_effects: true,
-            detail_objects: EnvironmentalDetailObjectDensity::High,
-            screen_detail: true,
             water_reflections: true,
-            ..Self::from_source_highest_detail_preset()
+            effects: GraphicsEffectQuality::High,
         }
     }
 }

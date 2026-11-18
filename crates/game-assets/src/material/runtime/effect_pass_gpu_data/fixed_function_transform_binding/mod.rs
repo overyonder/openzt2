@@ -113,28 +113,37 @@ impl DynamicFixedFunctionTransformBinding {
 }
 
 impl EffectPassMaterial {
-    /// Sets an owner-bound matrix parameter of the texture-stage expressions.
+    /// Applies a complete set of owner-bound matrices to the texture stages.
+    /// Each expression evaluates once with the final value of every input.
     ///
     /// # Errors
     /// Returns an error if the native expression cannot evaluate the supplied value.
-    pub fn bind_fixed_function_matrix_effect_semantic(
+    pub fn bind_fixed_function_matrix_effect_semantics(
         &mut self,
-        semantic_name: &str,
-        matrix: Mat4,
+        matrices: &[(&str, Mat4)],
     ) -> io::Result<bool> {
-        let components = matrix.to_cols_array();
-        let mut matched = false;
+        let all_matched = matrices.iter().all(|(semantic, _)| {
+            self.fixed_transform_bindings.iter().any(|binding| {
+                binding.parameters.iter().any(|parameter| {
+                    parameter
+                        .assignment
+                        .parameter_name
+                        .eq_ignore_ascii_case(semantic)
+                })
+            })
+        });
         for binding in &mut self.fixed_transform_bindings {
             let mut changed = false;
             for (dependency, parameter) in binding.parameters.iter_mut().enumerate() {
-                if !parameter
-                    .assignment
-                    .parameter_name
-                    .eq_ignore_ascii_case(semantic_name)
-                {
+                let Some((_, matrix)) = matrices.iter().rev().find(|(semantic, _)| {
+                    parameter
+                        .assignment
+                        .parameter_name
+                        .eq_ignore_ascii_case(semantic)
+                }) else {
                     continue;
-                }
-                matched = true;
+                };
+                let components = matrix.to_cols_array();
                 if let Some(first_input) = binding.gpu_first_input {
                     let Some((start, count)) =
                         dependency_components(binding.expression.compiled_program(), dependency)
@@ -194,7 +203,7 @@ impl EffectPassMaterial {
                 self.dirty_fixed_transforms = true;
             }
         }
-        Ok(matched)
+        Ok(all_matched)
     }
 
     pub fn fixed_transform_buffer_handle(&self) -> &Handle<bevy::render::storage::ShaderBuffer> {

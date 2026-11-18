@@ -16,8 +16,7 @@ use bevy::{asset::AssetApp, prelude::*};
 
 use self::{
     world_scenario_asset_set_refresh_and_indexing::{
-        index_loaded_world_scenario_assets_by_identifier,
-        refresh_world_scenario_asset_set_after_archive_revision,
+        index_loaded_world_scenario_assets_by_identifier, refresh_world_scenario_catalogue_sources,
     },
     world_scenario_document_loading::WorldScenarioDocumentLoader,
 };
@@ -37,10 +36,11 @@ impl Plugin for WorldScenarioDocumentAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_world_scenario_asset_set_after_archive_revision,
+                    refresh_world_scenario_catalogue_sources.run_if(resource_changed::<crate::asset_source::AssetArchives>),
                     index_loaded_world_scenario_assets_by_identifier,
                 )
-                    .chain(),
+                    .chain()
+                    .after(bevy::asset::AssetTrackingSystems),
             );
     }
 }

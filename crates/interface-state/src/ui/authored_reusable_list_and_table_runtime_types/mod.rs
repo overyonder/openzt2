@@ -6,6 +6,7 @@ use openzt2_game_data::{
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 
 #[derive(Component, Debug, Clone)]
+#[require(RequestedUiListRowCount)]
 pub struct UiListPolicy {
     pub row_document: Option<Handle<UiDocumentAsset>>,
     pub opener_node: AssetId,
@@ -29,9 +30,11 @@ pub struct SetUiListRowCount {
     pub count: u16,
 }
 
+#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct RequestedUiListRowCount(pub Option<u16>);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UiListRow {
-    pub list: Entity,
     pub index: u16,
 }
 

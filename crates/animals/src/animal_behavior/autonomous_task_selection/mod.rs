@@ -89,7 +89,10 @@ pub(super) fn select_idle_animal_tasks(
     mut world_objects: WorldObjectTargetSources,
     shores: super::natural_water_targets::NaturalWaterTargets,
     mut shore_candidates: Local<Vec<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>>,
-    tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
+    (tokens, token_owners): (
+        Query<(Entity, &BehaviorSelfToken), Without<ClaimedBehaviorSelfToken>>,
+        Query<&Children>,
+    ),
     animal_targets: animal_targets::AnimalTargetSources,
     mut commands: Commands,
 ) {
@@ -147,27 +150,30 @@ pub(super) fn select_idle_animal_tasks(
             continue;
         };
         let variant_id = facts.variant_id();
-        let declarations = subject_tasks.by_variant.entry(variant_id).or_insert_with(|| {
-            view.behavior_tasks()
-                .filter(|(_, _, task)| {
-                    task_has_typed_subject_and_target(task)
-                        && candidate_requirements_are_satisfied(
-                            &task.candidate_eligibility_requirements,
-                            |role, required| {
-                                role != BehaviorCandidateRole::Subject
-                                    || animal_subject_type_can_match(
-                                        required,
-                                        authored_types,
-                                        definition.id,
-                                        variant_id,
-                                    )
-                            },
-                            |_, _| true,
-                        )
-                })
-                .map(|(document, index, _)| (document.clone(), index))
-                .collect()
-        });
+        let declarations = subject_tasks
+            .by_variant
+            .entry(variant_id)
+            .or_insert_with(|| {
+                view.behavior_tasks()
+                    .filter(|(_, _, task)| {
+                        task_has_typed_subject_and_target(task)
+                            && candidate_requirements_are_satisfied(
+                                &task.candidate_eligibility_requirements,
+                                |role, required| {
+                                    role != BehaviorCandidateRole::Subject
+                                        || animal_subject_type_can_match(
+                                            required,
+                                            authored_types,
+                                            definition.id,
+                                            variant_id,
+                                        )
+                                },
+                                |_, _| true,
+                            )
+                    })
+                    .map(|(document, index, _)| (document.clone(), index))
+                    .collect()
+            });
         for (document, declaration) in declarations.iter() {
             let declaration = *declaration;
             let Some(task) = assets
@@ -206,11 +212,13 @@ pub(super) fn select_idle_animal_tasks(
                         (!task.objects.is_empty())
                             .then_some(())
                             .into_iter()
-                            .flat_map(|()| tokens.iter())
-                            .filter_map(|(entity, token, recipient)| {
-                                (recipient.parent() == animal
-                                    && clock.tick >= token.available_at
-                                    && clock.tick < token.expires_at)
+                            .flat_map(|()| {
+                                tokens.iter_many(
+                                    token_owners.get(animal).ok().into_iter().flatten().copied(),
+                                )
+                            })
+                            .filter_map(|(entity, token)| {
+                                (clock.tick >= token.available_at && clock.tick < token.expires_at)
                                     .then_some(Some((entity, token)))
                             }),
                     );
@@ -268,11 +276,11 @@ pub(super) fn select_idle_animal_tasks(
             let from_token =
                 task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
             let held_tokens = || {
-                tokens.iter().filter(|(_, token, recipient)| {
-                    recipient.parent() == animal
-                        && clock.tick >= token.available_at
-                        && clock.tick < token.expires_at
-                })
+                tokens
+                    .iter_many(token_owners.get(animal).ok().into_iter().flatten().copied())
+                    .filter(|(_, token)| {
+                        clock.tick >= token.available_at && clock.tick < token.expires_at
+                    })
             };
             let animal_candidates = animal_targets
                 .animals
@@ -281,17 +289,15 @@ pub(super) fn select_idle_animal_tasks(
                     *target != animal && target_facts.world.root == facts.world.root
                 })
                 .flat_map(|(target, _)| {
-                    let objects: Vec<Option<(Entity, &BehaviorSelfToken)>> = if task
-                        .objects
-                        .is_empty()
-                    {
-                        vec![None]
-                    } else {
-                        held_tokens()
-                            .filter(|(_, token, _)| !from_token || token.payload == Some(target))
-                            .map(|(entity, token, _)| Some((entity, token)))
-                            .collect()
-                    };
+                    let objects: Vec<Option<(Entity, &BehaviorSelfToken)>> =
+                        if task.objects.is_empty() {
+                            vec![None]
+                        } else {
+                            held_tokens()
+                                .filter(|(_, token)| !from_token || token.payload == Some(target))
+                                .map(Some)
+                                .collect()
+                        };
                     objects.into_iter().map(move |object| (target, object))
                 })
                 .collect::<Vec<_>>();
@@ -871,10 +877,13 @@ fn subject_can_consider_task(
 fn task_has_typed_subject_and_target(task: &BehaviorTask) -> bool {
     !task.targets.is_empty()
         && !task.subjects.is_empty()
-        && task.candidate_eligibility_requirements.iter().any(|requirements| {
-            requirements.candidate_role == BehaviorCandidateRole::Subject
-                && !requirements.candidate_type_identifiers.is_empty()
-        })
+        && task
+            .candidate_eligibility_requirements
+            .iter()
+            .any(|requirements| {
+                requirements.candidate_role == BehaviorCandidateRole::Subject
+                    && !requirements.candidate_type_identifiers.is_empty()
+            })
 }
 
 #[cfg(test)]

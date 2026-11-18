@@ -52,7 +52,12 @@ pub(super) struct EnvironmentVisualSampleIndex(pub(super) u32);
 /// may be parented to an authored model joint, so hierarchy depth cannot stand
 /// in for this relationship.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = EnvironmentVisuals)]
 pub(super) struct EnvironmentVisualOwner(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = EnvironmentVisualOwner, linked_spawn)]
+pub(super) struct EnvironmentVisuals(Vec<Entity>);
 
 /// One authored sun body awaiting its named joint in a shared position rig.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,8 +66,43 @@ pub(super) struct EnvironmentSunPosition {
     pub(super) node: AssetId,
 }
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct EnvironmentFog;
+#[derive(Component)]
+#[relationship(relationship_target = EnvironmentFogCameras)]
+pub(super) struct EnvironmentFog(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = EnvironmentFog)]
+pub(super) struct EnvironmentFogCameras(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = WorldEnvironments)]
+pub(super) struct EnvironmentOfWorld(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = EnvironmentOfWorld, linked_spawn)]
+pub(super) struct WorldEnvironments(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct EnvironmentRendererReady;
+
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(super) struct AboveWaterFog {
+    pub(super) color: Color,
+    pub(super) start: f32,
+    pub(super) end: f32,
+    pub(super) relative_to_far_plane: bool,
+}
+
+impl Default for AboveWaterFog {
+    fn default() -> Self {
+        Self {
+            color: bevy::pbr::DistanceFog::default().color,
+            start: 1_000_000.0,
+            end: 1_000_001.0,
+            relative_to_far_plane: false,
+        }
+    }
+}
 
 /// One-frame marker ensuring freshly hydrated renderer components receive the
 /// current sample even when the clock has not advanced.

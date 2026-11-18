@@ -1,4 +1,6 @@
-use avian3d::prelude::SpatialQuery;
+use avian3d::prelude::{
+    Collider, ColliderAabb, ColliderDisabled, Position, Rotation, SpatialQuery,
+};
 use bevy::{camera::ScalingMode, prelude::*};
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -17,7 +19,10 @@ use super::super::math::clamp_rig;
 use super::super::math::consume_wheel_zoom;
 use super::super::math::overhead_eye_and_target;
 use super::super::math::overhead_pose;
-use super::camera_ground_fit_surface_sampling::sample_highest_active_collision_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood;
+use super::camera_ground_fit_surface_sampling::{
+    sample_highest_camera_fitting_collider,
+    sample_highest_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood,
+};
 use super::camera_pose_comparison::camera_pose_materially_changed;
 use super::overhead_camera_zoom_policy::overhead_camera_zoom_speed_multiplier;
 use crate::camera::camera_execution_types::CameraBounds;
@@ -25,12 +30,36 @@ use crate::camera::camera_execution_types::CameraIntent;
 use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
 
+#[derive(Component, Default)]
+pub(crate) struct CameraFittingSurfaceSample {
+    probe_center: Option<Vec2>,
+    terrain_height: Option<f32>,
+    collision_height_and_entity: Option<(f32, Entity)>,
+}
+
 pub(crate) fn advance_overhead_camera(
     time: Res<Time<Real>>,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     spatial_query: SpatialQuery,
+    changed_terrain: Query<(), Or<(Changed<TerrainChunk>, Changed<EditedTerrainSamples>)>>,
+    mut removed_edits: RemovedComponents<EditedTerrainSamples>,
+    active_colliders: Query<&ColliderAabb, (With<Collider>, Without<ColliderDisabled>)>,
+    changed_colliders: Query<
+        (Entity, &ColliderAabb),
+        (
+            With<Collider>,
+            Or<(
+                Changed<ColliderAabb>,
+                Changed<Collider>,
+                Changed<Position>,
+                Changed<Rotation>,
+                Added<ColliderDisabled>,
+            )>,
+        ),
+    >,
+    mut enabled_colliders: RemovedComponents<ColliderDisabled>,
     mut cameras: Query<
         (
             &mut Transform,
@@ -40,16 +69,22 @@ pub(crate) fn advance_overhead_camera(
             &CameraBounds,
             &mut CameraIntent,
             &CameraMode,
+            &mut CameraFittingSurfaceSample,
         ),
         (With<ZooCamera>, Without<CameraTransition>),
     >,
 ) {
     let dt = time.delta_secs();
-    for (mut transform, mut projection, mut rig, tuning, bounds, mut intent, mode) in &mut cameras {
-        if *mode != CameraMode::Overhead {
-            continue;
-        }
-        if !dt.is_finite() || dt <= 0.0 || !tuning.is_valid() || !bounds.is_valid() {
+    let terrain_edits_removed = removed_edits.read().count() != 0;
+    let terrain_changed = terrain_index.is_changed()
+        || terrain_assets.is_changed()
+        || !changed_terrain.is_empty()
+        || terrain_edits_removed;
+    let reenabled_colliders = enabled_colliders.read().collect::<Vec<_>>();
+    for (mut transform, mut projection, mut rig, tuning, bounds, mut intent, mode, mut sample) in
+        &mut cameras
+    {
+        if *mode != CameraMode::Overhead || !dt.is_finite() || dt <= 0.0 {
             continue;
         }
 
@@ -76,14 +111,14 @@ pub(crate) fn advance_overhead_camera(
         );
         clamp_rig(&mut rig, tuning, bounds);
         if let Projection::Orthographic(current) = &*projection {
-            let requested_scaling = ScalingMode::FixedVertical {
-                viewport_height: rig.distance * tuning.vertical_view_per_zoom,
-            };
+            let desired_height = rig.distance * tuning.vertical_view_per_zoom;
             if !matches!(&current.scaling_mode, ScalingMode::FixedVertical { viewport_height }
-                if *viewport_height == rig.distance * tuning.vertical_view_per_zoom)
+                if *viewport_height == desired_height)
             {
                 if let Projection::Orthographic(projection) = &mut *projection {
-                    projection.scaling_mode = requested_scaling;
+                    projection.scaling_mode = ScalingMode::FixedVertical {
+                        viewport_height: desired_height,
+                    };
                 }
             }
         }
@@ -98,14 +133,43 @@ pub(crate) fn advance_overhead_camera(
         unfit_rig.camera_ground_fit_offset_m = 0.0;
         unfit_rig.target_ground_fit_offset_m = 0.0;
         let (unfit_eye, _) = overhead_eye_and_target(&unfit_rig);
-        let required_camera_offset =
-            sample_highest_active_collision_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood(
-                unfit_eye.xz(),
-                &spatial_query,
-                &terrain_index,
-                &terrain_assets,
-                &terrain_chunks,
-            )
+        let probe = unfit_eye.xz();
+        let probe_moved = sample.probe_center != Some(probe);
+        if probe_moved || terrain_changed {
+            sample.terrain_height =
+                sample_highest_terrain_or_water_fitting_surface_height_in_three_by_three_metre_neighborhood(
+                    probe, &terrain_index, &terrain_assets, &terrain_chunks,
+                );
+        }
+        let previous_surface = sample.collision_height_and_entity.map(|(_, entity)| entity);
+        let overlaps_probes = |aabb: &ColliderAabb| {
+            let minimum = probe - Vec2::ONE;
+            let maximum = probe + Vec2::ONE;
+            aabb.min.x <= maximum.x
+                && aabb.max.x >= minimum.x
+                && aabb.min.z <= maximum.y
+                && aabb.max.z >= minimum.y
+        };
+        if probe_moved
+            || previous_surface.is_some_and(|entity| !active_colliders.contains(entity))
+            || changed_colliders
+                .iter()
+                .any(|(entity, aabb)| Some(entity) == previous_surface || overlaps_probes(aabb))
+            || reenabled_colliders
+                .iter()
+                .any(|entity| active_colliders.get(*entity).is_ok_and(overlaps_probes))
+        {
+            sample.collision_height_and_entity =
+                sample_highest_camera_fitting_collider(probe, &spatial_query);
+        }
+        if probe_moved {
+            sample.probe_center = Some(probe);
+        }
+        let required_camera_offset = sample
+            .terrain_height
+            .into_iter()
+            .chain(sample.collision_height_and_entity.map(|(height, _)| height))
+            .reduce(f32::max)
             .map(|height| {
                 let ground_buffer_m = bounds.camera_clearance_m - tuning.collision_radius_m;
                 (height + ground_buffer_m - unfit_eye.y).max(0.0)

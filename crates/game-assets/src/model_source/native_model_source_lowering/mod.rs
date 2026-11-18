@@ -8,7 +8,7 @@ use super::{
     blue_fang_bfb_source::document::BlueFangBfbDocument,
     conversion_error::ConversionError,
     native_geometry::{
-        bfb_geometry_and_skin_lowering::lower_blue_fang_render_parts_for_lod,
+        bfb_geometry_and_skin_lowering::lower_blue_fang_render_parts,
         nif_geometry_lowering::lower_netimmerse_geometry_block,
     },
     native_model_glb_encoding::encode_models_as_glb,
@@ -152,15 +152,12 @@ pub fn lower_native_model_source(
                 native_model_asset_path.to_owned(),
                 native_model_source_bytes,
             )?;
-            let renderer_neutral_models = lower_blue_fang_render_parts_for_lod(
-                &blue_fang_document,
-                0,
-                |material_reference| {
+            let renderer_neutral_models =
+                lower_blue_fang_render_parts(&blue_fang_document, |material_reference| {
                     Some(openzt2_game_data::AssetId::from_key(
                         &material_reference.asset_key(),
                     ))
-                },
-            )?;
+                })?;
             let mut scene_prefab_document = lower_blue_fang_scene_prefab(
                 &blue_fang_document,
                 native_model_asset_path,

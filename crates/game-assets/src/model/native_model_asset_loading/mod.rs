@@ -12,7 +12,7 @@ use bevy::{
 use crate::{
     asset_source::AssetArchives,
     {
-        effect::ParticleEffectDocumentAsset,
+        effect::prepared_effect_emitters::prepare_particle_effect_document,
         material::evaluated_effect_material_asset_construction::create_material_asset_from_evaluated_d3d9_effect,
         model::bevy_gltf_loader_configuration::create_bevy_gltf_loader_for_lowered_source_assets,
         model_source::{
@@ -170,12 +170,13 @@ impl AssetLoader for NativeModelAssetLoader {
                     .ok_or_else(|| {
                         io::Error::new(io::ErrorKind::InvalidData, "invalid NIF effect path")
                     })?;
-            native_model_load_context.add_labeled_asset(
-                label,
-                ParticleEffectDocumentAsset {
-                    particle_document: lowered_particle_effect.particle_effect_document,
-                },
+            let asset = prepare_particle_effect_document(
+                lowered_particle_effect.particle_effect_document,
+                &label,
+                Some(&loaded_gltf),
+                native_model_load_context,
             );
+            native_model_load_context.add_labeled_asset(label, asset);
         }
         Ok(loaded_gltf)
     }

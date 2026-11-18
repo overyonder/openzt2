@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use bevy::{
     app::TaskPoolPlugin,
-    asset::{io::AssetSourceId, AssetPlugin},
+    asset::{AssetPlugin, io::AssetSourceId},
 };
 
 use crate::asset_source::{
@@ -43,7 +43,7 @@ fn archive_image_override_reloads_the_ground_path_parent_and_its_image() -> std:
     let directory = TestDirectory::new()?;
     let base = directory.archive("x300_000.z2f", &[("path.dds", b"base")])?;
     let modification = directory.archive("mod.z2f", &[("path.dds", b"mod")])?;
-    let (source, archives) =
+    let (source, mut archives) =
         create_bevy_asset_source_for_enabled_z2f_archives(vec![base, modification])?;
     let mut app = App::new();
     app.register_asset_source(AssetSourceId::Default, source)
@@ -83,9 +83,11 @@ fn archive_image_override_reloads_the_ground_path_parent_and_its_image() -> std:
                 .read(events)
                 .any(|event| event.is_loaded_with_dependencies(handle.id()))
             {
-                assert!(world
-                    .resource::<AssetServer>()
-                    .is_loaded_with_dependencies(handle.id()));
+                assert!(
+                    world
+                        .resource::<AssetServer>()
+                        .is_loaded_with_dependencies(handle.id())
+                );
                 let parent = world
                     .resource::<Assets<GroundPathSurfaceImage>>()
                     .get(&handle)

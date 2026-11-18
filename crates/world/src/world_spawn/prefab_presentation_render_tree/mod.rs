@@ -1,3 +1,5 @@
+use crate::model_render::world_entity_model_suppression::ModelRenderVisibilityGate;
+use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use openzt2_game_data::scene_prefab::ScenePrefabEntityFlags;
 use openzt2_game_data::scene_prefab::ScenePrefabRenderableVisibilityFlags;
@@ -5,13 +7,11 @@ use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
+use openzt2_world_state::world_spawn::prefab_model_replacement::PrefabModelReplaced;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
-use openzt2_world_state::world_spawn::prefab_model_replacement::{
-    PendingPrefabModelReplacements, PrefabModelReplaced,
-};
 
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
@@ -133,25 +133,37 @@ pub fn spawn_prefab_render_tree(
             match light.kind {
                 openzt2_game_data::scene_prefab::PrefabLightKind::Ambient => {}
                 openzt2_game_data::scene_prefab::PrefabLightKind::Directional => {
-                    commands.entity(spawned).insert(DirectionalLight {
-                        color,
-                        // The fixed-function shader maps DIRECT_SUNLIGHT
-                        // back to the authored unit directional intensity.
-                        illuminance: light.intensity * light_consts::lux::DIRECT_SUNLIGHT,
-                        shadow_maps_enabled: false,
-                        ..default()
-                    });
-                    lights.push(spawned);
+                    let entity = commands
+                        .spawn((
+                            ModelRenderVisibilityGate,
+                            ChildOf(spawned),
+                            DirectionalLight {
+                                color,
+                                // The fixed-function shader maps DIRECT_SUNLIGHT
+                                // back to the authored unit directional intensity.
+                                illuminance: light.intensity * light_consts::lux::DIRECT_SUNLIGHT,
+                                shadow_maps_enabled: false,
+                                ..default()
+                            },
+                        ))
+                        .id();
+                    lights.push(entity);
                 }
                 openzt2_game_data::scene_prefab::PrefabLightKind::Point => {
-                    commands.entity(spawned).insert(PointLight {
-                        color,
-                        intensity: light.intensity,
-                        range: light.range_m,
-                        shadow_maps_enabled: false,
-                        ..default()
-                    });
-                    lights.push(spawned);
+                    let entity = commands
+                        .spawn((
+                            ModelRenderVisibilityGate,
+                            ChildOf(spawned),
+                            PointLight {
+                                color,
+                                intensity: light.intensity,
+                                range: light.range_m,
+                                shadow_maps_enabled: false,
+                                ..default()
+                            },
+                        ))
+                        .id();
+                    lights.push(entity);
                 }
             }
         }
@@ -178,8 +190,12 @@ pub fn spawn_prefab_render_tree(
     (root, renderables, lights)
 }
 
-/// Root of the render tree that hydration spawned beneath a presentation.
 #[derive(Component)]
+#[relationship(relationship_target = PrefabPresentationRenderRoot)]
+pub(super) struct PrefabPresentationRenderOf(Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = PrefabPresentationRenderOf, linked_spawn)]
 pub(super) struct PrefabPresentationRenderRoot(Entity);
 
 pub(super) fn hydrate_prefab_presentations(
@@ -201,55 +217,58 @@ pub(super) fn hydrate_prefab_presentations(
                 renderable_commands.insert(*shadow_policy);
             }
         }
-        commands.entity(entity).insert((
-            PrefabPresentationHydrated,
-            PrefabPresentationRenderRoot(root),
-        ));
+        commands
+            .entity(root)
+            .insert(PrefabPresentationRenderOf(entity));
+        commands.entity(entity).insert(PrefabPresentationHydrated);
     }
 }
 
-/// Rebuilds presentations whose model was replaced or restored while the
-/// game runs, such as one sent from Blender, once it has reloaded.
+#[derive(Message)]
+pub(super) struct ReplacedPrefabReloaded(pub(super) bevy::asset::AssetId<ScenePrefabAsset>);
+
+pub(super) fn publish_replaced_prefab_reloads(
+    mut replacements: MessageReader<PrefabModelReplaced>,
+    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    mut reloaded: MessageWriter<ReplacedPrefabReloaded>,
+    asset_server: Res<AssetServer>,
+    mut pending_paths: Local<HashSet<String>>,
+) {
+    pending_paths.extend(
+        replacements
+            .read()
+            .map(|event| event.model_path.to_ascii_lowercase()),
+    );
+    for event in prefab_events.read() {
+        let AssetEvent::Modified { id } = *event else {
+            continue;
+        };
+        if pending_paths.is_empty() {
+            continue;
+        }
+        if let Some(path) = asset_server.get_path(id) {
+            if pending_paths.remove(&path.path().to_string_lossy().to_ascii_lowercase()) {
+                reloaded.write(ReplacedPrefabReloaded(id));
+            }
+        }
+    }
+}
+
 pub(super) fn rebuild_prefab_presentations_after_prefab_reload(
     mut commands: Commands,
-    mut replaced: MessageReader<PrefabModelReplaced>,
-    mut pending: Local<PendingPrefabModelReplacements>,
-    mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
-    asset_server: Res<AssetServer>,
+    mut reloaded: MessageReader<ReplacedPrefabReloaded>,
     presentations: Query<(Entity, &PrefabPresentation, &PrefabPresentationRenderRoot)>,
 ) {
-    pending.record(replaced.read().map(|message| message.model_path.clone()));
-    let reloaded = replaced_prefab_reloads(&mut prefab_events, &mut pending, &asset_server);
+    let reloaded = reloaded.read().map(|event| event.0).collect::<HashSet<_>>();
     if reloaded.is_empty() {
         return;
     }
     for (entity, presentation, render_root) in &presentations {
         if reloaded.contains(&presentation.0.id()) {
-            commands.entity(render_root.0).despawn();
+            commands.entity(render_root.0).try_despawn();
             commands
                 .entity(entity)
-                .remove::<(PrefabPresentationHydrated, PrefabPresentationRenderRoot)>();
+                .remove::<PrefabPresentationHydrated>();
         }
     }
-}
-
-/// Reloaded prefabs of replaced models. Other reloads, such as a model coming
-/// back into view after its assets were released, are not rebuilt.
-pub(super) fn replaced_prefab_reloads(
-    prefab_events: &mut MessageReader<AssetEvent<ScenePrefabAsset>>,
-    pending: &mut PendingPrefabModelReplacements,
-    asset_server: &AssetServer,
-) -> Vec<bevy::asset::AssetId<ScenePrefabAsset>> {
-    if pending.is_empty() {
-        prefab_events.clear();
-        return Vec::new();
-    }
-    prefab_events
-        .read()
-        .filter_map(|event| match event {
-            AssetEvent::Modified { id } => Some(*id),
-            _ => None,
-        })
-        .filter(|id| pending.take(asset_server.get_path(*id).as_ref()))
-        .collect()
 }

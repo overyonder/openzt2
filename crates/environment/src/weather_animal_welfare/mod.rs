@@ -10,24 +10,30 @@ use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::animal_welfare::types::AdjustEnvironment;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
 
-use super::weather_types::Weather;
+use super::weather_types::{Weather, WeatherWelfareDue};
 
 pub(super) fn apply_current_weather_welfare_adjustment_to_zoo_animals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     species: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
-    environments: Query<&Weather, (With<WorldEnvironment>, Changed<Weather>)>,
+    mut due: MessageReader<WeatherWelfareDue>,
+    environments: Query<&Weather, With<WorldEnvironment>>,
     animals: Query<(Entity, &SpeciesHandle, &HabitatMember), With<Animal>>,
     mut adjustments: MessageWriter<AdjustEnvironment>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
+        due.clear();
         return;
     };
     let Some(species_index) = species_index.get(&species) else {
+        due.clear();
         return;
     };
-    for weather in &environments {
+    for message in due.read() {
+        let Ok(weather) = environments.get(message.0) else {
+            continue;
+        };
         let Some(definition) = definitions.find_weather(weather.definition) else {
             continue;
         };

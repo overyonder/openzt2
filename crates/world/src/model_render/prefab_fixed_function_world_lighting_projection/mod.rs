@@ -6,220 +6,157 @@ use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentS
 
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightContexts;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3d9FixedFunctionWorldLightRegisters;
-use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_BUFFER;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT;
-use openzt2_world_state::world_spawn::prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy;
 use openzt2_zoo_state::environment::environment_presentation_types::EnvironmentTerrainAmbientLight;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
-
-use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
-use openzt2_world_state::model_render::ModelExpanded;
-
-#[derive(Component)]
-pub(super) struct ProjectedPrefabFixedFunctionWorldLightingMaterial {
-    source: Handle<EffectPassMaterial>,
-    projected: AssetId<EffectPassMaterial>,
-    policy: Option<PrefabFixedFunctionWorldLightingPolicy>,
-    context: usize,
-}
-
-pub(super) fn project_prefab_fixed_function_world_lighting_policies(
-    mut commands: Commands,
-    mut changes: super::model_projection_changes::ModelProjectionChanges,
-    branches: Query<Entity, Changed<PrefabFixedFunctionWorldLightingPolicy>>,
-    mut removed_policy: RemovedComponents<PrefabFixedFunctionWorldLightingPolicy>,
-    mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
-    changed_primitives: Query<
-        Entity,
-        (
-            With<MeshMaterial3d<EffectPassMaterial>>,
-            Or<(
-                Changed<MeshMaterial3d<EffectPassMaterial>>,
-                Changed<PrefabCameraRenderLayers>,
-            )>,
-        ),
-    >,
-    parents: Query<&ChildOf>,
-    expanded: Query<(), With<ModelExpanded>>,
-    policies: Query<&PrefabFixedFunctionWorldLightingPolicy>,
-    primitives: Query<(
-        &MeshMaterial3d<EffectPassMaterial>,
-        Option<&ProjectedPrefabFixedFunctionWorldLightingMaterial>,
-        Option<&PrefabCameraRenderLayers>,
-    )>,
-    mut materials: ResMut<Assets<EffectPassMaterial>>,
-    mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
-) {
-    changes.collect(
-        branches.iter().chain(removed_policy.read()),
-        changed_primitives.iter().chain(removed_layers.read()),
-    );
-    let mut missing = Vec::new();
-    for entity in changes.candidates() {
-        let Ok((current, previous, camera_layers)) = primitives.get(entity) else {
-            continue;
-        };
-        let ancestors = || std::iter::once(entity).chain(parents.iter_ancestors(entity));
-        let model = ancestors().find(|ancestor| expanded.contains(*ancestor));
-        let policy = model.and_then(|root| {
-            std::iter::once(root)
-                .chain(parents.iter_ancestors(root))
-                .find_map(|node| policies.get(node).ok().copied())
-        });
-        let context = if model.is_some() {
-            camera_layers
-                .map(|layers| &layers.0)
-                .unwrap_or_default()
-                .iter()
-                .next()
-                .filter(|index| *index < FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT)
-                .unwrap_or_default()
-        } else {
-            0
-        };
-        let owned = previous.filter(|previous| previous.projected == current.id());
-        if policy.is_none() && context == 0 {
-            if let Some(previous) = owned {
-                commands
-                    .entity(entity)
-                    .insert(MeshMaterial3d(previous.source.clone()));
-            }
-            if previous.is_some() {
-                commands
-                    .entity(entity)
-                    .remove::<ProjectedPrefabFixedFunctionWorldLightingMaterial>();
-            }
-            continue;
-        }
-        if owned.is_some_and(|old| old.policy == policy && old.context == context) {
-            continue;
-        }
-        let source = owned.map_or(&current.0, |previous| &previous.source);
-        let Some(material) = materials.get(source) else {
-            missing.push(entity);
-            continue;
-        };
-        let Some(material) = material.clone_with_fixed_function_world_lighting_context(
-            policy.map(|p| p.enabled),
-            policy.is_some_and(|p| p.preserve_authored_material_lighting),
-            context,
-            &mut effect_uniform_buffers,
-        ) else {
-            continue;
-        };
-        let handle = materials.add(material);
-        commands.entity(entity).insert((
-            ProjectedPrefabFixedFunctionWorldLightingMaterial {
-                source: source.clone(),
-                projected: handle.id(),
-                policy,
-                context,
-            },
-            MeshMaterial3d(handle),
-        ));
-    }
-    changes.retry_missing(&mut missing);
-}
 
 pub(super) fn update_fixed_function_world_light_buffer(
     graphics: Res<GraphicsSettings>,
     ambient_light: Res<GlobalAmbientLight>,
     terrain_ambient: Res<EnvironmentTerrainAmbientLight>,
-    camera_ambient_lights: Query<(&Camera, &AmbientLight, Option<&RenderLayers>), With<Camera3d>>,
-    directional_lights: Query<(
-        &DirectionalLight,
-        &GlobalTransform,
-        Option<&RenderLayers>,
-        &ViewVisibility,
-        Option<&EnvironmentSpecularLightColor>,
+    camera_ambient_lights: Query<(
+        Ref<Camera>,
+        Ref<Camera3d>,
+        Ref<AmbientLight>,
+        Option<Ref<RenderLayers>>,
     )>,
+    directional_lights: Query<(
+        Ref<DirectionalLight>,
+        Ref<GlobalTransform>,
+        Option<Ref<RenderLayers>>,
+        Ref<ViewVisibility>,
+        Option<Ref<EnvironmentSpecularLightColor>>,
+    )>,
+    light_entities: Query<(), With<DirectionalLight>>,
+    mut removed_cameras: RemovedComponents<Camera3d>,
+    mut removed_camera_components: RemovedComponents<Camera>,
+    mut removed_ambient_lights: RemovedComponents<AmbientLight>,
+    mut removed_directional_lights: RemovedComponents<DirectionalLight>,
+    mut removed_light_transforms: RemovedComponents<GlobalTransform>,
+    mut removed_light_visibility: RemovedComponents<ViewVisibility>,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut removed_specular_colors: RemovedComponents<EnvironmentSpecularLightColor>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut previous_contexts: Local<Option<D3d9FixedFunctionWorldLightContexts>>,
 ) {
-    let contexts = D3d9FixedFunctionWorldLightContexts {
-        values: std::array::from_fn(|layer| {
-            collect_fixed_function_world_light_registers_for_render_layers(
-                &ambient_light,
-                terrain_ambient.0,
-                &camera_ambient_lights,
-                &directional_lights,
-                &RenderLayers::layer(layer),
-                graphics.specular_effects,
-            )
-        }),
-    };
-    if previous_contexts.as_ref() == Some(&contexts) {
+    let removed_inputs = (removed_cameras.read().count() != 0)
+        | (removed_camera_components.read().count() != 0)
+        | (removed_ambient_lights.read().count() != 0)
+        | (removed_directional_lights.read().count() != 0)
+        | (removed_light_transforms
+            .read()
+            .filter(|entity| light_entities.contains(*entity))
+            .count()
+            != 0)
+        | (removed_light_visibility
+            .read()
+            .filter(|entity| light_entities.contains(*entity))
+            .count()
+            != 0)
+        | (removed_layers
+            .read()
+            .filter(|entity| {
+                camera_ambient_lights.contains(*entity) || directional_lights.contains(*entity)
+            })
+            .count()
+            != 0)
+        | (removed_specular_colors.read().count() != 0);
+    if previous_contexts.is_some()
+        && !removed_inputs
+        && !ambient_light.is_changed()
+        && !terrain_ambient.is_changed()
+        && !graphics.is_changed()
+        && !camera_ambient_lights
+            .iter()
+            .any(|(camera, camera_3d, ambient, layers)| {
+                camera.is_changed()
+                    || camera_3d.is_added()
+                    || ambient.is_changed()
+                    || layers.is_some_and(|layers| layers.is_changed())
+            })
+        && !directional_lights
+            .iter()
+            .any(|(light, transform, layers, visibility, specular)| {
+                light.is_changed()
+                    || transform.is_changed()
+                    || visibility.is_changed()
+                    || layers.is_some_and(|layers| layers.is_changed())
+                    || specular.is_some_and(|color| color.is_changed())
+            })
+    {
         return;
     }
-    let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) else {
-        return;
+    let default_ambient =
+        Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;
+    let specular_enabled = f32::from(u8::from(graphics.specular_effects));
+    let mut contexts = D3d9FixedFunctionWorldLightContexts {
+        values: [D3d9FixedFunctionWorldLightRegisters {
+            ambient_color_and_directional_light_count: default_ambient,
+            specular_enabled: Vec4::new(specular_enabled, 0.0, 0.0, 0.0),
+            ..default()
+        }; FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT],
     };
-    contexts.write_shader_buffer(&mut buffer);
-    *previous_contexts = Some(contexts);
-}
-
-fn collect_fixed_function_world_light_registers_for_render_layers(
-    ambient_light: &GlobalAmbientLight,
-    terrain_ambient: Option<Vec3>,
-    camera_ambient_lights: &Query<(&Camera, &AmbientLight, Option<&RenderLayers>), With<Camera3d>>,
-    directional_lights: &Query<(
-        &DirectionalLight,
-        &GlobalTransform,
-        Option<&RenderLayers>,
-        &ViewVisibility,
-        Option<&EnvironmentSpecularLightColor>,
-    )>,
-    render_layers: &RenderLayers,
-    specular_enabled: bool,
-) -> D3d9FixedFunctionWorldLightRegisters {
-    let mut registers = D3d9FixedFunctionWorldLightRegisters {
-        specular_enabled: Vec4::new(f32::from(u8::from(specular_enabled)), 0.0, 0.0, 0.0),
-        ..default()
-    };
-    let camera_ambient_light = camera_ambient_lights.iter().find_map(
-        |(camera, camera_ambient_light, camera_render_layers)| {
-            (camera.is_active
-                && camera_render_layers
-                    .unwrap_or_default()
-                    .intersects(render_layers))
-            .then_some(camera_ambient_light)
-        },
-    );
-    let (ambient_color, ambient_brightness) = camera_ambient_light.map_or_else(
-        || (ambient_light.color, ambient_light.brightness),
-        |ambient| (ambient.color, ambient.brightness),
-    );
-    // The legacy shader combines authored colour bytes before converting its
-    // final output to linear. Environment lights hold those bytes as their linear
-    // channels, so reading them as sRGB would encode them a second time.
-    registers.ambient_color_and_directional_light_count = terrain_ambient
-        .filter(|_| render_layers.intersects(&RenderLayers::layer(TERRAIN_RENDER_LAYER)))
-        .map_or_else(
-            || Vec4::from_array(ambient_color.to_linear().to_f32_array()) * ambient_brightness,
-            |ambient| ambient.extend(0.0),
-        );
-    let mut directional_light_count = 0;
-    for (light, transform, light_layers, view_visibility, specular) in directional_lights {
-        if !view_visibility.get()
-            || !light_layers.unwrap_or_default().intersects(render_layers)
-            || directional_light_count == D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS
-        {
+    let mut ambient_overrides = [false; FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT];
+    for (camera, _, ambient, layers) in &camera_ambient_lights {
+        if !camera.is_active {
             continue;
         }
-        registers.directional_light_directions[directional_light_count] =
-            Vec3::from(transform.back()).extend(0.0);
-        registers.directional_light_colors[directional_light_count] =
-            Vec4::from_array(light.color.to_linear().to_f32_array()) * light.illuminance;
-        registers.directional_specular_colors[directional_light_count] = Vec4::from_array(
+        let ambient =
+            Vec4::from_array(ambient.color.to_linear().to_f32_array()) * ambient.brightness;
+        for layer in layers.as_deref().unwrap_or_default().iter() {
+            let Some(applied) = ambient_overrides.get_mut(layer) else {
+                continue;
+            };
+            if !*applied {
+                contexts.values[layer].ambient_color_and_directional_light_count = ambient;
+                *applied = true;
+            }
+        }
+    }
+    // Environment ambient already carries the authored channels; the shader
+    // combines them before converting its final output to linear.
+    if let Some(ambient) = terrain_ambient.0 {
+        contexts.values[TERRAIN_RENDER_LAYER].ambient_color_and_directional_light_count =
+            ambient.extend(0.0);
+    }
+
+    let mut directional_counts = [0; FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT];
+    for (light, transform, layers, visibility, specular) in &directional_lights {
+        if !visibility.get() {
+            continue;
+        }
+        let direction = Vec3::from(transform.back()).extend(0.0);
+        let color = Vec4::from_array(light.color.to_linear().to_f32_array()) * light.illuminance;
+        let specular = Vec4::from_array(
             specular
                 .map_or(light.color, |color| color.0)
                 .to_linear()
                 .to_f32_array(),
         ) * light.illuminance;
-        directional_light_count += 1;
+        for layer in layers.as_deref().unwrap_or_default().iter() {
+            let Some(count) = directional_counts.get_mut(layer) else {
+                continue;
+            };
+            if *count == D3D9_MAX_ACTIVE_DIRECTIONAL_LIGHTS {
+                continue;
+            }
+            let registers = &mut contexts.values[layer];
+            registers.directional_light_directions[*count] = direction;
+            registers.directional_light_colors[*count] = color;
+            registers.directional_specular_colors[*count] = specular;
+            *count += 1;
+        }
     }
-    registers.ambient_color_and_directional_light_count.w = directional_light_count as f32;
-    registers
+    for (registers, count) in contexts.values.iter_mut().zip(directional_counts) {
+        registers.ambient_color_and_directional_light_count.w = count as f32;
+    }
+    if previous_contexts.as_ref() == Some(&contexts) {
+        return;
+    }
+    if let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) {
+        contexts.write_shader_buffer(&mut buffer);
+        *previous_contexts = Some(contexts);
+    }
 }

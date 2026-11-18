@@ -11,4 +11,5 @@ pub mod placement_transaction_types;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ObjectPlacementPreviewUpdateSet;
 
+pub mod object_placement_geometry;
 pub mod placement_occupancy_index;

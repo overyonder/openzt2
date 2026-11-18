@@ -134,6 +134,7 @@ pub struct EffectPassTextureAssets {
 pub struct EffectPassMaterial {
     pub(super) texture_coordinate_animations:
         std::sync::Arc<[super::texture_coordinate_animation::TextureCoordinateAnimation]>,
+    pub(super) texture_coordinate_animation_geometry: Option<Entity>,
     pub(super) vertex_uniform_upload_order: Option<std::sync::Arc<[Vec<u32>; 3]>>,
     pub(super) pixel_uniform_upload_order: Option<std::sync::Arc<[Vec<u32>; 3]>>,
     pub(super) lighting_state_is_authored: bool,

@@ -180,27 +180,40 @@ pub(super) fn set_authored_graphics_detail_setting_list_row_count(
     }
 }
 
-/// Fills each authored `optionsslider.xml` row with its setting label, slider
-/// range and the draft's current level. The slider keeps the setting as its
-/// component so slider changes can be routed back into the draft.
 pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
     mut commands: Commands,
-    draft: Res<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
-    rows: Query<(Entity, Ref<UiListRow>)>,
+    drafts: Query<Ref<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>>,
+    rows: Query<(Entity, Ref<UiListRow>, &ChildOf)>,
     lists: Query<&UiListPolicy>,
+    children: Query<&Children>,
     parents: Query<&ChildOf>,
     localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    mut texts: Query<(Entity, &UiTextBinding, &mut Text)>,
-    mut sliders: Query<(Entity, &UiNodeId, &mut UiMaximum, &mut UiValue)>,
+    mut texts: Query<(&UiTextBinding, &mut Text)>,
+    mut sliders: Query<(
+        &UiNodeId,
+        &mut UiMaximum,
+        &mut UiValue,
+        Option<&mut GraphicsDetailSetting>,
+    )>,
 ) {
+    let refresh = localization.is_changed() || localization_assets.is_changed();
     let Some(localization) = localization.borrow_loaded_localization_view(&localization_assets)
     else {
         return;
     };
     let slider_node = AssetId::from_key("ui/role/fragment/node/slider");
-    for (row_entity, row) in &rows {
-        if !lists.get(row.list).is_ok_and(|policy| {
+    for (entity, row, parent) in &rows {
+        let Some(draft) = parents
+            .iter_ancestors::<ChildOf>(entity)
+            .find_map(|entity| drafts.get(entity).ok())
+        else {
+            continue;
+        };
+        if !refresh && !row.is_changed() && !draft.is_changed() {
+            continue;
+        }
+        if !lists.get(parent.parent()).is_ok_and(|policy| {
             policy.source == UiWidgetLiveCollectionSource::GraphicsDetailSettings
         }) {
             continue;
@@ -217,26 +230,29 @@ pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
             .get(usize::from(level))
             .and_then(|key| localization.find_plain_localized_text(AssetId::from_key(key)))
             .unwrap_or_default();
-        let ancestors = |entity: Entity| {
-            std::iter::successors(Some(entity), |entity| {
-                parents.get(*entity).ok().map(ChildOf::parent)
-            })
-        };
-        for (slider, node_id, mut maximum, mut value) in &mut sliders {
-            if node_id.id == slider_node && ancestors(slider).any(|entity| entity == row_entity) {
+        for descendant in std::iter::once(entity).chain(children.iter_descendants(entity)) {
+            if let Some((_, mut maximum, mut value, current)) = sliders
+                .get_mut(descendant)
+                .ok()
+                .filter(|(id, ..)| id.id == slider_node)
+            {
                 maximum.set_if_neq(UiMaximum(level_keys.len() as i64 - 1));
-                value.set_if_neq(UiValue(i64::from(level)));
-                commands.entity(slider).insert(setting);
+                value.bypass_change_detection().0 = i64::from(level);
+                if let Some(mut current) = current {
+                    current.set_if_neq(setting);
+                } else {
+                    commands.entity(descendant).insert(setting);
+                }
             }
-        }
-        for (text_entity, binding, mut text) in &mut texts {
-            let next = match binding.0 {
-                UiTextPropertyBindingSource::GraphicsDetailSettingLabel => label,
-                UiTextPropertyBindingSource::GraphicsDetailSettingLevel => level_label,
-                _ => continue,
-            };
-            if text.0 != next && ancestors(text_entity).any(|entity| entity == row_entity) {
-                next.clone_into(&mut text.0);
+            if let Ok((binding, mut text)) = texts.get_mut(descendant) {
+                let next = match binding.0 {
+                    UiTextPropertyBindingSource::GraphicsDetailSettingLabel => label,
+                    UiTextPropertyBindingSource::GraphicsDetailSettingLevel => level_label,
+                    _ => continue,
+                };
+                if text.0 != next {
+                    next.clone_into(&mut text.0);
+                }
             }
         }
     }
@@ -247,13 +263,23 @@ pub(super) fn project_drafted_graphics_detail_settings_into_authored_rows(
 pub(super) fn copy_changed_graphics_detail_slider_levels_into_settings_draft(
     mut activations: MessageReader<UiNodeActivated>,
     sliders: Query<(&GraphicsDetailSetting, &UiValue)>,
-    mut draft: ResMut<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    mut drafts: Query<&mut OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
+    parents: Query<&ChildOf>,
 ) {
     for activation in activations.read() {
         if activation.trigger != UiTrigger::Change {
             continue;
         }
         let Ok((&setting, value)) = sliders.get(activation.node) else {
+            continue;
+        };
+        let Some(owner) = parents
+            .iter_ancestors::<ChildOf>(activation.node)
+            .find(|entity| drafts.contains(*entity))
+        else {
+            continue;
+        };
+        let Ok(mut draft) = drafts.get_mut(owner) else {
             continue;
         };
         let level = u8::try_from(value.0).unwrap_or(0);

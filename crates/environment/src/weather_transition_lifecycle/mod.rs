@@ -26,8 +26,8 @@ use super::{
         weather_transition_has_reached_completion_tick,
     },
     weather_types::{
-        PendingWeatherOperation, SetWeather, Weather, WeatherChanged, WeatherRequestApplied,
-        WeatherRequestRejected, WeatherTransition,
+        PendingWeatherOperation, SetWeather, Weather, WeatherChanged, WeatherDuration,
+        WeatherRequestApplied, WeatherRequestRejected, WeatherTransition, WeatherWelfareDue,
     },
 };
 
@@ -41,6 +41,7 @@ pub(super) fn apply_requested_weather_transitions(
         Entity,
         &WorldEnvironment,
         &mut Weather,
+        &mut WeatherDuration,
         &mut Wind,
         &mut EnvironmentRandom,
         Option<&WeatherTransition>,
@@ -65,6 +66,7 @@ pub(super) fn apply_requested_weather_transitions(
             environment_entity,
             environment,
             mut weather,
+            mut duration,
             mut wind,
             mut random,
             transition,
@@ -119,6 +121,7 @@ pub(super) fn apply_requested_weather_transitions(
         if transition_ticks == 0 {
             set_current_weather_and_regenerate_wind(
                 &mut weather,
+                &mut duration,
                 &mut wind,
                 &mut random.0,
                 request.definition,
@@ -162,28 +165,25 @@ pub(super) fn apply_requested_weather_transitions(
 pub(super) fn advance_automatic_and_requested_weather_transitions(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    mut previously_advanced_tick: Local<Option<u64>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut environments: Query<(
         Entity,
         &WorldEnvironment,
         &mut Weather,
+        &mut WeatherDuration,
         Option<&WeatherTransition>,
         Option<&PendingWeatherOperation>,
         &mut Wind,
         &mut EnvironmentRandom,
     )>,
     mut applied_results: MessageWriter<WeatherRequestApplied>,
+    mut welfare: MessageWriter<WeatherWelfareDue>,
     mut weather_changes: MessageWriter<WeatherChanged>,
     mut audio: MessageWriter<PlayAudioCue>,
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
     mut stop_effects: MessageWriter<StopParticleEffectsAttachedToEntity>,
 ) {
-    if previously_advanced_tick.is_some_and(|tick| tick == clock.tick) {
-        return;
-    }
-    *previously_advanced_tick = Some(clock.tick);
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -192,6 +192,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
         environment_entity,
         environment,
         mut weather,
+        mut duration,
         transition,
         pending_operation,
         mut wind,
@@ -205,9 +206,11 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
             let Some(weather_definition) = definitions.find_weather(transition.to) else {
                 continue;
             };
+            welfare.write(WeatherWelfareDue(environment_entity));
             let previous_weather = weather.definition;
             set_current_weather_and_regenerate_wind(
                 &mut weather,
+                &mut duration,
                 &mut wind,
                 &mut random.0,
                 transition.to,
@@ -241,8 +244,9 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
             continue;
         }
 
-        weather.elapsed_ticks = weather.elapsed_ticks.saturating_add(1);
-        if weather.elapsed_ticks < weather.duration_ticks {
+        welfare.write(WeatherWelfareDue(environment_entity));
+        duration.elapsed_ticks = duration.elapsed_ticks.saturating_add(1);
+        if duration.elapsed_ticks < duration.duration_ticks {
             continue;
         }
         let Some(environment_definition) = definitions.find_environment(environment.definition)
@@ -261,7 +265,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
                 && random_probability_threshold_passes(rule.probability, &mut random.0)
         });
         let Some(selected_transition) = selected_transition else {
-            weather.elapsed_ticks = 0;
+            duration.elapsed_ticks = 0;
             continue;
         };
         let target_weather_identifier = selected_transition.to;
@@ -273,6 +277,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
             let previous_weather = weather.definition;
             set_current_weather_and_regenerate_wind(
                 &mut weather,
+                &mut duration,
                 &mut wind,
                 &mut random.0,
                 target_weather_identifier,
@@ -362,13 +367,14 @@ fn reject_weather_request(
 
 fn set_current_weather_and_regenerate_wind(
     weather: &mut Weather,
+    duration: &mut WeatherDuration,
     wind: &mut Wind,
     random: &mut DeterministicRng,
     weather_identifier: AssetId,
     definition: &WeatherDefinition,
 ) {
     weather.definition = weather_identifier;
-    weather.elapsed_ticks = 0;
-    weather.duration_ticks = sample_authored_weather_duration_ticks(definition, random);
+    duration.elapsed_ticks = 0;
+    duration.duration_ticks = sample_authored_weather_duration_ticks(definition, random);
     *wind = generate_deterministic_wind_from_speed_range(definition.wind_mps, random);
 }

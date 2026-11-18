@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::AssetId;
 use openzt2_world_state::world_spawn::selected_world_document_handles::SelectedWorldDocumentHandles;
 use openzt2_zoo_state::environment::environment_state_types::AuthoredWindShaderPresentationState;
@@ -22,16 +22,16 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
 use super::{
-    ambient_animal_types::AmbientAnimalSpawner,
+    ambient_animal_types::{AmbientAnimalPopulation, AmbientAnimalSpawner},
     daylight_curve_sampling::calculate_environment_month_fraction,
-    environment_presentation_types::EnvironmentPresentationPending,
+    environment_presentation_types::EnvironmentOfWorld,
     environment_random_sampling::sample_inclusive_u32_range,
     environment_state_types::{Daylight, EnvironmentRandom},
     weather_rules::generate_deterministic_wind_from_speed_range,
     weather_transition_lifecycle::{
         project_weather_audio_and_effects, sample_authored_weather_duration_ticks,
     },
-    weather_types::Weather,
+    weather_types::{Weather, WeatherDuration},
 };
 
 #[derive(Component)]
@@ -112,17 +112,26 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
         );
         let wind = generate_deterministic_wind_from_speed_range(wind_range, &mut random);
         let wind_shader_presentation = AuthoredWindShaderPresentationState::from_wind(wind);
-        let weather = initial_weather.map(|initial_weather| Weather {
-            definition: initial_weather.id,
-            elapsed_ticks: 0,
-            duration_ticks: sample_authored_weather_duration_ticks(initial_weather, &mut random),
+        let weather = initial_weather.map(|initial_weather| {
+            (
+                Weather {
+                    definition: initial_weather.id,
+                },
+                WeatherDuration {
+                    elapsed_ticks: 0,
+                    duration_ticks: sample_authored_weather_duration_ticks(
+                        initial_weather,
+                        &mut random,
+                    ),
+                },
+            )
         });
         let mut environment_commands = commands.spawn((
             WorldEnvironment {
                 definition: environment_id,
             },
             Daylight { fraction },
-            EnvironmentPresentationPending,
+            EnvironmentOfWorld(root),
             AudioSoundscape {
                 biome: biome_id,
                 selection: (u64::from(random.next_u32()) << 32) | u64::from(random.next_u32()),
@@ -152,6 +161,7 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
             );
         }
 
+        let mut populations = HashMap::new();
         for ambient in definition
             .ambient
             .iter()
@@ -168,13 +178,21 @@ pub(super) fn initialize_world_environment_from_loaded_scenario_and_definitions(
                 ],
                 &mut random,
             );
+            let population = *populations.entry(ambient.id).or_insert_with(|| {
+                commands
+                    .spawn((
+                        AmbientAnimalPopulation(ambient.id),
+                        WorldMember { root },
+                        ChildOf(environment_entity),
+                    ))
+                    .id()
+            });
             commands.spawn((
                 AmbientAnimalSpawner {
-                    definition: ambient.id,
                     next_tick: clock.tick.saturating_add(u64::from(interval)),
                     random,
                 },
-                WorldMember { root },
+                ChildOf(population),
                 id,
             ));
         }

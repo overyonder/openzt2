@@ -323,7 +323,7 @@ pub struct SynchronizedBehaviorParticipant {
 
 /// A live evasion instruction; navigation combines this horizontal steering
 /// direction with its obstacle and contact response each fixed step.
-#[derive(Component, Clone, Copy, Debug)]
+#[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct BehaviorEvasionSteering {
     pub request_id: u64,
     pub direction: Vec2,

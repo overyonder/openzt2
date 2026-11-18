@@ -6,14 +6,14 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::File,
     path::PathBuf,
-    sync::{Mutex, RwLock},
+    sync::RwLock,
 };
 
 mod archive_overlay;
 mod archive_reading;
 pub mod paths;
+mod positional_archive_reader;
 mod source_reference_resolution;
 #[cfg(test)]
 mod tests;
@@ -35,7 +35,7 @@ struct WinningArchiveEntryLocation {
 /// Later enabled archives have higher priority.
 pub struct ArchiveSet {
     archive_names: Vec<PathBuf>,
-    open_zip_archives: Vec<Mutex<ZipArchive<File>>>,
+    open_zip_archives: Vec<ZipArchive<positional_archive_reader::PositionalArchiveReader>>,
     archive_entries_by_normalized_path: Vec<BTreeMap<PathBuf, WinningArchiveEntryLocation>>,
     overlay_state: RwLock<EnabledArchiveOverlayState>,
 }
@@ -67,8 +67,15 @@ pub struct ResolvedAssetChange {
     pub change_kind: ResolvedAssetChangeKind,
 }
 
+/// A stable entry selected from this archive set.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct ArchiveReadEntry {
+    archive_priority_index: usize,
+    zip_entry_ordinal: usize,
+}
+
 /// One winning entry in the current archive overlay.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct ResolvedArchiveEntry {
     /// Normalized path used to read the winning entry.
     pub normalized_asset_path: PathBuf,

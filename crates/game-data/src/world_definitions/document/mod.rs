@@ -66,6 +66,10 @@ pub struct WorldDefinitionDocument {
     #[serde(default)]
     pub entity_naming: Vec<super::entity_naming::EntityNamingDefinition>,
     pub placeables: Vec<PlaceableDefinition>,
+    #[serde(default)]
+    pub placement_target_facts: std::collections::BTreeMap<
+        crate::AssetId, super::object_placement::placement_stomp_rules::PlacementTargetFacts,
+    >,
     pub facilities: Vec<FacilityDefinition>,
     pub maintenance_definitions: Vec<MaintenanceDefinition>,
     pub cleanliness_policy: Option<CleanlinessPolicy>,
@@ -78,6 +82,10 @@ pub struct WorldDefinitionDocument {
     pub viewing_opportunities: Vec<ViewingOpportunityDefinition>,
     pub fences: Vec<FenceDefinition>,
     pub paths: Vec<GuestPathDefinition>,
+    #[serde(default)]
+    pub path_stomp_policies: std::collections::BTreeMap<
+        crate::AssetId, super::object_placement::placement_stomp_rules::PlacementStompPolicy,
+    >,
     pub biomes: Vec<BiomeDefinition>,
     pub locations: Vec<WorldLocationDefinition>,
     pub biome_detail_placement: Option<BiomeDetailPlacementPolicy>,
