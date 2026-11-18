@@ -5275,6 +5275,7 @@ dependencies = [
  "openzt2_environment",
  "openzt2_extinct_animals",
  "openzt2_game_assets",
+ "openzt2_game_data",
  "openzt2_information",
  "openzt2_interface_state",
  "openzt2_navigation",
