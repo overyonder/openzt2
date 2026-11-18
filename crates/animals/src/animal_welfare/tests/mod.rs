@@ -51,7 +51,7 @@ fn welfare_is_the_need_point_balance() {
     let points = |good, bad| NeedPoints {
         good,
         bad,
-        seconds_until_update: 0.0,
+        ..NeedPoints::default()
     };
     assert_eq!(
         welfare_from_need_points(&points(0.0, 0.0)),
@@ -80,7 +80,7 @@ fn welfare_is_the_need_point_balance() {
 }
 
 #[test]
-fn need_points_grow_on_one_branch_and_shrink_the_other() {
+fn need_points_grow_on_one_branch_and_clear_the_other_on_a_flip() {
     let mut points = NeedPoints::default();
     // 150 updates of 3 s with an unmet need reach a fence bash's 30.
     for _ in 0..150 {
@@ -88,9 +88,9 @@ fn need_points_grow_on_one_branch_and_shrink_the_other() {
     }
     assert!((points.bad - 30.0).abs() < 1.0e-3);
     assert_eq!(points.good, 0.0);
-    // A met need takes back one update's worth, not the whole spell.
+    // Once the needs are met, the bad points are cleared.
     super::systems::step_need_points(&mut points, false);
-    assert!((points.bad - 29.8).abs() < 1.0e-3);
+    assert_eq!(points.bad, 0.0);
     assert!((points.good - 0.2).abs() < 1.0e-6);
     for _ in 0..1000 {
         super::systems::step_need_points(&mut points, false);

@@ -165,33 +165,102 @@ const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
 const NEED_POINT_DELTA: f32 = 0.2;
 const NEED_POINT_MAX: f32 = 100.0;
 
-/// One need-point update: the branch matching the animal's needs grows and
-/// the other shrinks by the same delta, so a moment of a met need doesn't wipe
-/// out a long spell of unhappiness.
+/// One need-point update: the branch matching the animal's needs grows. When
+/// the animal's state flips, the other branch is cleared first, as in the
+/// original (`zt.exe` 0x61478f).
 pub(super) fn step_need_points(points: &mut NeedPoints, unmet: bool) {
-    let (grows, shrinks) = if unmet {
+    let (grows, cleared) = if unmet {
         (&mut points.bad, &mut points.good)
     } else {
         (&mut points.good, &mut points.bad)
     };
+    if points.unmet != unmet {
+        *cleared = 0.0;
+    }
     *grows = (*grows + NEED_POINT_DELTA).min(NEED_POINT_MAX);
-    *shrinks = (*shrinks - NEED_POINT_DELTA).max(0.0);
+    points.unmet = unmet;
 }
 
-/// Every update an animal with an unmet need gains bad need points and loses
-/// good ones, and an animal whose needs are all met the other way round.
+/// Whether one of the animal's basic needs is at its critical threshold. As in
+/// the original (`zt.exe` 0x614a2f), `Advanced` needs such as social or
+/// stimulation don't count.
+fn has_critical_need(values: [i32; 11], needs: [&SpeciesNeed; 11]) -> bool {
+    values.into_iter().zip(needs).any(|(value, need)| {
+        !need.advanced
+            && need
+                .critical_wellness_threshold
+                .is_some_and(|threshold| convert_animal_need_q16_to_permille(value) <= threshold)
+    })
+}
+
+/// Every update an animal with a critical need gains bad need points, and an
+/// animal without one good points. A change of state updates at once.
+#[allow(clippy::type_complexity)]
 pub(super) fn update_need_points(
     time: Res<Time<Fixed>>,
-    mut animals: Query<(Entity, &NeedTriggerState, &mut NeedPoints), (With<Animal>, Without<Dead>)>,
+    assets: Res<Assets<SpeciesAsset>>,
+    index: Res<SpeciesAssets>,
+    mut animals: Query<
+        (
+            Entity,
+            &SpeciesHandle,
+            (
+                &Hunger,
+                &Thirst,
+                &RestNeed,
+                &PrivacyNeed,
+                &SocialNeed,
+                &ExerciseNeed,
+                &StimulationNeed,
+                &EnvironmentNeed,
+                &HealthNeed,
+                &HygieneNeed,
+                &BathroomNeed,
+            ),
+            &mut NeedPoints,
+        ),
+        (With<Animal>, Without<Dead>),
+    >,
     mut outcomes: MessageWriter<AccumulateNeedPoints>,
 ) {
-    for (animal, triggers, mut points) in &mut animals {
+    for (animal, species, needs, mut points) in &mut animals {
+        let Some(rows) = species_needs(&index, &assets, species) else {
+            continue;
+        };
+        let (
+            hunger,
+            thirst,
+            rest,
+            privacy,
+            social,
+            exercise,
+            stimulation,
+            environment,
+            health,
+            hygiene,
+            bathroom,
+        ) = needs;
+        let unmet = has_critical_need(
+            [
+                hunger.0,
+                thirst.0,
+                rest.0,
+                privacy.0,
+                social.0,
+                exercise.0,
+                stimulation.0,
+                environment.0,
+                health.0,
+                hygiene.0,
+                bathroom.0,
+            ],
+            rows,
+        );
         points.seconds_until_update -= time.delta_secs();
-        if points.seconds_until_update > 0.0 {
+        if points.seconds_until_update > 0.0 && unmet == points.unmet {
             continue;
         }
-        points.seconds_until_update += NEED_POINT_UPDATE_SECONDS;
-        let unmet = triggers.0 != 0;
+        points.seconds_until_update = NEED_POINT_UPDATE_SECONDS;
         step_need_points(&mut points, unmet);
         outcomes.write(AccumulateNeedPoints {
             animal,
