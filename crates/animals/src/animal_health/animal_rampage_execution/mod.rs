@@ -1,5 +1,5 @@
 //! `zt.exe`'s rampage manager (`BFGRampageMgr`, `config/rampage.xml`): every
-//! 3.5 s an unhappy animal that can rampage may start one, more likely the
+//! 3.5 s an animal that can rampage and isn't content may start one, more likely the
 //! more bad need points it has. A rampage lasts about five minutes, and the
 //! animal can't start another for five more.
 
@@ -20,7 +20,7 @@ const MAX_GOOD_POINTS: f32 = 10.0;
 const MAX_BAD_POINTS: f32 = 60.0;
 const BASE_CHANCE_PERCENT: f32 = 0.2;
 const MAX_CHANCE_PERCENT: f32 = 4.0;
-const REPEAT_RAMPAGER_FACTOR: f32 = 1.2;
+const RAMPAGING_ANIMAL_FACTOR: f32 = 1.2;
 const RAMPAGE_SECONDS: f32 = 300.0;
 const RAMPAGE_VARIANCE_SECONDS: f32 = 30.0;
 const RAMPAGE_INTERVAL_SECONDS: f32 = 300.0;
@@ -31,31 +31,29 @@ pub(crate) struct RampageSchedule {
     seconds_until_check: f32,
     /// Left of the current rampage, or of the rest after one.
     seconds_remaining: f32,
-    rampaged_before: bool,
 }
 
-/// The chance, in percent, that an animal starts a rampage at one check.
+/// The chance, in percent, that an animal starts a rampage at one check, as
+/// `zt.exe`'s rampage manager works it out (0x6eb2fd, called from 0x6eb0e6).
 ///
-/// `rampage.xml` names a base and a maximum chance, and the good and bad need
-/// points at which they apply. Read that way, bad points up to
-/// `maxBadPoints` raise the chance from the base towards the maximum, and
-/// good points up to `maxGoodPoints` take that rise away again: an animal
-/// with 10 good points is content whatever its bad ones. An animal with no
-/// bad points doesn't rampage. `rampagingAnimalFactor` (1.2) is read as
-/// making a repeat rampager more likely to go again, still capped at the
-/// maximum.
-pub(crate) fn rampage_chance_percent(points: &NeedPoints, rampaged_before: bool) -> f32 {
-    let pressure = (points.bad / MAX_BAD_POINTS).clamp(0.0, 1.0)
-        * (1.0 - (points.good / MAX_GOOD_POINTS).clamp(0.0, 1.0));
-    if pressure <= 0.0 {
+/// An animal with more than `maxGoodPoints` good need points doesn't
+/// rampage. Otherwise its bad points, up to `maxBadPoints`, raise the chance
+/// from `baseRampageChance` towards `maxRampageChance`; with none it stays at
+/// the base. Each animal already rampaging in the zoo multiplies the chance by
+/// `rampagingAnimalFactor`, so one rampage makes the next likelier.
+pub(crate) fn rampage_chance_percent(points: &NeedPoints, rampaging_now: usize) -> f32 {
+    if points.good > MAX_GOOD_POINTS {
         return 0.0;
     }
-    let chance = BASE_CHANCE_PERCENT + (MAX_CHANCE_PERCENT - BASE_CHANCE_PERCENT) * pressure;
-    if rampaged_before {
-        (chance * REPEAT_RAMPAGER_FACTOR).min(MAX_CHANCE_PERCENT)
+    let chance = if points.bad > MAX_BAD_POINTS {
+        MAX_CHANCE_PERCENT
+    } else if points.bad > 0.0 {
+        BASE_CHANCE_PERCENT
+            + (MAX_CHANCE_PERCENT - BASE_CHANCE_PERCENT) * points.bad / MAX_BAD_POINTS
     } else {
-        chance
-    }
+        BASE_CHANCE_PERCENT
+    };
+    chance * RAMPAGING_ANIMAL_FACTOR.powi(rampaging_now.min(64) as i32)
 }
 
 #[allow(clippy::type_complexity)]
@@ -81,6 +79,7 @@ pub(super) fn evaluate_animal_rampage_start_and_end_conditions(
         return;
     };
     let delta = time.delta_secs();
+    let rampaging_now = animals.iter().filter(|animal| animal.5).count();
     for (animal, variant, points, random, schedule, rampaging, tranquilized, crated) in &mut animals
     {
         if !species
@@ -118,14 +117,13 @@ pub(super) fn evaluate_animal_rampage_start_and_end_conditions(
         if schedule.seconds_remaining > 0.0 || tranquilized || crated {
             continue;
         }
-        let chance = rampage_chance_percent(points, schedule.rampaged_before);
+        let chance = rampage_chance_percent(points, rampaging_now);
         // A sample in hundredths of a percent.
         if (random.next_u32() % 10_000) as f32 >= chance * 100.0 {
             continue;
         }
         let variance = (random.next_u32() % 10_001) as f32 / 10_000.0 * 2.0 - 1.0;
         schedule.seconds_remaining = RAMPAGE_SECONDS + RAMPAGE_VARIANCE_SECONDS * variance;
-        schedule.rampaged_before = true;
         debug!(
             ?animal,
             chance,
@@ -151,13 +149,16 @@ mod tests {
     }
 
     #[test]
-    fn an_unhappy_animal_is_likelier_to_rampage_and_a_contented_one_never_does() {
-        assert_eq!(rampage_chance_percent(&points(0.0, 0.0), false), 0.0);
-        assert_eq!(rampage_chance_percent(&points(10.0, 60.0), false), 0.0);
-        assert!((rampage_chance_percent(&points(0.0, 30.0), false) - 2.1).abs() < 1e-4);
-        assert!((rampage_chance_percent(&points(0.0, 60.0), false) - 4.0).abs() < 1e-4);
-        assert!((rampage_chance_percent(&points(0.0, 30.0), true) - 2.52).abs() < 1e-4);
-        assert_eq!(rampage_chance_percent(&points(0.0, 90.0), true), 4.0);
+    fn rampage_chance_follows_the_original_manager() {
+        let close = |actual: f32, expected: f32| (actual - expected).abs() < 1e-4;
+        // No bad points leave the base chance; too many good ones rule it out.
+        assert!(close(rampage_chance_percent(&points(0.0, 0.0), 0), 0.2));
+        assert_eq!(rampage_chance_percent(&points(10.5, 60.0), 0), 0.0);
+        assert!(close(rampage_chance_percent(&points(10.0, 30.0), 0), 2.1));
+        assert!(close(rampage_chance_percent(&points(0.0, 60.0), 0), 4.0));
+        assert!(close(rampage_chance_percent(&points(0.0, 90.0), 0), 4.0));
+        // Two animals already rampaging: 2.1 x 1.2 x 1.2.
+        assert!(close(rampage_chance_percent(&points(0.0, 30.0), 2), 3.024));
     }
 }
 
