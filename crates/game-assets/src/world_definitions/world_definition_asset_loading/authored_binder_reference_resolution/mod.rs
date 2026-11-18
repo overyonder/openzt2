@@ -55,12 +55,20 @@ impl AuthoredBinderSourcePathIndex {
                 {
                     // Retain only source paths. Each parsed winning binder is dropped
                     // before reading the next; the archive byte cache remains bounded.
-                    let bytes = archives.read_source(&path)?;
-                    let document = parse_blue_fang_source_document(
-                        AssetPath::new(&path.to_string_lossy()),
-                        &bytes,
-                    )
-                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                    let document = archives.read_source(&path).and_then(|bytes| {
+                        parse_blue_fang_source_document(
+                            AssetPath::new(&path.to_string_lossy()),
+                            &bytes,
+                        )
+                        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+                    });
+                    let document = match document {
+                        Ok(document) => document,
+                        Err(error) => {
+                            bevy::log::warn!(%error, path = %path.display(), "could not index authored binder");
+                            continue;
+                        }
+                    };
                     if !document.root.name.eq_ignore_ascii_case("BFTypedBinder") {
                         continue;
                     }

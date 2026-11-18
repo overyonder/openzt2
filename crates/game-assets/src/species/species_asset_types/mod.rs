@@ -36,6 +36,7 @@ impl SpeciesAssets {
         document: &SpeciesDocument,
     ) {
         self.handles = vec![handle.clone()];
+        self.loaded_handles = vec![handle.clone()];
         self.by_species = document
             .species
             .iter()
@@ -56,7 +57,6 @@ impl SpeciesAssets {
                 )
             })
             .collect();
-        self.complete = true;
     }
 }
 
@@ -64,9 +64,9 @@ impl SpeciesAssets {
 pub struct SpeciesAssets {
     pub(super) revision: Option<u64>,
     pub(super) dirty: bool,
-    pub(super) complete: bool,
     pub(super) pending_paths: std::collections::VecDeque<std::path::PathBuf>,
     pub(super) handles: Vec<Handle<SpeciesAsset>>,
+    pub(super) loaded_handles: Vec<Handle<SpeciesAsset>>,
     pub(super) by_species: BTreeMap<AssetId, Handle<SpeciesAsset>>,
     pub(super) by_variant: BTreeMap<AssetId, VariantHandle>,
 }
