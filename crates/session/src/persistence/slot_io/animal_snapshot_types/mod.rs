@@ -70,6 +70,11 @@ pub(super) struct AnimalWelfareSnapshotRecord {
     pub need_adjustment_timer: Option<(u64, [u64; 2])>,
     pub triggers: u16,
     pub cumulative_points: [f32; 2],
+    /// Current good and bad need points, seconds to the next update and
+    /// whether the last update found a critical need. Absent in older saves;
+    /// such animals start from none.
+    #[serde(default)]
+    pub need_points: Option<([f32; 3], bool)>,
     pub welfare: u16,
     pub habitat_suitability: [u16; 3],
     /// Older records cannot distinguish an unapplied zero score from an assessed
