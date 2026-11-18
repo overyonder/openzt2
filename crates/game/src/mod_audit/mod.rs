@@ -1,9 +1,11 @@
 //! Opt-in Freeform smoke test. Set `OPENZT2_MOD_AUDIT=1` on a build with the
 //! `mod-audit` feature and use a disposable `XDG_DATA_HOME` for the run.
 //! `OPENZT2_MOD_AUDIT_ANIMAL` optionally checks adoption and presentation of a
-//! land animal on the chosen map.
+//! land animal on the chosen map. `OPENZT2_MOD_AUDIT_ANIMAL_BATCH` checks one
+//! adult land variant per archive with an eligible winning model.
 
 mod animal;
+mod animal_batch;
 
 use std::time::{Duration, Instant};
 
@@ -23,6 +25,7 @@ use openzt2_game_assets::{
     lua_script::lua_script_asset_loading::LuaScriptAsset,
     scene_prefab::ScenePrefabAsset,
     species::species_asset_types::SpeciesAsset,
+    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
     world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     world_scenario::{
@@ -95,9 +98,11 @@ pub(super) fn install(app: &mut App) {
             report_loaded::<LuaScriptAsset>,
             report_loaded::<LocalizationAsset>,
             report_loaded::<AudioAsset>,
+            report_loaded::<TerrainAsset>,
         ),
     );
     animal::install(app);
+    animal_batch::install(app);
 }
 
 fn archive_name<'a>(
@@ -158,6 +163,7 @@ fn exercise_freeform(
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     profile: Res<ProfileIndex>,
     animal_probe: Option<Res<animal::AnimalProbe>>,
+    animal_batch: Option<Res<animal_batch::AnimalBatch>>,
     mut splash: MessageWriter<SplashFinished>,
     mut load: MessageWriter<BeginWorldLoad>,
     mut failures: MessageReader<WorldLoadFailed>,
@@ -220,6 +226,9 @@ fn exercise_freeform(
                 println!("mod-audit\tin-game");
                 Instant::now()
             });
+            if animal_batch.as_ref().is_some_and(|batch| !batch.finished()) {
+                return;
+            }
             if let Some(probe) = animal_probe.as_ref().filter(|probe| !probe.presented()) {
                 if entered.elapsed() >= Duration::from_secs(45) {
                     println!("mod-audit\tanimal-timeout\t{}", probe.stage());
