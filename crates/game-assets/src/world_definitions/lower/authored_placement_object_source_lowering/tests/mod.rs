@@ -107,3 +107,84 @@ fn price_comes_from_the_first_economy_component_with_a_cost(
     assert_eq!(tables.document.objects[0].price_cents, 100_000);
     Ok(())
 }
+
+#[test]
+fn a_building_inherits_its_strength_and_docks_from_its_type_binders(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Shipped hot dog stands get strength 10 from the abstract Foodstand binder.
+    let documents = [
+        ("entities/foodstand.xml", r#"<BFTypedBinder binderType="Foodstand" abstract="true"><types><entity><building><Foodstand/></building></entity></types><shared><BFAIEntityDataShared f_BuildingStrength="10" p_TalkOffset="0 -1 180"/><BFSharedPhysVars><virtualNodes><Dock_Rampage1 y="-1.5"/></virtualNodes></BFSharedPhysVars></shared></BFTypedBinder>"#),
+        ("entities/building.xml", r#"<BFTypedBinder binderType="building" abstract="true"><types><entity><building/></entity></types><shared><BFSharedPhysVars><virtualNodes><Dock_Rampage1 y="-4" yaw="180"/><Dock_Rampage2 x="-4" yaw="-90"/></virtualNodes></BFSharedPhysVars></shared></BFTypedBinder>"#),
+        ("entities/hotdog.xml", r#"<BFTypedBinder binderType="Hotdog"><types><entity><building><Foodstand><Hotdog/></Foodstand></building></entity></types><shared><ZTEntityDestructionData explosionEffect="e" explosionSound="s" rubbleBinderName="r" entityRuinBinderName="rubble_xt" secsToRemove="0.3f"/></shared></BFTypedBinder>"#),
+    ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    bind_authored_placement_object(
+        &index.find("Hotdog").ok_or("Hotdog")?,
+        &[],
+        &BTreeMap::new(),
+        &BTreeMap::new(),
+        &mut tables,
+    )?;
+    let destruction = tables.document.objects[0]
+        .destruction
+        .as_ref()
+        .ok_or("no destruction")?;
+    assert_eq!(destruction.strength, Some(10));
+    assert_eq!(destruction.effect_path, "particle/e.psys");
+    // The stand moves the building's dock closer but keeps its yaw, which
+    // turns the Bevy way: the dock left of the building faces it, along +X.
+    let nodes = &tables.document.objects[0].virtual_nodes;
+    assert_eq!(nodes.len(), 3);
+    // A position attribute, as a guest's p_TalkOffset, is a node too.
+    assert_eq!(
+        (
+            nodes[2].name.as_str(),
+            nodes[2].translation_m,
+            nodes[2].yaw_degrees
+        ),
+        ("p_TalkOffset", [0.0, 0.0, 1.0], -180.0)
+    );
+    assert_eq!(nodes[0].name, "Dock_Rampage1");
+    assert_eq!(
+        (nodes[0].translation_m, nodes[0].yaw_degrees),
+        ([0.0, 0.0, 1.5], -180.0)
+    );
+    assert_eq!(
+        (nodes[1].translation_m, nodes[1].yaw_degrees),
+        ([-4.0, 0.0, -0.0], 90.0)
+    );
+    Ok(())
+}
+
+#[test]
+fn a_ruin_or_stump_can_be_put_down_although_it_has_no_placement_data(
+) -> Result<(), Box<dyn std::error::Error>> {
+    // As the shipped rubble_xt_1 a smashed hot dog stand gives way to, and a
+    // smashed tree's stump.
+    let documents = [(
+        "entities/rubble_xt_1.xml",
+        r#"<BFTypedBinder binderType="rubble_xt_1"><types><entity><building><Rubble><rubble_xt><rubble_xt_1/></rubble_xt></Rubble></building></entity></types><shared/></BFTypedBinder>"#,
+    ), (
+        "entities/stump_1.xml",
+        r#"<BFTypedBinder binderType="ThinBrownLarge_Stump_1"><types><entity><tree><stump><ThinBrownLarge_Stump><ThinBrownLarge_Stump_1/></ThinBrownLarge_Stump></stump></tree></entity></types><shared/></BFTypedBinder>"#,
+    )]
+    .map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()))
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()?;
+    let index = SourceIndex::build(&documents)?;
+    let mut tables = WorldDefinitionLoweringTables::default();
+    for key in ["rubble_xt_1", "ThinBrownLarge_Stump_1"] {
+        bind_authored_placement_object(
+            &index.find(key).ok_or(key)?,
+            &[],
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+            &mut tables,
+        )?;
+    }
+    assert_eq!(tables.document.placeables.len(), 2);
+    Ok(())
+}

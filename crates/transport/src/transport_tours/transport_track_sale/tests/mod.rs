@@ -116,6 +116,7 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             properties: WorldObjectPropertyFlags::DELETABLE,
             affordances: default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         tracks: vec![TransportationTrackDefinition {
             id: definition,

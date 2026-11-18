@@ -58,6 +58,7 @@ fn install_action_app() -> (App, Entity, Entity) {
         .add_message::<AdjustStimulation>()
         .add_message::<AdjustHealthNeed>()
         .add_message::<AdjustHygiene>()
+        .add_message::<openzt2_zoo_state::guests::guest_simulation_types::AdjustGuestSatisfaction>()
         .add_message::<FreezeAnimal>()
         .add_message::<ThawAnimal>();
     let target = app

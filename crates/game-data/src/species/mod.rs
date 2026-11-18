@@ -186,6 +186,9 @@ pub struct SpeciesVariant {
     /// Resolved collision tester; absent when no tester is authored.
     #[serde(default)]
     pub navigation_collision_policy: Option<AnimalNavigationCollisionPolicy>,
+    /// Authored `virtualNodes`, such as a dinosaur's `Dock_Building`.
+    #[serde(default)]
+    pub virtual_nodes: Vec<crate::world_definitions::world_objects::WorldObjectVirtualNode>,
     /// Source ground locomotion's `slow` clip (`variable` resolves to `slow`).
     #[serde(default)]
     pub ground_navigation_clip_asset_key: Option<String>,

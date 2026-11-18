@@ -252,6 +252,7 @@ pub(super) fn execute_audio_cue_playback_requests(
         let Some((resolved_cue, variant, usage)) =
             resolve_weighted_audio_cue_variant(audio_asset_view, request.cue, request.selection, 0)
         else {
+            debug!(cue = ?request.cue, "audio cue has no playable variant");
             continue;
         };
         let voice_limit = match usage {

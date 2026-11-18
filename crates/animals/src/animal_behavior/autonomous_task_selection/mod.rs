@@ -104,7 +104,7 @@ pub(super) fn select_idle_animal_tasks(
     world_objects.refresh_index(definitions);
     // The scratch list returns to its owner below, keeping its allocation.
     let mut candidates = std::mem::take(&mut *world_objects.candidates);
-    for (animal, facts, mut random, mut cooldowns) in &mut animals {
+    for (animal, facts, mut random, cooldowns) in &mut animals {
         let Some((definition, variant)) = species.find_variant_with_species(facts.variant_id())
         else {
             continue;
@@ -121,14 +121,34 @@ pub(super) fn select_idle_animal_tasks(
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
         let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
+        let Some(mut cooldowns) = cooldowns else {
+            // Delays are kept from the animal's first selection on.
+            commands
+                .entity(animal)
+                .insert(task_cooldowns::AnimalTaskCooldowns::default());
+            continue;
+        };
         for (document, declaration, task) in view.behavior_tasks() {
             if !subject_can_consider_task(task, &facts, authored_types) {
+                cooldowns.disarm(task.id);
                 continue;
             }
-            if cooldowns
-                .as_deref()
-                .is_some_and(|cooldowns| cooldowns.is_cooling_down(task.id, clock.tick))
+            if let Some(delay) = task
+                .task_delay_seconds
+                .filter(|delay| *delay != [0.0, 0.0])
+                .filter(|_| !cooldowns.is_armed(task.id))
             {
+                let delay_ticks = task_cooldowns::sample_task_delay_ticks(
+                    delay,
+                    random.0.unit_f32(),
+                    definitions.timing().fixed_hz,
+                );
+                debug!(?animal, task = %task.name, delay_ticks,
+                    "animal task became possible and waits out its delay");
+                cooldowns.arm(task.id, clock.tick, delay_ticks);
+                continue;
+            }
+            if cooldowns.is_cooling_down(task.id, clock.tick) {
                 debug!(?animal, task = %task.name, id = ?task.id, "animal task cooling down");
                 continue;
             }
@@ -552,6 +572,11 @@ pub(super) fn select_idle_animal_tasks(
                             })
                         },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
+                    distance: facts.transform.translation().distance(target_position),
+                    building_strength: object
+                        .destruction
+                        .as_ref()
+                        .and_then(|destruction| destruction.strength),
                 };
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
@@ -668,13 +693,7 @@ pub(super) fn select_idle_animal_tasks(
                 cooldown_ticks = ?delay_ticks,
                 "animal's chosen task has unsupported actions; no task starts");
             if let Some(delay_ticks) = delay_ticks {
-                if let Some(cooldowns) = cooldowns.as_deref_mut() {
-                    cooldowns.start(task.id, clock.tick, delay_ticks);
-                } else {
-                    let mut started = AnimalTaskCooldowns::default();
-                    started.start(task.id, clock.tick, delay_ticks);
-                    commands.entity(animal).insert(started);
-                }
+                cooldowns.start(task.id, clock.tick, delay_ticks);
             }
             continue;
         }

@@ -20,18 +20,18 @@ use openzt2_game_data::world_definitions::object_placement::{
 use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectAffordanceFlags, WorldObjectBiomeAutomaticPlacementClass, WorldObjectDefinition,
     WorldObjectDestructionDefinition, WorldObjectPropertyFlags,
-    WorldObjectRealPhysicsWaterImpactDefinition,
+    WorldObjectRealPhysicsWaterImpactDefinition, WorldObjectVirtualNode,
 };
 use openzt2_game_data::AssetId;
 
 #[cfg(test)]
 mod tests;
 
-pub(super) fn bind_object(
+/// `ZTEntityDestructionData` plus the inherited `f_BuildingStrength`.
+pub(super) fn lower_world_object_destruction(
     record: &RecordView<'_, '_>,
-    output: &mut WorldDefinitionLoweringTables,
-) -> Result<(), BindError> {
-    let destruction = record
+) -> Result<Option<WorldObjectDestructionDefinition>, BindError> {
+    record
         .descendant_named("ZTEntityDestructionData")
         .map(|data| {
             let effect = required_element(&data, &["explosionEffect"])?;
@@ -43,7 +43,7 @@ pub(super) fn bind_object(
                     .ok_or_else(|| BindError::record(record, "invalid destruction secsToRemove"))?;
             let delay_ns = seconds_ns(delay_seconds, record)?;
             Ok(WorldObjectDestructionDefinition {
-                effect: id(&format!("particle/{effect}")),
+                effect_path: format!("particle/{}.psys", effect.trim().to_ascii_lowercase()),
                 audio_cue: AssetId::from_key(&format!("audio-cue:{sound}")),
                 rubble: id(rubble),
                 ruin: id(ruin),
@@ -58,9 +58,99 @@ pub(super) fn bind_object(
                 start_height_cm: (element_number::<f32>(&data, &["rubbleStartHeight"], 0.0)?
                     * 100.0)
                     .round() as i32,
+                // Buildings inherit it from an abstract type binder (`bathroomsmall`).
+                strength: crate::species::source::source_queries::find_effective_authored_animal_shared_attribute(
+                    record,
+                    "f_BuildingStrength",
+                )
+                    .and_then(|value| value.trim().parse::<f32>().ok())
+                    .filter(|value| value.is_finite() && *value >= 0.0)
+                    .map(|value| value.round() as u16),
             })
         })
-        .transpose()?;
+        .transpose()
+}
+
+/// Authored `virtualNodes`. A node's own attributes override an ancestor's
+/// one by one, as a food stand moves `building`'s rampage docks closer but
+/// keeps their yaw.
+pub(crate) fn lower_world_object_virtual_nodes(
+    record: &RecordView<'_, '_>,
+) -> Vec<WorldObjectVirtualNode> {
+    const KEYS: [&str; 4] = ["x", "y", "z", "yaw"];
+    let mut nodes: Vec<(String, [Option<f32>; 4])> = Vec::new();
+    for group in super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "virtualNodes",
+    ) {
+        for node in group.element_children() {
+            let name = node.name.as_str();
+            let index = match nodes
+                .iter()
+                .position(|(known, _)| known.eq_ignore_ascii_case(name))
+            {
+                Some(index) => index,
+                None => {
+                    nodes.push((name.to_owned(), [None; 4]));
+                    nodes.len() - 1
+                }
+            };
+            for (value, key) in nodes[index].1.iter_mut().zip(KEYS) {
+                *value = value.or_else(|| {
+                    node.attribute_named_any(&[key])
+                        .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+                        .filter(|value| value.is_finite())
+                });
+            }
+        }
+    }
+    // A position attribute such as a guest's `p_TalkOffset="0 -1 180"`
+    // (x, y, yaw) names a node too, where an animal docks to talk or attack.
+    for shared in super::source_element_tree_search::authored_type_family_elements_named(
+        record,
+        "BFAIEntityDataShared",
+    ) {
+        for attribute in &shared.attributes {
+            let name = attribute.name();
+            if !name.starts_with("p_")
+                || nodes
+                    .iter()
+                    .any(|(known, _)| known.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            let values = attribute
+                .value()
+                .split_whitespace()
+                .map(parse_blue_fang_source_numeric_lexeme::<f32>)
+                .collect::<Option<Vec<_>>>();
+            if let Some([x, y, yaw]) = values.as_deref() {
+                nodes.push((name.to_owned(), [Some(*x), Some(*y), None, Some(*yaw)]));
+            }
+        }
+    }
+    nodes
+        .into_iter()
+        .map(|(name, values)| {
+            let [x, y, z, yaw] = values.map(|value| value.unwrap_or(0.0));
+            WorldObjectVirtualNode {
+                name,
+                translation_m: crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up_coordinates(
+                    [x, y, z],
+                ),
+                // Source yaw turns the other way about the up axis: a dock at
+                // `x="-4"` with `yaw="-90"` faces the building, along +X.
+                yaw_degrees: -yaw,
+            }
+        })
+        .collect()
+}
+
+pub(super) fn bind_object(
+    record: &RecordView<'_, '_>,
+    output: &mut WorldDefinitionLoweringTables,
+) -> Result<(), BindError> {
+    let destruction = lower_world_object_destruction(record)?;
     let biome_data = record.descendant_named("BFGBiomeData");
     let biomes = biome_data
         .into_iter()
@@ -186,6 +276,7 @@ pub(super) fn bind_object(
         )?)
         .ok_or_else(|| BindError::record(record, "object affordances contain unknown flag bits"))?,
         destruction,
+        virtual_nodes: lower_world_object_virtual_nodes(record),
     });
     Ok(())
 }

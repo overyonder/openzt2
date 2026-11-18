@@ -66,6 +66,7 @@ pub(super) fn install_definitions(
                     .map(AssetId::from_key)
                     .to_vec(),
                 navigation_collision_policy: None,
+                virtual_nodes: Vec::new(),
                 ground_navigation_clip_asset_key: None,
                 medium_ground_navigation_clip_asset_key: None,
                 fast_ground_navigation_clip_asset_key: None,
@@ -171,6 +172,7 @@ pub(super) fn install_definitions(
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     })
     .collect();
     let world_document = WorldDefinitionDocument {

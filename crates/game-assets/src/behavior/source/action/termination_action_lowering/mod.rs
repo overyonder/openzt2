@@ -55,13 +55,21 @@ pub(super) fn lower_termination_action_source_node(
     Ok(Some(BehaviorAction::Termination(termination_action)))
 }
 
-/// `BFBehKill` on the fence a raptor smashes (`radiusKillType="fence"`): its
-/// clip, then the fence becomes its broken variant, as `ZTBehMorph` makes it
-/// for an elephant.
-// ponytail: only the target fence breaks; the authored `radius` would also
-// break fences beside it.
+/// `BFBehKill` that destroys its target with a clip: the fence a raptor
+/// smashes (`radiusKillType="fence"`) becomes its broken variant, as
+/// `ZTBehMorph` makes it for an elephant, and a building an ankylosaur bashes
+/// (`killUsingDestroyEntity`) gives way to its ruin.
+// Only the target breaks; the authored `radius` would also break
+// fences beside it.
 pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[BehaviorAction; 2]>> {
-    if node.name != "BFBehKill" || node.attribute("radiusKillType").map(str::trim) != Some("fence")
+    if node.name != "BFBehKill" {
+        return Ok(None);
+    }
+    let breaks_fences = node.attribute("radiusKillType").map(str::trim) == Some("fence");
+    if !breaks_fences
+        && !(read_boolean_attribute_or_false(node, "killUsingDestroyEntity")?
+            && node.attribute("radius").is_none()
+            && node.attribute("targetAnim").is_some())
     {
         return Ok(None);
     }
@@ -101,6 +109,10 @@ pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[Be
                 playback_speed: None,
             },
         ),
-        BehaviorAction::MorphTarget(openzt2_game_data::AssetId::from_key("s_broken")),
+        if breaks_fences {
+            BehaviorAction::MorphTarget(openzt2_game_data::AssetId::from_key("s_broken"))
+        } else {
+            BehaviorAction::DestroyTarget
+        },
     ]))
 }
