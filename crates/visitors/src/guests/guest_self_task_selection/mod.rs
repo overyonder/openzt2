@@ -1,9 +1,11 @@
 //! Bounded entry into the authored task executor for idle guests.
+mod target_index;
+
 use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestTaskCooldowns;
 
 use arrayvec::ArrayVec;
-use bevy::prelude::*;
+use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
     behavior::eligibility::BehaviorCandidateRole,
     world_definitions::world_objects::WorldObjectDefinition, AssetId,
@@ -48,10 +50,19 @@ use super::{
 use super::guest_simulation_types::{
     Guest, GuestArchetype, GuestDestination, GuestPhase, GuestRng, Viewing,
 };
+use target_index::{GuestTarget, GuestTargetIndex};
+
+#[derive(Default)]
+pub(super) struct GuestSubjectTaskIndex {
+    by_subject_types: HashMap<Vec<AssetId>, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+}
 
 pub(super) fn select_idle_guest_tasks(
-    documents: Res<LoadedBehaviorDocumentCollection>,
-    assets: Res<Assets<BehaviorDocumentAsset>>,
+    (documents, assets, mut subject_tasks): (
+        Res<LoadedBehaviorDocumentCollection>,
+        Res<Assets<BehaviorDocumentAsset>>,
+        Local<GuestSubjectTaskIndex>,
+    ),
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     clock: Res<ZooClock>,
@@ -107,6 +118,9 @@ pub(super) fn select_idle_guest_tasks(
     >,
     mut commands: Commands,
 ) {
+    if documents.is_changed() || assets.is_changed() {
+        subject_tasks.by_subject_types.clear();
+    }
     let Some(view) = documents.create_declaration_index_view(&assets) else {
         return;
     };
@@ -154,6 +168,8 @@ pub(super) fn select_idle_guest_tasks(
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+    let mut target_index = None;
+    let mut combined_targets = Vec::new();
     for (
         guest,
         archetype,
@@ -193,32 +209,54 @@ pub(super) fn select_idle_guest_tasks(
             .collect::<Vec<_>>();
         let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
         let diagnostics = bevy::log::tracing::enabled!(bevy::log::Level::DEBUG);
-        for (document, declaration, task) in view.behavior_tasks() {
-            // Token candidates still require their own source-backed producers.
-            if task.targets.len() != 1
-                || task.targets[0] == "fromtoken"
-                || cooldowns
-                    .as_deref()
-                    .is_some_and(|cooldowns| cooldowns.is_cooling(task.id))
-                || !task
-                    .candidate_eligibility_requirements
-                    .iter()
-                    .any(|requirements| {
-                        requirements.candidate_role == BehaviorCandidateRole::Subject
-                            && !requirements.candidate_type_identifiers.is_empty()
-                    })
+        let subject_types = definition.behavior_subject_type_identifiers.as_slice();
+        if !subject_tasks.by_subject_types.contains_key(subject_types) {
+            let declarations = view
+                .behavior_tasks()
+                .filter(|(_, _, task)| {
+                    // Token candidates still require their own producers.
+                    task.targets.len() == 1
+                        && task.targets[0] != "fromtoken"
+                        && task
+                            .candidate_eligibility_requirements
+                            .iter()
+                            .any(|requirement| {
+                                requirement.candidate_role == BehaviorCandidateRole::Subject
+                                    && !requirement.candidate_type_identifiers.is_empty()
+                            })
+                        && candidate_requirements_are_satisfied(
+                            &task.candidate_eligibility_requirements,
+                            |role, required| {
+                                role != BehaviorCandidateRole::Subject
+                                    || subject_types.contains(&required)
+                            },
+                            |_, _| true,
+                        )
+                })
+                .map(|(document, declaration, _)| (document.clone(), declaration))
+                .collect();
+            subject_tasks
+                .by_subject_types
+                .insert(subject_types.to_vec(), declarations);
+        }
+        for (document, declaration) in &subject_tasks.by_subject_types[subject_types] {
+            let declaration = *declaration;
+            let Some(task) = assets
+                .get(document)
+                .and_then(|asset| asset.behavior_task_at_index(declaration))
+            else {
+                continue;
+            };
+            if cooldowns
+                .as_deref()
+                .is_some_and(|cooldowns| cooldowns.is_cooling(task.id))
             {
                 continue;
             }
-            // Reject unrelated subjects before scanning concrete world targets.
+            // Subject types are indexed. Live needs and triggers still vary by guest.
             if !candidate_requirements_are_satisfied(
                 &task.candidate_eligibility_requirements,
-                |role, required| {
-                    role != BehaviorCandidateRole::Subject
-                        || definition
-                            .behavior_subject_type_identifiers
-                            .contains(&required)
-                },
+                |_, _| true,
                 |role, fact| {
                     role != BehaviorCandidateRole::Subject
                         || need_facts.satisfies(
@@ -264,9 +302,7 @@ pub(super) fn select_idle_guest_tasks(
                     if !candidate_requirements_are_satisfied(
                         &task.candidate_eligibility_requirements,
                         |role, required| match role {
-                            BehaviorCandidateRole::Subject => definition
-                                .behavior_subject_type_identifiers
-                                .contains(&required),
+                            BehaviorCandidateRole::Subject => true,
                             BehaviorCandidateRole::Target => {
                                 if is_self {
                                     required == AssetId::from_key("self")
@@ -402,23 +438,42 @@ pub(super) fn select_idle_guest_tasks(
                     }
                 }
             } else {
-                for (target, target_definition, target_transform, target_world, waste) in &targets {
-                    if target == guest
-                        || target_world.root != world.root
-                        || !target_transform.translation().is_finite()
-                    {
-                        continue;
+                let index = target_index.get_or_insert_with(|| {
+                    let mut index = GuestTargetIndex::default();
+                    for (entity, definition, transform, world, waste) in &targets {
+                        let position = transform.translation();
+                        if !position.is_finite() {
+                            continue;
+                        }
+                        let Some(object) = definitions.find_object(definition.0) else {
+                            continue;
+                        };
+                        index.insert(
+                            world.root,
+                            GuestTarget {
+                                entity,
+                                object,
+                                position,
+                                waste: waste.map(|waste| waste.contained_waste_units),
+                            },
+                        );
                     }
-                    let Some(object) = definitions.find_object(target_definition.0) else {
-                        continue;
-                    };
-                    consider_target(
-                        target,
-                        Some(object),
-                        None,
-                        waste.map(|waste| waste.contained_waste_units),
-                        target_transform.translation(),
-                    );
+                    index
+                });
+                for target in index.candidates(
+                    world.root,
+                    &task.candidate_eligibility_requirements,
+                    &mut combined_targets,
+                ) {
+                    if target.entity != guest {
+                        consider_target(
+                            target.entity,
+                            Some(target.object),
+                            None,
+                            target.waste,
+                            target.position,
+                        );
+                    }
                 }
             }
         }
