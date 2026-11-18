@@ -52,6 +52,27 @@ static LIVE_STATE_TYPES: LazyLock<[(AssetId, BehaviorEntityStateEligibilityFact)
     });
 static ANIMAL_TYPES: LazyLock<[AssetId; 2]> =
     LazyLock::new(|| ["animal", "b_animal"].map(AssetId::from_key));
+
+pub(super) fn animal_subject_type_can_match(
+    required: AssetId,
+    authored_types: &[AssetId],
+    species: AssetId,
+    variant: AssetId,
+) -> bool {
+    LIVE_STATE_TYPES.iter().any(|&(id, _)| id == required)
+        || matches_static_type(required, authored_types, species, variant)
+}
+
+fn matches_static_type(
+    required: AssetId,
+    authored_types: &[AssetId],
+    species: AssetId,
+    variant: AssetId,
+) -> bool {
+    authored_types.contains(&required)
+        || [species, variant].contains(&required)
+        || ANIMAL_TYPES.contains(&required)
+}
 static NEED_NAMES: LazyLock<[AssetId; 11]> = LazyLock::new(|| {
     [
         "hunger",
@@ -130,9 +151,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 return self.boolean_state(fact) == Some(true);
             }
         }
-        authored_types.contains(&required)
-            || [self.species.species, self.variant.0].contains(&required)
-            || ANIMAL_TYPES.contains(&required)
+        matches_static_type(required, authored_types, self.species.species, self.variant.0)
     }
 
     fn boolean_state(&self, state: BehaviorEntityStateEligibilityFact) -> Option<bool> {

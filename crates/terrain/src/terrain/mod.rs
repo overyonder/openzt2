@@ -88,6 +88,7 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::application_schedule::WaterPresentationSet;
+use openzt2_world_state::model_render::ModelRenderPresentationSet;
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
 use openzt2_zoo_state::construction::FixedConstructionSet;
 use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
@@ -207,14 +208,15 @@ impl Plugin for TerrainPlugin {
                     terrain_water_caustics::scene_projection::project_scene_caustic_passes
                         .after(terrain_water_caustics::scene_projection::project_scene_caustic_targets)
                         .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
-                        .after(openzt2_world_state::model_render::ModelRenderPresentationSet::SourceMaterials),
+                        .after(ModelRenderPresentationSet::SourceMaterials)
+                        .in_set(ModelRenderPresentationSet::VisibilityInputCommands),
                     terrain_water_caustics::scene_projection::update_scene_caustic_bindings
-                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)
+                        .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands)
                         .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
                     bevy::transform::systems::propagate_transforms_for::<With<
                         openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticScenePass,
                     >>
-                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_passes)
+                        .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands)
                         .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
                 ),
             )

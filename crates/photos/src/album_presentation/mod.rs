@@ -6,7 +6,7 @@ use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use openzt2_game_data::ui_document::{
-    action::{photography::UiPhotoAction, presentation::UiPresentationAction, UiActionRecord},
+    action::{UiActionRecord, photography::UiPhotoAction, presentation::UiPresentationAction},
     node::*,
     node_property_binding::*,
     widget_live_collection::UiWidgetLiveCollectionSource,
@@ -37,10 +37,9 @@ use super::album_operations::{
     photo_rank_for_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, EnlargedAlbumPhoto, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
-    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
-    PresentedPhotoCount, SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
-    PHOTO_CAMERA_ROLL_CAPACITY,
+    ActivePhotoAlbum, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
+    PhotoAlbumCapacityPages, PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll,
+    PhotoCameraRollRow, PhotoMove, PhotoMoveTarget, PresentedPhotoCount, SelectedAlbumPhoto,
 };
 use super::photo_capture_types::PhotoCaptionSubject;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -280,10 +279,23 @@ fn present_photo_storage_row_descendants(
     }
 }
 
+#[derive(Default, PartialEq, Eq)]
+pub(super) struct AlbumControlAvailability {
+    active_has_photos: bool,
+    roll_has_photos: bool,
+    active_selected: bool,
+    roll_selected: bool,
+    previous_page: bool,
+    next_page: bool,
+}
+
 /// Enables photo controls when the selected album supports their action.
 pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<&UiDocumentRoot>,
+    roots: Query<Ref<UiDocumentRoot>>,
+    mut previous: Local<Option<AlbumControlAvailability>>,
+    mut removed_photo_actions: RemovedComponents<UiPhotoActions>,
+    mut removed_presentation_actions: RemovedComponents<UiPresentationActions>,
     albums: Query<
         (
             Entity,
@@ -298,9 +310,9 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     photos: Query<&AlbumMember, With<Photo>>,
     mut nodes: Query<
         (
-            Option<&UiPhotoActions>,
-            Option<&UiPresentationActions>,
-            &UiDocumentOwner,
+            Option<Ref<UiPhotoActions>>,
+            Option<Ref<UiPresentationActions>>,
+            Ref<UiDocumentOwner>,
             &mut UiInteractionEnabled,
             Option<&mut UiSelected>,
         ),
@@ -319,17 +331,49 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
     let active_selected = active.and_then(|row| row.2).is_some();
     let camera_selected = camera.and_then(|row| row.2).is_some();
 
+    let availability = AlbumControlAvailability {
+        active_has_photos: active_count != 0,
+        roll_has_photos: camera_count != 0,
+        active_selected,
+        roll_selected: camera_selected,
+        previous_page: active.and_then(|row| row.1).is_some_and(|page| page.0 != 0),
+        next_page: active.is_some_and(|row| {
+            let page = row.1.map_or(0, |page| page.0);
+            let capacity = row.3.map_or(INITIAL_PHOTO_ALBUM_SPREADS, |pages| pages.0);
+            page.saturating_add(1) < capacity
+        }),
+    };
+    let refresh_all = previous.as_ref() != Some(&availability)
+        || documents.is_changed()
+        || !removed_photo_actions.is_empty()
+        || !removed_presentation_actions.is_empty();
+    removed_photo_actions.clear();
+    removed_presentation_actions.clear();
     for (photo_range, presentation_range, owner, mut enabled, selected) in &mut nodes {
         let Ok(root) = roots.get(owner.0) else {
             continue;
         };
+        if !refresh_all
+            && !root.is_changed()
+            && !owner.is_changed()
+            && !enabled.is_changed()
+            && !selected.as_ref().is_some_and(|value| value.is_changed())
+            && !photo_range.as_ref().is_some_and(|range| range.is_changed())
+            && !presentation_range
+                .as_ref()
+                .is_some_and(|range| range.is_changed())
+        {
+            continue;
+        }
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
         let direct_actions = photo_range
+            .as_deref()
             .into_iter()
             .flat_map(|actions| actions.authored_action_records(document));
         let revealed_actions = presentation_range
+            .as_deref()
             .into_iter()
             .flat_map(|actions| actions.authored_action_records(document))
             .filter_map(|record| match &record.action {
@@ -377,14 +421,8 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
                     Some(active_selected || camera_selected)
                 }
                 UiPhotoAction::ExportActivePhotoAlbumAsHtml => Some(active_count != 0),
-                UiPhotoAction::ShowPreviousActivePhotoAlbumPage => {
-                    Some(active.and_then(|row| row.1).is_some_and(|page| page.0 != 0))
-                }
-                UiPhotoAction::ShowNextActivePhotoAlbumPage => Some(active.is_some_and(|row| {
-                    let page = row.1.map_or(0, |page| page.0);
-                    let capacity = row.3.map_or(INITIAL_PHOTO_ALBUM_SPREADS, |pages| pages.0);
-                    page.saturating_add(1) < capacity
-                })),
+                UiPhotoAction::ShowPreviousActivePhotoAlbumPage => Some(availability.previous_page),
+                UiPhotoAction::ShowNextActivePhotoAlbumPage => Some(availability.next_page),
                 _ => None,
             });
         let Some(next) = next else {
@@ -394,11 +432,12 @@ pub(super) fn set_photo_album_control_interaction_availability_from_album_state(
             enabled.0 = next;
         }
         if !next {
-            if let Some(mut selected) = selected {
+            if let Some(mut selected) = selected.filter(|selected| selected.0) {
                 selected.0 = false;
             }
         }
     }
+    *previous = Some(availability);
 }
 
 /// Photo slots share the image handle stored on each photo.

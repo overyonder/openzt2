@@ -33,7 +33,9 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
-use candidate_facts::{AnimalCandidateFacts, AnimalCandidateFactsItem};
+use candidate_facts::{
+    AnimalCandidateFacts, AnimalCandidateFactsItem, animal_subject_type_can_match,
+};
 use openzt2_game_data::{
     behavior::{document::BehaviorTask, eligibility::BehaviorCandidateRole},
     AssetId,
@@ -44,9 +46,18 @@ use world_object_targets::{
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
 
+#[derive(Default)]
+pub(super) struct AnimalSubjectTaskIndex {
+    by_variant:
+        bevy::platform::collections::HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+}
+
 pub(super) fn select_idle_animal_tasks(
-    documents: Res<LoadedBehaviorDocumentCollection>,
-    assets: Res<Assets<BehaviorDocumentAsset>>,
+    (documents, assets, mut subject_tasks): (
+        Res<LoadedBehaviorDocumentCollection>,
+        Res<Assets<BehaviorDocumentAsset>>,
+        Local<AnimalSubjectTaskIndex>,
+    ),
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -82,6 +93,13 @@ pub(super) fn select_idle_animal_tasks(
     animal_targets: animal_targets::AnimalTargetSources,
     mut commands: Commands,
 ) {
+    if documents.is_changed()
+        || assets.is_changed()
+        || species_assets.is_changed()
+        || species_index.is_changed()
+    {
+        subject_tasks.by_variant.clear();
+    }
     world_objects.note_object_changes();
     if animals.is_empty() {
         return;
@@ -128,7 +146,36 @@ pub(super) fn select_idle_animal_tasks(
                 .insert(task_cooldowns::AnimalTaskCooldowns::default());
             continue;
         };
-        for (document, declaration, task) in view.behavior_tasks() {
+        let variant_id = facts.variant_id();
+        let declarations = subject_tasks.by_variant.entry(variant_id).or_insert_with(|| {
+            view.behavior_tasks()
+                .filter(|(_, _, task)| {
+                    task_has_typed_subject_and_target(task)
+                        && candidate_requirements_are_satisfied(
+                            &task.candidate_eligibility_requirements,
+                            |role, required| {
+                                role != BehaviorCandidateRole::Subject
+                                    || animal_subject_type_can_match(
+                                        required,
+                                        authored_types,
+                                        definition.id,
+                                        variant_id,
+                                    )
+                            },
+                            |_, _| true,
+                        )
+                })
+                .map(|(document, index, _)| (document.clone(), index))
+                .collect()
+        });
+        for (document, declaration) in declarations.iter() {
+            let declaration = *declaration;
+            let Some(task) = assets
+                .get(document)
+                .and_then(|asset| asset.behavior_task_at_index(declaration))
+            else {
+                continue;
+            };
             if !subject_can_consider_task(task, &facts, authored_types) {
                 cooldowns.disarm(task.id);
                 continue;
@@ -810,19 +857,6 @@ fn subject_can_consider_task(
     facts: &AnimalCandidateFactsItem<'_, '_>,
     authored_types: &[AssetId],
 ) -> bool {
-    if task.targets.is_empty() || task.subjects.is_empty() {
-        return false;
-    }
-    if !task
-        .candidate_eligibility_requirements
-        .iter()
-        .any(|requirements| {
-            requirements.candidate_role == BehaviorCandidateRole::Subject
-                && !requirements.candidate_type_identifiers.is_empty()
-        })
-    {
-        return false;
-    }
     // Prune subject mismatches before scanning world targets, while retaining
     // all authored target checks for concrete candidate evaluation.
     candidate_requirements_are_satisfied(
@@ -832,6 +866,15 @@ fn subject_can_consider_task(
         },
         |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact),
     )
+}
+
+fn task_has_typed_subject_and_target(task: &BehaviorTask) -> bool {
+    !task.targets.is_empty()
+        && !task.subjects.is_empty()
+        && task.candidate_eligibility_requirements.iter().any(|requirements| {
+            requirements.candidate_role == BehaviorCandidateRole::Subject
+                && !requirements.candidate_type_identifiers.is_empty()
+        })
 }
 
 #[cfg(test)]
