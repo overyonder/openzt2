@@ -183,7 +183,7 @@ impl AnimalCandidateFactsItem<'_, '_> {
                 self.triggers.0 & (1 << index) != 0
                     // An escaped animal roams: its exercise need always
                     // scores, so it wanders off rather than standing by the gap.
-                    // ponytail: a guess at why it leaves in `zt.exe`.
+                    // Not yet confirmed against the original.
                     || (self.escaped && *key == AssetId::from_key("exercise")),
             ))
         })

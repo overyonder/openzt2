@@ -76,7 +76,6 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
 /// priority one is drawn with a chance in proportion to its score. A task
 /// that always outscores another, as an elephant's `Lie` outscores its
 /// `Sleep`, then no longer shuts it out.
-// ponytail: the draw is a guess; `zt.exe`'s rule needs digging out with Ghidra.
 pub struct WeightedBehaviorTaskRanking<K, T> {
     minimum_score: f32,
     /// The task whose candidates are being considered, and its best one.
