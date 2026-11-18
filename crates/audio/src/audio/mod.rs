@@ -39,6 +39,14 @@ pub struct AudioPlugin;
 
 impl Plugin for AudioPlugin {
     fn build(&self, app: &mut App) {
+        // Rodio quiets a spatial sound with the square of its distance in
+        // units. One unit of 30 m keeps a sound full within 30 m of the
+        // camera and a quarter as loud at 60 m.
+        // ponytail: one rolloff for every sound; the authored `mindist` and
+        // `maxdist` of each would need a rolloff of our own.
+        app.insert_resource(bevy::audio::DefaultSpatialScale(
+            bevy::audio::SpatialScale::new(1.0 / 30.0),
+        ));
         app.add_message::<PlayAudioCue>()
             .add_message::<PlayPositionedAudioCue>()
             .add_message::<PlayAudioClip>()

@@ -1,5 +1,6 @@
 mod environment_layer_rendering;
 mod mirrored_model_primitive_winding;
+pub(crate) mod model_projection_changes;
 mod prefab_render_layer_camera_matching;
 // Instantiation and presentation policy for ordinary glTF model scenes.
 
@@ -17,8 +18,8 @@ mod prefab_texture_replacement_projection;
 mod world_entity_model_suppression;
 
 use bevy::camera::visibility::VisibilitySystems;
+use bevy::extract::extract_instances::ExtractInstancesPlugin;
 use bevy::prelude::*;
-use bevy::render::extract_instances::ExtractInstancesPlugin;
 use bevy::render::Render;
 use bevy::render::RenderApp;
 use bevy::render::RenderSystems;
@@ -52,16 +53,26 @@ use prefab_texture_replacement_projection::project_prefab_texture_replacements_o
 
 pub struct ModelRenderPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ModelRenderCommandConsumers {
+    ProjectMaterialBindings,
+    CompleteGltfRelease,
+}
+
 impl Plugin for ModelRenderPlugin {
     fn build(&self, app: &mut App) {
+        prefab_render_layer_camera_matching::register_inherited_render_layers(app);
+        model_projection_changes::register(app);
         app.add_plugins(ExtractInstancesPlugin::<
             AuthoredEffectTechniquePassSubmissionOrder,
+            RenderApp,
         >::extract_visible());
         app.add_observer(
             invalidate_model_scene_visibility_and_shadow_policy_on_world_instance_ready,
         );
         app.add_plugins(ExtractInstancesPlugin::<
             environment_layer_rendering::EnvironmentPrimitiveLayer,
+            RenderApp,
         >::new());
         app.sub_app_mut(RenderApp)
             .init_resource::<environment_layer_rendering::PreparedEnvironmentLayers>()
@@ -85,18 +96,25 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             environment_layer_rendering::project_environment_layers_to_model_primitives
-                .after(ModelRenderPresentationSet::PassTransforms),
+                .after(project_effect_pass_material_instances_for_additional_render_views),
         );
         app.configure_sets(
             PostUpdate,
-            (
-                ModelRenderPresentationSet::LevelOfDetail,
-                ModelRenderPresentationSet::MaterialProjection,
-                ModelRenderPresentationSet::PassTransforms,
-            )
-                .chain()
+            ModelRenderPresentationSet::LevelOfDetail
                 .after(TransformSystems::Propagate)
                 .before(VisibilitySystems::VisibilityPropagate),
+        );
+        app.add_systems(
+            PostUpdate,
+            ApplyDeferred
+                .after(ModelRenderPresentationSet::SourceMaterials)
+                .after(ModelRenderPresentationSet::VisibilityInputCommands)
+                .before(VisibilitySystems::CheckVisibility)
+                .in_set(ModelRenderPresentationSet::ApplyVisibilityInputCommands)
+                // Bevy keeps a conditional flush separate from automatic UI flushes.
+                .run_if(resource_exists::<Assets<
+                    openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
+                >>),
         );
         app.add_systems(PostUpdate,
             orient_prefab_model_billboards_toward_active_camera_on_matching_render_layers
@@ -106,63 +124,65 @@ impl Plugin for ModelRenderPlugin {
         app.add_systems(
             PostUpdate,
             (
+                project_prefab_ambient_light_contributions
+                    .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands),
+                update_fixed_function_world_light_buffer
+                    .after(project_prefab_ambient_light_contributions)
+                    .after(VisibilitySystems::CheckVisibility),
+                update_per_draw_effect_transform_semantics
+                    .after(TransformSystems::Propagate)
+                    .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
+                    .after(project_prefab_ambient_light_contributions)
+                    .after(project_effect_pass_material_instances_for_additional_render_views)
+                    .after(project_prefab_fixed_function_world_lighting_policies),
+                crate::model_render::authored_effect_technique_pass_submission_order::project_authored_effect_opaque_base_pass_order
+                    .after(project_prefab_fixed_function_world_lighting_policies)
+                    .in_set(ModelRenderCommandConsumers::ProjectMaterialBindings),
+            ),
+        );
+        app.add_systems(
+            PostUpdate,
+            (
                 invalidate_authored_model_material_pass_projection.before(project_authored_model_material_passes),
                 project_prefab_model_level_of_detail_visibility
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 instantiate_visible_gltf_model_scenes.after(VisibilitySystems::VisibilityPropagate),
-                (
-                    complete_hidden_prefab_model_asset_release_after_world_instance_despawn,
-                    request_hidden_prefab_model_asset_release,
-                )
-                    .chain()
+                complete_hidden_prefab_model_asset_release_after_world_instance_despawn
+                    .in_set(ModelRenderCommandConsumers::CompleteGltfRelease)
                     .after(instantiate_visible_gltf_model_scenes),
-                project_model_scene_visibility_and_shadow_policy
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
+                // Complete earlier releases first. The request query excludes pending
+                // releases, so it can run before the completion commands are applied.
+                request_hidden_prefab_model_asset_release
+                    .after_ignore_deferred(complete_hidden_prefab_model_asset_release_after_world_instance_despawn),
+                project_model_scene_visibility_and_shadow_policy,
                 project_model_scene_visibility_and_shadow_policy_onto_late_primitives
                     .after(project_model_scene_visibility_and_shadow_policy)
-                    .before(project_authored_model_material_passes)
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
+                    .before(project_authored_model_material_passes),
                 mirrored_model_primitive_winding::project_mirrored_model_primitive_winding
-                    .in_set(ModelRenderPresentationSet::MaterialProjection)
+                    .after(TransformSystems::Propagate)
                     .before(project_authored_model_material_passes)
                     .before(project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors),
                 project_authored_model_material_passes
-                    .after(project_model_scene_visibility_and_shadow_policy)
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
-                update_per_draw_effect_transform_semantics
                     .after(TransformSystems::Propagate)
-                    .after(VisibilitySystems::MarkNewlyHiddenEntitiesInvisible)
-                    .after(project_effect_pass_material_instances_for_additional_render_views)
-                    .after(project_prefab_fixed_function_world_lighting_policies),
+                    .after(project_model_scene_visibility_and_shadow_policy)
+                    .in_set(ModelRenderPresentationSet::SourceMaterials),
                 project_effect_pass_material_instances_for_additional_render_views
                     .after(project_authored_model_material_passes)
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
-                bevy::transform::systems::propagate_transforms_for::<Or<(
-                    With<authored_model_material_pass_projection::AdditionalAuthoredModelMaterialPass>,
-                    With<authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection>,
-                )>>
-                    .in_set(ModelRenderPresentationSet::PassTransforms),
+                    .before(VisibilitySystems::VisibilityPropagate),
                 crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression
                     .after(project_effect_pass_material_instances_for_additional_render_views)
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
-                project_prefab_ambient_light_contributions
-                    .after(crate::model_render::world_entity_model_suppression::project_world_entity_model_suppression),
-                update_fixed_function_world_light_buffer
-                    .after(project_prefab_ambient_light_contributions)
-                    .after(VisibilitySystems::CheckVisibility),
+                    .in_set(ModelRenderPresentationSet::VisibilityInputCommands),
+                // The policy selects a context in the shared light buffer.
+                // Material projection does not read the buffer contents.
                 project_prefab_fixed_function_world_lighting_policies
-                    .after(project_authored_model_material_passes)
-                    .after(update_fixed_function_world_light_buffer),
+                    .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands),
                 project_prefab_model_tints_onto_standard_materials_and_effect_pass_vertex_colors
                     .after(project_model_scene_visibility_and_shadow_policy)
-                    .after(project_prefab_fixed_function_world_lighting_policies),
-                crate::model_render::authored_effect_technique_pass_submission_order::project_authored_effect_opaque_base_pass_order
-                    .after(project_authored_model_material_passes)
-                    .after(project_prefab_fixed_function_world_lighting_policies),
+                    .after(project_prefab_fixed_function_world_lighting_policies)
+                    .in_set(ModelRenderCommandConsumers::ProjectMaterialBindings),
                 project_prefab_texture_replacements_onto_effect_pass_materials
                     .after(project_authored_model_material_passes)
-                    .before(project_prefab_fixed_function_world_lighting_policies)
-                    .in_set(ModelRenderPresentationSet::MaterialProjection),
+                    .in_set(ModelRenderPresentationSet::SourceMaterials),
             )
                 // Material replacement must reach pipeline specialization in
                 // the same frame as render extraction sees the new binding.

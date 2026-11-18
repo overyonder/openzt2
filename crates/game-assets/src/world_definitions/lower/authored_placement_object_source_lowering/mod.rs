@@ -16,8 +16,7 @@ use super::object_facility_staff_and_guest_source_vocabulary::{
 };
 use super::source_element_tree_search::{
     authored_type_family_component_attribute, authored_type_family_components,
-    authored_type_family_elements_named, find_descendant,
-    find_descendant_named_with_nonempty_attribute, find_descendant_with_attribute,
+    authored_type_family_elements_named, find_descendant, find_descendant_with_attribute,
     find_presentation_component,
 };
 use super::source_model_scene_path_normalization::normalize_scene_path;
@@ -247,19 +246,19 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|element| element.attribute_named_any(&["ids"]))
         .map(id)
         .unwrap_or_default();
-    let price_cents = find_descendant_named_with_nonempty_attribute(
-        record.source_document_element(),
-        "ZTEconomyComponent",
-        "cost",
-    )
-    .and_then(|element| element.attribute_named_any(&["cost"]))
-    .map(|cost| {
-        let value = parse_blue_fang_source_numeric_lexeme::<f64>(cost)
-            .ok_or_else(|| BindError::record(record, "invalid authored placement cost"))?;
-        money_cents(value, record).map(i64::from)
-    })
-    .transpose()?
-    .unwrap_or_default();
+    // An object inherits its cost from its type family, as the sky tram pole
+    // takes it from the skytower binder. A station's first economy component
+    // takes donations and has no cost, so look past it.
+    let price_cents = authored_type_family_elements_named(record, "ZTEconomyComponent")
+        .into_iter()
+        .find_map(|element| element.attribute_named_any(&["cost"]))
+        .map(|cost| {
+            let value = parse_blue_fang_source_numeric_lexeme::<f64>(cost)
+                .ok_or_else(|| BindError::record(record, "invalid authored placement cost"))?;
+            money_cents(value, record).map(i64::from)
+        })
+        .transpose()?
+        .unwrap_or_default();
     let upkeep = find_descendant_with_attribute(
         record.source_document_element(),
         "ZTTransaction",
@@ -318,14 +317,35 @@ pub(super) fn bind_authored_placement_object(
         actor_scene_paths,
         entity_scene_paths,
     )?;
-    let terrain_fitted = record.descendant_named("BFGroundFitComponent").is_some()
-        || record
-            .descendant_named("BFMultiGroundFitComponent")
-            .is_some()
-        || prop_record.as_ref().is_some_and(|prop| {
-            prop.descendant_named("BFGroundFitComponent").is_some()
-                || prop.descendant_named("BFMultiGroundFitComponent").is_some()
+    let ground_fit = record
+        .descendant_named("BFGroundFitComponent")
+        .or_else(|| record.descendant_named("BFMultiGroundFitComponent"))
+        .or_else(|| {
+            prop_record.as_ref().and_then(|prop| {
+                prop.descendant_named("BFGroundFitComponent")
+                    .or_else(|| prop.descendant_named("BFMultiGroundFitComponent"))
+            })
         });
+    let terrain_fitted = ground_fit.is_some();
+    let terrain_fit_height_offset_m = ground_fit
+        .and_then(|fit| fit.attribute_named_any(&["heightOffset"]))
+        .map(|value| {
+            parse_blue_fang_source_numeric_lexeme(value)
+                .ok_or_else(|| BindError::record(record, "invalid heightOffset"))
+        })
+        .transpose()?
+        .unwrap_or(0.0);
+    let terrain_fit_water_offset_m = ground_fit
+        .filter(|fit| {
+            fit.attribute_named_any(&["floatOnWater"])
+                .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+        })
+        .map(|fit| {
+            fit.attribute_named_any(&["waterOffset"])
+                .map_or(Some(0.0), parse_blue_fang_source_numeric_lexeme)
+                .ok_or_else(|| BindError::record(record, "invalid waterOffset"))
+        })
+        .transpose()?;
     let real_physics_water_impact = record
         .descendant_named("BFRealPhysicsComponent")
         .or_else(|| {
@@ -383,7 +403,15 @@ pub(super) fn bind_authored_placement_object(
         .and_then(|data| data.attribute_named_any(&["icon3Dscale"]))
         .and_then(parse_blue_fang_source_numeric_lexeme)
         .unwrap_or(1.0);
-    if purchase_button.is_some() && automatic_footprint {
+    // A building's ruin (`rubble_xt_1`) or a tree's stump has no placement
+    // data of its own; an animal puts it down where the object stood, sized
+    // to its model.
+    let ruin = record.type_tokens().iter().any(|token| {
+        ["Rubble", "stump"]
+            .iter()
+            .any(|family| source_document_names_are_semantically_equal(token, family))
+    });
+    if (purchase_button.is_some() && automatic_footprint) || (ruin && placement_bounds.is_none()) {
         bind_authored_placeable(record, None, true, price_cents, output)?;
     } else if let Some(footprint_bounds) = placement_bounds {
         bind_authored_placeable(record, Some(footprint_bounds), false, price_cents, output)?;
@@ -429,6 +457,11 @@ pub(super) fn bind_authored_placement_object(
                 WorldObjectPropertyFlags::ANIMAL_WASTE.raw_flag_bits()
             } else {
                 0
+            }
+            | if record.has_type_token("TrashGround") || record.has_type_token("RecyclableGround") {
+                WorldObjectPropertyFlags::LOOSE_LITTER.raw_flag_bits()
+            } else {
+                0
             },
     )
     .expect("authored object flags are part of the canonical flag vocabulary");
@@ -462,6 +495,32 @@ pub(super) fn bind_authored_placement_object(
                     cleanup_interval_seconds: element_number(filter, &["cleanupInterval"], 0.0)?,
                     cleanup_rate: element_number(filter, &["cleanupRate"], 0.0)?,
                     maximum_dirt_capacity: element_number(filter, &["maximumDirtCapacity"], 0.0)?,
+                    maintenance_thresholds: filter
+                        .element_children()
+                        .find(|child| child.name.as_str() == "maintenanceThresholds")
+                        .map(|thresholds| -> Result<_, BindError> {
+                            let schedule = |name: &str| -> Result<[f32; 2], BindError> {
+                                let row = thresholds
+                                    .element_children()
+                                    .find(|child| child.name.as_str() == name)
+                                    .ok_or_else(|| {
+                                        BindError::record(
+                                            record,
+                                            format!("maintenanceThresholds has no {name}"),
+                                        )
+                                    })?;
+                                Ok([
+                                    element_number(row, &["threshold"], 0.0)?,
+                                    element_number(row, &["cancelThreshold"], 0.0)?,
+                                ])
+                            };
+                            Ok([
+                                schedule("preemptive")?,
+                                schedule("regular")?,
+                                schedule("occasional")?,
+                            ])
+                        })
+                        .transpose()?,
                 })
             })
             .transpose()?,
@@ -499,12 +558,15 @@ pub(super) fn bind_authored_placement_object(
         preview_offset_cm,
         preview_scale,
         terrain_fitted,
+        terrain_fit_height_offset_m,
+        terrain_fit_water_offset_m,
         real_physics_water_impact,
         price_cents,
         upkeep_cents_per_month,
         properties: object_property_flags,
         affordances: WorldObjectAffordanceFlags::default(),
-        destruction: None,
+        destruction: super::object_and_placeable_source_lowering::lower_world_object_destruction(record)?,
+        virtual_nodes: super::object_and_placeable_source_lowering::lower_world_object_virtual_nodes(record),
     });
     if purchase_button.is_some()
         && !authored_species_offer_owns_concrete_purchase_choice(
@@ -541,3 +603,6 @@ fn authored_placement_binder_is_abstract(record: &RecordView<'_, '_>) -> bool {
             )
         })
 }
+
+#[cfg(test)]
+mod tests;

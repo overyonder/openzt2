@@ -292,6 +292,13 @@ pub(super) fn adjust_sliders_from_pointer(
     for (entity, enabled, presentation, policy, minimum, maximum, mut value, active, scroll) in
         &mut sliders
     {
+        let pressed_here = primary_pointer.just_pressed
+            && capture.target.is_some_and(|target| {
+                target == entity || node_is_descendant_of(target, entity, &parents)
+            });
+        if active.is_none() && !pressed_here {
+            continue;
+        }
         // Pointer capture already picked this slider; keyboard focus scope
         // (the topmost focusable document) must not gate it, or a HUD slider
         // such as the catalogue scrollbar never drags.
@@ -328,11 +335,7 @@ pub(super) fn adjust_sliders_from_pointer(
         let pointer_over_thumb = point.is_some_and(|point| {
             thumb.is_some_and(|(_, _, node, transform)| node.contains_point(*transform, point))
         });
-        let starting = primary_pointer.just_pressed
-            && capture.target.is_some_and(|target| {
-                target == entity || node_is_descendant_of(target, entity, &parents)
-            })
-            && (pointer_over_interval || pointer_over_thumb);
+        let starting = pressed_here && (pointer_over_interval || pointer_over_thumb);
         if !starting && active.is_none() {
             continue;
         }
@@ -545,6 +548,9 @@ pub(super) fn present_slider_values(
             UiSliderAxis::Both => unreachable!("effective_axis resolves both"),
         }
         let delta = track_transform.affine().transform_point2(point) - current;
+        if delta == Vec2::ZERO {
+            continue;
+        }
         // Layout reconstructs these transforms each frame. Local translations
         // remain authored, so rounded render coordinates never feed back into them.
         let mut transforms = nodes.p1();

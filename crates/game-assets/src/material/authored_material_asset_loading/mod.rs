@@ -42,15 +42,13 @@ impl AssetLoader for MaterialAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_authored_material", skip_all))]
     async fn load(
         &self,
         reader: &mut dyn Reader,
         _: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> io::Result<Self::Asset> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("authored_material");
         let mut material_source_bytes = Vec::new();
         reader.read_to_end(&mut material_source_bytes).await?;
         let authored_material_source: BlueFangMaterialSourceDocument =

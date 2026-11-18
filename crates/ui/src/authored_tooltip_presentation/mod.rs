@@ -143,7 +143,6 @@ pub(super) fn update_authored_tooltip_presentations(
                     .next()
                     .and_then(|window| window.cursor_position().map(|position| (window, position)))
                 {
-                    node.position_type = PositionType::Absolute;
                     let viewport = Vec2::new(window.width(), window.height());
                     let (logical_size, transform) = canvases
                         .get(owner.0)
@@ -169,8 +168,14 @@ pub(super) fn update_authored_tooltip_presentations(
                         + Vec2::new(policy.offset[0] as f32, policy.offset[1] as f32);
                     let maximum = (visible_max - size).max(visible_min);
                     let clamped = desired.clamp(visible_min, maximum);
-                    node.left = px(clamped.x);
-                    node.top = px(clamped.y);
+                    if node.position_type != PositionType::Absolute
+                        || node.left != px(clamped.x)
+                        || node.top != px(clamped.y)
+                    {
+                        node.position_type = PositionType::Absolute;
+                        node.left = px(clamped.x);
+                        node.top = px(clamped.y);
+                    }
                 }
             }
             state.hovered_seconds += time.delta_secs();
@@ -181,7 +186,9 @@ pub(super) fn update_authored_tooltip_presentations(
             };
         } else {
             state = UiTooltipState::default();
-            text.0.clear();
+            if !text.0.is_empty() {
+                text.0.clear();
+            }
             retire_tooltip_text_presentations(&mut commands, entity, &tooltip_text_presentations);
         }
         let timed_out = policy.autohide

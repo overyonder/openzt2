@@ -128,7 +128,13 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
             }
         }
         if let BlueFangBfbNodeKind::Billboard { mode, .. } = &node.kind {
-            builder.billboard(entity, PrefabBillboard { mode: *mode });
+            builder.billboard(
+                entity,
+                PrefabBillboard {
+                    mode: *mode,
+                    faces_positive_z: true,
+                },
+            );
         }
         if let Some(ordinal) = node.lod_index {
             builder.lod(

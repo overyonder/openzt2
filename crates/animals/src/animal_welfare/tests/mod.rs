@@ -68,3 +68,23 @@ fn welfare_uses_canonical_need_mean_and_habitat_cap() {
         300
     );
 }
+
+#[test]
+fn need_points_grow_on_one_branch_and_shrink_the_other() {
+    let mut points = NeedPoints::default();
+    // 150 updates of 3 s with an unmet need reach a fence bash's 30.
+    for _ in 0..150 {
+        super::systems::step_need_points(&mut points, true);
+    }
+    assert!((points.bad - 30.0).abs() < 1.0e-3);
+    assert_eq!(points.good, 0.0);
+    // A met need takes back one update's worth, not the whole spell.
+    super::systems::step_need_points(&mut points, false);
+    assert!((points.bad - 29.8).abs() < 1.0e-3);
+    assert!((points.good - 0.2).abs() < 1.0e-6);
+    for _ in 0..1000 {
+        super::systems::step_need_points(&mut points, false);
+    }
+    assert_eq!(points.good, 100.0);
+    assert_eq!(points.bad, 0.0);
+}

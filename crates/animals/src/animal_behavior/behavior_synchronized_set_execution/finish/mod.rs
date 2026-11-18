@@ -1,11 +1,13 @@
 use super::super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use super::{SynchronizedBehaviorOwner, SynchronizedBehaviorParticipant};
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
+use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
@@ -25,6 +27,18 @@ pub(super) struct SynchronizedBehaviorOutcomes<'w, 's> {
         (
             &'static AnimationPresentationOwner,
             &'static mut AnimationPlaybackController,
+        ),
+    >,
+    documents: Option<
+        Res<'w, Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
+    >,
+    partner_tasks: Query<
+        'w,
+        's,
+        &'static BehaviorTaskExecutionState,
+        (
+            With<SynchronizedBehaviorParticipant>,
+            Without<SynchronizedBehaviorOwner>,
         ),
     >,
 }
@@ -75,8 +89,34 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
                 .as_ref()
                 .is_some_and(|task| task.stack.len() == owner.depth);
         let failed = failure.is_some() || !owns_partner || owner.target_outcome == Some(false);
-        if owns_task && !failed && !(subject_finished && owner.target_outcome == Some(true)) {
+        // A partner looping a wait, as a guest's `WaitAnimalInteraction`
+        // stands idle until the animal is done, ends with the subject. A loop
+        // with a `playTime` runs out on its own, so it isn't cut short.
+        let partner_waits = owns_partner
+            && outcomes
+                .partner_tasks
+                .get(owner.target)
+                .ok()
+                .and_then(|partner| {
+                    outcomes
+                        .documents
+                        .as_ref()?
+                        .get(&partner.document)
+                        .and_then(|document| find_current_behavior_task_action(document, partner))
+                })
+                .is_some_and(|action| {
+                    matches!(action, BehaviorAction::AnimationClip(clip)
+                        if clip.looping && clip.play_duration_seconds.is_none())
+                });
+        if owns_task
+            && !failed
+            && !(subject_finished && (owner.target_outcome == Some(true) || partner_waits))
+        {
             continue;
+        }
+        if failed {
+            debug!(?actor, target = ?owner.target, own_failure = failure.is_some(), owns_partner,
+                target_outcome = ?owner.target_outcome, "synchronized behavior failed");
         }
         if owns_task {
             if let Some(task) = task.as_deref_mut() {

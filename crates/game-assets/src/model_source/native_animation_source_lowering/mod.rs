@@ -15,6 +15,7 @@ use super::{
     netimmerse_nif_source::document_source_types::NetImmerseNifDocument,
 };
 
+#[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 pub fn lower_native_animation_source(
     animation_clip_asset_path: &str,
     animation_source_bytes: &[u8],

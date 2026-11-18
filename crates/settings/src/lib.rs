@@ -130,6 +130,8 @@ impl Plugin for SettingsPlugin {
                         copy_activated_display_resolution_into_settings_draft,
                     display_resolution_ui_presentation::
                         project_drafted_display_resolution_selection_into_authored_rows,
+                    display_resolution_ui_presentation::
+                        project_drafted_display_resolution_into_authored_text,
                 )
                     .chain()
                     .in_set(GameSet::Ui),

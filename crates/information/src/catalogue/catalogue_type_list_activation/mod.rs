@@ -106,8 +106,8 @@ pub(crate) fn choose_catalogue_entry_from_activated_type_list_row(
 
         let selected_entry_is_animal = world_definitions.is_some_and(|world_definitions| {
             world_definitions
-                .catalogue()
-                .find(|entry| AssetId(entry.definition.0) == catalogue_row.definition)
+                .catalogue_entry_for_definition(catalogue_row.definition)
+                .map(|(_, entry)| entry)
                 .is_some_and(|entry| matches!(&entry.category, CatalogueCategory::Animals))
         });
         let sex = std::iter::successors(Some(activation.node), |entity| {

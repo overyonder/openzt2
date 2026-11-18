@@ -55,6 +55,22 @@ pub(crate) fn authored_transport_track_piece_chain_is_valid(
 ) -> bool {
     const TRACK_ALIGNMENT_EPSILON_METRES: f32 = 0.001;
 
+    // A sky track is one rope span between two towers, as long as the
+    // authored maxDistanceToConnect allows; it has no pieces or grade.
+    if definition.kind == openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind::Sky {
+        return match path_points {
+            [from, to] => definition
+                .sky_maximum_connection_distance_metres
+                .is_some_and(|maximum| {
+                    let distance = from.xz().distance(to.xz());
+                    distance.is_finite()
+                        && distance > TRACK_ALIGNMENT_EPSILON_METRES
+                        && distance <= maximum + TRACK_ALIGNMENT_EPSILON_METRES
+                }),
+            _ => false,
+        };
+    }
+
     let source_endpoint_position = |source_position| {
         Vec3::from_array(convert_source_z_up_vector_to_bevy_y_up_coordinates(
             source_position,

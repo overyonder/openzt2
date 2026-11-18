@@ -8,10 +8,10 @@ use openzt2_game_assets::world_definitions::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         document::WorldDefinitionDocument, guest_simulation_definitions::*, world_objects::*,
     },
+    AssetId,
 };
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -58,12 +58,15 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
+            terrain_fit_water_offset_m: None,
             real_physics_water_impact: None,
             price_cents: 0,
             upkeep_cents_per_month: 0,
             properties: Default::default(),
             affordances: Default::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         guests: vec![GuestDefinition {
             donation: None,

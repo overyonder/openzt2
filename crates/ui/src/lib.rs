@@ -102,9 +102,27 @@ impl Plugin for GameUiPlugin {
     fn build(&self, app: &mut App) {
         cursor::initialize(app);
         picking::initialize(app);
+        app.register_required_components::<
+            bevy::ui_widgets::Button,
+            openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction,
+        >()
+        .register_required_components_with::<bevy::ui_widgets::Button, bevy::ui::FocusPolicy>(
+            || bevy::ui::FocusPolicy::Block,
+        );
         app.add_systems(PostUpdate,
             authored_ui_source_rectangle_presentation::resolve_authored_image_source_rectangles_after_image_changes
                 .before(bevy::ui::UiSystems::Layout));
+        app.configure_sets(
+            PostUpdate,
+            (
+                // Let animation apply its input commands before the UI tree walk.
+                bevy::ui::UiSystems::Stack.after_ignore_deferred(bevy::app::AnimationSystems),
+                // Keep the UI clip commands out of the automatic visibility flush.
+                bevy::ui::UiSystems::Clipping.after_ignore_deferred(
+                    bevy::camera::visibility::VisibilitySystems::VisibilityPropagate,
+                ),
+            ),
+        );
         app.add_message::<ShowUiDocument>()
             .add_message::<SetWaitCursor>()
             .add_message::<SetUiListRowCount>()
@@ -120,10 +138,6 @@ impl Plugin for GameUiPlugin {
             .add_message::<ui_document_asset_load_failure::UiDocumentAssetLoadFailed>()
             .init_resource::<UiRoleRequests>()
             .add_observer(authored_text_edit_bevy_adaptation::dispatch_authored_change_activation_after_bevy_text_edit)
-            .add_systems(
-                First,
-                authored_text_edit_bevy_adaptation::restore_authored_text_edit_scroll_before_input,
-            )
             .add_systems(
                 Startup,
                 (
@@ -340,9 +354,8 @@ impl Plugin for GameUiPlugin {
                         .after(bevy::ui::UiSystems::Layout)
                         .before(bevy::ui::UiSystems::PostLayout),
                     authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels
-                        .after(bevy::ui::UiSystems::PostLayout),
-                    authored_ui_canvas_scaling_and_clipping::project_authored_scaled_canvas_clip_rectangles
-                        .after(authored_ui_canvas_scaling_and_clipping::snap_authored_ui_canvas_descendant_edges_to_physical_pixels),
+                        .after(bevy::ui::UiSystems::Layout)
+                        .before(bevy::ui::UiSystems::Clipping),
                     authored_globe_camera_framing::update_globe_camera_viewports
                         .after(bevy::ui::UiSystems::PostLayout),
                     // Measured in the same frame as Bevy's text layout, so a
@@ -350,16 +363,12 @@ impl Plugin for GameUiPlugin {
                     authored_ui_text_layout_presentation::align_authored_single_line_text_from_measured_glyph_run
                         .after(bevy::ui::UiSystems::PostLayout),
                 ),
-            )
-            .add_systems(
-                Last,
-                authored_text_edit_bevy_adaptation::suppress_fitting_authored_text_edit_scroll_during_render_extraction,
             );
         #[cfg(debug_assertions)]
         app.add_systems(
             PostUpdate,
             modal_render_diagnostics::trace_changed_modal_render_state
-                .after(authored_ui_canvas_scaling_and_clipping::project_authored_scaled_canvas_clip_rectangles),
+                .after(bevy::ui::UiSystems::PostLayout),
         );
         app.sub_app_mut(bevy::render::RenderApp).add_systems(
             bevy::render::ExtractSchedule,
@@ -367,7 +376,7 @@ impl Plugin for GameUiPlugin {
                 authored_visual_layer_draw_order::place_authored_aspect_draws_in_owner_stack_slot,
                 authored_text_physical_glyph_projection::preserve_authored_font_aspect_in_extracted_text_draws,
             ).chain()
-                .after(bevy::ui_render::RenderUiSystems::ExtractCursor),
+                .after(bevy::ui_render::RenderUiSystems::ExtractInlineImages),
         );
     }
 }

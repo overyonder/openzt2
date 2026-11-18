@@ -11,6 +11,7 @@ use openzt2_game_data::ui_document::{
     document::UiDocument, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
 };
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 use std::cell::RefCell;
 
@@ -22,6 +23,9 @@ use super::{
 
 #[derive(Message, Debug, Clone)]
 pub(super) enum ScenarioUiCommand {
+    Tool(openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool),
+    /// Selects the placement, fence or path tool for an authored type.
+    PlacementObject(AssetId),
     Node {
         path: Vec<String>,
         operation: NodeOperation,
@@ -42,11 +46,13 @@ pub(super) enum ScenarioUiCommand {
     },
     NextScenario(Option<String>),
     Overhead,
-    SelectionMode,
+    Select(Option<Entity>),
 }
 
 #[derive(Debug, Clone)]
 pub(super) enum NodeOperation {
+    /// Returns to the selection tool once earlier node calls have settled.
+    SelectionMode,
     Visible(bool),
     Selected(bool),
     Press,
@@ -152,6 +158,21 @@ pub(super) fn install_manager_commands<'scope, 'env: 'scope>(
     Ok(())
 }
 
+/// A message nothing handles does nothing, as for any other receiver, so the
+/// rest of the script still runs. Each distinct one is reported once.
+pub(super) fn warn_unhandled_scenario_message(message: &str) {
+    thread_local! {
+        static REPORTED: RefCell<std::collections::HashSet<String>> = RefCell::default();
+    }
+    if REPORTED.with_borrow_mut(|reported| reported.insert(message.to_owned())) {
+        bevy::log::warn!(message, "scenario script sent a message nothing handles");
+    }
+}
+
+fn authored_type_id(name: &str) -> AssetId {
+    AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(name))
+}
+
 pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
     lua: &Lua,
     scope: &'scope Scope<'scope, 'env>,
@@ -167,11 +188,24 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
             Ok(())
         }
         "mode_selection" => {
-            commands.borrow_mut().push(ScenarioUiCommand::SelectionMode);
+            commands.borrow_mut().push(ScenarioUiCommand::Node {
+                path: Vec::new(),
+                operation: NodeOperation::SelectionMode,
+            });
             Ok(())
         }
-        "mode_placement" => Ok(()),
-        _ => Err(mlua::Error::runtime("unsupported scenario placement mode")),
+        // The tool follows from the object or fence named next.
+        "mode_placement" | "mode_fence_placement" => Ok(()),
+        "mode_biome" => {
+            commands.borrow_mut().push(ScenarioUiCommand::Tool(
+                openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Biome,
+            ));
+            Ok(())
+        }
+        unhandled => {
+            warn_unhandled_scenario_message(&format!("ZT_SETMODE {unhandled}"));
+            Ok(())
+        }
     };
     mode.set(
         "ZT_SETMODE",
@@ -191,12 +225,53 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                     // Starting Super Staff releases the mouse for walking, which
                     // this game's first-person controls don't capture to begin with.
                     "UI_RBUTTONDOWN" => {}
+                    "ZT_SET_SELECTED_ENTITY" => {
+                        let entity = match value {
+                            mlua::Value::Table(reference) => {
+                                Some(super::scenario_lua_entity_queries::resolve_reference_entity(&reference, queries, entities)?)
+                            }
+                            _ => None,
+                        };
+                        commands.borrow_mut().push(ScenarioUiCommand::Select(entity));
+                    }
                     "ZT_SETPLACEMENTOBJECT" => {
                         let mlua::Value::String(value) = value else {
                             return Err(mlua::Error::runtime("placement type must be a string"));
                         };
                         placement.borrow_mut().0 = (value.to_str()?.as_ref() != "-")
-                            .then(|| AssetId::from_key(&openzt2_game_assets::source_document::source_document_semantic_name::canonicalize_source_document_record_key(&value.to_string_lossy())));
+                            .then(|| authored_type_id(&value.to_string_lossy()));
+                        if let Some(definition) = placement.borrow().0 {
+                            commands
+                                .borrow_mut()
+                                .push(ScenarioUiCommand::PlacementObject(definition));
+                        }
+                    }
+                    "ZT_SETPLACEMENTFENCE" => {
+                        let mlua::Value::String(value) = value else {
+                            return Err(mlua::Error::runtime("fence type must be a string"));
+                        };
+                        commands.borrow_mut().push(ScenarioUiCommand::PlacementObject(
+                            authored_type_id(&value.to_string_lossy()),
+                        ));
+                    }
+                    // A gate is its own fence type, so the type named next decides.
+                    "ZT_SETFENCEPLACEMENTMODE" => {}
+                    "ZT_IS_TYPE_ON_CURSOR" => {
+                        let mlua::Value::String(value) = value else {
+                            return Err(mlua::Error::runtime("cursor type must be a string"));
+                        };
+                        let wanted = authored_type_id(&value.to_string_lossy());
+                        return Ok(mlua::Value::Boolean(queries.construction_tool.is_some_and(
+                            |tool| {
+                                matches!(
+                                    tool,
+                                    openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Place(definition)
+                                    | openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Fence(definition)
+                                    | openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Path(definition)
+                                    if definition == wanted
+                                )
+                            },
+                        )));
                     }
                     "ZT_OBJECT_ROTATE" => {
                         let mlua::Value::String(value) = value else {
@@ -220,6 +295,10 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                         let spawn = queries
                             .spawn_animal
                             .ok_or_else(|| mlua::Error::runtime("animal placement unavailable"))?;
+                        // Spawning directly leaves the player's tool alone.
+                        commands.borrow_mut().retain(|command| {
+                            !matches!(command, ScenarioUiCommand::PlacementObject(definition) if *definition == kind)
+                        });
                         let request = spawn(
                             kind,
                             [point.get("x")?, point.get("y")?, point.get("z")?],
@@ -228,13 +307,9 @@ pub(super) fn create_mode_adapter<'scope, 'env: 'scope>(
                         )?;
                         entities.borrow_mut().spawns.push(request);
                     }
-                    _ => {
-                        return Err(mlua::Error::runtime(format!(
-                            "unmapped scenario mode message {message}"
-                        )))
-                    }
+                    unhandled => warn_unhandled_scenario_message(unhandled),
                 }
-                Ok(())
+                Ok(mlua::Value::Nil)
             },
         )?,
     )?;
@@ -337,7 +412,8 @@ fn locate_ui_node<'a>(
             lineage_visible: inherited.get(),
             selected: selected.is_some_and(|selected| selected.0),
             enabled: enabled.is_none_or(|enabled| enabled.0),
-            highlighted: interaction.is_some_and(|interaction| *interaction != Interaction::None),
+            highlighted: interaction
+                .is_some_and(|interaction| *interaction != UiPointerInteraction::None),
             size: if computed_size.min_element() > 0.0 {
                 computed_size.to_array()
             } else {
@@ -390,8 +466,14 @@ fn read_point(point: &Table) -> mlua::Result<[i32; 2]> {
 /// its path, and finds this call's methods through the shared metatable.
 fn create_node(lua: &Lua, path: &[String]) -> mlua::Result<Table> {
     let node = lua.create_table()?;
-    node.set("__path", lua.create_sequence_from(path.iter().map(String::as_str))?)?;
-    let metatable = match lua.globals().get::<Option<Table>>("__openzt2_ui_node_metatable")? {
+    node.set(
+        "__path",
+        lua.create_sequence_from(path.iter().map(String::as_str))?,
+    )?;
+    let metatable = match lua
+        .globals()
+        .get::<Option<Table>>("__openzt2_ui_node_metatable")?
+    {
         Some(metatable) => metatable,
         None => {
             let metatable = lua.create_table()?;
@@ -403,7 +485,8 @@ fn create_node(lua: &Lua, path: &[String]) -> mlua::Result<Table> {
                         .get::<mlua::Value>(method)
                 })?,
             )?;
-            lua.globals().set("__openzt2_ui_node_metatable", metatable.clone())?;
+            lua.globals()
+                .set("__openzt2_ui_node_metatable", metatable.clone())?;
             metatable
         }
     };
@@ -422,7 +505,8 @@ fn install_node_methods<'scope, 'env: 'scope>(
     queries: ScenarioLuaQueryFacts<'env>,
 ) -> mlua::Result<()> {
     let node = lua.create_table()?;
-    lua.globals().set("__openzt2_ui_node_methods", node.clone())?;
+    lua.globals()
+        .set("__openzt2_ui_node_methods", node.clone())?;
     let push = move |path: Vec<String>, operation: NodeOperation| {
         commands
             .borrow_mut()
@@ -494,7 +578,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_GET_LINEAGE_VISIBLE",
         scope.create_function(move |_, node: Table| {
-            Ok(locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.lineage_visible))
+            Ok(
+                locate_ui_node(queries, &node_path(&node)?)
+                    .is_some_and(|node| node.lineage_visible),
+            )
         })?,
     )?;
     node.set(
@@ -517,15 +604,14 @@ fn install_node_methods<'scope, 'env: 'scope>(
                 .is_some_and(|node| node.lineage_visible && !node.selected))
         })?,
     )?;
-    for (method, selected) in [
-        ("UI_IS_ALTERNATE", true),
-        ("UI_IS_ACTIVATED", true),
-    ] {
+    for (method, selected) in [("UI_IS_ALTERNATE", true), ("UI_IS_ACTIVATED", true)] {
         node.set(
             method,
             scope.create_function(move |_, node: Table| {
-                Ok(locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.selected)
-                    == selected)
+                Ok(
+                    locate_ui_node(queries, &node_path(&node)?).is_some_and(|node| node.selected)
+                        == selected,
+                )
             })?,
         )?;
     }
@@ -536,8 +622,16 @@ fn install_node_methods<'scope, 'env: 'scope>(
                 return Ok(None);
             };
             let authored = &node.document.nodes[node.index];
-            rectangle_table(lua, [authored.rect[0], authored.rect[1], node.size[0], node.size[1]])
-                .map(Some)
+            rectangle_table(
+                lua,
+                [
+                    authored.rect[0],
+                    authored.rect[1],
+                    node.size[0],
+                    node.size[1],
+                ],
+            )
+            .map(Some)
         })?,
     )?;
     node.set(
@@ -562,13 +656,17 @@ fn install_node_methods<'scope, 'env: 'scope>(
         "UI_GET_IMAGE_SRC_RECT",
         scope.create_function(move |lua, node: Table| {
             let image_path = node_path(&node)?;
-            let key = commands.borrow().iter().rev().find_map(|command| match command {
-                ScenarioUiCommand::Node {
-                    path,
-                    operation: NodeOperation::IconKey(key),
-                } if *path == image_path => Some(*key),
-                _ => None,
-            });
+            let key = commands
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|command| match command {
+                    ScenarioUiCommand::Node {
+                        path,
+                        operation: NodeOperation::IconKey(key),
+                    } if *path == image_path => Some(*key),
+                    _ => None,
+                });
             let located = locate_ui_node(queries, &image_path);
             let entry = located.as_ref().and_then(|node| {
                 let UiWidgetRecord::MultiIcon { entries } = &node.document.nodes[node.index].widget
@@ -629,7 +727,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     }
     // The tutorial document sits above the others and these raise only within it.
     for method in ["UI_RAISE", "UI_MOVE_TO_FRONT"] {
-        node.set(method, lua.create_function(|_, _: mlua::MultiValue| Ok(()))?)?;
+        node.set(
+            method,
+            lua.create_function(|_, _: mlua::MultiValue| Ok(()))?,
+        )?;
     }
     node.set(
         "UI_SET_MODAL",
@@ -641,7 +742,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_POS",
         scope.create_function(move |_, (node, point): (Table, Table)| {
-            push(node_path(&node)?, NodeOperation::Position(read_point(&point)?));
+            push(
+                node_path(&node)?,
+                NodeOperation::Position(read_point(&point)?),
+            );
             Ok(())
         })?,
     )?;
@@ -655,7 +759,10 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_VALUE",
         scope.create_function(move |_, (node, key): (Table, String)| {
-            push(node_path(&node)?, NodeOperation::IconKey(AssetId::from_key(&key)));
+            push(
+                node_path(&node)?,
+                NodeOperation::IconKey(AssetId::from_key(&key)),
+            );
             Ok(())
         })?,
     )?;
@@ -672,13 +779,17 @@ fn install_node_methods<'scope, 'env: 'scope>(
     node.set(
         "UI_SET_ANIM_RECT_END",
         scope.create_function(move |_, (node, rectangle): (Table, Table)| {
-            let fit_text = commands.borrow().iter().rev().find_map(|command| match command {
-                ScenarioUiCommand::Node {
-                    path,
-                    operation: NodeOperation::MeasureText,
-                } => Some(path.clone()),
-                _ => None,
-            });
+            let fit_text = commands
+                .borrow()
+                .iter()
+                .rev()
+                .find_map(|command| match command {
+                    ScenarioUiCommand::Node {
+                        path,
+                        operation: NodeOperation::MeasureText,
+                    } => Some(path.clone()),
+                    _ => None,
+                });
             push(
                 node_path(&node)?,
                 NodeOperation::AnimationEnd {

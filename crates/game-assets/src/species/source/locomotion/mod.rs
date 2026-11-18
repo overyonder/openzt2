@@ -1,3 +1,5 @@
+use openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed;
+
 use super::source_queries::find_all_semantically_named_source_descendants;
 use super::source_queries::find_first_semantically_named_source_descendant;
 use crate::source_document::blue_fang_source_numeric_lexeme::parse_blue_fang_source_numeric_lexeme;
@@ -17,6 +19,7 @@ pub(super) fn lower_animal_surface_water_locomotion(
     };
     let ancestry = record.type_tokens();
     let mut rows = [None, None, None];
+    let mut named: Vec<(openzt2_game_data::AssetId, AnimalWaterLocomotionRow)> = Vec::new();
     let mut stop = None;
     let mut swim_depths = None;
     for member in ancestry
@@ -55,25 +58,32 @@ pub(super) fn lower_animal_surface_water_locomotion(
             };
             for row in loco.element_children() {
                 if row.name == "stop" {
-                    stop = row
+                    // A polar bear's water `stop` lists only `Swim_Ahead` and
+                    // `SubSwim_2Swim`: it keeps swimming when it stops.
+                    let mut clips = row
                         .element_children()
-                        .filter_map(|child| child.attribute_named_any(&["name"]))
+                        .filter_map(|child| child.attribute_named_any(&["name"]));
+                    let first = clips.clone().next();
+                    stop = clips
                         .find(|name| name.ends_with("_Idle"))
-                        .map(str::to_owned);
+                        .or(first)
+                        .map(str::to_owned)
+                        .or_else(|| {
+                            row.attribute_named_any(&["name"])
+                                .map(|name| format!("{name}_Idle"))
+                        });
                     continue;
                 }
-                let Some(index) = ["slow", "medium", "fast"]
-                    .iter()
-                    .position(|name| row.name == *name)
-                else {
-                    continue;
-                };
                 let number = |name: &str, default: f32| -> Option<f32> {
                     row.attribute_named_any(&[name])
                         .map_or(Some(default), parse_blue_fang_source_numeric_lexeme::<f32>)
                         .filter(|value| value.is_finite())
                 };
-                let speeds = [number("minAnimSpeed", 1.0)?, number("maxAnimSpeed", 1.0)?];
+                let fixed_speed = number("animSpeed", 1.0)?;
+                let speeds = [
+                    number("minAnimSpeed", fixed_speed)?,
+                    number("maxAnimSpeed", fixed_speed)?,
+                ];
                 let resets = [
                     number("minResetPeriod", 0.0)?,
                     number("maxResetPeriod", 0.0)?,
@@ -85,17 +95,9 @@ pub(super) fn lower_animal_surface_water_locomotion(
                 {
                     return None;
                 }
-                if row
-                    .attribute_named_any(&["animSpeed", "resetPeriod", "flapAnim"])
-                    .is_some()
-                {
-                    return None;
-                }
                 let mut parameters = Vec::new();
                 for animation in row.element_children() {
-                    if animation.name != "anim"
-                        || animation.attribute_named_any(&["acceleration"]).is_some()
-                    {
+                    if animation.name != "anim" {
                         return None;
                     }
                     let number = |name| {
@@ -110,25 +112,84 @@ pub(super) fn lower_animal_surface_water_locomotion(
                         roll: number("roll"),
                     });
                 }
-                rows[index] = Some(AnimalWaterLocomotionRow {
+                let lowered = AnimalWaterLocomotionRow {
                     node: row.attribute_named_any(&["name"])?.to_owned(),
                     playback_speed_range: speeds,
                     reset_seconds_range: resets,
                     animation_parameters: parameters,
-                });
+                };
+                match ["slow", "medium", "fast"]
+                    .iter()
+                    .position(|name| row.name == *name)
+                {
+                    Some(index) => rows[index] = Some(lowered),
+                    None => {
+                        let key = BehaviorGroundLocomotionSpeed::from_authored(&row.name).row_key();
+                        named.retain(|(existing, _)| *existing != key);
+                        named.push((key, lowered));
+                    }
+                }
             }
         }
     }
     let [slow, medium, fast] = rows;
+    let slow = slow?;
     let (water_entry_depth_m, water_exit_depth_m) = swim_depths?;
     Some(AnimalSurfaceWaterLocomotion {
-        slow: slow?,
-        medium: medium?,
-        fast: fast?,
+        medium: medium.unwrap_or_else(|| slow.clone()),
+        fast: fast.unwrap_or_else(|| slow.clone()),
+        slow,
+        named,
         stop: stop?,
         water_entry_depth_m,
         water_exit_depth_m,
     })
+}
+
+/// Clips for the ground rows beyond `slow`, `medium`, `fast` and `stop`.
+pub(super) fn lower_animal_named_ground_navigation_clips(
+    record: &RecordView<'_, '_>,
+) -> Vec<(openzt2_game_data::AssetId, String)> {
+    let ancestry = record.type_tokens();
+    let mut speeds = Vec::new();
+    for member in ancestry
+        .iter()
+        .filter(|name| !source_document_names_are_semantically_equal(name, record.key))
+        .filter_map(|name| record.find_resolved_source_record_by_reference(name))
+        .chain(std::iter::once(*record))
+    {
+        for binder in find_all_semantically_named_source_descendants(
+            member.source_document_element(),
+            "BFNamedBinder",
+        ) {
+            if binder.attribute_named_any(&["binderName"]) != Some("ground") {
+                continue;
+            }
+            let Some(loco) =
+                find_first_semantically_named_source_descendant(binder, "BFLocoAnimate")
+            else {
+                continue;
+            };
+            for row in loco.element_children() {
+                if !["slow", "medium", "fast", "stop"].contains(&row.name.as_str())
+                    && !speeds.contains(&row.name)
+                {
+                    speeds.push(row.name.clone());
+                }
+            }
+        }
+    }
+    speeds
+        .into_iter()
+        .filter_map(|speed| {
+            lower_animal_ground_navigation_clip_for_speed(record, &speed).map(|clip| {
+                (
+                    BehaviorGroundLocomotionSpeed::from_authored(&speed).row_key(),
+                    clip,
+                )
+            })
+        })
+        .collect()
 }
 
 pub(super) fn lower_animal_ground_navigation_clip_for_speed(

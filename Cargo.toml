@@ -35,13 +35,13 @@ members = [
 default-members = ["crates/game"]
 # Keep upstream code out of first-party workspace checks while allowing its
 # focused GPU-resource tests to run through its own manifest.
-exclude = ["vendor/bevy_render", "vendor/bevy_image", "vendor/lunify", "vendor/taffy"]
+exclude = ["vendor/*"]
 resolver = "3"
 
 [workspace.package]
-version = "1.1.3-beta"
+version = "1.2.0-beta"
 edition = "2021"
-rust-version = "1.96"
+rust-version = "1.97.1"
 publish = false
 license = "MIT"
 
@@ -79,8 +79,8 @@ openzt2_zoo_state = { path = "crates/zoo-state" }
 d3d9-effects = { path = "crates/d3d9-effects" }
 z2f = { path = "crates/z2f" }
 arrayvec = "0.7"
-avian3d = { version = "0.7", default-features = false, features = ["3d", "f32", "parry-f32", "collider-from-mesh"] }
-bevy_hanabi = { version = "0.19", default-features = false, features = ["3d"] }
+avian3d = { version = "0.8", default-features = false, features = ["3d", "parry-f32", "collider-from-mesh"] }
+bevy_hanabi = { version = "0.20", default-features = false, features = ["3d"] }
 blake3 = "1.8"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 dirs = "7"
@@ -95,7 +95,7 @@ smol_str = "0.2"
 ureq = { version = "3.3", default-features = false, features = ["json", "rustls"] }
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
 zip = { version = "4.6", default-features = false, features = ["deflate-flate2-zlib-rs"] }
-bevy = { version = "0.19.0", default-features = false, features = [
+bevy = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2", default-features = false, features = [
     "default_app",
     "std",
     "multi_threaded",
@@ -179,10 +179,57 @@ strip = "none"
 taffy = { path = "vendor/taffy" }
 # Stripped Lua chunks retain executable instructions and closure upvalue counts.
 lunify = { path = "vendor/lunify" }
-# Preserve legacy 24-bit DDS BGR channel order during alpha expansion.
-bevy_image = { path = "vendor/bevy_image" }
-# Reuse wgpu staging allocations for repeated ShaderBuffer uploads.
-bevy_render = { path = "vendor/bevy_render" }
 # Narrow tracked extension: per-instance effect delta time. Hanabi remains the
 # sole particle simulator and renderer; OpenZT2 does not own a particle runtime.
 bevy_hanabi = { path = "vendor/bevy_hanabi" }
+avian3d = { path = "vendor/avian3d" }
+bevy-inspector-egui = { path = "vendor/bevy-inspector-egui" }
+bevy_egui = { path = "vendor/bevy_egui" }
+bevy_heavy = { path = "vendor/bevy_heavy" }
+bevy_transform_interpolation = { path = "vendor/bevy_transform_interpolation" }
+glam_matrix_extras = { path = "vendor/glam_matrix_extras" }
+
+# Third-party plugins use the same Bevy crates as the engine.
+bevy = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_a11y = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_app = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_asset = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_camera = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_color = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_core_pipeline = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_curve = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_derive = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_diagnostic = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_ecs = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_encase_derive = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_extract = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_extract_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_gizmos = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_image = { path = "vendor/bevy_image" }
+bevy_input = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_light = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_log = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_material = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_material_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_math = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_mesh = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_pbr = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_picking = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_platform = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_reflect = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_render = { path = "vendor/bevy_render" }
+bevy_render_macros = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_shader = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_shape = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_state = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_tasks = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_time = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_transform = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_ui_render = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_utils = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_window = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+bevy_winit = { git = "https://github.com/bevyengine/bevy", rev = "2e26874eb1a0f61ffd57d268be4e4725fe8cd4e2" }
+
+[patch."https://github.com/bevyengine/bevy"]
+bevy_image = { path = "vendor/bevy_image" }
+bevy_render = { path = "vendor/bevy_render" }

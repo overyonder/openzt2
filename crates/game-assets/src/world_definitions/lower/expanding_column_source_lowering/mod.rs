@@ -42,10 +42,13 @@ pub(super) fn lower_expanding_column_presentation(
             .filter(|value| value.is_finite() && *value > 0.0)
             .ok_or_else(|| BindError::record(record, "column piece height must be positive"))
     };
-    let prefab = |piece: &OrderedSourceDocumentNode| {
-        let binder_name = piece
+    let binder_name = |piece: &OrderedSourceDocumentNode| {
+        piece
             .attribute_named_any(&["binderName"])
-            .ok_or_else(|| BindError::record(record, "column piece has no binderName"))?;
+            .map(str::to_owned)
+            .ok_or_else(|| BindError::record(record, "column piece has no binderName"))
+    };
+    let binders = |binder_name: &str| {
         authored_type_family_elements_named(record, "BFNamedBinder")
             .into_iter()
             .filter(|binder| {
@@ -55,6 +58,12 @@ pub(super) fn lower_expanding_column_presentation(
                         source_document_names_are_semantically_equal(name, binder_name)
                     })
             })
+            .collect::<Vec<_>>()
+    };
+    let prefab = |piece: &OrderedSourceDocumentNode| {
+        let binder_name = binder_name(piece)?;
+        binders(&binder_name)
+            .into_iter()
             .find_map(find_presentation_component)
             .and_then(|component| component.attribute_named_any(&["modelfile", "actorfile"]))
             .and_then(|path| entity_scene_paths.get(&canonicalize_source_document_record_key(path)))
@@ -85,5 +94,21 @@ pub(super) fn lower_expanding_column_presentation(
         base_height_metres: height(base)?,
         repeating_height_metres: height(repeating)?,
         top_height_metres: height(top)?,
+        // The base reaches the lowest ground within `fitRadius` when it
+        // authors `fitLowest`, so a support on a slope doesn't float.
+        fit_lowest_radius_metres: binders(&binder_name(base)?)
+            .into_iter()
+            .find_map(|binder| find_descendant(binder, "BFGroundFitComponent"))
+            .filter(|fit| {
+                fit.attribute_named_any(&["fitLowest"])
+                    .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"))
+            })
+            .and_then(|fit| fit.attribute_named_any(&["fitRadius"]))
+            .and_then(parse_blue_fang_source_numeric_lexeme::<f32>)
+            .filter(|radius| radius.is_finite() && *radius > 0.0)
+            .unwrap_or(0.0),
     })
 }
+
+#[cfg(test)]
+mod tests;

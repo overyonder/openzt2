@@ -2,13 +2,19 @@
 
 use bevy::prelude::*;
 
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabModel;
 use openzt2_world_state::world_spawn::prefab_texture_replacements::PrefabTextureReplacements;
 
-/// The replaced material this primitive currently draws with.
+/// The replaced material this primitive currently draws with, and the
+/// material it drew with before, restored when replacements are switched off.
 #[derive(Component)]
-pub(super) struct ProjectedPrefabTextureReplacementMaterial(Handle<EffectPassMaterial>);
+pub(super) struct ProjectedPrefabTextureReplacementMaterial {
+    replaced: Handle<EffectPassMaterial>,
+    original: Handle<EffectPassMaterial>,
+}
 
 // ponytail: walks every owner's tree each frame; fine for staff counts, gate on
 // change detection if owners grow to guests.
@@ -23,13 +29,30 @@ pub(super) fn project_prefab_texture_replacements_onto_effect_pass_materials(
         Option<&ProjectedPrefabTextureReplacementMaterial>,
     )>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
+    graphics: Option<Res<GraphicsSettings>>,
 ) {
+    // Low object texture detail authors `textureReplaceOn` false.
+    if graphics.is_some_and(|graphics| !graphics.texture_replacement) {
+        for (owner, _) in &owners {
+            for primitive in children.iter_descendants_depth_first::<Children>(owner) {
+                if let Ok((_, Some(projected))) = primitives.get(primitive) {
+                    commands
+                        .entity(primitive)
+                        .insert(MeshMaterial3d(projected.original.clone()));
+                    commands
+                        .entity(primitive)
+                        .remove::<ProjectedPrefabTextureReplacementMaterial>();
+                }
+            }
+        }
+        return;
+    }
     for (owner, replacements) in &owners {
         for primitive in children.iter_descendants_depth_first::<Children>(owner) {
             let Ok((current, projected)) = primitives.get(primitive) else {
                 continue;
             };
-            if projected.is_some_and(|projected| projected.0 == current.0) {
+            if projected.is_some_and(|projected| projected.replaced == current.0) {
                 continue;
             }
             // A primitive belongs to its nearest renderable only: models
@@ -57,7 +80,10 @@ pub(super) fn project_prefab_texture_replacements_onto_effect_pass_materials(
             let handle = materials.add(material);
             commands.entity(primitive).insert((
                 MeshMaterial3d(handle.clone()),
-                ProjectedPrefabTextureReplacementMaterial(handle),
+                ProjectedPrefabTextureReplacementMaterial {
+                    replaced: handle,
+                    original: current.0.clone(),
+                },
             ));
         }
     }

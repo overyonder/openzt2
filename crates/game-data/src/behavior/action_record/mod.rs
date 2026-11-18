@@ -26,6 +26,20 @@ pub enum BehaviorAction {
         #[serde(default)]
         pose: action::spawn::BehaviorSpawnPosePolicy,
     },
+    /// `BFBehSpawn spawnRelation="child"`: a young animal of the `entity`
+    /// variant beside the subject, which becomes its mother.
+    SpawnChild {
+        entity: crate::AssetId,
+        #[serde(default)]
+        pose: action::spawn::BehaviorSpawnPosePolicy,
+    },
+    /// `BFBehSpawn` without a node or clip, such as the `TrashGround` a guest
+    /// drops on a path: the object appears at once beside the actor.
+    SpawnObjectAtActor {
+        entity: crate::AssetId,
+        #[serde(default)]
+        pose: action::spawn::BehaviorSpawnPosePolicy,
+    },
     Dock(action::docking::BehaviorDockAction),
     DockWater(action::docking::BehaviorWaterDockAction),
     Move(action::movement::BehaviorMoveAction),
@@ -73,6 +87,12 @@ pub enum BehaviorAction {
         looping: bool,
     },
     PlaceTarget(action::place_target::BehaviorPlaceTargetAction),
+    /// `ZTBehMorph` on the target: it becomes the type its attribute names,
+    /// as a fence an animal bashes becomes its `s_Broken` variant.
+    MorphTarget(crate::AssetId),
+    /// `BFBehKill killUsingDestroyEntity` on the target: a fence breaks and a
+    /// building gives way to its ruin.
+    DestroyTarget,
     LocomotionSwitchSet(action::locomotion_switch_set::BehaviorLocomotionSwitchSetAction),
     AnimationSwitchSet(action::locomotion_switch_set::BehaviorAnimationSwitchSetAction),
     AnimalShowEvent(action::show_event::BehaviorShowEventAction),

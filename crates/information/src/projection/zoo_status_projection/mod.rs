@@ -38,24 +38,24 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
         }
     }
     *previous_guest_count = Some(guest_count);
-    let (Some(cash), Some(fame), Some(rating), Some(endangered_births)) =
-        (cash, fame, rating, endangered_births)
-    else {
-        return;
-    };
     let facts_changed = guest_count_changed
-        || cash.is_changed()
-        || fame.is_changed()
-        || rating.is_changed()
-        || endangered_births.is_changed();
+        || cash.as_ref().is_some_and(DetectChanges::is_changed)
+        || fame.as_ref().is_some_and(DetectChanges::is_changed)
+        || rating.as_ref().is_some_and(DetectChanges::is_changed)
+        || endangered_births
+            .as_ref()
+            .is_some_and(DetectChanges::is_changed);
     for (binding, mut value, mut visibility) in &mut values {
         if !facts_changed && !binding.is_changed() {
             continue;
         }
-        value.0 = match &binding.0 {
-            UiIntegerPropertyBindingSource::ZooCashCents => cash.0 .0,
-            UiIntegerPropertyBindingSource::ZooFameHalfStars => i64::from(fame.half_stars),
+        let next = match &binding.0 {
+            UiIntegerPropertyBindingSource::ZooCashCents => cash.as_ref().map(|cash| cash.0 .0),
+            UiIntegerPropertyBindingSource::ZooFameHalfStars => {
+                fame.as_ref().map(|fame| i64::from(fame.half_stars))
+            }
             UiIntegerPropertyBindingSource::ZooRatingPermille => {
+                let Some(rating) = &rating else { continue };
                 visibility.set_if_neq(if rating.overall_available {
                     Visibility::Inherited
                 } else {
@@ -64,12 +64,17 @@ pub(crate) fn project_live_zoo_status_to_authored_information_bindings(
                 if !rating.overall_available {
                     continue;
                 }
-                i64::from(rating.overall_permille)
+                Some(i64::from(rating.overall_permille))
             }
-            UiIntegerPropertyBindingSource::ZooGuestCount => i64::from(guest_count),
-            UiIntegerPropertyBindingSource::EndangeredBirthCount => i64::from(endangered_births.0),
+            UiIntegerPropertyBindingSource::ZooGuestCount => Some(i64::from(guest_count)),
+            UiIntegerPropertyBindingSource::EndangeredBirthCount => {
+                endangered_births.as_ref().map(|births| i64::from(births.0))
+            }
             _ => continue,
         };
+        if let Some(next) = next {
+            value.set_if_neq(UiValue(next));
+        }
     }
 }
 

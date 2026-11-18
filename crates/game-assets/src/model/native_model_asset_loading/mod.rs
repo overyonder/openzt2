@@ -40,15 +40,13 @@ impl AssetLoader for NativeModelAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_native_model", skip_all))]
     async fn load(
         &self,
         native_model_source_reader: &mut dyn Reader,
         _: &Self::Settings,
         native_model_load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .archives
-            .measure_scene_loading_asset_translation("native_model");
         let mut native_model_source_bytes = Vec::new();
         native_model_source_reader
             .read_to_end(&mut native_model_source_bytes)

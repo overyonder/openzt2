@@ -18,5 +18,5 @@ cc = "1.2"
 pkg-config = "0.3"
 
 [dev-dependencies]
-naga = { version = "29", features = ["spv-in"] }
+naga = { version = "30", features = ["spv-in"] }
 z2f = { path = "../z2f" }

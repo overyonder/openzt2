@@ -1,3 +1,4 @@
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use std::collections::{BTreeMap, BTreeSet};
 
 use mlua::Lua;
@@ -42,6 +43,10 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) species: Option<openzt2_game_assets::species::species_asset_types::SpeciesView<'a>>,
     pub(super) profile_variables: &'a openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables,
     pub(super) zoo_cash: &'a ZooCash,
+    /// The rule set of the loaded world, which `ZT_GET_IS_CAMPAIGN` and
+    /// `ZT_GET_IS_FREEFORM` report.
+    pub(super) world_session_mode:
+        Option<openzt2_world_state::game_session_types::WorldSessionMode>,
     pub(super) guest_admission_price: &'a AdmissionPrice,
     pub(super) finance_history:
         &'a openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory,
@@ -69,6 +74,7 @@ pub(super) struct ScenarioLuaQueryFacts<'a> {
     pub(super) ui_canvas_scale: bevy::prelude::Vec2,
     pub(super) real_seconds: f64,
     pub(super) overhead_camera: Option<&'a openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig>,
+    pub(super) construction_tool: Option<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
 }
 
 /// Fence runs, which scripts count by type like any other entity.
@@ -113,7 +119,7 @@ pub(super) type ScenarioLuaUiNodeQuery<'w, 's> = bevy::prelude::Query<
         &'static bevy::ui::UiGlobalTransform,
         Option<&'static openzt2_interface_state::ui::authored_ui_selection_state::UiSelected>,
         Option<&'static openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled>,
-        Option<&'static bevy::prelude::Interaction>,
+        Option<&'static UiPointerInteraction>,
     ),
 >;
 

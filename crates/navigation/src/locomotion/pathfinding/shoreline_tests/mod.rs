@@ -57,6 +57,7 @@ fn amphibious_animals_cross_a_water_channel_in_both_directions() {
                 destination,
                 &mut route,
                 &mut scratch,
+                crate::locomotion::pathfinding::LONG_PATH_ITERATIONS,
             );
             assert_eq!(
                 result.is_ok(),
@@ -102,6 +103,7 @@ fn ground_endpoint_snapping_rejects_water_but_preserves_dry_approaches() {
             destination,
             &mut route,
             &mut scratch,
+            crate::locomotion::pathfinding::LONG_PATH_ITERATIONS,
         );
         if result.is_err() {
             assert!(route.points.is_empty());
@@ -121,4 +123,60 @@ fn ground_endpoint_snapping_rejects_water_but_preserves_dry_approaches() {
     graph.navigation_nodes[4].eligibility_flags = NavFlags::default();
     // Preserve existing dry docking offsets outside the eligible node itself.
     assert!(plan(&graph, Vec3::new(2.5, 0.0, -0.5)).is_ok());
+}
+
+#[test]
+fn sliced_search_resumes_across_tile_boundaries_and_reuses_dirty_scratch() {
+    let node = TerrainDerivedNavigationGraphNode {
+        height_centimetres: 0,
+        minimum_triangle_normal_y: 1.0,
+        clearance_centimetres: 100,
+        water_depth_centimetres: 0,
+        eligibility_flags: NavFlags::ANIMAL,
+    };
+    let graph = TerrainDerivedNavigationGraph::from_terrain_nodes(
+        100,
+        4,
+        [2, 2],
+        vec![node; 64].into_boxed_slice(),
+    );
+    let agent = NavAgent {
+        radius_m: 0.25,
+        max_speed_mps: 1.0,
+        acceleration_mps2: 1.0,
+        capabilities: NavFlags::ANIMAL,
+    };
+    let mut scratch = RouteScratch::default();
+    scratch.ensure_capacity(64, 65);
+    let mut route = Route::with_capacity(65);
+    let a = Vec3::new(0.5, 0.0, -0.5);
+    let b = Vec3::new(7.5, 0.0, -7.5);
+    for (from, to) in [(a, b), (b, a)] {
+        route.clear();
+        let mut search = RouteSearch::default();
+        for slice in 1..=8 {
+            let done = advance_route(
+                &graph,
+                |_, _| false,
+                |_, _| false,
+                &agent,
+                LocomotionMode::Ground,
+                None,
+                from,
+                to,
+                &mut route,
+                &mut scratch,
+                &mut search,
+                2,
+                1000,
+            )
+            .unwrap();
+            assert_eq!(done, slice == 8);
+            if !done {
+                assert!(route.points.is_empty());
+            }
+        }
+        assert_eq!(search.expansions, 15);
+        assert_eq!(route.points.last(), Some(&to));
+    }
 }

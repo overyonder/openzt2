@@ -352,8 +352,8 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
 
         let species_identifier = offer.species();
         let Some(catalogue_entry) = world_definitions
-            .catalogue()
-            .find(|entry| AssetId(entry.definition.0) == species_identifier)
+            .catalogue_entry_for_definition(species_identifier)
+            .map(|(_, entry)| entry)
         else {
             *visibility = Visibility::Hidden;
             continue;

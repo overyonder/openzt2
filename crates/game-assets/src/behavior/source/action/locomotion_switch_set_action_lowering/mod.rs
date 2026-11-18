@@ -13,7 +13,10 @@ use openzt2_game_data::{
 use crate::source_document::ordered_source_document_types::OrderedSourceDocumentNode;
 
 use super::{
-    invalid_behavior_source_data, source_value_reading::read_optional_trimmed_string_attribute,
+    invalid_behavior_source_data,
+    source_value_reading::{
+        read_boolean_attribute_or_false, read_optional_trimmed_string_attribute,
+    },
 };
 
 /// Carrying variants, which select by held items, have no runtime owner and
@@ -50,6 +53,7 @@ pub(super) fn lower_locomotion_switch_set_action(
         ground: None,
         water: None,
         underwater: None,
+        default: None,
         follows_medium_changes,
     };
     for entry in node
@@ -60,6 +64,10 @@ pub(super) fn lower_locomotion_switch_set_action(
             "ground" => &mut action.ground,
             "water" => &mut action.water,
             "underwater" => &mut action.underwater,
+            "default" => &mut action.default,
+            // An actor carrying something isn't tracked, so the
+            // `groundcarry`, `watercarry` and `underwatercarry` rows go unused.
+            "groundcarry" | "watercarry" | "underwatercarry" => continue,
             _ => {
                 return Err(invalid_behavior_source_data(
                     "BFBehLocoSwitchSet has an unmapped locomotion medium",
@@ -88,15 +96,17 @@ pub(super) fn lower_locomotion_switch_set_action(
     Ok(Some(BehaviorAction::LocomotionSwitchSet(action)))
 }
 
-/// Only the form that selects once is mapped; `loopFlag` replays the
-/// selection indefinitely and has no runtime owner.
+/// `loopFlag` selects again each time the selected set ends.
 pub(super) fn lower_animation_switch_set_action(
     node: &OrderedSourceDocumentNode,
 ) -> io::Result<Option<BehaviorAction>> {
     if node.name != "BFBehAnimSwitchSet" {
         return Ok(None);
     }
-    if !node.attributes.is_empty()
+    if node
+        .attributes
+        .iter()
+        .any(|attribute| attribute.name() != "loopFlag")
         || node
             .element_children()
             .any(|child| child.name != "behaviorTable")
@@ -108,6 +118,7 @@ pub(super) fn lower_animation_switch_set_action(
     let mut action = BehaviorAnimationSwitchSetAction {
         sets_by_animation_graph_node: Vec::new(),
         default_set: None,
+        loops: read_boolean_attribute_or_false(node, "loopFlag")?,
     };
     for entry in node
         .element_children()
@@ -143,4 +154,26 @@ pub(super) fn lower_animation_switch_set_action(
         }
     }
     Ok(Some(BehaviorAction::AnimationSwitchSet(action)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    };
+
+    #[test]
+    fn looping_animation_switch_keeps_its_rows() {
+        let document = parse_blue_fang_source_document(AssetPath::new("dodo.beh"),
+            br#"<behaviors><BFBehAnimSwitchSet loopFlag="true"><behaviorTable><Stand behSet="LoopStand"/><default behSet="LoopStand"/></behaviorTable></BFBehAnimSwitchSet></behaviors>"#).expect("source");
+        let Some(BehaviorAction::AnimationSwitchSet(action)) = lower_animation_switch_set_action(
+            document.root.element_children().next().expect("action"),
+        )
+        .expect("lower") else {
+            panic!("animation switch")
+        };
+        assert!(action.loops);
+        assert_eq!(action.default_set, Some(AssetId::from_key("loopstand")));
+    }
 }

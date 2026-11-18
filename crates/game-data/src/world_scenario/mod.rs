@@ -208,7 +208,6 @@ pub struct StartingFenceRecord {
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub enum StartingZooSpawnValue {
     Name { entity: u32, text: String },
-    Condition { entity: u32, permille: u16 },
     CashRegister { entity: u32, cents: i64 },
     Research { item: AssetId, progress: u16 },
 }

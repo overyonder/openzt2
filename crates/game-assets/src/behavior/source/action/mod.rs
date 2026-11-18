@@ -232,6 +232,37 @@ pub(super) fn lower_one_behavior_action_source_node(
     {
         return Ok(lowered_behavior_action);
     }
+    if behavior_action_source_node.name == "ZTBehMorph" {
+        // The fade and its period only change how the swap looks.
+        if behavior_action_source_node
+            .attributes
+            .iter()
+            .any(|attribute| {
+                !matches!(
+                    attribute.name(),
+                    "morphEntity" | "morphTargetEntityType" | "morphFade" | "morphPeriod"
+                )
+            })
+            || source_value_reading::read_optional_trimmed_string_attribute(
+                behavior_action_source_node,
+                "morphEntity",
+            )
+            .as_deref()
+                != Some("target")
+        {
+            return Err(invalid_behavior_source_data(
+                "ZTBehMorph has unmapped authored policy",
+            ));
+        }
+        let attribute = source_value_reading::read_optional_trimmed_string_attribute(
+            behavior_action_source_node,
+            "morphTargetEntityType",
+        )
+        .ok_or_else(|| invalid_behavior_source_data("ZTBehMorph has no morphTargetEntityType"))?;
+        return Ok(BehaviorAction::MorphTarget(
+            openzt2_game_data::AssetId::from_key(&attribute.to_ascii_lowercase()),
+        ));
+    }
 
     Err(invalid_behavior_source_data(format!(
         "unmapped behavior action {}",

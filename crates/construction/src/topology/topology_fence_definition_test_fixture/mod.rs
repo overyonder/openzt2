@@ -17,6 +17,15 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
     app: &mut App,
     definition: AssetId,
 ) {
+    install_fence_definition_with_broken_variant(app, definition, None);
+}
+
+/// As above, for a fence that an animal breaks into `broken`.
+pub(super) fn install_fence_definition_with_broken_variant(
+    app: &mut App,
+    definition: AssetId,
+    broken: Option<AssetId>,
+) {
     let object = AssetId([42; 16]);
     let document = WorldDefinitionDocument {
         objects: vec![WorldObjectDefinition {
@@ -51,15 +60,19 @@ pub(super) fn install_fence_definition_for_topology_transaction_tests(
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
+            terrain_fit_water_offset_m: None,
             real_physics_water_impact: None,
             price_cents: 100,
             upkeep_cents_per_month: 0,
             properties: WorldObjectPropertyFlags::default(),
             affordances: WorldObjectAffordanceFlags::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         fences: vec![FenceDefinition {
             fitting_curves: Vec::new(),
+            broken,
             id: definition,
             object,
             segment_length_cm: 100,

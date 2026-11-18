@@ -58,6 +58,15 @@ pub struct GroundTransportTrackPiecePresentationDefinition {
     pub ground_decal_rotation_radians: f32,
     pub ground_decal_size_metres: [f32; 2],
     pub ground_decal_offset_metres: [f32; 2],
+    /// `paintTexture`, painted into the terrain: the `paintCopyDimension`
+    /// texels from `paintSampleStart` of a texture authored at the terrain's
+    /// texel size, centred on the piece.
+    #[serde(default)]
+    pub paint_texture: AssetId,
+    #[serde(default)]
+    pub paint_sample_start_texels: [f32; 2],
+    #[serde(default)]
+    pub paint_copy_dimension_texels: [f32; 2],
     pub elevated_path_texture: AssetId,
     pub elevated_path_rotation_radians: f32,
 }

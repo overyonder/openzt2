@@ -47,5 +47,3 @@ openzt2_photos.workspace = true
 openzt2_player_controls.workspace = true
 openzt2_simulation_time.workspace = true
 openzt2_zoo_staff = { workspace = true, features = ["testing"] }
-
-zip.workspace = true

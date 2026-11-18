@@ -184,11 +184,7 @@ fn lower_inherited_texture_effect(
                 .block(current)
                 .ok_or_else(|| invalid("missing texture-effect transform object".to_owned()))?;
             if let Some(object) = block.payload.av_object() {
-                if object.object.controller_ref >= 0 {
-                    return Err(invalid(
-                        "animated texture-effect transform ancestry is not supported".to_owned(),
-                    ));
-                }
+                // An animated ancestor contributes its authored rest rotation.
                 rotation = Mat3::from_cols_array(&object.rotation).transpose() * rotation;
             }
             let Some(ancestor) = parent(current) else {

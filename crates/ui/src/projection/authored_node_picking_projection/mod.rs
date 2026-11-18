@@ -6,9 +6,7 @@ use openzt2_game_data::ui_document::node_presentation::UiNodePointerHitPolicy;
 use openzt2_game_data::ui_document::node_presentation::UiNodeVisualState;
 
 pub(super) fn initial_bevy_pickable_for_authored_node(node: &UiNodeDefinition) -> Pickable {
-    // Decorative layers must never occlude an actionable sibling. Bevy's UI
-    // picker stops at the uppermost hit even when that entity has no
-    // `Interaction`; the original UI treated such layers as presentation only.
+    // Decorative layers pass hits through to actionable controls underneath.
     if node.flags.0 & UiNodeFlags::POINTER_BLOCKING.0 == 0
         || (!authored_node_has_actions(node)
             && !authored_node_kind_owns_pointer_interaction(&node.kind))

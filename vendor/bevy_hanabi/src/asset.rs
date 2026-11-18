@@ -12,7 +12,6 @@ use bevy::{
     utils::default,
 };
 use bevy::{ecs::reflect::AppTypeRegistry, reflect::serde::TypedReflectSerializer};
-use serde::de::DeserializeSeed as _;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use wgpu::{BlendComponent, BlendFactor, BlendOperation, BlendState};
@@ -606,7 +605,7 @@ impl EffectAsset {
         // Build the set of unique attributes required for all modifiers
         let mut set = HashSet::new();
         for modifier in self.modifiers() {
-            for &attr in modifier.attributes() {
+            for &attr in modifier.attributes().as_ref() {
                 set.insert(attr);
             }
         }
@@ -707,10 +706,12 @@ impl EffectAsset {
     /// For more advanced deserialization, for example to another format, see
     /// also the [`EffectAssetDeserializer`] which implements
     /// [`serde::de::DeserializeSeed`].
-    pub fn deserialize(s: &str, type_registry: &TypeRegistry) -> Result<Self, ron::Error> {
-        let mut deserializer = ron::de::Deserializer::from_str(s)?;
+    pub fn deserialize(
+        s: &str,
+        type_registry: &TypeRegistry,
+    ) -> Result<Self, ron::error::SpannedError> {
         let deserialize = EffectAssetDeserializer::new(type_registry);
-        let asset = deserialize.deserialize(&mut deserializer)?;
+        let asset = ron::Options::default().from_str_seed(s, deserialize)?;
         Ok(asset)
     }
 }
@@ -938,8 +939,9 @@ impl<'de> bevy::reflect::serde::DeserializeWithRegistry<'de> for EffectAsset {
                 let alpha_mode =
                     alpha_mode.ok_or_else(|| serde::de::Error::missing_field("alpha_mode"))?;
                 let mesh = mesh.ok_or_else(|| serde::de::Error::missing_field("mesh"))?;
-                // Modifiers uses ReflectModifier type data to construct a concrete type. So we
-                // can directly try_take() here from the PartialReflect to recover that concrete
+                // Modifiers uses ReflectModifier type data to construct a
+                // concrete type. So we can directly try_take()
+                // here from the PartialReflect to recover that concrete
                 // object. This should always succeed.
                 let init_modifiers = init_modifiers
                     .map(|m| m.try_take::<Modifiers>())
@@ -1088,20 +1090,16 @@ impl FromWorld for EffectAssetLoader {
 #[non_exhaustive]
 pub enum EffectAssetLoaderError {
     /// I/O error reading the asset source.
-    #[error("An IO error occurred during loading of a particle effect")]
+    #[error("An IO error occurred during loading of a particle effect: {0}")]
     Io(#[from] std::io::Error),
 
     /// UTF-8 error converting the asset serialized content.
-    #[error("An encoding error occurred during loading of a particle effect")]
+    #[error("An encoding error occurred during loading of a particle effect: {0}")]
     Encoding(#[from] std::string::FromUtf8Error),
 
     /// Error during RON format parsing.
-    #[error("A RON format error occurred during loading of a particle effect")]
+    #[error("A RON format error occurred during loading of a particle effect: {0}")]
     RonSpan(#[from] ron::error::SpannedError),
-
-    /// Error during RON format parsing.
-    #[error("A RON error occurred during loading of a particle effect")]
-    Ron(#[from] ron::error::Error),
 }
 
 impl AssetLoader for EffectAssetLoader {
@@ -1220,7 +1218,6 @@ mod tests {
         let mut module = Module::default();
         let origin = module.lit(Vec3::ZERO);
         let one = module.lit(1.);
-        let slot_zero = module.lit(0u32);
         let init_age = SetAttributeModifier::new(Attribute::AGE, one);
         let init_lifetime = SetAttributeModifier::new(Attribute::LIFETIME, one);
         let init_pos_sphere = SetPositionSphereModifier {
@@ -1239,7 +1236,7 @@ mod tests {
             //.update(AccelModifier::default())
             .update(LinearDragModifier::new(one))
             .update(ConformToSphereModifier::new(origin, one, one, one, one))
-            .render(ParticleTextureModifier::new(slot_zero))
+            .render(ParticleTextureModifier::new(0))
             .render(ColorOverLifetimeModifier::default())
             .render(SizeOverLifetimeModifier::default())
             .render(OrientModifier::new(OrientMode::ParallelCameraDepthPlane))
@@ -1251,8 +1248,13 @@ mod tests {
         let module = &mut effect.module;
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
-        let mut init_context =
-            ShaderWriter::new(ModifierContext::Init, &property_layout, &particle_layout);
+        let texture_layout = TextureLayout::default();
+        let mut init_context = ShaderWriter::new(
+            ModifierContext::Init,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(init_pos_sphere.apply(module, &mut init_context).is_ok());
         assert!(init_vel_sphere.apply(module, &mut init_context).is_ok());
         assert!(init_age.apply(module, &mut init_context).is_ok());
@@ -1263,8 +1265,13 @@ mod tests {
         let drag_mod = LinearDragModifier::constant(module, 3.5);
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
-        let mut update_context =
-            ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let texture_layout = TextureLayout::default();
+        let mut update_context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(accel_mod.apply(module, &mut update_context).is_ok());
         assert!(drag_mod.apply(module, &mut update_context).is_ok());
         assert!(ConformToSphereModifier::new(origin, one, one, one, one)
@@ -1277,7 +1284,7 @@ mod tests {
         let texture_layout = TextureLayout::default();
         let mut render_context =
             RenderContext::new(&property_layout, &particle_layout, &texture_layout);
-        ParticleTextureModifier::new(slot_zero)
+        ParticleTextureModifier::new(0)
             .apply_render(module, &mut render_context)
             .unwrap();
         ColorOverLifetimeModifier::default()
@@ -1452,7 +1459,8 @@ mod tests {
         app.init_asset::<EffectAsset>()
             .init_asset_loader::<EffectAssetLoader>();
 
-        // Create an effect, serialize it, and write it to the in-memory file system
+        // Create an effect, serialize it, and write it to the in-memory file
+        // system
         let asset_ref = {
             let type_registry = app.world().resource::<AppTypeRegistry>().clone();
             let type_registry = type_registry.read();

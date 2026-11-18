@@ -11,6 +11,8 @@ pub(super) struct ScenarioLuaEntityFacts {
         Option<&'static openzt2_world_state::world_spawn::persistent_id_types::PersistentId>,
     pub(super) definition: &'static DefinitionId,
     pub(super) pregnant: Has<Pregnancy>,
+    pub(super) relocating:
+        Has<openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject>,
     pub(super) crated:
         Has<openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated>,
     pub(super) stage: Option<&'static AnimalLifeStage>,
@@ -27,7 +29,8 @@ pub(super) struct ScenarioLuaEntityFacts {
     pub(super) health: Option<&'static HealthNeed>,
     pub(super) hygiene: Option<&'static HygieneNeed>,
     pub(super) bathroom: Option<&'static BathroomNeed>,
-    pub(super) trash: Option<&'static openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste>,
+    pub(super) trash:
+        Option<&'static openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste>,
 }
 
 impl ScenarioLuaEntityFactsItem<'_, '_> {

@@ -47,7 +47,6 @@ pub(super) fn bind_maintenance(
         .map(|effect| {
             Ok(FacilityServiceMaintenanceEffect {
                 service: element_asset(&effect, &["service"]),
-                condition_loss_permille: element_number(&effect, &["conditionLossPermille"], 0)?,
                 contained_waste_units: element_number(&effect, &["containedWasteUnits"], 0)?,
                 loose_litter_units: element_number(&effect, &["looseLitterUnits"], 0)?,
             })
@@ -59,21 +58,6 @@ pub(super) fn bind_maintenance(
         .push(MaintenanceDefinition {
             id: id(record.key),
             object: asset(record, &["object", "entity"]),
-            initial_condition_permille: number_or(
-                record,
-                &["initialConditionPermille", "initialCondition"],
-                1000,
-            )?,
-            deterioration_per_zoo_day_permille: number_or(
-                record,
-                &["deteriorationPerZooDayPermille", "dailyDeterioration"],
-                0,
-            )?,
-            repair_below_permille: number_or(
-                record,
-                &["repairBelowPermille", "repairThreshold"],
-                0,
-            )?,
             waste_capacity_units: number_or(record, &["wasteCapacityUnits", "wasteCapacity"], 0)?,
             initial_waste_units: number_or(record, &["initialWasteUnits"], 0)?,
             empty_at_units: number_or(record, &["emptyAtUnits", "emptyThreshold"], 0)?,
@@ -92,7 +76,6 @@ pub(super) fn bind_cleanliness(
     record: &RecordView<'_, '_>,
 ) -> Result<CleanlinessPolicy, BindError> {
     Ok(CleanlinessPolicy {
-        condition_weight: required_number(record, &["conditionWeight"])?,
         waste_weight: required_number(record, &["wasteWeight"])?,
         litter_weight: required_number(record, &["litterWeight"])?,
         litter_reference_units: required_number(record, &["litterReferenceUnits"])?,

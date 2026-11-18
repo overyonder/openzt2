@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::species::Sex;
+use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
@@ -28,7 +29,6 @@ use super::{
         BeginAnimalAdoptionPlacement, BeginAnimalRelocation,
     },
     animal_adoption_pricing::resolve_nonnegative_animal_adoption_cost,
-    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
 };
 
 pub(super) fn begin_selected_species_adoption_placement_on_construction_cursor(
@@ -135,7 +135,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
     habitat_index: Res<HabitatIndex>,
     topology_grid: Res<TopologyGrid>,
     adoption_policy: Query<(Entity, Option<&AnimalAdoptionAvailabilityPolicy>), With<WorldRoot>>,
-    placement_sites: AnimalPlacementSiteQueries,
+    placement_sites: PlacementSiteQueries,
     hydrated_previews: Query<(), With<ObjectPlacementPreviewPrefabHydrated>>,
     mut previews: Query<(Entity, &mut ConstructionPreview)>,
 ) {
@@ -209,7 +209,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
                 .0
                 .saturating_mul(i64::from(availability.multiplier_permille))
                 / 1000;
-            if unlimited_zoo_cash.is_none() && zoo_cash.0.0 < adoption_cost.0 {
+            if unlimited_zoo_cash.is_none() && zoo_cash.0 .0 < adoption_cost.0 {
                 PlacementValidity::Invalid(PlacementFailure::Unaffordable)
             } else {
                 PlacementValidity::Valid {

@@ -26,7 +26,7 @@ impl AuthoredBinderSourcePathIndex {
         archives: &AssetArchives,
         from: &str,
         binder_type: &str,
-    ) -> io::Result<(PathBuf, u64)> {
+    ) -> io::Result<Option<(PathBuf, u64)>> {
         let revision = archives.revision();
         let mut resolved = self
             .resolved
@@ -37,7 +37,12 @@ impl AuthoredBinderSourcePathIndex {
             .is_none_or(|index| index.revision != revision)
         {
             let mut paths_by_type = BTreeMap::<String, Vec<PathBuf>>::new();
-            for directory in load_game_context_binder_directories(archives)? {
+            let directories = match load_game_context_binder_directories(archives) {
+                Ok(directories) => directories,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Default::default(),
+                Err(error) => return Err(error),
+            };
+            for directory in directories {
                 for path in archives
                     .source_paths_under(&directory)
                     .into_iter()
@@ -78,16 +83,12 @@ impl AuthoredBinderSourcePathIndex {
                 .get(&canonicalize_source_document_record_key(binder_type))
         });
         match paths.map(Vec::as_slice) {
-            Some([path]) => Ok((path.clone(), revision)),
+            Some([path]) => Ok(Some((path.clone(), revision))),
             Some(_) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("{from} references ambiguous authored binder type {binder_type}"),
             )),
-            None => Err(super::unresolved_reference(
-                from,
-                "authored binder type",
-                binder_type,
-            )),
+            None => Ok(None),
         }
     }
 }

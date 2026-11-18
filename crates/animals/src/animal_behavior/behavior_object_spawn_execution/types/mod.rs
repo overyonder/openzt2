@@ -19,3 +19,10 @@ impl PendingBehaviorObjectSpawn {
             && task.is_at_or_nested_under(&self.origin, self.depth)
     }
 }
+
+/// Keeps the model of an at-actor spawn loading while its actor waits for it.
+#[derive(Component)]
+pub(super) struct PendingAtActorSpawnPrefab {
+    pub(super) object: AssetId,
+    pub(super) prefab: Handle<ScenePrefabAsset>,
+}

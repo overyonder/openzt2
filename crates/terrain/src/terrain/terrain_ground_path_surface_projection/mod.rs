@@ -21,7 +21,9 @@ use openzt2_zoo_state::topology::topology_graph_types::PathTile;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 use crate::terrain::terrain_surface_image_composition::blend_ground_path_surface_patch_into_terrain_surface_image;
+use crate::terrain::terrain_surface_image_composition::blend_terrain_surface_paint_into_terrain_surface_image;
 use crate::terrain::terrain_surface_image_composition::compose_terrain_surface_image;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainSurfaceImage;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -225,6 +227,52 @@ pub(super) fn mark_terrain_chunks_requiring_ground_path_surface_recomposition(
     }
 }
 
+/// Invalidates the terrain chunks under a painted texture that was added,
+/// changed or removed (a road piece built or demolished).
+pub(super) fn mark_terrain_chunks_under_changed_painted_textures(
+    mut commands: Commands,
+    changed: Query<(Entity, &TerrainPaintedTexture), Changed<TerrainPaintedTexture>>,
+    mut removed: RemovedComponents<TerrainPaintedTexture>,
+    mut painted: Local<HashMap<Entity, Rect>>,
+    chunks: Query<(
+        Entity,
+        &TerrainChunk,
+        Option<&GroundPathSurfaceProjectionRevision>,
+    )>,
+) {
+    let mut changed_areas = removed
+        .read()
+        .filter_map(|entity| painted.remove(&entity))
+        .collect::<Vec<_>>();
+    for (entity, paint) in &changed {
+        let area = Rect::from_center_size(paint.centre, Vec2::splat(paint.size_m));
+        changed_areas.extend(painted.insert(entity, area));
+        changed_areas.push(area);
+    }
+    if changed_areas.is_empty() {
+        return;
+    }
+    for (entity, chunk, projected) in &chunks {
+        if projected.is_none() {
+            continue;
+        }
+        // The chunk image reaches a few cells past the chunk.
+        let chunk_area = Rect::from_corners(
+            chunk.origin,
+            chunk.origin + Vec2::splat(f32::from(chunk.side.saturating_sub(1)) * chunk.spacing_m),
+        )
+        .inflate(chunk.spacing_m * 5.0);
+        if changed_areas
+            .iter()
+            .any(|area| !area.intersect(chunk_area).is_empty())
+        {
+            commands
+                .entity(entity)
+                .insert(GroundPathSurfaceProjectionDirty);
+        }
+    }
+}
+
 /// Rebuilds a terrain chunk's base image and applies the
 /// ground-path surface-patch records directly to that owned image.
 #[allow(clippy::too_many_arguments)]
@@ -238,6 +286,7 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
     mut dependencies: ResMut<GroundPathSurfaceImageDependencies>,
     grid: Res<TopologyGrid>,
     paths: Query<(Entity, &PathTile)>,
+    paints: Query<&TerrainPaintedTexture>,
     chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -461,7 +510,21 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
                 minimum.cmple(image_max).all() && maximum.cmpge(image_min).all()
             })
             .collect::<Vec<_>>();
-        if relevant_overlays.is_empty() && dirty.is_none() {
+        let relevant_paints = paints
+            .iter()
+            .filter(|paint| {
+                (paint.centre - (image_min + image_max) * 0.5)
+                    .abs()
+                    .cmple((image_max - image_min + Vec2::splat(paint.size_m)) * 0.5)
+                    .all()
+            })
+            .map(|paint| Some((paint, images.get(&paint.texture)?)))
+            .collect::<Option<Vec<_>>>();
+        // Wait for a painted texture to load rather than drop it.
+        let Some(relevant_paints) = relevant_paints else {
+            continue;
+        };
+        if relevant_overlays.is_empty() && relevant_paints.is_empty() && dirty.is_none() {
             commands
                 .entity(entity)
                 .insert(GroundPathSurfaceProjectionRevision(render_revision.0));
@@ -517,6 +580,20 @@ pub(super) fn recompose_ground_path_surfaces_into_terrain_chunk_images(
                     path_format = ?path_texture.texture_descriptor.format,
                     mask_format = ?detail_mask.texture_descriptor.format,
                     "ground path surface blend rejected source image");
+            }
+        }
+        for (paint, texture) in relevant_paints {
+            if blend_terrain_surface_paint_into_terrain_surface_image(
+                &mut composed,
+                chunk,
+                margin_cells,
+                paint,
+                texture,
+            )
+            .is_none()
+            {
+                error!(texture_format = ?texture.texture_descriptor.format,
+                    "terrain painted texture rejected source image");
             }
         }
         let Some(mut image) = images.get_mut(&surface.0) else {

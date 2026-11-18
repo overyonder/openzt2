@@ -51,15 +51,13 @@ impl AssetLoader for TerrainSourceAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_terrain", skip_all))]
     async fn load(
         &self,
         reader: &mut dyn Reader,
         _settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("terrain");
         let mut terrain_source_bytes = Vec::new();
         reader.read_to_end(&mut terrain_source_bytes).await?;
         let terrain_source =

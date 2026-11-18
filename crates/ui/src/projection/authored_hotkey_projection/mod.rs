@@ -149,6 +149,9 @@ fn authored_hotkey_character_key_code(value: char) -> Option<KeyCode> {
         'A'..='Z' => windows_virtual_key_code(value.to_ascii_uppercase() as u32),
         '0'..='9' => windows_virtual_key_code(value as u32),
         ' ' => Some(KeyCode::Space),
+        // The game mode turns an object being placed with these.
+        '.' => Some(KeyCode::Period),
+        ',' => Some(KeyCode::Comma),
         _ => None,
     }
 }

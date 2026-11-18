@@ -150,7 +150,10 @@ pub(super) fn integrate_non_physics_planned_navigation_motion(
             destination.arrival_radius_m,
             navigation_agent.radius_m,
         );
-        if planned_route.cursor >= planned_route.points.len() && docking.is_none() {
+        if !planned_route.points.is_empty()
+            && planned_route.cursor >= planned_route.points.len()
+            && docking.is_none()
+        {
             local_velocity.0 = Vec3::ZERO;
             planned_route.clear();
             commands

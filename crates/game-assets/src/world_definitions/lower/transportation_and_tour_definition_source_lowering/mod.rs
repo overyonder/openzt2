@@ -244,6 +244,19 @@ fn lower_authored_ground_transport_track_piece_presentations(
                 })
                 .transpose()?
                 .unwrap_or(0.0);
+            let paint_texture = texture_data
+                .attribute_named_any(&["paintTexture"])
+                .map(id)
+                .unwrap_or_default();
+            let paint_pair = |name| {
+                texture_data
+                    .attribute_named_any(&[name])
+                    .map(parse_f32_pair)
+                    .transpose()
+                    .map(Option::unwrap_or_default)
+            };
+            let paint_sample_start_texels = paint_pair("paintSampleStart")?;
+            let paint_copy_dimension_texels = paint_pair("paintCopyDimension")?;
             let elevated_path_texture = texture_data
                 .attribute_named_any(&["elevatedPathTexture"])
                 .map(id)
@@ -269,6 +282,9 @@ fn lower_authored_ground_transport_track_piece_presentations(
                 ground_decal_rotation_radians: ground_decal_rotation_degrees.to_radians(),
                 ground_decal_size_metres,
                 ground_decal_offset_metres,
+                paint_texture,
+                paint_sample_start_texels,
+                paint_copy_dimension_texels,
                 elevated_path_texture,
                 elevated_path_rotation_radians: elevated_path_rotation_degrees.to_radians(),
             })
@@ -303,22 +319,27 @@ pub(super) fn bind_station(
         ));
     }
     let kind = authored_transportation_track_kind(record)?;
-    let cardinal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryCardinal")?,
-                authored_transportation_offset_metres(record, "p_ExitCardinal")?,
-            ])
-        })
-        .transpose()?;
-    let diagonal_endpoint_offsets_metres = (kind == TransportationTrackKind::Ground)
-        .then(|| {
-            Ok([
-                authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
-                authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
-            ])
-        })
-        .transpose()?;
+    // A sky station's ropes leave from its two seed points, whichever way
+    // the station faces.
+    let (cardinal_endpoint_offsets_metres, diagonal_endpoint_offsets_metres) =
+        if kind == TransportationTrackKind::Ground {
+            (
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryCardinal")?,
+                    authored_transportation_offset_metres(record, "p_ExitCardinal")?,
+                ]),
+                Some([
+                    authored_transportation_offset_metres(record, "p_EntryDiagonal")?,
+                    authored_transportation_offset_metres(record, "p_ExitDiagonal")?,
+                ]),
+            )
+        } else {
+            let seeds = [
+                authored_transportation_offset_metres(record, "p_SeedA")?,
+                authored_transportation_offset_metres(record, "p_SeedB")?,
+            ];
+            (Some(seeds), Some(seeds))
+        };
     output
         .document
         .stations
@@ -375,19 +396,19 @@ pub(super) fn bind_track(
             "authored maximum transport-track slope exceeds stored permille",
         ));
     }
-    let purchase_cost_cents = find_descendant_named_with_nonempty_attribute(
-        record.source_document_element(),
-        "ZTEconomyComponent",
-        "cost",
-    )
-    .and_then(|economy| economy.attribute_named_any(&["cost"]))
-    .map(|cost| {
-        parse_blue_fang_source_numeric_lexeme::<f64>(cost)
-            .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
-            .and_then(|cost| money_cents(cost, record).map(i64::from))
-    })
-    .transpose()?
-    .unwrap_or_default();
+    // The concrete track inherits its cost from its type family (the
+    // skytower binder authors the pole's cost, not SkyTower_end).
+    let purchase_cost_cents = authored_type_family_components(record, "ZTEconomyComponent")
+        .into_iter()
+        .find(|economy| economy.attribute_named_any(&["cost"]).is_some())
+        .and_then(|economy| economy.attribute_named_any(&["cost"]))
+        .map(|cost| {
+            parse_blue_fang_source_numeric_lexeme::<f64>(cost)
+                .ok_or_else(|| BindError::record(record, "invalid authored transport-track cost"))
+                .and_then(|cost| money_cents(cost, record).map(i64::from))
+        })
+        .transpose()?
+        .unwrap_or_default();
     let sky_tower_presentation = (kind == TransportationTrackKind::Sky)
         .then(|| {
             lower_authored_sky_tower_track_presentation(
@@ -568,6 +589,45 @@ pub(super) fn bind_vehicle(
             seats,
             maximum_speed_metres_per_second,
         });
+    // The station panel's "vehicles sold" type lists (`groundvehicle`,
+    // `skytram` in `UI/layout/entityinfo.xml`) list vehicles from the catalogue.
+    let Some(icon) = record
+        .descendant_named("UIToggleButton")
+        .and_then(|button| find_descendant(button, "default"))
+        .and_then(|element| element.attribute_named_any(&["image"]))
+        .filter(|image| !image.trim().is_empty() && *image != "_VALUE_")
+        .map(id)
+    else {
+        return Ok(());
+    };
+    let name_key = record
+        .descendant_named("UIHelpInfo")
+        .and_then(|element| element.attribute_named_any(&["ids"]))
+        .map(id)
+        .unwrap_or_default();
+    let mut type_tokens = record.type_tokens();
+    if type_tokens.is_empty() {
+        type_tokens.push(record.key.to_owned());
+    }
+    output.document.catalogue.push(CatalogueEntry {
+        filter_values: super::catalogue_entry_source_lowering::authored_catalogue_filter_values(
+            record,
+        ),
+        id: id(&format!("catalogue/transport/{}", record.key)),
+        definition: id(record.key),
+        kind: type_tokens
+            .last()
+            .map_or_else(|| id(record.key), |value| id(value)),
+        kinds: type_tokens.iter().map(|value| id(value)).collect(),
+        category: CatalogueCategory::Transport,
+        authored_purchase_sort_key: authored_catalogue_purchase_sort_key(record),
+        authored_purchase_sort_fallback_type_name:
+            authored_catalogue_purchase_sort_fallback_type_name(record),
+        authored_type_registry_source_order: [u64::MAX; 3],
+        filters: CatalogueFilterFlags::PURCHASABLE,
+        name_key,
+        icon,
+    });
     Ok(())
 }
 

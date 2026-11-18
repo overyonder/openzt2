@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use openzt2_game_data::world_definitions::object_placement::ADJACENT_WATER_REACH_METRES;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
@@ -10,9 +11,6 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::aquatic_simulation_types::{
     AddAquaticWaterDirt, AquaticHome, Tank, TankGeometry, WaterFilter, WaterQuality,
 };
-
-/// How far in front of a filter its tank's water is looked for.
-const FILTER_TANK_REACH_METRES: f32 = 3.0;
 
 /// Dirtiness is the share of a tank's volume that is dirt, so the same amount
 /// matters less in a bigger tank. Water quality is its complement in permille.
@@ -87,17 +85,12 @@ pub(super) fn clean_tank_water_through_filters(
         }
         let origin = transform.translation().xz();
         let forward = transform.forward().xz().normalize_or_zero();
-        // Placement doesn't turn filters to face their wall yet, so every side is searched.
-        let tank = [forward, forward.perp(), -forward, -forward.perp()]
-            .into_iter()
-            .filter_map(|side| {
-                locate_habitat_at_world_position(
-                    &habitats,
-                    origin + side * FILTER_TANK_REACH_METRES,
-                    *grid,
-                )
-            })
-            .find(|habitat| tanks.contains(*habitat));
+        let tank = locate_habitat_at_world_position(
+            &habitats,
+            origin + forward * ADJACENT_WATER_REACH_METRES,
+            *grid,
+        )
+        .filter(|habitat| tanks.contains(*habitat));
         let Some((geometry, mut quality)) = tank.and_then(|tank| tanks.get_mut(tank).ok()) else {
             continue;
         };

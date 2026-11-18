@@ -7,12 +7,14 @@ publish.workspace = true
 license.workspace = true
 
 [features]
+tracing = ["dep:tracing"]
 testing = []
 
 [lints]
 workspace = true
 
 [dependencies]
+tracing = { version = "0.1", features = ["attributes"], optional = true }
 openzt2_game_data.workspace = true
 
 d3d9-effects.workspace = true

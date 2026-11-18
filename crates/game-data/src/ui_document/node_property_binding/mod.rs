@@ -74,6 +74,11 @@ pub enum UiBooleanPropertyBindingSource {
     /// The most recent first-person training trace was rejected.
     TrainingAttemptRejected,
     TransportCircuitClosed,
+    /// The selected station runs the given kind of track: the station panel
+    /// shows only the matching vehicles-sold list.
+    TransportStationRunsSkyTrack {
+        sky: bool,
+    },
     TransportWaiting,
     TransportRiding,
     ScenarioRunning,
@@ -117,6 +122,8 @@ pub enum UiTextPropertyBindingSource {
     SelectedEntityName,
     GraphicsDetailSettingLabel,
     GraphicsDetailSettingLevel,
+    /// Resolution picked in the open options screen, before it is accepted.
+    DraftDisplayResolution,
     ZooName,
     SelectedEntityDefinitionName,
     SelectedEntitySaleConfirmation,
@@ -304,7 +311,6 @@ pub enum UiIntegerPropertyBindingSource {
     FacilityPriceCents,
     FacilityCapacityUsed,
     FacilityCapacityTotal,
-    FacilityConditionPermille,
     FacilityWasteUnits,
     FacilityWasteCapacity,
     FacilityTrashLevel,

@@ -1,17 +1,6 @@
 use bevy::prelude::*;
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-#[repr(transparent)]
-/// Remaining maintainable-object condition, where 1,000 is pristine.
-pub struct MaintainableObjectConditionPermille(pub u16);
-
-impl MaintainableObjectConditionPermille {
-    pub const fn is_valid(self) -> bool {
-        self.0 <= 1_000
-    }
-}
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 /// Waste retained by a facility and the maximum amount it can retain.
 pub struct FacilityContainedWaste {
     /// Current retained waste quantity.
@@ -119,16 +108,11 @@ pub struct ZooCleanlinessPermille(pub Option<u16>);
 #[derive(Resource, Debug, Clone, Copy, Default, PartialEq, Eq)]
 /// Incremental source totals used to project whole-zoo cleanliness.
 pub struct IncrementalZooCleanlinessTotals {
-    pub maintainable_condition_permille_sum: u64,
-    pub maintainable_object_count: u32,
     pub contained_waste_units: u64,
     pub contained_waste_capacity_units: u64,
     pub uncontained_waste_units: u64,
     pub requires_recalculation: bool,
 }
-
-#[derive(Component)]
-pub struct MaintenanceRepairStaffJobKindMarker;
 
 #[derive(Component)]
 pub struct WasteContainerEmptyingStaffJobKindMarker;
@@ -150,40 +134,6 @@ pub struct AuthoredMaintenanceFactsResolutionMarker;
 pub struct AnimalWasteProductionScheduleResolutionMarker;
 
 impl IncrementalZooCleanlinessTotals {
-    pub fn add_maintainable_object_condition(
-        &mut self,
-        maintainable_object_condition: MaintainableObjectConditionPermille,
-    ) {
-        self.maintainable_condition_permille_sum = self
-            .maintainable_condition_permille_sum
-            .saturating_add(u64::from(maintainable_object_condition.0));
-        self.maintainable_object_count = self.maintainable_object_count.saturating_add(1);
-        self.requires_recalculation = true;
-    }
-
-    pub fn remove_maintainable_object_condition(
-        &mut self,
-        maintainable_object_condition: MaintainableObjectConditionPermille,
-    ) {
-        self.maintainable_condition_permille_sum = self
-            .maintainable_condition_permille_sum
-            .saturating_sub(u64::from(maintainable_object_condition.0));
-        self.maintainable_object_count = self.maintainable_object_count.saturating_sub(1);
-        self.requires_recalculation = true;
-    }
-
-    pub fn replace_maintainable_object_condition(
-        &mut self,
-        previous_condition: MaintainableObjectConditionPermille,
-        current_condition: MaintainableObjectConditionPermille,
-    ) {
-        self.maintainable_condition_permille_sum = self
-            .maintainable_condition_permille_sum
-            .saturating_sub(u64::from(previous_condition.0))
-            .saturating_add(u64::from(current_condition.0));
-        self.requires_recalculation |= previous_condition != current_condition;
-    }
-
     pub fn add_facility_contained_waste(&mut self, contained_waste: FacilityContainedWaste) {
         self.contained_waste_units = self
             .contained_waste_units

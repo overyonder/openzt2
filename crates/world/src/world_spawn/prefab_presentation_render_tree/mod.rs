@@ -16,8 +16,6 @@ use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement
 use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 
 /// Spawn a prefab for isolated render scenes, such as the shell globe.
 pub fn spawn_prefab_render_tree(
@@ -63,7 +61,8 @@ pub fn spawn_prefab_render_tree(
                     PrefabAuthoredBillboardOrientationMode::from_authored_mode_and_local_rotation(
                         billboard.mode,
                         transform.rotation,
-                    ),
+                    )
+                    .facing_positive_z(billboard.faces_positive_z),
                 );
             }
             entity.id()
@@ -178,15 +177,12 @@ pub fn spawn_prefab_render_tree(
 
 pub(super) fn hydrate_prefab_presentations(
     mut commands: Commands,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     pending: Query<
         (Entity, &PrefabPresentation, Option<&PrefabShadowPolicy>),
         Without<PrefabPresentationHydrated>,
     >,
 ) {
-    let _performance_timer =
-        performance.measure(WorldLoadingPerformanceStage::PrefabPresentationHydration);
     for (entity, request, inherited_shadow_policy) in &pending {
         let Some(prefab) = prefabs.get(&request.0) else {
             continue;

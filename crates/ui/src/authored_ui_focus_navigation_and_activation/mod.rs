@@ -281,25 +281,44 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
     }
 }
 
+#[derive(Component)]
+pub(super) struct AuthoredHoverPresentation;
+
 pub(super) fn present_controller_authored_ui_focus(
     active_input: Res<ActiveInputDevice>,
     context: ActiveAuthoredUiContext,
     scopes: Query<(Entity, Ref<UiFocusScope>)>,
-    mut nodes: Query<(Entity, &UiDocumentOwner, &mut UiFocusPresentation), With<UiFocusable>>,
+    mut nodes: Query<(&UiDocumentOwner, &mut UiFocusPresentation), With<UiFocusable>>,
+    authored_hover: Query<Entity, With<AuthoredHoverPresentation>>,
+    mut highlighted: Local<Vec<Entity>>,
 ) {
     if !active_input.is_changed() && !scopes.iter().any(|(_, scope)| scope.is_changed()) {
         return;
     }
     let controller_focus = matches!(active_input.source, ActionSource::Controller(_));
-    for (root, scope) in &scopes {
-        for (entity, owner, mut focused) in &mut nodes {
+    for entity in highlighted.drain(..).chain(authored_hover.iter()) {
+        if let Ok((owner, mut focused)) = nodes.get_mut(entity) {
+            let scope = scopes.get(context.document_scope(owner.0));
+            if focused.0
+                && scope.is_ok_and(|(_, scope)| !controller_focus || scope.focused != Some(entity))
+            {
+                focused.0 = false;
+            }
+        }
+    }
+    if controller_focus {
+        for (root, scope) in &scopes {
+            let Some(entity) = scope.focused else {
+                continue;
+            };
+            let Ok((owner, mut focused)) = nodes.get_mut(entity) else {
+                continue;
+            };
             if context.document_scope(owner.0) != root {
                 continue;
             }
-            let next = controller_focus && scope.focused == Some(entity);
-            if focused.0 != next {
-                focused.0 = next;
-            }
+            focused.set_if_neq(UiFocusPresentation(true));
+            highlighted.push(entity);
         }
     }
 }

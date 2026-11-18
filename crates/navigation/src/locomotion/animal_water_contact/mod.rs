@@ -1,26 +1,23 @@
 use bevy::prelude::*;
-use openzt2_game_assets::{
-    species::species_asset_types::{SpeciesAsset, SpeciesAssets},
-    terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
-};
+use openzt2_game_assets::species::species_asset_types::{SpeciesAsset, SpeciesAssets};
 use openzt2_zoo_state::{
     animal_lifecycle::types::AnimalVariant,
     locomotion::locomotion_types::{AnimalTerrainWaterContact, LocomotionMode, SwimLayer},
-    terrain::{
-        terrain_chunk_types::{EditedTerrainSamples, TerrainChunk, TerrainIndex},
-        terrain_world_sampling::{sample_terrain, terrain_chunk_at},
-    },
+    terrain::dry_surface_eligibility::DrySurfaceEligibility,
 };
 
 pub(super) fn project_animal_water_contact(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
-    terrain_assets: Res<Assets<TerrainAsset>>,
-    terrain_index: Res<TerrainIndex>,
-    chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    animals: Query<
-        (Entity, &AnimalVariant, &Transform, Option<&LocomotionMode>),
+    surfaces: DrySurfaceEligibility,
+    mut animals: Query<
+        (
+            Entity,
+            &AnimalVariant,
+            &mut Transform,
+            Option<&LocomotionMode>,
+        ),
         (
             Without<openzt2_zoo_state::animal_health::types::Dead>,
             Without<openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated>,
@@ -30,19 +27,13 @@ pub(super) fn project_animal_water_contact(
     let Some(species) = species_index.get(&species_assets) else {
         return;
     };
-    for (entity, variant, transform, current_mode) in &animals {
-        let Some((chunk, edited)) = terrain_chunk_at(&terrain_index, transform.translation.xz())
-            .and_then(|entity| chunks.get(entity).ok())
-        else {
+    for (entity, variant, mut transform, current_mode) in &mut animals {
+        let position = transform.translation.xz();
+        let Some(ground) = surfaces.ground_height(position) else {
             continue;
         };
-        let Some(sample) = terrain_assets
-            .get(&chunk.asset)
-            .and_then(|asset| sample_terrain(chunk, asset, edited, transform.translation.xz()))
-        else {
-            continue;
-        };
-        let depth_m = sample.water_height_m.map(|height| height - sample.height_m);
+        let surface = surfaces.water_surface_height(position);
+        let depth_m = surface.map(|height| height - ground);
         commands
             .entity(entity)
             .insert(AnimalTerrainWaterContact { depth_m });
@@ -66,6 +57,13 @@ pub(super) fn project_animal_water_contact(
         } else {
             LocomotionMode::Ground
         };
+        // Motion fits a swimmer to the ground under a tank, whose water is not
+        // terrain water; a leap above the surface stays where it is.
+        if let Some(surface) = surface.filter(|_| next == LocomotionMode::Swim) {
+            if transform.translation.y < surface {
+                transform.translation.y = surface;
+            }
+        }
         if current_mode.is_none() || next != current {
             commands.entity(entity).insert(next);
             if next == LocomotionMode::Swim {

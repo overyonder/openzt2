@@ -11,10 +11,8 @@ use bevy::prelude::MessageWriter;
 use bevy::prelude::Name;
 use bevy::prelude::Query;
 use bevy::prelude::Res;
-use bevy::prelude::ResMut;
 use bevy::prelude::With;
 use openzt2_game_data::AssetId;
-use openzt2_game_assets::asset_source::AssetArchives;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -32,16 +30,12 @@ use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::Selec
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
 
 pub fn accept_queued_world_load_after_required_assets_resolve(
     mut commands: Commands,
-    archives: Res<AssetArchives>,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     mut requests: MessageReader<BeginWorldLoad>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     active_scenarios: Res<WorldScenarios>,
@@ -57,29 +51,9 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
     for request in requests.read() {
         if queued.is_none() {
             demanded_starts.clear();
-            performance.begin(request.scenario, &archives);
         }
         queued.get_or_insert(*request);
     }
-    if performance.progress_report_is_due() {
-        info!(
-            target: "openzt2_scene_loading",
-            definitions_ready = active_definitions.get(&definitions).is_some(),
-            world_root_count = roots.iter().count(),
-            hydration = ?pending.iter().next(),
-            "scene loading pending owners"
-        );
-        for (start, handle) in demanded_starts.iter() {
-            info!(
-                target: "openzt2_scene_loading",
-                ?start,
-                path = ?asset_server.get_path(handle.id()),
-                state = ?asset_server.get_load_states(handle.id()),
-                "scene loading requested starting zoo"
-            );
-        }
-    }
-    let _performance_timer = performance.measure(WorldLoadingPerformanceStage::RequestAcceptance);
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -108,8 +82,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         });
         *queued = None;
         demanded_starts.clear();
-        drop(_performance_timer);
-        performance.finish_and_report(&archives, "failed");
         return;
     }
     let Some((
@@ -157,8 +129,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
             });
             *queued = None;
             demanded_starts.clear();
-            drop(_performance_timer);
-            performance.finish_and_report(&archives, "failed");
         }
         return;
     };
@@ -174,8 +144,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         });
         *queued = None;
         demanded_starts.clear();
-        drop(_performance_timer);
-        performance.finish_and_report(&archives, "failed");
         return;
     };
     if start_record.next_persistent_identifier == Some(0) {
@@ -187,8 +155,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         });
         *queued = None;
         demanded_starts.clear();
-        drop(_performance_timer);
-        performance.finish_and_report(&archives, "failed");
         return;
     }
     let zoo_name = &start_record.name;
@@ -204,8 +170,6 @@ pub fn accept_queued_world_load_after_required_assets_resolve(
         });
         *queued = None;
         demanded_starts.clear();
-        drop(_performance_timer);
-        performance.finish_and_report(&archives, "failed");
         return;
     };
     let terrain_handle = asset_server.load::<TerrainAsset>(terrain_path.to_owned());

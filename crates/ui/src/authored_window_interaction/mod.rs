@@ -1,4 +1,5 @@
 use bevy::{input::mouse::AccumulatedMouseMotion, prelude::*};
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiAuthoredWindowInteractionPolicy {
@@ -21,13 +22,17 @@ impl UiAuthoredWindowInteractionPolicy {
 
 pub(super) fn drag_authored_windows_from_accumulated_pointer_motion(
     motion: Res<AccumulatedMouseMotion>,
-    mut windows: Query<(&UiAuthoredWindowInteractionPolicy, &Interaction, &mut Node)>,
+    mut windows: Query<(
+        &UiAuthoredWindowInteractionPolicy,
+        &UiPointerInteraction,
+        &mut Node,
+    )>,
 ) {
     if motion.delta == Vec2::ZERO {
         return;
     }
     for (policy, interaction, mut node) in &mut windows {
-        if policy.draggable && *interaction == Interaction::Pressed {
+        if policy.draggable && *interaction == UiPointerInteraction::Pressed {
             if let Val::Px(left) = &mut node.left {
                 *left += motion.delta.x;
             }

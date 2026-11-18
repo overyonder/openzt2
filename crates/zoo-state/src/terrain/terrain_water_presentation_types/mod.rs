@@ -202,6 +202,7 @@ pub struct TerrainWaterMembershipIndex {
     height: u32,
     point_owners: Box<[Option<Entity>]>,
     side_owners: Box<[[Option<Entity>; 4]]>,
+    has_water_sides: bool,
     regions: Box<[TerrainWaterRegionSpatialIndex]>,
     empty_selector_topology: bool,
     selector_projection: Box<[Option<[u8; 4]>]>,
@@ -286,6 +287,7 @@ impl TerrainWaterMembershipIndex {
             width,
             height,
             point_owners,
+            has_water_sides: side_owners.iter().flatten().any(Option::is_some),
             side_owners,
             regions,
             empty_selector_topology,
@@ -431,6 +433,10 @@ impl TerrainWaterMembershipIndex {
         self.region_source_revision = source.region_source_revision;
         self.tank_minimum_depth = source.tank_minimum_depth;
         Some(self)
+    }
+
+    pub fn has_water_sides(&self) -> bool {
+        self.has_water_sides
     }
 
     pub fn selector_codes(&self, tile: UVec2) -> Option<&[u8; 4]> {

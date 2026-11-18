@@ -125,7 +125,8 @@ impl<T: Pod + ShaderType + ShaderSize> GpuBuffer<T> {
         if buffer_usage.contains(BufferUsages::UNIFORM) {
             <T as ShaderType>::assert_uniform_compat();
         }
-        // Capacity is derived from the physical buffer so the two can't disagree.
+        // Capacity is derived from the physical buffer so the two can't
+        // disagree.
         debug_assert_eq!(
             buffer.size() % item_size,
             0,
@@ -168,12 +169,34 @@ impl<T: Pod + ShaderType + ShaderSize> GpuBuffer<T> {
         if let Some(index) = self.free_list.pop() {
             index
         } else {
-            // Note: we may return an index past the buffer capacity. This will instruct
-            // allocate_gpu() to re-allocate the buffer.
+            // Note: we may return an index past the buffer capacity. This will
+            // instruct allocate_gpu() to re-allocate the buffer.
             let index = self.used_size;
             self.used_size += 1;
             index
         }
+    }
+
+    /// Allocate a contiguous slice of new entries in the buffer.
+    ///
+    /// If the GPU buffer has not enough storage, or is not allocated yet, this
+    /// schedules a (re-)allocation, which must be applied by calling
+    /// [`allocate_gpu()`] once a frame after all [`allocate()`] calls were made
+    /// for that frame.
+    ///
+    /// # Returns
+    ///
+    /// The index of the first allocated entry.
+    ///
+    /// [`allocate_gpu()`]: Self::allocate_gpu
+    /// [`allocate()`]: Self::allocate
+    pub fn allocate_slice(&mut self, count: u32) -> u32 {
+        // FIXME - we bypass the free list to be sure to have a contiguous slice
+        // Note: we may return an index past the buffer capacity. This will
+        // instruct allocate_gpu() to re-allocate the buffer.
+        let base_index = self.used_size;
+        self.used_size += count;
+        base_index
     }
 
     /// Free an existing entry.
@@ -285,8 +308,8 @@ impl<T: Pod + ShaderType + ShaderSize> GpuBuffer<T> {
             return false;
         }
 
-        // Ensure we allocate at least 256 more entries than what we need this frame,
-        // and round that to make it nicer for the GPU.
+        // Ensure we allocate at least 256 more entries than what we need this
+        // frame, and round that to make it nicer for the GPU.
         let new_capacity = (self.used_size + 256).next_multiple_of(1024);
         if new_capacity <= old_capacity {
             return false;

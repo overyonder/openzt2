@@ -4,6 +4,7 @@ mod diagnostics;
 mod launch;
 mod missing_game_content_screen;
 mod openzt2_game_plugin_group;
+mod render_scheduling;
 
 use bevy::{
     asset::{io::AssetSourceId, AssetApp, AssetPlugin},
@@ -39,6 +40,7 @@ fn run_game_application(launch_configuration: GameLaunchConfiguration) -> std::i
         enabled_z2f_archive_paths,
     } = launch_configuration;
     let mut game_application = App::new();
+    render_scheduling::configure(&mut game_application);
 
     let content_result = enabled_z2f_archive_paths.and_then(|paths| {
         add_enabled_z2f_archives_as_default_asset_source(&mut game_application, paths)
@@ -117,7 +119,6 @@ fn execute_short_main_world_systems_without_per_system_task_dispatch(app: &mut A
         First.intern(),
         PreUpdate.intern(),
         Update.intern(),
-        PostUpdate.intern(),
         Last.intern(),
         FixedFirst.intern(),
         FixedPreUpdate.intern(),
@@ -157,9 +158,7 @@ fn add_game_persistence_directories(game_application: &mut App) -> std::io::Resu
     Ok(())
 }
 
-fn add_default_bevy_platform_plugins(
-    game_application: &mut App,
-) {
+fn add_default_bevy_platform_plugins(game_application: &mut App) {
     let default_plugins = DefaultPlugins
         .set(
             bevy::gltf::GltfPlugin::default()
@@ -228,7 +227,7 @@ fn add_openzt2_game_states_and_update_schedules(game_application: &mut App) {
         .init_state::<GamePhase>()
         .insert_resource(Time::<Fixed>::from_hz(30.0))
         .insert_resource(Time::<Virtual>::from_max_delta(
-            std::time::Duration::from_secs_f64(2.0 / 30.0),
+            std::time::Duration::from_millis(250),
         ))
         .configure_sets(
             Update,

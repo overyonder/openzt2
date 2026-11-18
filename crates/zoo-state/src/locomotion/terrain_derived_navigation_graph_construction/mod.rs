@@ -44,8 +44,6 @@ impl TerrainDerivedNavigationGraph {
         // conversion exact for every accepted value.
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let terrain_cell_size_centimetres = terrain_cell_size_centimetres.round() as u16;
-        let terrain_tile_size_centimetres = u32::from(terrain_cell_size_centimetres)
-            .checked_mul(u32::from(terrain_cells_per_tile))?;
         let terrain_tile_grid_dimensions = [
             authored_terrain_grid.sector_columns,
             authored_terrain_grid.sector_rows,
@@ -136,7 +134,8 @@ impl TerrainDerivedNavigationGraph {
                         navigation_nodes.push(TerrainDerivedNavigationGraphNode {
                             height_centimetres,
                             minimum_triangle_normal_y,
-                            clearance_centimetres: terrain_cell_size_centimetres,
+                            // Open terrain does not narrow; fences and objects block separately.
+                            clearance_centimetres: u16::MAX,
                             water_depth_centimetres,
                             eligibility_flags,
                         });
@@ -144,16 +143,11 @@ impl TerrainDerivedNavigationGraph {
                 }
             }
         }
-        (navigation_nodes.len() == navigation_node_count).then_some(Self {
+        Some(Self::from_terrain_nodes(
             terrain_cell_size_centimetres,
             terrain_cells_per_tile,
-            terrain_tile_size_centimetres,
             terrain_tile_grid_dimensions,
-            navigation_nodes: navigation_nodes.into_boxed_slice(),
-            path_surfaces: Vec::new(),
-            path_surface_edges: std::collections::BTreeMap::new(),
-            path_surfaces_by_cell: std::collections::BTreeMap::new(),
-            ground_path_nodes: Vec::new(),
-        })
+            navigation_nodes.into_boxed_slice(),
+        ))
     }
 }

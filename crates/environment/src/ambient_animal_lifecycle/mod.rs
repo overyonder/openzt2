@@ -5,6 +5,7 @@ use openzt2_game_data::{
 };
 
 use openzt2_game_assets::effect::SpawnParticleEffectEmitter;
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -46,7 +47,13 @@ pub(super) fn spawn_eligible_ambient_animals_from_authored_environment_spawners(
     mut spawners: Query<(&WorldMember, &mut AmbientAnimalSpawner)>,
     ambient_animals: Query<(&AmbientAnimal, &WorldMember)>,
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
+    graphics: Option<Res<GraphicsSettings>>,
 ) {
+    // Low environment detail authors `ambientsOn` false; animals already
+    // spawned live out their authored lifetime.
+    if graphics.is_some_and(|graphics| !graphics.ambient_effects) {
+        return;
+    }
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

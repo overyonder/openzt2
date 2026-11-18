@@ -1,5 +1,6 @@
 //! Starts authored animal tasks through the existing behavior executor.
 
+mod animal_targets;
 pub(super) mod candidate_facts;
 mod scoring;
 pub(super) mod task_cooldowns;
@@ -7,7 +8,7 @@ mod world_object_targets;
 
 use super::{
     behavior_candidate_selection::{
-        candidate_requirements_are_satisfied, BehaviorCandidateRanking,
+        candidate_requirements_are_satisfied, WeightedBehaviorTaskRanking,
     },
     behavior_random_stream_state::BehaviorRandomStream,
     behavior_set_start_request_types::PendingBehaviorSet,
@@ -32,7 +33,9 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
-use candidate_facts::{AnimalCandidateFacts, AnimalCandidateFactsItem};
+use candidate_facts::{
+    AnimalCandidateFacts, AnimalCandidateFactsItem, animal_subject_type_can_match,
+};
 use openzt2_game_data::{
     behavior::{document::BehaviorTask, eligibility::BehaviorCandidateRole},
     AssetId,
@@ -43,9 +46,18 @@ use world_object_targets::{
 };
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{BehaviorSelfToken, ClaimedBehaviorSelfToken};
 
+#[derive(Default)]
+pub(super) struct AnimalSubjectTaskIndex {
+    by_variant:
+        bevy::platform::collections::HashMap<AssetId, Vec<(Handle<BehaviorDocumentAsset>, usize)>>,
+}
+
 pub(super) fn select_idle_animal_tasks(
-    documents: Res<LoadedBehaviorDocumentCollection>,
-    assets: Res<Assets<BehaviorDocumentAsset>>,
+    (documents, assets, mut subject_tasks): (
+        Res<LoadedBehaviorDocumentCollection>,
+        Res<Assets<BehaviorDocumentAsset>>,
+        Local<AnimalSubjectTaskIndex>,
+    ),
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -78,8 +90,16 @@ pub(super) fn select_idle_animal_tasks(
     shores: super::natural_water_targets::NaturalWaterTargets,
     mut shore_candidates: Local<Vec<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>>,
     tokens: Query<(Entity, &BehaviorSelfToken, &ChildOf), Without<ClaimedBehaviorSelfToken>>,
+    animal_targets: animal_targets::AnimalTargetSources,
     mut commands: Commands,
 ) {
+    if documents.is_changed()
+        || assets.is_changed()
+        || species_assets.is_changed()
+        || species_index.is_changed()
+    {
+        subject_tasks.by_variant.clear();
+    }
     world_objects.note_object_changes();
     if animals.is_empty() {
         return;
@@ -102,7 +122,7 @@ pub(super) fn select_idle_animal_tasks(
     world_objects.refresh_index(definitions);
     // The scratch list returns to its owner below, keeping its allocation.
     let mut candidates = std::mem::take(&mut *world_objects.candidates);
-    for (animal, facts, mut random, mut cooldowns) in &mut animals {
+    for (animal, facts, mut random, cooldowns) in &mut animals {
         let Some((definition, variant)) = species.find_variant_with_species(facts.variant_id())
         else {
             continue;
@@ -117,16 +137,65 @@ pub(super) fn select_idle_animal_tasks(
             .contains(&AssetId::from_key("b_generatestraversabilityinfo"))
             || authored_types.contains(&AssetId::from_key("unspecified"));
         let animal_habitat = world_objects.habitat_at(facts.transform.translation());
-        let mut ranking = BehaviorCandidateRanking::new(policy.minimum_score);
+        let mut ranking = WeightedBehaviorTaskRanking::new(policy.minimum_score);
         let mut considered_candidates = 0_u32;
-        for (document, declaration, task) in view.behavior_tasks() {
+        let Some(mut cooldowns) = cooldowns else {
+            // Delays are kept from the animal's first selection on.
+            commands
+                .entity(animal)
+                .insert(task_cooldowns::AnimalTaskCooldowns::default());
+            continue;
+        };
+        let variant_id = facts.variant_id();
+        let declarations = subject_tasks.by_variant.entry(variant_id).or_insert_with(|| {
+            view.behavior_tasks()
+                .filter(|(_, _, task)| {
+                    task_has_typed_subject_and_target(task)
+                        && candidate_requirements_are_satisfied(
+                            &task.candidate_eligibility_requirements,
+                            |role, required| {
+                                role != BehaviorCandidateRole::Subject
+                                    || animal_subject_type_can_match(
+                                        required,
+                                        authored_types,
+                                        definition.id,
+                                        variant_id,
+                                    )
+                            },
+                            |_, _| true,
+                        )
+                })
+                .map(|(document, index, _)| (document.clone(), index))
+                .collect()
+        });
+        for (document, declaration) in declarations.iter() {
+            let declaration = *declaration;
+            let Some(task) = assets
+                .get(document)
+                .and_then(|asset| asset.behavior_task_at_index(declaration))
+            else {
+                continue;
+            };
             if !subject_can_consider_task(task, &facts, authored_types) {
+                cooldowns.disarm(task.id);
                 continue;
             }
-            if cooldowns
-                .as_deref()
-                .is_some_and(|cooldowns| cooldowns.is_cooling_down(task.id, clock.tick))
+            if let Some(delay) = task
+                .task_delay_seconds
+                .filter(|delay| *delay != [0.0, 0.0])
+                .filter(|_| !cooldowns.is_armed(task.id))
             {
+                let delay_ticks = task_cooldowns::sample_task_delay_ticks(
+                    delay,
+                    random.0.unit_f32(),
+                    definitions.timing().fixed_hz,
+                );
+                debug!(?animal, task = %task.name, delay_ticks,
+                    "animal task became possible and waits out its delay");
+                cooldowns.arm(task.id, clock.tick, delay_ticks);
+                continue;
+            }
+            if cooldowns.is_cooling_down(task.id, clock.tick) {
                 debug!(?animal, task = %task.name, id = ?task.id, "animal task cooling down");
                 continue;
             }
@@ -176,6 +245,7 @@ pub(super) fn select_idle_animal_tasks(
                     trace!(?animal, task = %task.name, score, priority = task.priority.unwrap_or_default(),
                     "animal self task scored");
                     ranking.consider(
+                        task.id,
                         (
                             document,
                             declaration,
@@ -191,9 +261,117 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 continue;
             }
-            // Token payloads and concrete object participants need their own
-            // target producer; this path only considers an object-free target.
-            if !task.objects.is_empty() {
+            // Other animals, by type or as a held token's payload (`fromToken`),
+            // each with every held token the task's `Objects` names.
+            // ponytail: scans every animal per task, O(tasks x animals) per idle
+            // animal; index animals by type if large zoos make selection slow.
+            let from_token =
+                task.targets.len() == 1 && task.targets[0].eq_ignore_ascii_case("fromtoken");
+            let held_tokens = || {
+                tokens.iter().filter(|(_, token, recipient)| {
+                    recipient.parent() == animal
+                        && clock.tick >= token.available_at
+                        && clock.tick < token.expires_at
+                })
+            };
+            let animal_candidates = animal_targets
+                .animals
+                .iter()
+                .filter(|(target, target_facts)| {
+                    *target != animal && target_facts.world.root == facts.world.root
+                })
+                .flat_map(|(target, _)| {
+                    let objects: Vec<Option<(Entity, &BehaviorSelfToken)>> = if task
+                        .objects
+                        .is_empty()
+                    {
+                        vec![None]
+                    } else {
+                        held_tokens()
+                            .filter(|(_, token, _)| !from_token || token.payload == Some(target))
+                            .map(|(entity, token, _)| Some((entity, token)))
+                            .collect()
+                    };
+                    objects.into_iter().map(move |object| (target, object))
+                })
+                .collect::<Vec<_>>();
+            for (target, object) in animal_candidates {
+                let Ok((_, target_facts)) = animal_targets.animals.get(target) else {
+                    continue;
+                };
+                let Some((_, target_variant)) =
+                    species.find_variant_with_species(target_facts.variant_id())
+                else {
+                    continue;
+                };
+                let target_types = &target_variant.behavior_subject_type_identifiers;
+                if from_token && object.is_none() {
+                    continue;
+                }
+                if !candidate_requirements_are_satisfied(
+                    &task.candidate_eligibility_requirements,
+                    |role, required| match role {
+                        BehaviorCandidateRole::Subject => {
+                            facts.matches_type(required, authored_types)
+                        }
+                        BehaviorCandidateRole::Target => {
+                            if from_token {
+                                required == AssetId::from_key("fromtoken")
+                            } else {
+                                target_facts.matches_type(required, target_types)
+                            }
+                        }
+                        BehaviorCandidateRole::Object => {
+                            object.is_some_and(|(_, token)| token.name == required)
+                        }
+                    },
+                    |role, fact| match role {
+                        BehaviorCandidateRole::Subject => facts.satisfies(fact),
+                        BehaviorCandidateRole::Target => animal_targets.target_satisfies(
+                            animal,
+                            &facts,
+                            target,
+                            &target_facts,
+                            fact,
+                        ),
+                        BehaviorCandidateRole::Object => false,
+                    },
+                ) {
+                    continue;
+                }
+                let distance = facts
+                    .transform
+                    .translation()
+                    .distance(target_facts.transform.translation());
+                let Some(score) = scoring::score_animal_task(
+                    task,
+                    &facts,
+                    policy.outside_range_need_value,
+                    distance,
+                    &mut random,
+                ) else {
+                    continue;
+                };
+                considered_candidates += 1;
+                debug!(?animal, task = %task.name, ?target, score, distance,
+                    "animal task animal target scored");
+                ranking.consider(
+                    task.id,
+                    (
+                        document,
+                        declaration,
+                        task,
+                        target,
+                        object.map(|(entity, _)| entity),
+                        None,
+                    ),
+                    task.priority.unwrap_or_default(),
+                    score,
+                    |upper| random.range_u32(upper),
+                );
+            }
+            // World-object targets carry no token participants.
+            if !task.objects.is_empty() || from_token {
                 continue;
             }
             if task.targets.len() == 1
@@ -231,6 +409,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 } else {
@@ -239,6 +418,7 @@ pub(super) fn select_idle_animal_tasks(
                         facts.world.root,
                         facts.transform.translation(),
                         radius,
+                        facts.escaped,
                         &mut shore_candidates,
                     );
                 }
@@ -302,7 +482,102 @@ pub(super) fn select_idle_animal_tasks(
                     };
                     considered_candidates += 1;
                     ranking.consider(
+                        task.id,
                         (document, declaration, task, shore.region, None, Some(shore)),
+                        task.priority.unwrap_or_default(),
+                        score,
+                        |upper| random.range_u32(upper),
+                    );
+                }
+                continue;
+            }
+            // Fence tasks target the fences around the animal's habitat.
+            // ponytail: a fence task is told apart by its name.
+            let task_name = task.name.rsplit(':').next().unwrap_or_default();
+            if task_name.contains("Fence") {
+                let fence_types = task
+                    .targets
+                    .iter()
+                    .map(|target| AssetId::from_key(&target.to_ascii_lowercase()))
+                    .collect::<Vec<_>>();
+                let boundary = animal_habitat
+                    .and_then(|habitat| world_objects.habitat_regions.get(habitat).ok())
+                    .map_or(&[][..], |region| &region.boundary_fence_entities[..]);
+                if task.name.contains("Fence") {
+                    debug!(?animal, task = %task.name, ?animal_habitat, fences = boundary.len(),
+                        "animal fence task looks at its habitat's fences");
+                }
+                for &fence in boundary {
+                    let Ok((edge, transform)) = world_objects.fences.get(fence) else {
+                        continue;
+                    };
+                    let (Some(definition), Some(object)) = (
+                        definitions.find_fence(edge.definition),
+                        definitions.find_object(edge.definition),
+                    ) else {
+                        continue;
+                    };
+                    if !fence_types
+                        .iter()
+                        .any(|fence_type| object.behavior_type_identifiers.contains(fence_type))
+                    {
+                        continue;
+                    }
+                    // Only a fence that can break is worth bashing; a broken
+                    // segment has no broken variant of its own.
+                    if task_name.contains("Bash") && definition.broken.is_none() {
+                        continue;
+                    }
+                    let distance = facts.transform.translation().distance(
+                        world_objects
+                            .fence_middle(edge)
+                            .unwrap_or_else(|| transform.translation()),
+                    );
+                    let electric = object
+                        .behavior_type_identifiers
+                        .contains(&AssetId::from_key("b_electric"));
+                    if !candidate_requirements_are_satisfied(
+                        &task.candidate_eligibility_requirements,
+                        |role, required| match role {
+                            BehaviorCandidateRole::Subject => {
+                                facts.matches_type(required, authored_types)
+                            }
+                            BehaviorCandidateRole::Target => {
+                                object.behavior_type_identifiers.contains(&required)
+                            }
+                            BehaviorCandidateRole::Object => false,
+                        },
+                        |role, fact| match role {
+                            BehaviorCandidateRole::Subject => facts.satisfies(fact),
+                            BehaviorCandidateRole::Target => {
+                                fence_satisfies(fact, definition.strength, electric, distance)
+                            }
+                            BehaviorCandidateRole::Object => false,
+                        },
+                    ) || target_retry_delays
+                        .get(animal)
+                        .is_ok_and(|delays| delays.rejects(fence))
+                    {
+                        debug!(?animal, task = %task.name, ?fence, strength = definition.strength,
+                            electric, "animal fence task refused the fence");
+                        continue;
+                    }
+                    let Some(score) = scoring::score_animal_task(
+                        task,
+                        &facts,
+                        policy.outside_range_need_value,
+                        distance,
+                        &mut random,
+                    ) else {
+                        debug!(?animal, task = %task.name, ?fence,
+                            "animal fence task has no score for the fence");
+                        continue;
+                    };
+                    debug!(?animal, task = %task.name, ?fence, score, "animal fence task scored");
+                    considered_candidates += 1;
+                    ranking.consider(
+                        task.id,
+                        (document, declaration, task, fence, None, None),
                         task.priority.unwrap_or_default(),
                         score,
                         |upper| random.range_u32(upper),
@@ -339,11 +614,21 @@ pub(super) fn select_idle_animal_tasks(
                 }
                 let target_position = target.transform.translation();
                 let location = WorldObjectTargetLocation {
+                    // An escaped animal reaches what its breach leads to.
                     in_habitat: !area_restricted
-                        || animal_habitat.is_some_and(|habitat| {
-                            world_objects.habitat_at(target_position) == Some(habitat)
-                        }),
+                        || if facts.escaped {
+                            world_objects.escaped_animal_reaches(target_position)
+                        } else {
+                            animal_habitat.is_some_and(|habitat| {
+                                world_objects.habitat_at(target_position) == Some(habitat)
+                            })
+                        },
                     on_land: || world_objects.terrain_surfaces.on_land(target_position.xz()),
+                    distance: facts.transform.translation().distance(target_position),
+                    building_strength: object
+                        .destruction
+                        .as_ref()
+                        .and_then(|destruction| destruction.strength),
                 };
                 if !candidate_requirements_are_satisfied(
                     &task.candidate_eligibility_requirements,
@@ -416,6 +701,7 @@ pub(super) fn select_idle_animal_tasks(
                     minimum_score = policy.minimum_score,
                     "animal task target scored");
                 ranking.consider(
+                    task.id,
                     (document, declaration, task, target.entity, None, None),
                     task.priority.unwrap_or_default(),
                     score,
@@ -426,7 +712,7 @@ pub(super) fn select_idle_animal_tasks(
         // The known candidate subset cannot establish a native singleton.
         // Do not promote a zero score merely because another producer is missing.
         let Some(((document, declaration, task, target, object, shore), score)) =
-            ranking.finish(false)
+            ranking.finish(|upper| random.range_u32(upper))
         else {
             debug!(?animal, considered_candidates,
                 thirst = ?facts.source_need(AssetId::from_key("thirst")),
@@ -459,13 +745,7 @@ pub(super) fn select_idle_animal_tasks(
                 cooldown_ticks = ?delay_ticks,
                 "animal's chosen task has unsupported actions; no task starts");
             if let Some(delay_ticks) = delay_ticks {
-                if let Some(cooldowns) = cooldowns.as_deref_mut() {
-                    cooldowns.start(task.id, clock.tick, delay_ticks);
-                } else {
-                    let mut started = AnimalTaskCooldowns::default();
-                    started.start(task.id, clock.tick, delay_ticks);
-                    commands.entity(animal).insert(started);
-                }
+                cooldowns.start(task.id, clock.tick, delay_ticks);
             }
             continue;
         }
@@ -488,6 +768,17 @@ pub(super) fn select_idle_animal_tasks(
             started.insert(shore);
         } else {
             started.remove::<openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>();
+        }
+        // A crossing ends with the animal on the fence's far side.
+        if world_objects.fences.contains(target)
+            && super::behavior_fence_crossing_execution::fence_task_crosses(
+                task.name.rsplit(':').next().unwrap_or_default(),
+            )
+        {
+            started.insert(super::behavior_fence_crossing_execution::CrossingFence {
+                execution_id,
+                fence: target,
+            });
         }
         started.insert(BehaviorTaskExecutionState {
             execution_id,
@@ -515,6 +806,36 @@ pub(super) fn select_idle_animal_tasks(
     *world_objects.candidates = candidates;
 }
 
+/// A fence target's qualifiers: its strength, whether it is electric, how
+/// far it is and that it bounds the animal's habitat.
+fn fence_satisfies(
+    fact: &openzt2_game_data::behavior::eligibility::BehaviorCandidateEligibilityFact,
+    strength: u16,
+    electric: bool,
+    distance: f32,
+) -> bool {
+    use openzt2_game_data::behavior::eligibility::{
+        BehaviorConditionEligibilityFact as Condition, BehaviorEligibilityFactInput as Input,
+        BehaviorEligibilityFactValue as Value, BehaviorEntityStateEligibilityFact as State,
+        BehaviorSpatialEligibilityFact as Spatial,
+    };
+    match (fact.fact_input, fact.expected_value) {
+        (Input::Condition(Condition::FenceStrength), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(i32::from(strength) << 16, expected, fact.comparison)
+        }
+        (Input::State(State::Electric), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(i32::from(electric) << 16, expected, fact.comparison)
+        }
+        (Input::State(State::InHabitat), Value::Q16(expected)) => {
+            candidate_facts::compare_q16(1 << 16, expected, fact.comparison)
+        }
+        (Input::Spatial(Spatial::InSight), Value::Q16(radius)) => {
+            distance < radius as f32 / 65_536.0
+        }
+        _ => false,
+    }
+}
+
 fn unsupported_action(
     phase: &openzt2_game_data::behavior::document::BehaviorTaskActionPhase,
 ) -> Option<&str> {
@@ -536,19 +857,6 @@ fn subject_can_consider_task(
     facts: &AnimalCandidateFactsItem<'_, '_>,
     authored_types: &[AssetId],
 ) -> bool {
-    if task.targets.is_empty() || task.subjects.is_empty() {
-        return false;
-    }
-    if !task
-        .candidate_eligibility_requirements
-        .iter()
-        .any(|requirements| {
-            requirements.candidate_role == BehaviorCandidateRole::Subject
-                && !requirements.candidate_type_identifiers.is_empty()
-        })
-    {
-        return false;
-    }
     // Prune subject mismatches before scanning world targets, while retaining
     // all authored target checks for concrete candidate evaluation.
     candidate_requirements_are_satisfied(
@@ -558,4 +866,43 @@ fn subject_can_consider_task(
         },
         |role, fact| role != BehaviorCandidateRole::Subject || facts.satisfies(fact),
     )
+}
+
+fn task_has_typed_subject_and_target(task: &BehaviorTask) -> bool {
+    !task.targets.is_empty()
+        && !task.subjects.is_empty()
+        && task.candidate_eligibility_requirements.iter().any(|requirements| {
+            requirements.candidate_role == BehaviorCandidateRole::Subject
+                && !requirements.candidate_type_identifiers.is_empty()
+        })
+}
+
+#[cfg(test)]
+mod fence_target_tests {
+    use super::fence_satisfies;
+    use openzt2_game_data::behavior::eligibility::{
+        BehaviorCandidateEligibilityFact as Fact, BehaviorConditionEligibilityFact as Condition,
+        BehaviorEligibilityFactComparison as Comparison, BehaviorEligibilityFactInput as Input,
+        BehaviorEligibilityFactValue as Value, BehaviorEntityStateEligibilityFact as State,
+    };
+
+    #[test]
+    fn a_fence_qualifies_by_its_strength_and_whether_it_is_electric() {
+        // An elephant bashes fences up to strength 8 (`f_FenceStrength="LE 8"`).
+        let up_to_eight = Fact {
+            fact_input: Input::Condition(Condition::FenceStrength),
+            comparison: Comparison::LessOrEqual,
+            expected_value: Value::Q16(8 << 16),
+        };
+        assert!(fence_satisfies(&up_to_eight, 1, false, 5.0));
+        assert!(!fence_satisfies(&up_to_eight, 10, false, 5.0));
+        // A raptor bashes only fences that aren't electric (`b_Electric="false"`).
+        let not_electric = Fact {
+            fact_input: Input::State(State::Electric),
+            comparison: Comparison::Equal,
+            expected_value: Value::Q16(0),
+        };
+        assert!(fence_satisfies(&not_electric, 8, false, 5.0));
+        assert!(!fence_satisfies(&not_electric, 8, true, 5.0));
+    }
 }

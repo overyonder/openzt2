@@ -1,3 +1,4 @@
+use bevy::camera::primitives::Aabb;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCastSettings;
 use bevy::picking::mesh_picking::ray_cast::RayCastVisibility;
@@ -14,6 +15,15 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 };
 
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
+use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderRevision;
+
+#[derive(Default)]
+pub(crate) struct TerrainCursorHit {
+    ray: Option<Ray3d>,
+    chunks: usize,
+    hit: Option<(Vec3, Vec3)>,
+}
 
 pub(super) fn ensure_construction_cursor(
     mut commands: Commands,
@@ -43,48 +53,86 @@ pub(crate) fn update_construction_cursor(
     water_memberships: Query<&TerrainWaterMembershipIndex>,
     water_regions: TerrainWaterRegionQuery,
     mut cursors: Query<&mut ConstructionCursor>,
+    tool: Res<ConstructionTool>,
+    pickable_chunks: Query<
+        (),
+        (
+            With<TerrainRenderChunk>,
+            With<Mesh3d>,
+            With<Aabb>,
+            With<InheritedVisibility>,
+            With<GlobalTransform>,
+        ),
+    >,
+    changed_chunks: Query<
+        (),
+        (
+            With<TerrainRenderChunk>,
+            Or<(
+                Added<TerrainRenderChunk>,
+                Changed<Mesh3d>,
+                AssetChanged<Mesh3d>,
+                Changed<Aabb>,
+                Changed<GlobalTransform>,
+                Changed<InheritedVisibility>,
+                Changed<TerrainRenderRevision>,
+            )>,
+        ),
+    >,
+    mut cached: Local<TerrainCursorHit>,
 ) {
     if cursors.is_empty() {
+        cached.ray = None;
         return;
     }
-    let hit = (!ui_pointer_capture.over_ui)
-        .then_some(ray.0)
-        .flatten()
-        .and_then(|ray| {
-            let mut nearest = raycast_rendered_terrain_surface(
+    let pointer = ray.0.filter(|_| !ui_pointer_capture.over_ui);
+    let chunks = pickable_chunks.iter().len();
+    if pointer != cached.ray
+        || chunks != cached.chunks
+        || tool.is_changed()
+        || !changed_chunks.is_empty()
+    {
+        cached.ray = pointer;
+        cached.chunks = chunks;
+        cached.hit = pointer.and_then(|ray| {
+            raycast_rendered_terrain_surface(
                 ray,
                 &mut terrain_surface_mesh_ray_cast,
                 &terrain_chunks,
-            );
-            for (owner, region) in water_regions.iter() {
-                let Some(terrain) = terrains.get(region.terrain()) else {
-                    continue;
-                };
-                let Some(height) = region.surface_height(terrain) else {
-                    continue;
-                };
-                // The surface shader consumes source coordinates and displacement
-                // weights, so its input mesh is not a world-space picking mesh.
-                if ray.direction.y.abs() <= 0.0001 {
-                    continue;
-                }
-                let distance = (height - ray.origin.y) / ray.direction.y;
-                if distance < 0.0 {
-                    continue;
-                }
-                let world = ray.get_point(distance);
-                if !water_memberships.iter().any(|index| {
-                    index.terrain() == region.terrain().id()
-                        && index.owner_at_world_xz(world.xz(), terrain) == Some(Some(owner))
-                }) {
-                    continue;
-                }
-                if nearest.is_none_or(|(point, _)| distance < point.distance(ray.origin)) {
-                    nearest = Some((world, Vec3::Y));
-                }
-            }
-            nearest
+            )
         });
+    }
+    let hit = pointer.and_then(|ray| {
+        let mut nearest = cached.hit;
+        for (owner, region) in water_regions.iter() {
+            let Some(terrain) = terrains.get(region.terrain()) else {
+                continue;
+            };
+            let Some(height) = region.surface_height(terrain) else {
+                continue;
+            };
+            // The surface shader consumes source coordinates and displacement
+            // weights, so its input mesh is not a world-space picking mesh.
+            if ray.direction.y.abs() <= 0.0001 {
+                continue;
+            }
+            let distance = (height - ray.origin.y) / ray.direction.y;
+            if distance < 0.0 {
+                continue;
+            }
+            let world = ray.get_point(distance);
+            if !water_memberships.iter().any(|index| {
+                index.terrain() == region.terrain().id()
+                    && index.owner_at_world_xz(world.xz(), terrain) == Some(Some(owner))
+            }) {
+                continue;
+            }
+            if nearest.is_none_or(|(point, _)| distance < point.distance(ray.origin)) {
+                nearest = Some((world, Vec3::Y));
+            }
+        }
+        nearest
+    });
     for mut cursor in &mut cursors {
         let over_terrain = hit.is_some();
         if cursor.over_terrain != over_terrain {

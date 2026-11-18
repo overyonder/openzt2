@@ -1,4 +1,5 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 mod consumable_compatibility;
 use openzt2_game_data::behavior::{
     action::modification::{
@@ -12,12 +13,14 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_health::types::FreezeAnimal;
 use openzt2_zoo_state::animal_health::types::ThawAnimal;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::animal_lifecycle::types::{Mate, Pregnancy};
 use openzt2_zoo_state::animal_welfare::types::AdjustBathroom;
 use openzt2_zoo_state::animal_welfare::types::AdjustExercise;
 use openzt2_zoo_state::animal_welfare::types::AdjustHealthNeed;
 use openzt2_zoo_state::animal_welfare::types::AdjustHunger;
 use openzt2_zoo_state::animal_welfare::types::AdjustHygiene;
 use openzt2_zoo_state::animal_welfare::types::AdjustPrivacy;
+use openzt2_zoo_state::animal_welfare::types::AdjustReproduction;
 use openzt2_zoo_state::animal_welfare::types::AdjustRest;
 use openzt2_zoo_state::animal_welfare::types::AdjustSocial;
 use openzt2_zoo_state::animal_welfare::types::AdjustStimulation;
@@ -30,6 +33,10 @@ use openzt2_zoo_state::staff::staff_job_completion_rules::behavior_fact_modifica
 use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 
+use openzt2_zoo_state::guests::guest_simulation_types::{
+    AdjustGuestSatisfaction, GuestAttacked, GuestDeparturePoints,
+};
+
 use super::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
@@ -40,6 +47,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 #[derive(SystemParam)]
 pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     bathroom: MessageWriter<'w, AdjustBathroom>,
+    reproduction: MessageWriter<'w, AdjustReproduction>,
     hunger: MessageWriter<'w, AdjustHunger>,
     thirst: MessageWriter<'w, AdjustThirst>,
     rest: MessageWriter<'w, AdjustRest>,
@@ -55,6 +63,7 @@ pub(super) struct BehaviorFactModificationMessageWriters<'w> {
         'w,
         openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt,
     >,
+    guest_satisfaction: MessageWriter<'w, AdjustGuestSatisfaction>,
 }
 
 pub(super) fn apply_supported_current_behavior_fact_modifications(
@@ -73,8 +82,13 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut food_containers: Query<(Entity, &mut FoodContainer)>,
     mut drink_containers: Query<(Entity, &mut DrinkContainer)>,
     animals: Query<(), With<Animal>>,
+    pregnancies: Query<(), With<Pregnancy>>,
+    mates: Query<&Mate>,
+    caffeine_modes: Query<&CaffeineMode>,
     jobs: Query<&StaffJob>,
     compatibility: consumable_compatibility::AnimalConsumableCompatibility,
+    // A rampaging animal's attack scares its guest off (`AttackGuest_Rampage`).
+    mut guests: Query<&mut GuestDeparturePoints>,
     mut commands: Commands,
 ) {
     for (entity, mut task, mut random, current_job) in &mut tasks {
@@ -133,6 +147,19 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     return false;
                 }
             }
+            if guests.contains(affected_entity) {
+                return matches!(
+                    modification.modified_fact,
+                    BehaviorFact::DeparturePoints | BehaviorFact::Happiness | BehaviorFact::Attacked
+                ) && !matches!(
+                    modification.modification_value,
+                    openzt2_game_data::behavior::scalar::BehaviorScalarQ16::PriceEffectQ16(_)
+                );
+            }
+            // An animal's escape follows from where it stands.
+            if animals.contains(affected_entity) && modification.modified_fact == BehaviorFact::Escaped {
+                return true;
+            }
             behavior_fact_modification_has_runtime_owner(
                 modification,
                 affected_entity,
@@ -179,6 +206,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                             amount: value_q16 as f32 / 65536.0,
                         },
                     );
+                }
+                BehaviorFact::Reproduction => {
+                    modification_messages
+                        .reproduction
+                        .write(AdjustReproduction {
+                            animal,
+                            delta_q16: wellness_delta_q16,
+                        });
                 }
                 BehaviorFact::Hunger => {
                     modification_messages.hunger.write(AdjustHunger {
@@ -234,6 +269,18 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         delta_q16: wellness_delta_q16,
                     });
                 }
+                BehaviorFact::Pregnancy => {
+                    if modification.modification_operation
+                        == BehaviorFactModificationOperation::Clear
+                        || value_q16 == 0
+                    {
+                        commands.entity(animal).remove::<Pregnancy>();
+                    } else if !pregnancies.contains(animal) {
+                        commands.entity(animal).insert(Pregnancy {
+                            father: mates.get(animal).ok().map(|mate| mate.0),
+                        });
+                    }
+                }
                 BehaviorFact::Frozen => {
                     if modification.modification_operation
                         == BehaviorFactModificationOperation::Clear
@@ -285,6 +332,46 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                         unreachable!("FoodLevel target was validated before application");
                     }
                 }
+                BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode => {
+                    let mode = if modification.modified_fact == BehaviorFact::CaffeineMode {
+                        CaffeineMode::Caffeinated
+                    } else {
+                        CaffeineMode::Decaffeinated
+                    };
+                    CaffeineMode::write_authored(
+                        &mut commands.entity(animal),
+                        caffeine_modes.get(animal).ok(),
+                        mode,
+                        modification.modification_operation
+                            != BehaviorFactModificationOperation::Clear
+                            && value_q16 != 0,
+                    );
+                }
+                BehaviorFact::DeparturePoints => {
+                    if let Ok(mut departure_points) = guests.get_mut(animal) {
+                        departure_points.0 = departure_points.0.saturating_add(value_q16);
+                    }
+                }
+                // Source happiness is deprivation; the satisfaction message is wellness.
+                BehaviorFact::Happiness => {
+                    modification_messages
+                        .guest_satisfaction
+                        .write(AdjustGuestSatisfaction {
+                            guest: animal,
+                            delta_q16: value_q16.saturating_neg(),
+                        });
+                }
+                BehaviorFact::Attacked => {
+                    if modification.modification_operation
+                        == BehaviorFactModificationOperation::Clear
+                        || value_q16 == 0
+                    {
+                        commands.entity(animal).remove::<GuestAttacked>();
+                    } else {
+                        commands.entity(animal).insert(GuestAttacked);
+                    }
+                }
+                BehaviorFact::Escaped => {}
                 _ => {
                     unreachable!("unsupported fact modifications were rejected before application")
                 }
@@ -314,6 +401,12 @@ fn behavior_fact_modification_has_runtime_owner(
             && (food_containers.contains(affected_entity)
                 ^ drink_containers.contains(affected_entity));
     }
+    if matches!(
+        modification.modified_fact,
+        BehaviorFact::CaffeineMode | BehaviorFact::DeCaffeineMode
+    ) {
+        return true;
+    }
     if !animals.contains(affected_entity) {
         return false;
     }
@@ -321,6 +414,8 @@ fn behavior_fact_modification_has_runtime_owner(
         modification.modified_fact,
         BehaviorFact::Hunger
             | BehaviorFact::Bathroom
+            | BehaviorFact::Reproduction
+            | BehaviorFact::Pregnancy
             | BehaviorFact::Thirst
             | BehaviorFact::Rest
             | BehaviorFact::Privacy

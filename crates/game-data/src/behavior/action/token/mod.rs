@@ -18,6 +18,30 @@ pub struct BehaviorSelfTokenDelivery {
     /// the token's task can take over without the old task's failure branch.
     #[serde(default)]
     pub reconsider: bool,
+    /// `OnlyOne`: nothing is delivered while the recipient holds this token.
+    #[serde(default)]
+    pub only_one: bool,
+    /// `Payload`: the participant the token carries, such as the inviting
+    /// female in `t_Reproduce`, which a `fromToken` target resolves to.
+    #[serde(default)]
+    pub payload: Option<BehaviorTokenRecipient>,
+    /// `RetainOnFailure`: a task that claimed the token and failed leaves it
+    /// for the next attempt, as a due birth's `t_Pregnant` does.
+    #[serde(default)]
+    pub retain_on_failure: bool,
+    /// `GiveTo` naming an entity type, with `Radius`: replaces `recipient`.
+    #[serde(default)]
+    pub nearby: Option<BehaviorNearbyTokenRecipients>,
+}
+
+/// Every live animal of `entity_type` within `radius_m` of the subject, each
+/// receiving the token with `chance_percent` (`ChanceInRadius`), as a disease
+/// spreads to nearby animals.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub struct BehaviorNearbyTokenRecipients {
+    pub entity_type: AssetId,
+    pub radius_m: f32,
+    pub chance_percent: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

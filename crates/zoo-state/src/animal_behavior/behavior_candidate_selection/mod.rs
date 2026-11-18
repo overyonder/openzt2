@@ -71,6 +71,87 @@ impl<T: Copy> BehaviorCandidateRanking<T> {
     }
 }
 
+/// Ranks an animal's candidates: each task keeps its best target, as
+/// [`BehaviorCandidateRanking`] does, and among the tasks of the highest
+/// priority one is drawn with a chance in proportion to its score. A task
+/// that always outscores another, as an elephant's `Lie` outscores its
+/// `Sleep`, then no longer shuts it out.
+pub struct WeightedBehaviorTaskRanking<K, T> {
+    minimum_score: f32,
+    /// The task whose candidates are being considered, and its best one.
+    current: Option<(K, BehaviorCandidateRanking<T>, f32)>,
+    selected: Option<(T, f32)>,
+    best_priority: f32,
+    total_score: f32,
+}
+
+impl<K: PartialEq + Copy, T: Copy> WeightedBehaviorTaskRanking<K, T> {
+    pub fn new(minimum_score: f32) -> Self {
+        Self {
+            minimum_score,
+            current: None,
+            selected: None,
+            best_priority: f32::NEG_INFINITY,
+            total_score: 0.0,
+        }
+    }
+
+    /// Considers one candidate of `task`; a task's candidates come together.
+    pub fn consider(
+        &mut self,
+        task: K,
+        candidate: T,
+        priority: f32,
+        score: f32,
+        mut random: impl FnMut(u32) -> Option<u32>,
+    ) {
+        if self
+            .current
+            .as_ref()
+            .is_none_or(|(current, ..)| *current != task)
+        {
+            self.draw(&mut random);
+            self.current = Some((
+                task,
+                BehaviorCandidateRanking::new(self.minimum_score),
+                priority,
+            ));
+        }
+        if let Some((_, best, _)) = &mut self.current {
+            best.consider(candidate, priority, score, &mut random);
+        }
+    }
+
+    /// Enters the finished task's best candidate into the draw.
+    fn draw(&mut self, random: &mut impl FnMut(u32) -> Option<u32>) {
+        let Some((_, best, priority)) = self.current.take() else {
+            return;
+        };
+        let Some((candidate, score)) = best.finish(false) else {
+            return;
+        };
+        if priority < self.best_priority {
+            return;
+        }
+        if priority > self.best_priority {
+            self.best_priority = priority;
+            self.total_score = 0.0;
+        }
+        self.total_score += score;
+        const SCALE: u32 = 1 << 24;
+        if random(SCALE)
+            .is_some_and(|sample| (sample as f32) < score / self.total_score * SCALE as f32)
+        {
+            self.selected = Some((candidate, score));
+        }
+    }
+
+    pub fn finish(mut self, mut random: impl FnMut(u32) -> Option<u32>) -> Option<(T, f32)> {
+        self.draw(&mut random);
+        self.selected
+    }
+}
+
 /// Applies authored type and qualifier conjunctions without copying live facts.
 pub fn candidate_requirements_are_satisfied(
     requirements: &[BehaviorCandidateEligibilityRequirements],
@@ -112,9 +193,59 @@ pub fn score_supported_behavior_task(
     outside_range_need_value: f32,
     target_distance: f32,
     source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
+    scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
+) -> Option<f32> {
+    score_behavior_task(
+        task,
+        outside_range_need_value,
+        target_distance,
+        None,
+        source_need,
+        scalar_value,
+    )
+}
+
+/// As [`score_supported_behavior_task`], for an animal with its current good
+/// and bad need points: an authored `needPointsGood` or `needPointsBad` is
+/// the least the animal must have for the task to run, as `InviteReproduction`
+/// waits for a contented animal and `BashFence` for an unhappy one.
+pub fn score_behavior_task_with_need_points(
+    task: &openzt2_game_data::behavior::document::BehaviorTask,
+    outside_range_need_value: f32,
+    target_distance: f32,
+    need_points: (f32, f32),
+    source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
+    scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
+) -> Option<f32> {
+    score_behavior_task(
+        task,
+        outside_range_need_value,
+        target_distance,
+        Some(need_points),
+        source_need,
+        scalar_value,
+    )
+}
+
+fn score_behavior_task(
+    task: &openzt2_game_data::behavior::document::BehaviorTask,
+    outside_range_need_value: f32,
+    target_distance: f32,
+    need_points: Option<(f32, f32)>,
+    source_need: impl Fn(AssetId) -> Option<(i32, bool)>,
     mut scalar_value: impl FnMut(openzt2_game_data::behavior::scalar::BehaviorScalarQ16) -> Option<i32>,
 ) -> Option<f32> {
     use openzt2_game_data::behavior::score::BehaviorScore;
+    if let Some((good, bad)) = need_points {
+        let met = task.scores.iter().all(|score| match score {
+            BehaviorScore::AggregateGoodNeeds { weight } => good >= *weight,
+            BehaviorScore::AggregateBadNeeds { weight } => bad >= *weight,
+            _ => true,
+        });
+        if !met {
+            return None;
+        }
+    }
     if task
         .scores
         .iter()
@@ -151,6 +282,9 @@ pub fn score_supported_behavior_task(
             }
             // Applied once to the accumulated need score below.
             BehaviorScore::DistanceInfluence(_) => {}
+            // Need-point thresholds were checked above, when they are known.
+            BehaviorScore::AggregateGoodNeeds { .. } | BehaviorScore::AggregateBadNeeds { .. }
+                if need_points.is_some() => {}
             // Current need-point branches and biome multiplier have separate owners.
             // Until those inputs are available, do not silently treat them as neutral.
             _ => return None,
@@ -165,3 +299,112 @@ pub fn score_supported_behavior_task(
 
 #[cfg(test)]
 mod inherited_species_task_compatibility_tests;
+
+#[cfg(test)]
+mod need_point_threshold_tests {
+    use super::*;
+    use openzt2_game_data::behavior::document::{BehaviorTask, BehaviorTaskActionPhase};
+    use openzt2_game_data::behavior::scalar::BehaviorScalarQ16;
+    use openzt2_game_data::behavior::score::BehaviorScore;
+
+    fn task(scores: Vec<BehaviorScore>) -> BehaviorTask {
+        BehaviorTask {
+            id: AssetId::from_key("task"),
+            name: "task".to_owned(),
+            priority: None,
+            task_delay_seconds: None,
+            reservation_tag: None,
+            sensor_tag: None,
+            subjects: Vec::new(),
+            targets: Vec::new(),
+            objects: Vec::new(),
+            candidate_eligibility_requirements: Vec::new(),
+            scores,
+            execution: BehaviorTaskActionPhase::Supported(Vec::new()),
+            completion: BehaviorTaskActionPhase::Supported(Vec::new()),
+            failure: BehaviorTaskActionPhase::Supported(Vec::new()),
+        }
+    }
+
+    fn score(task: &BehaviorTask, need_points: (f32, f32)) -> Option<f32> {
+        score_behavior_task_with_need_points(
+            task,
+            0.0,
+            1.0,
+            need_points,
+            |_| Some((50 << 16, true)),
+            |value| match value {
+                BehaviorScalarQ16::FixedQ16(value) => Some(value),
+                _ => None,
+            },
+        )
+    }
+
+    #[test]
+    fn a_fence_bash_waits_for_its_bad_need_points() {
+        // As the shipped BashFence: needPointsBad="30" fixedScore="100".
+        let bash = task(vec![
+            BehaviorScore::AggregateBadNeeds { weight: 30.0 },
+            BehaviorScore::Fixed(100.0),
+        ]);
+        assert_eq!(score(&bash, (0.0, 29.8)), None);
+        assert_eq!(score(&bash, (0.0, 30.0)), Some(100.0));
+    }
+
+    #[test]
+    fn a_contented_task_waits_for_its_good_need_points_then_scores_its_needs() {
+        // As InviteReproduction: needPointsGood with reproduction="-40".
+        let invite = task(vec![
+            BehaviorScore::AggregateGoodNeeds { weight: 50.0 },
+            BehaviorScore::AttributeValue {
+                attribute: AssetId::from_key("reproduction"),
+                value: BehaviorScalarQ16::FixedQ16(-40 << 16),
+            },
+        ]);
+        assert_eq!(score(&invite, (49.0, 0.0)), None);
+        assert_eq!(score(&invite, (50.0, 0.0)), Some(20.0));
+        // Without need points, as for guests, the threshold stays unsupported.
+        assert_eq!(
+            score_supported_behavior_task(
+                &invite,
+                0.0,
+                1.0,
+                |_| Some((50 << 16, true)),
+                |_| { Some(-40 << 16) }
+            ),
+            None
+        );
+    }
+}
+
+#[cfg(test)]
+mod weighted_ranking_tests {
+    use super::WeightedBehaviorTaskRanking;
+
+    #[test]
+    fn tasks_of_the_top_priority_are_drawn_in_proportion_to_their_scores() {
+        let mut state = 1_u64;
+        let mut random = |upper: u32| {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            Some(((state >> 33) as u32) % upper)
+        };
+        let mut wins = [0_u32; 3];
+        for _ in 0..10_000 {
+            let mut ranking = WeightedBehaviorTaskRanking::new(0.0);
+            // Lie with two targets, the better one 40; Sleep 35; a
+            // lower-priority task that never runs.
+            ranking.consider("lie", 0, 0.0, 20.0, &mut random);
+            ranking.consider("lie", 0, 0.0, 40.0, &mut random);
+            ranking.consider("sleep", 1, 0.0, 35.0, &mut random);
+            ranking.consider("idle", 2, -1.0, 500.0, &mut random);
+            let (winner, _) = ranking.finish(&mut random).unwrap();
+            wins[winner] += 1;
+        }
+        // 40 / 75 and 35 / 75.
+        assert!((5_000..5_700).contains(&wins[0]), "{wins:?}");
+        assert!((4_300..5_000).contains(&wins[1]), "{wins:?}");
+        assert_eq!(wins[2], 0);
+    }
+}

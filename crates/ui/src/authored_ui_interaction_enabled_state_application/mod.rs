@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use super::authored_ui_focus_state::UiFocusable;
 use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
@@ -32,7 +33,7 @@ pub(super) fn apply_authored_ui_node_interaction_enabled_state_changes(
         &UiDocumentOwner,
         &mut UiInteractionEnabled,
         Option<&mut UiFocusable>,
-        &mut Interaction,
+        &mut UiPointerInteraction,
     )>,
 ) {
     for change in changes.read() {
@@ -43,7 +44,7 @@ pub(super) fn apply_authored_ui_node_interaction_enabled_state_changes(
                     focusable.enabled = change.enabled;
                 }
                 if !change.enabled {
-                    *interaction = Interaction::None;
+                    *interaction = UiPointerInteraction::None;
                 }
                 break;
             }

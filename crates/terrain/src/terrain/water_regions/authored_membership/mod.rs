@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use bevy::ecs::system::SystemParam;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -10,6 +11,52 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 
 mod height_support;
 mod selector_projection;
+
+use openzt2_zoo_state::{
+    aquatic::aquatic_simulation_types::TankGeometry,
+    habitat::habitat_types::HabitatRegion,
+    terrain::terrain_water_presentation_types::{
+        TerrainWaterRegionEdit, TerrainWaterRegionRetired,
+    },
+    topology::{
+        fence_segment_presentation_types::{
+            FenceSegmentPrefab, FenceTerrainEndpointPresentationCells,
+        },
+        topology_graph_types::{FenceEdge, PathTile, TileSurface, TopologyNode},
+    },
+};
+
+#[derive(SystemParam)]
+struct ComponentChanges<'w, 's, T: Component> {
+    changed: Query<'w, 's, (), Changed<T>>,
+    removed: RemovedComponents<'w, 's, T>,
+}
+
+impl<T: Component> ComponentChanges<'_, '_, T> {
+    fn read(&mut self) -> bool {
+        self.removed.read().count() > 0 || !self.changed.is_empty()
+    }
+}
+
+#[derive(SystemParam)]
+pub(in crate::terrain) struct MembershipInputs<'w, 's> {
+    paths: ComponentChanges<'w, 's, PathTile>,
+    surfaces: ComponentChanges<'w, 's, TileSurface>,
+    tanks: ComponentChanges<'w, 's, TankGeometry>,
+    habitats: ComponentChanges<'w, 's, HabitatRegion>,
+    nodes: ComponentChanges<'w, 's, TopologyNode>,
+    fences: ComponentChanges<'w, 's, FenceEdge>,
+    prefabs: ComponentChanges<'w, 's, FenceSegmentPrefab>,
+    endpoints: ComponentChanges<'w, 's, FenceTerrainEndpointPresentationCells>,
+    chunks: ComponentChanges<'w, 's, TerrainChunk>,
+    edits: ComponentChanges<'w, 's, EditedTerrainSamples>,
+    regions: ComponentChanges<'w, 's, TerrainWaterRegionSource>,
+    region_edits: ComponentChanges<'w, 's, TerrainWaterRegionEdit>,
+    retired: ComponentChanges<'w, 's, TerrainWaterRegionRetired>,
+    removed_indexes: RemovedComponents<'w, 's, TerrainWaterMembershipIndex>,
+    sky: Local<'s, Option<Vec<(Entity, openzt2_game_data::AssetId, Option<Transform>)>>>,
+    grid: Local<'s, Option<TopologyGrid>>,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::terrain) enum WaterMembershipProjectionStatus {
@@ -55,6 +102,7 @@ pub(in crate::terrain) fn project_terrain_water_membership(
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     selector_fences: selector_projection::SelectorFences,
     topology: Res<TopologyGrid>,
+    mut inputs: MembershipInputs,
     mut diagnostic: Local<
         Option<(
             bevy::asset::AssetId<TerrainAsset>,
@@ -78,6 +126,35 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         );
         return;
     };
+    let sky = supports.sky_supports(definitions);
+    let terrain_changed = inputs.chunks.read() | inputs.edits.read();
+    // Read every removal cursor, including when another input already changed.
+    let geometry_changed = inputs.paths.read()
+        | inputs.surfaces.read()
+        | inputs.tanks.read()
+        | inputs.habitats.read()
+        | inputs.nodes.read()
+        | inputs.fences.read()
+        | inputs.prefabs.read()
+        | inputs.endpoints.read();
+    let regions_changed =
+        inputs.regions.read() | inputs.region_edits.read() | inputs.retired.read();
+    let index_removed = inputs.removed_indexes.read().count() > 0;
+    if !geometry_changed
+        && !regions_changed
+        && !terrain_changed
+        && !index_removed
+        && changed_chunks.is_empty()
+        && !assets.is_changed()
+        && !definition_assets.is_changed()
+        && !active_definitions.is_changed()
+        && *inputs.sky == sky
+        && *inputs.grid == Some(*topology)
+    {
+        return;
+    }
+    *inputs.sky = sky;
+    *inputs.grid = Some(*topology);
     let curb = openzt2_game_data::AssetId::from_key("curb");
     let empty_selector_topology = !selector_fences.iter().any(|(_, edge, _, _)| {
         definitions
@@ -96,7 +173,11 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         let Some(asset) = assets.get(&chunk.asset) else {
             continue;
         };
-        let Some(height_limits) = supports.point_limits(asset, definitions, &topology) else {
+        let Some(height_limits) = inputs
+            .sky
+            .as_deref()
+            .and_then(|sky| supports.point_limits(asset, definitions, &topology, sky))
+        else {
             commands
                 .entity(entity)
                 .remove::<TerrainWaterMembershipIndex>();
@@ -129,9 +210,12 @@ pub(in crate::terrain) fn project_terrain_water_membership(
         };
         let region_revision = live_regions.source_revision(chunk.asset.id());
         if let Some(index) = index {
-            if chunks.iter().any(|(entity, candidate, _, _)| {
-                candidate.asset == chunk.asset && changed_chunks.contains(&entity)
-            }) || index.empty_selector_topology() != empty_selector_topology
+            if terrain_changed
+                || regions_changed
+                || chunks.iter().any(|(entity, candidate, _, _)| {
+                    candidate.asset == chunk.asset && changed_chunks.contains(&entity)
+                })
+                || index.empty_selector_topology() != empty_selector_topology
                 || !index.selector_projection_matches(&selector_projection)
                 || !index.fence_probes_match(&fence_probes)
                 || !index.height_support_limits_match(&height_limits)

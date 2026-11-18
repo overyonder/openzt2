@@ -105,10 +105,20 @@ pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
     mut show_ui_role_requests: MessageWriter<ShowUiRole>,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
 ) {
+    let world_definitions = active_world_definitions.get(&world_definition_assets);
     let selected_definition = purchase_choices
         .read()
         .map(|choice| choice.definition)
+        // A vehicle chosen in the station panel's vehicles-sold list is the
+        // circuit's vehicle type, not something to place: the station stays
+        // selected and no purchase panel opens.
+        .filter(|definition| {
+            world_definitions
+                .is_none_or(|definitions| definitions.find_vehicle(*definition).is_none())
+        })
         .chain(
             adoption_placement_requests
                 .read()
@@ -214,8 +224,8 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
 
     for (document_owner, mut visibility, catalogue_details) in &mut catalogue_detail_panels {
         let Some(catalogue_entry) = world_definitions
-            .catalogue()
-            .find(|entry| AssetId(entry.definition.0) == selected_definition)
+            .catalogue_entry_for_definition(selected_definition)
+            .map(|(_, entry)| entry)
         else {
             *visibility = Visibility::Hidden;
             continue;
@@ -328,8 +338,8 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
                         .filter(|name| !name.is_empty())
                         .or_else(|| {
                             world_definitions
-                                .catalogue()
-                                .find(|entry| AssetId(entry.definition.0) == details_definition)
+                                .catalogue_entry_for_definition(details_definition)
+                                .map(|(_, entry)| entry)
                                 .and_then(|entry| {
                                     localization
                                         .find_plain_localized_text(AssetId(entry.name_key.0))
@@ -467,59 +477,34 @@ pub(crate) fn project_selected_catalogue_entry_to_purchase_information_document(
 /// Applies the native `ZTBuyInfoPanel` dynamic row stack after the selected
 /// object's optional groups have received their visibility.
 pub(crate) fn position_visible_purchase_information_rows_from_authored_dynamic_start(
-    ui_document_assets: Res<Assets<UiDocumentAsset>>,
-    ui_document_roots: Query<&UiDocumentRoot>,
-    catalogue_detail_panels: Query<&UiDocumentOwner, With<CatalogueDetails>>,
-    mut projected_nodes: Query<(&UiNodeId, &UiDocumentOwner, &Visibility, &mut Node)>,
+    panels: Query<&CatalogueDetails>,
+    mut nodes: Query<(&Visibility, &mut Node)>,
 ) {
-    for document_owner in &catalogue_detail_panels {
-        let Some(document) = ui_document_roots
-            .get(document_owner.0)
-            .ok()
-            .and_then(|root| ui_document_assets.get(&root.document))
-        else {
+    for panel in &panels {
+        let Some((x, mut y)) = panel.dynamic_rows[0].iter().find_map(|&entity| {
+            nodes
+                .get(entity)
+                .ok()
+                .map(|(_, node)| (node.left, node.top))
+        }) else {
             continue;
         };
-        let canonical_document = document.canonical_ui_document();
-        let Some((dynamic_x, mut dynamic_y)) =
-            projected_nodes
-                .iter()
-                .find_map(|(node_id, candidate_document_owner, _, node)| {
-                    (candidate_document_owner.0 == document_owner.0
-                        && canonical_document
-                            .nodes
-                            .get(node_id.index as usize)
-                            .is_some_and(|record| record.name.eq_ignore_ascii_case("cost")))
-                    .then_some((node.left, node.top))
-                })
-        else {
-            continue;
-        };
-        for dynamic_row_name in [
-            "cost",
-            "gender",
-            "biome",
-            "biome_location_endangerment",
-            "Items Sold",
-        ] {
-            for (node_id, candidate_document_owner, visibility, mut node) in &mut projected_nodes {
-                if candidate_document_owner.0 != document_owner.0
-                    || *visibility == Visibility::Hidden
-                    || !canonical_document
-                        .nodes
-                        .get(node_id.index as usize)
-                        .is_some_and(|record| record.name.eq_ignore_ascii_case(dynamic_row_name))
-                {
+        for row in &panel.dynamic_rows {
+            for &entity in row {
+                let Ok((visibility, mut node)) = nodes.get_mut(entity) else {
+                    continue;
+                };
+                if *visibility == Visibility::Hidden {
                     continue;
                 }
-                if node.left != dynamic_x {
-                    node.left = dynamic_x;
+                if node.left != x {
+                    node.left = x;
                 }
-                if node.top != dynamic_y {
-                    node.top = dynamic_y;
+                if node.top != y {
+                    node.top = y;
                 }
-                if let (Val::Px(y), Val::Px(height)) = (dynamic_y, node.height) {
-                    dynamic_y = Val::Px(y + height);
+                if let (Val::Px(top), Val::Px(height)) = (y, node.height) {
+                    y = Val::Px(top + height);
                 }
                 break;
             }

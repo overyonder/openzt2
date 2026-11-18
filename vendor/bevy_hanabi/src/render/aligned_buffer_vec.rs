@@ -136,12 +136,13 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
     #[inline]
     #[allow(dead_code)]
     pub fn binding(&self) -> Option<BindingResource<'_>> {
-        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then from that
-        // wrapper implement all the xxx_binding() helpers. That avoids a bunch of "if
-        // let Some()" everywhere when we know the buffer is valid. The only reason the
-        // buffer might not be valid is if it was not created, and in that case
-        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied out
-        // before.
+        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then
+        // from that wrapper implement all the xxx_binding() helpers.
+        // That avoids a bunch of "if let Some()" everywhere when we
+        // know the buffer is valid. The only reason the buffer might
+        // not be valid is if it was not created, and in that case
+        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied
+        // out before.
         let buffer = self.buffer()?;
         Some(buffer.as_entire_binding())
     }
@@ -248,6 +249,7 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
     /// was reused which already had enough capacity.
     ///
     /// [`write_buffer()`]: crate::AlignedBufferVec::write_buffer
+    #[must_use]
     pub fn reserve(&mut self, capacity: usize, device: &RenderDevice) -> bool {
         if capacity > self.capacity {
             let size = self.aligned_size * capacity;
@@ -291,7 +293,9 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
     ///
     /// # Returns
     ///
-    /// `true` if the buffer was (re)allocated, `false` otherwise.
+    /// `true` if the buffer was (re)allocated, `false` otherwise. This
+    /// indicates whether bind groups need to be re-created.
+    #[must_use]
     pub fn write_buffer(&mut self, device: &RenderDevice, queue: &RenderQueue) -> bool {
         if self.values.is_empty() {
             return false;
@@ -306,23 +310,44 @@ impl<T: Pod + ShaderSize> AlignedBufferVec<T> {
         let buffer_changed = self.reserve(self.values.len(), device);
         if let Some(buffer) = &self.buffer {
             let aligned_size = self.aligned_size * self.values.len();
-            trace!(
-                "aligned_buffer['{}']: size={} buffer={:?}",
-                self.safe_label(),
-                aligned_size,
-                buffer.id(),
-            );
-            let mut aligned_buffer: Vec<u8> = vec![0; aligned_size];
-            for i in 0..self.values.len() {
-                let src: &[u8] = cast_slice(std::slice::from_ref(&self.values[i]));
-                let dst_offset = i * self.aligned_size;
-                let dst_range = dst_offset..dst_offset + self.item_size;
-                trace!("+ copy: src={:?} dst={:?}", src.as_ptr(), dst_range);
-                let dst = &mut aligned_buffer[dst_range];
-                dst.copy_from_slice(src);
+            if self.aligned_size == self.item_size {
+                // The CPU storage already contains aligned items; directly
+                // write to GPU buffer.
+                trace!(
+                    "+ direct-write['{}']: size={}B buffer={:?}",
+                    self.safe_label(),
+                    aligned_size,
+                    buffer.id(),
+                );
+                let src: &[u8] = cast_slice(&self.values[..]);
+                queue.write_buffer(buffer, 0, src);
+            } else {
+                // The CPU storage contains items smaller than the aligned size;
+                // copy with padding into a temporary storage to
+                // align items, then write from that
+                // temporary to the GPU buffer.
+                trace!(
+                    "+ aligned_buffer['{}']: size={}B buffer={:?}",
+                    self.safe_label(),
+                    aligned_size,
+                    buffer.id(),
+                );
+                let mut aligned_buffer: Vec<u8> = vec![0; aligned_size];
+                for i in 0..self.values.len() {
+                    let src: &[u8] = cast_slice(std::slice::from_ref(&self.values[i]));
+                    let dst_offset = i * self.aligned_size;
+                    let dst_range = dst_offset..dst_offset + self.item_size;
+                    trace!(
+                        "+ copy: src={:?} ({}B) dst={:?}",
+                        src.as_ptr(),
+                        self.item_size,
+                        dst_range
+                    );
+                    let dst = &mut aligned_buffer[dst_range];
+                    dst.copy_from_slice(src);
+                }
+                queue.write_buffer(buffer, 0, &aligned_buffer[..]);
             }
-            let bytes: &[u8] = cast_slice(&aligned_buffer);
-            queue.write_buffer(buffer, 0, bytes);
         }
         buffer_changed
     }
@@ -415,12 +440,13 @@ impl HybridAlignedBufferVec {
     #[allow(dead_code)]
     #[inline]
     pub fn max_binding(&self) -> Option<BindingResource<'_>> {
-        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then from that
-        // wrapper implement all the xxx_binding() helpers. That avoids a bunch of "if
-        // let Some()" everywhere when we know the buffer is valid. The only reason the
-        // buffer might not be valid is if it was not created, and in that case
-        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied out
-        // before.
+        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then
+        // from that wrapper implement all the xxx_binding() helpers.
+        // That avoids a bunch of "if let Some()" everywhere when we
+        // know the buffer is valid. The only reason the buffer might
+        // not be valid is if it was not created, and in that case
+        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied
+        // out before.
         let buffer = self.buffer()?;
         Some(BindingResource::Buffer(BufferBinding {
             buffer,
@@ -580,8 +606,8 @@ impl HybridAlignedBufferVec {
         // Calculate the number of (aligned) rows to allocate
         let num_rows = src.len().div_ceil(self.item_align) as u32;
 
-        // Try to find a block of free rows which can accomodate it, and pick the
-        // smallest one in order to limit wasted space.
+        // Try to find a block of free rows which can accomodate it, and pick
+        // the smallest one in order to limit wasted space.
         let mut best_slot: Option<(u32, usize)> = None;
         for (index, range) in self.free_rows.iter().enumerate() {
             let free_rows = range.0.end - range.0.start;
@@ -592,7 +618,8 @@ impl HybridAlignedBufferVec {
                     best_slot = Some((0, index));
                     break;
                 }
-                // Otherwise try to find the smallest oversized slot to reduce wasted space
+                // Otherwise try to find the smallest oversized slot to reduce
+                // wasted space
                 if let Some(best_slot) = best_slot.as_mut() {
                     if wasted_rows < best_slot.0 {
                         *best_slot = (wasted_rows, index);
@@ -612,9 +639,10 @@ impl HybridAlignedBufferVec {
             assert!(size <= free_size);
 
             let dst = self.values.as_mut_ptr();
-            // SAFETY: dst is guaranteed to point to allocated bytes, which are already
-            // initialized from a previous call, and are initialized by overwriting the
-            // bytes with those of a POD type.
+            // SAFETY: dst is guaranteed to point to allocated bytes, which are
+            // already initialized from a previous call, and are
+            // initialized by overwriting the bytes with those of a
+            // POD type.
             #[allow(unsafe_code)]
             unsafe {
                 let dst = dst.add(offset);
@@ -642,15 +670,17 @@ impl HybridAlignedBufferVec {
             }
 
             // Insert serialized value
-            // Dealing with safe code via Vec::spare_capacity_mut() is quite difficult
-            // without the upcoming (unstable) additions to MaybeUninit to deal with arrays.
-            // To prevent having to loop over individual u8, we use direct pointers instead.
+            // Dealing with safe code via Vec::spare_capacity_mut() is quite
+            // difficult without the upcoming (unstable) additions
+            // to MaybeUninit to deal with arrays. To prevent having
+            // to loop over individual u8, we use direct pointers instead.
             assert!(self.values.capacity() >= offset + size);
             assert_eq!(self.values.len(), offset);
             let dst = self.values.as_mut_ptr();
-            // SAFETY: dst is guaranteed to point to allocated (offset+size) bytes, which
-            // are written by copying a Pod type, so ensures those values are initialized,
-            // and the final size is set to exactly (offset+size).
+            // SAFETY: dst is guaranteed to point to allocated (offset+size)
+            // bytes, which are written by copying a Pod type, so
+            // ensures those values are initialized, and the final
+            // size is set to exactly (offset+size).
             #[allow(unsafe_code)]
             unsafe {
                 let dst = dst.add(offset);
@@ -690,16 +720,18 @@ impl HybridAlignedBufferVec {
             return false;
         }
 
-        // Note: See below, sometimes self.values() has some padding left we couldn't
-        // recover earlier beause we didn't know the size of this allocation, but we
-        // need to still deallocate the row here.
+        // Note: See below, sometimes self.values() has some padding left we
+        // couldn't recover earlier beause we didn't know the size of
+        // this allocation, but we need to still deallocate the row
+        // here.
         if range.end == end || range.end.next_multiple_of(align) == end {
-            // If the allocation is at the end of the buffer, shorten the CPU values. This
-            // ensures is_empty() eventually returns true.
+            // If the allocation is at the end of the buffer, shorten the CPU
+            // values. This ensures is_empty() eventually returns
+            // true.
             let mut new_row_end = range.start.div_ceil(align);
 
-            // Walk the (sorted) free list to also dequeue any range which is now at the end
-            // of the buffer
+            // Walk the (sorted) free list to also dequeue any range which is
+            // now at the end of the buffer
             while let Some(free_row) = self.free_rows.pop() {
                 if free_row.0.end == new_row_end {
                     new_row_end = free_row.0.start;
@@ -709,8 +741,9 @@ impl HybridAlignedBufferVec {
                 }
             }
 
-            // Note: we can't really recover any padding here because we don't know the
-            // exact size of that allocation, only its row-aligned size.
+            // Note: we can't really recover any padding here because we don't
+            // know the exact size of that allocation, only its
+            // row-aligned size.
             self.values.truncate((new_row_end * align) as usize);
         } else {
             // Otherwise, save the row into the free list.
@@ -769,8 +802,8 @@ impl HybridAlignedBufferVec {
                     }
                 }
             } else {
-                // The range exists in the free list, this means it's already removed. This is a
-                // duplicate; ignore it.
+                // The range exists in the free list, this means it's already
+                // removed. This is a duplicate; ignore it.
                 return false;
             }
         }
@@ -923,7 +956,9 @@ mod tests {
         assert_eq!(std::mem::align_of::<GpuDummyLarge>(), 4);
 
         // GPU
-        assert_eq!(<GpuDummy as ShaderType>::min_size().get(), 16); // Vec3 gets padded to 16 bytes
+        assert_eq!(<GpuDummy as ShaderType>::min_size().get(), 16); // Vec3 gets
+                                                                    // padded to
+                                                                    // 16 bytes
         assert_eq!(<GpuDummy as ShaderSize>::SHADER_SIZE.get(), 16);
         assert_eq!(<GpuDummyComposed as ShaderType>::min_size().get(), 32); // align is 16 bytes, forces padding
         assert_eq!(<GpuDummyComposed as ShaderSize>::SHADER_SIZE.get(), 32);
@@ -1102,7 +1137,8 @@ mod tests {
 
             assert!(habv.remove(r2.clone()));
             assert!(!habv.is_empty());
-            assert_eq!(habv.values.len(), 32); // can't recover exact alloc (4), only row-aligned size (32)
+            assert_eq!(habv.values.len(), 32); // can't recover exact alloc (4),
+                                               // only row-aligned size (32)
             assert!(habv.free_rows.is_empty()); // merged!
 
             assert!(habv.remove(r0));
@@ -1148,7 +1184,8 @@ mod tests {
 
             assert!(habv.remove(r4.clone()));
             assert!(!habv.is_empty());
-            assert_eq!(habv.values.len(), 32); // can't recover exact alloc (4), only row-aligned size (32)
+            assert_eq!(habv.values.len(), 32); // can't recover exact alloc (4),
+                                               // only row-aligned size (32)
             assert!(habv.free_rows.is_empty());
 
             assert!(habv.remove(r0));
@@ -1172,8 +1209,8 @@ mod gpu_tests {
         let device = renderer.device();
         let queue = renderer.queue();
 
-        // Create a dummy CommandBuffer to force the write_buffer() call to have any
-        // effect.
+        // Create a dummy CommandBuffer to force the write_buffer() call to have
+        // any effect.
         let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("test"),
         });
@@ -1203,8 +1240,8 @@ mod gpu_tests {
             tag: 3,
             ..Default::default()
         });
-        abv.reserve(CAPACITY, &device);
-        abv.write_buffer(&device, &queue);
+        assert!(abv.reserve(CAPACITY, &device));
+        assert!(!abv.write_buffer(&device, &queue));
         // need a submit() for write_buffer() to be processed
         queue.submit([command_buffer]);
         let (tx, rx) = futures::channel::oneshot::channel();
@@ -1231,7 +1268,9 @@ mod gpu_tests {
             timeout: None,
         });
         let _result = futures::executor::block_on(rx);
-        let view = buffer.get_mapped_range();
+        let view = buffer
+            .get_mapped_range()
+            .expect("Buffer must be mapped for reading");
 
         // Validate content
         assert_eq!(view.len(), final_align as usize * CAPACITY);

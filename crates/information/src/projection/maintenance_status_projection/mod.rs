@@ -9,7 +9,6 @@ use openzt2_zoo_state::maintenance::maintenance_types::AnimalHabitatWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWastePresentationLevel;
 use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
-use openzt2_zoo_state::maintenance::maintenance_types::MaintainableObjectConditionPermille;
 use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 
 use openzt2_interface_state::information::entity_selection_types::InfoPanel;
@@ -19,7 +18,6 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
     cleanliness: Res<ZooCleanlinessPermille>,
     panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
     subjects: Query<(
-        Option<Ref<MaintainableObjectConditionPermille>>,
         Option<Ref<FacilityContainedWaste>>,
         Option<Ref<LooseLitterWaste>>,
         Option<Ref<AnimalHabitatWaste>>,
@@ -36,14 +34,12 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
         if !visible.get() {
             continue;
         }
-        let Ok((condition, container, litter, habitat_waste, water_quality)) =
-            subjects.get(panel.subject)
+        let Ok((container, litter, habitat_waste, water_quality)) = subjects.get(panel.subject)
         else {
             continue;
         };
         if !panel.is_changed()
             && !cleanliness.is_changed()
-            && condition.as_ref().is_none_or(|value| !value.is_changed())
             && container.as_ref().is_none_or(|value| !value.is_changed())
             && litter.as_ref().is_none_or(|value| !value.is_changed())
             && habitat_waste
@@ -60,9 +56,6 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
                 continue;
             }
             let next = match &binding.0 {
-                UiIntegerPropertyBindingSource::FacilityConditionPermille => {
-                    condition.as_ref().map(|condition| i64::from(condition.0))
-                }
                 UiIntegerPropertyBindingSource::FacilityWasteUnits => container
                     .as_ref()
                     .map(|container| i64::from(container.contained_waste_units)),

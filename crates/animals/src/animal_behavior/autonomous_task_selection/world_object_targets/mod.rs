@@ -41,15 +41,33 @@ pub(crate) struct WorldObjectTargetSources<'w, 's> {
     pub(super) habitat_index: Res<'w, HabitatIndex>,
     pub(super) topology_grid: Res<'w, TopologyGrid>,
     pub(super) terrain_surfaces: DrySurfaceEligibility<'w, 's>,
+    /// Fences an animal bashes, jumps, climbs or tunnels under.
+    pub(super) fences: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+            &'static GlobalTransform,
+        ),
+    >,
+    pub(super) habitat_summaries:
+        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatSummary>,
+    pub(super) topology_nodes:
+        Query<'w, 's, &'static openzt2_zoo_state::topology::topology_graph_types::TopologyNode>,
+    pub(super) habitat_regions:
+        Query<'w, 's, &'static openzt2_zoo_state::habitat::habitat_types::HabitatRegion>,
 }
 
 impl WorldObjectTargetSources<'_, '_> {
     /// Marks the type index stale when objects change type, appear or disappear. Runs
     /// every update so removals don't accumulate while no animal is idle.
     pub(super) fn note_object_changes(&mut self) {
-        if self.removed_objects.read().count() > 0 || !self.changed_objects.is_empty() {
+        if self.index.current
+            && (!self.removed_objects.is_empty() || !self.changed_objects.is_empty())
+        {
             self.index.mark_stale();
         }
+        self.removed_objects.clear();
     }
 
     pub(super) fn refresh_index(&mut self, definitions: WorldDefinitionsView<'_>) {
@@ -59,6 +77,39 @@ impl WorldObjectTargetSources<'_, '_> {
                 .iter()
                 .map(|(entity, definition)| (entity, definition.0)),
         );
+    }
+
+    /// The middle of a fence segment, whose origin is its first end, on the
+    /// ground there.
+    pub(super) fn fence_middle(
+        &self,
+        edge: &openzt2_zoo_state::topology::topology_graph_types::FenceEdge,
+    ) -> Option<Vec3> {
+        let first = self
+            .topology_grid
+            .cell_translation(self.topology_nodes.get(edge.a).ok()?.cell);
+        let second = self
+            .topology_grid
+            .cell_translation(self.topology_nodes.get(edge.b).ok()?.cell);
+        // On the ground, not at the topology layer's height.
+        let middle = (first + second) * 0.5;
+        Some(
+            middle.with_y(
+                self.terrain_surfaces
+                    .ground_height(middle.xz())
+                    .unwrap_or(middle.y),
+            ),
+        )
+    }
+
+    /// Whether an escaped animal can reach a world position.
+    pub(super) fn escaped_animal_reaches(&self, position: Vec3) -> bool {
+        super::super::escaped_animal_reaches(
+            &self.habitat_index,
+            *self.topology_grid,
+            &self.habitat_summaries,
+            position.xz(),
+        )
     }
 
     /// The fenced habitat containing a world position, if any.
@@ -79,6 +130,7 @@ pub(crate) struct WorldObjectTargetFacts {
     pub(super) world: &'static WorldMember,
     food: Option<&'static FoodContainer>,
     drink: Option<&'static DrinkContainer>,
+    attacked: Has<openzt2_zoo_state::guests::guest_simulation_types::GuestAttacked>,
 }
 
 /// Location facts about one target, read only when a qualifier needs them.
@@ -86,6 +138,10 @@ pub(super) struct WorldObjectTargetLocation<OnLand: Fn() -> Option<bool>> {
     /// The target stands in the habitat that restricts the animal.
     pub(super) in_habitat: bool,
     pub(super) on_land: OnLand,
+    /// How far the target is from the animal, for `inSight`.
+    pub(super) distance: f32,
+    /// The target's `f_BuildingStrength`, if it can be destroyed.
+    pub(super) building_strength: Option<u16>,
 }
 
 impl WorldObjectTargetFactsItem<'_, '_> {
@@ -153,6 +209,20 @@ impl WorldObjectTargetFactsItem<'_, '_> {
             BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::InHabitat) => {
                 truth(location.in_habitat)
             }
+            BehaviorEligibilityFactInput::State(BehaviorEntityStateEligibilityFact::Attacked) => {
+                truth(self.attacked)
+            }
+            BehaviorEligibilityFactInput::Spatial(BehaviorSpatialEligibilityFact::InSight) => {
+                return location.distance < expected as f32 / 65_536.0;
+            }
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::BuildingStrength,
+            ) => {
+                let Some(strength) = location.building_strength else {
+                    return false;
+                };
+                i32::from(strength) << 16
+            }
             _ => return false,
         };
         compare_q16(value, expected, fact.comparison)
@@ -163,15 +233,18 @@ fn can_evaluate_world_object_fact(fact: &BehaviorCandidateEligibilityFact) -> bo
     matches!(fact.expected_value, BehaviorEligibilityFactValue::Q16(_))
         && matches!(
             fact.fact_input,
-            BehaviorEligibilityFactInput::Condition(BehaviorConditionEligibilityFact::FoodLevel)
-                | BehaviorEligibilityFactInput::Spatial(
-                    BehaviorSpatialEligibilityFact::SupportedSurface
-                        | BehaviorSpatialEligibilityFact::OnLand
-                        | BehaviorSpatialEligibilityFact::InWater
-                )
-                | BehaviorEligibilityFactInput::State(
-                    BehaviorEntityStateEligibilityFact::InHabitat
-                )
+            BehaviorEligibilityFactInput::Condition(
+                BehaviorConditionEligibilityFact::FoodLevel
+                    | BehaviorConditionEligibilityFact::BuildingStrength
+            ) | BehaviorEligibilityFactInput::Spatial(
+                BehaviorSpatialEligibilityFact::SupportedSurface
+                    | BehaviorSpatialEligibilityFact::OnLand
+                    | BehaviorSpatialEligibilityFact::InWater
+                    | BehaviorSpatialEligibilityFact::InSight
+            ) | BehaviorEligibilityFactInput::State(
+                BehaviorEntityStateEligibilityFact::InHabitat
+                    | BehaviorEntityStateEligibilityFact::Attacked
+            )
         )
 }
 

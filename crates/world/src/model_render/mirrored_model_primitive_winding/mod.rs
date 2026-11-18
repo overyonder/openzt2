@@ -16,8 +16,11 @@ pub(super) struct ModelPrimitiveWindingProjected;
 
 pub(super) fn project_mirrored_model_primitive_winding(
     mut commands: Commands,
-    roots: Query<Entity, With<ModelExpanded>>,
-    children: Query<&Children>,
+    mut changes: super::model_projection_changes::ModelProjectionChanges,
+    roots: Query<(), With<ModelExpanded>>,
+    parents: Query<&ChildOf>,
+    changed_meshes: Query<Entity, (Changed<Mesh3d>, Without<ModelPrimitiveWindingProjected>)>,
+    mut removed_markers: RemovedComponents<ModelPrimitiveWindingProjected>,
     primitives: Query<
         &Mesh3d,
         (
@@ -29,53 +32,71 @@ pub(super) fn project_mirrored_model_primitive_winding(
     transforms: TransformHelper,
     mut meshes: ResMut<Assets<Mesh>>,
     mut reflected_meshes: Local<HashMap<AssetId<Mesh>, AssetId<Mesh>>>,
+    mut asset_events: MessageReader<AssetEvent<Mesh>>,
 ) {
-    reflected_meshes
-        .retain(|source, reflected| meshes.contains(*source) && meshes.contains(*reflected));
-    for root in &roots {
-        for entity in std::iter::once(root).chain(children.iter_descendants(root)) {
-            let Ok(source) = primitives.get(entity) else {
-                continue;
-            };
-            let Ok(transform) = transforms.compute_global_transform(entity) else {
-                continue;
-            };
-            let determinant = transform.affine().matrix3.determinant();
-            if !determinant.is_finite() || determinant == 0.0 {
-                continue;
-            }
-            if determinant < 0.0 {
-                let cached = reflected_meshes
-                    .get(&source.0.id())
-                    .copied()
-                    .and_then(|asset| meshes.get_strong_handle(asset));
-                let reflected = if let Some(handle) = cached {
-                    handle
-                } else {
-                    let Some(mut mesh) = meshes.get(&source.0).cloned() else {
-                        continue;
-                    };
-                    if mesh.primitive_topology() == PrimitiveTopology::TriangleList
-                        && mesh.indices().is_none()
-                    {
-                        let Ok(vertex_count) = u32::try_from(mesh.count_vertices()) else {
-                            continue;
-                        };
-                        mesh.insert_indices(Indices::U32((0..vertex_count).collect()));
-                    }
-                    if let Err(error) = mesh.invert_winding() {
-                        warn!(?entity, ?error, "model primitive winding projection failed");
-                        continue;
-                    }
-                    let handle = meshes.add(mesh);
-                    reflected_meshes.insert(source.0.id(), handle.id());
-                    handle
-                };
-                commands.entity(entity).insert(Mesh3d(reflected));
-            }
-            commands
-                .entity(entity)
-                .insert(ModelPrimitiveWindingProjected);
+    for event in asset_events.read() {
+        if let AssetEvent::Removed { id } = event {
+            reflected_meshes.remove(id);
         }
     }
+    changes.collect(
+        std::iter::empty(),
+        changed_meshes.iter().chain(removed_markers.read()),
+    );
+    let mut missing = Vec::new();
+    for entity in changes.candidates() {
+        let Ok(source) = primitives.get(entity) else {
+            continue;
+        };
+        if !std::iter::once(entity)
+            .chain(parents.iter_ancestors(entity))
+            .any(|node| roots.contains(node))
+        {
+            continue;
+        }
+        let Ok(transform) = transforms.compute_global_transform(entity) else {
+            missing.push(entity);
+            continue;
+        };
+        let determinant = transform.affine().matrix3.determinant();
+        if !determinant.is_finite() || determinant == 0.0 {
+            missing.push(entity);
+            continue;
+        }
+        if determinant < 0.0 {
+            let source = &source.0;
+            let cached = reflected_meshes
+                .get(&source.id())
+                .copied()
+                .and_then(|asset| meshes.get_strong_handle(asset));
+            let handle = if let Some(handle) = cached {
+                handle
+            } else {
+                let Some(mut mesh) = meshes.get(source).cloned() else {
+                    missing.push(entity);
+                    continue;
+                };
+                if mesh.primitive_topology() == PrimitiveTopology::TriangleList
+                    && mesh.indices().is_none()
+                {
+                    let Ok(vertex_count) = u32::try_from(mesh.count_vertices()) else {
+                        continue;
+                    };
+                    mesh.insert_indices(Indices::U32((0..vertex_count).collect()));
+                }
+                if let Err(error) = mesh.invert_winding() {
+                    warn!(?entity, ?error, "model primitive winding projection failed");
+                    continue;
+                }
+                let handle = meshes.add(mesh);
+                reflected_meshes.insert(source.id(), handle.id());
+                handle
+            };
+            commands.entity(entity).insert(Mesh3d(handle));
+        }
+        commands
+            .entity(entity)
+            .insert(ModelPrimitiveWindingProjected);
+    }
+    changes.retry_missing(&mut missing);
 }

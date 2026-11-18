@@ -186,6 +186,9 @@ pub struct SpeciesVariant {
     /// Resolved collision tester; absent when no tester is authored.
     #[serde(default)]
     pub navigation_collision_policy: Option<AnimalNavigationCollisionPolicy>,
+    /// Authored `virtualNodes`, such as a dinosaur's `Dock_Building`.
+    #[serde(default)]
+    pub virtual_nodes: Vec<crate::world_definitions::world_objects::WorldObjectVirtualNode>,
     /// Source ground locomotion's `slow` clip (`variable` resolves to `slow`).
     #[serde(default)]
     pub ground_navigation_clip_asset_key: Option<String>,
@@ -193,6 +196,9 @@ pub struct SpeciesVariant {
     pub medium_ground_navigation_clip_asset_key: Option<String>,
     #[serde(default)]
     pub fast_ground_navigation_clip_asset_key: Option<String>,
+    /// Every other authored ground row, such as `sprint` or `stott`.
+    #[serde(default)]
+    pub named_ground_navigation_clip_asset_keys: Vec<(AssetId, String)>,
     #[serde(default)]
     pub surface_water_locomotion: Option<AnimalSurfaceWaterLocomotion>,
     pub sex: Sex,
@@ -223,9 +229,33 @@ pub struct AnimalSurfaceWaterLocomotion {
     pub slow: AnimalWaterLocomotionRow,
     pub medium: AnimalWaterLocomotionRow,
     pub fast: AnimalWaterLocomotionRow,
+    /// Every other authored row, such as `glide` or `porpoise`.
+    #[serde(default)]
+    pub named: Vec<(AssetId, AnimalWaterLocomotionRow)>,
     pub stop: String,
     pub water_entry_depth_m: f32,
     pub water_exit_depth_m: f32,
+}
+
+impl AnimalSurfaceWaterLocomotion {
+    /// The row for a speed; a table without that row moves at its `slow` row.
+    #[must_use]
+    pub fn row(
+        &self,
+        speed: crate::behavior::action::wander::BehaviorGroundLocomotionSpeed,
+    ) -> &AnimalWaterLocomotionRow {
+        use crate::behavior::action::wander::BehaviorGroundLocomotionSpeed as Speed;
+        match speed {
+            Speed::Slow | Speed::Stop => &self.slow,
+            Speed::Medium => &self.medium,
+            Speed::Fast => &self.fast,
+            other => self
+                .named
+                .iter()
+                .find(|(key, _)| *key == other.row_key())
+                .map_or(&self.slow, |(_, row)| row),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -272,6 +302,8 @@ pub enum NeedKind {
     Health,
     Hygiene,
     Bathroom,
+    /// Simulated like the others but outside the welfare score.
+    Reproduction,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]

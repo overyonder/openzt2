@@ -58,9 +58,10 @@ pub struct WorldObjectAffordanceFlags(u64);
     clippy::derive_partial_eq_without_eq,
     reason = "schema records may contain floats"
 )]
-#[derive(Clone, Copy, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
 pub struct WorldObjectDestructionDefinition {
-    pub effect: AssetId,
+    /// The `explosionEffect` particle system, as `particle/destroy_building.psys`.
+    pub effect_path: String,
     pub audio_cue: AssetId,
     pub rubble: AssetId,
     pub ruin: AssetId,
@@ -70,6 +71,10 @@ pub struct WorldObjectDestructionDefinition {
     pub force_mps: [f32; 2],
     pub pitch_degrees: f32,
     pub start_height_cm: i32,
+    /// `f_BuildingStrength`: a rampaging animal smashes a building up to its
+    /// own limit and leaves this one's ruin.
+    #[serde(default)]
+    pub strength: Option<u16>,
 }
 
 // This schema record may contain floating-point members and therefore cannot derive `Eq`.
@@ -244,6 +249,7 @@ pub struct WorldObjectFadeRange {
 }
 
 impl WorldObjectFadeRange {
+    #[must_use]
     pub fn contains(&self, value: f32) -> bool {
         (self.minimum..self.maximum).contains(&value)
     }
@@ -267,6 +273,11 @@ pub struct WaterFilterPolicy {
     pub cleanup_rate: f32,
     /// Dirt the filter holds before a worker has to clean it.
     pub maximum_dirt_capacity: f32,
+    /// `maintenanceThresholds`: the dirt percent at which a worker is called,
+    /// and at which the call is dropped, for the filter panel's preemptive,
+    /// regular and occasional schedules.
+    #[serde(default)]
+    pub maintenance_thresholds: Option<[[f32; 2]; 3]>,
 }
 
 #[allow(
@@ -340,6 +351,13 @@ pub struct WorldObjectDefinition {
     pub preview_offset_cm: [i16; 3],
     pub preview_scale: f32,
     pub terrain_fitted: bool,
+    /// Authored ground-fit `heightOffset` above the sampled terrain.
+    #[serde(default)]
+    pub terrain_fit_height_offset_m: f32,
+    /// Authored `waterOffset` from the water surface when the ground fit
+    /// authors `floatOnWater`; `None` sinks to the ground under water.
+    #[serde(default)]
+    pub terrain_fit_water_offset_m: Option<f32>,
     #[serde(default)]
     pub real_physics_water_impact: Option<WorldObjectRealPhysicsWaterImpactDefinition>,
     pub price_cents: i64,
@@ -347,6 +365,19 @@ pub struct WorldObjectDefinition {
     pub properties: WorldObjectPropertyFlags,
     pub affordances: WorldObjectAffordanceFlags,
     pub destruction: Option<WorldObjectDestructionDefinition>,
+    /// Authored `virtualNodes`: named points the model itself lacks, such as
+    /// a building's rampage docks.
+    #[serde(default)]
+    pub virtual_nodes: Vec<WorldObjectVirtualNode>,
+}
+
+/// A `virtualNodes` entry in the object's own Bevy frame; its yaw turns
+/// about Bevy's up axis.
+#[derive(Clone, Debug, serde::Deserialize, PartialEq, serde::Serialize)]
+pub struct WorldObjectVirtualNode {
+    pub name: String,
+    pub translation_m: [f32; 3],
+    pub yaw_degrees: f32,
 }
 
 #[derive(Clone, Debug, serde::Deserialize, Eq, PartialEq, serde::Serialize)]

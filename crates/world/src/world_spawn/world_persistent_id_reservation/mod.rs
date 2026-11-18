@@ -13,18 +13,13 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 
 pub fn reserve_all_imported_world_persistent_ids(
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     allocator: Option<ResMut<PersistentIdAllocator>>,
     mut pending: Query<(Entity, &mut WorldHydration)>,
     mut reported_missing: Local<bool>,
 ) {
-    let _performance_timer =
-        performance.measure(WorldLoadingPerformanceStage::PersistentIdReservation);
     let Some(mut allocator) = allocator else {
         if !*reported_missing && !pending.is_empty() {
             warn!("world hydration is waiting for its persistent-id allocator");

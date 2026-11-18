@@ -16,4 +16,8 @@ pub struct ExpandingColumnPresentationDefinition {
     pub base_height_metres: f32,
     pub repeating_height_metres: f32,
     pub top_height_metres: f32,
+    /// Authored base `fitRadius` when it fits to the lowest ground; 0 fits
+    /// to the ground under the column.
+    #[serde(default)]
+    pub fit_lowest_radius_metres: f32,
 }

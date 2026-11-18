@@ -1,120 +1,112 @@
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::entity::EntityHashMap;
-use bevy::math::Affine3A;
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
+use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
+    PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
+};
 
-use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
+use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
 
-use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
+#[derive(Default)]
+pub(super) struct LodSelection {
+    layer_revision: u64,
+    cameras: Vec<(Entity, Vec3, Dir3, RenderLayers)>,
+}
 
 pub(super) fn project_prefab_model_level_of_detail_visibility(
     cameras: Query<(Entity, &Camera, &GlobalTransform, Option<&RenderLayers>), With<Camera3d>>,
     graphics: Res<GraphicsSettings>,
-    groups: Query<Ref<GlobalTransform>>,
-    hierarchy: Query<(
-        Option<&ChildOf>,
-        Option<&RenderLayers>,
-        Option<&crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers>,
-    )>,
+    groups: Query<(Ref<PrefabLodRanges>, Option<Ref<GlobalTransform>>)>,
+    mut inherited_layers: PrefabRenderLayers,
     mut lods: Query<(
-        Entity,
-        Ref<GlobalTransform>,
-        Ref<PrefabModelLevelOfDetailVisibilityRange>,
+        &GlobalTransform,
+        &PrefabModelLevelOfDetailVisibilityRange,
         &mut Visibility,
     )>,
-    mut camera_state_buffers: Local<(
-        Vec<(Entity, bool, Affine3A, RenderLayers)>,
-        Vec<(Entity, bool, Affine3A, RenderLayers)>,
-    )>,
+    mut selection: Local<LodSelection>,
+    mut current_cameras: Local<Vec<(Entity, Vec3, Dir3, RenderLayers)>>,
 ) {
-    let (previous_camera_states, current_camera_states) = &mut *camera_state_buffers;
-    current_camera_states.clear();
-    current_camera_states.extend(cameras.iter().map(|(entity, camera, transform, layers)| {
-        (
-            entity,
-            camera.is_active,
-            transform.affine(),
-            layers.cloned().unwrap_or_default(),
-        )
-    }));
-    let camera_changed = *previous_camera_states != *current_camera_states;
-    std::mem::swap(previous_camera_states, current_camera_states);
-    let level_of_detail_changed = lods.iter().any(|(_, transform, range, _)| {
-        range.is_changed()
-            || groups
-                .get(range.group)
-                .map_or_else(|_| transform.is_changed(), |group| group.is_changed())
-    });
-    if !camera_changed && !level_of_detail_changed && !graphics.is_changed() {
-        return;
-    }
-    // ponytail: the source object detail tiers publish no LOD bias. Medium, the
-    // default preset, keeps the authored ranges; the others halve or stretch them.
-    let object_detail_range_scale = match graphics.object_detail {
+    let selection = &mut *selection;
+    current_cameras.clear();
+    current_cameras.extend(
+        cameras
+            .iter()
+            .filter(|(_, camera, ..)| camera.is_active)
+            .map(|(entity, _, transform, layers)| {
+                (
+                    entity,
+                    transform.translation(),
+                    transform.forward(),
+                    layers.cloned().unwrap_or_default(),
+                )
+            }),
+    );
+    let layers_changed = selection.layer_revision != inherited_layers.revision();
+    selection.layer_revision = inherited_layers.revision();
+    let refresh_all =
+        layers_changed || graphics.is_changed() || *current_cameras != selection.cameras;
+    std::mem::swap(&mut *current_cameras, &mut selection.cameras);
+    let detail_scale = match graphics.object_detail {
         ThreeLevelGraphicsDetail::Low => 0.5,
         ThreeLevelGraphicsDetail::Medium => 1.0,
         ThreeLevelGraphicsDetail::High => 1.5,
     };
-    let level_of_detail_range_matches = lods
-        .iter()
-        .map(|(entity, transform, range, _)| {
-            let lod_layers = render_layers_for_prefab_entity_and_ancestor_chain(entity, &hierarchy);
-            let camera_transform = cameras
-                .iter()
-                .find(|(_, camera, _, camera_layers)| {
-                    camera.is_active && camera_layers.unwrap_or_default().intersects(&lod_layers)
-                })
-                .map(|(_, _, transform, _)| transform);
-            let range_matches = camera_transform
-                .map(|camera_transform| {
-                    if range.active_without_range {
-                        return true;
-                    }
-                    let (origin, group_range_scale) = groups.get(range.group).map_or_else(
-                        |_| (transform.translation(), 1.0),
-                        |value| {
-                            let (scale, _, _) = value.to_scale_rotation_translation();
-                            (
-                                value.transform_point(range.center_m),
-                                scale.abs().max_element(),
-                            )
-                        },
-                    );
-                    // NiRangeLODData selects from camera-space Z depth, not
-                    // radial camera distance. Its ranges are half-open and
-                    // the first matching authored range owns the group.
-                    let authored_range_scale = group_range_scale * object_detail_range_scale;
-                    let camera_space_depth = camera_transform
-                        .forward()
-                        .dot(origin - camera_transform.translation());
-                    camera_space_depth >= range.near_m * authored_range_scale
-                        && camera_space_depth < range.far_m * authored_range_scale
-                })
-                .unwrap_or(range.active_without_range);
-            (range.group, range.ordinal, range_matches)
-        })
-        .collect::<Vec<_>>();
-    let mut selected_ordinal_by_group = EntityHashMap::<u16>::default();
-    for (group, ordinal, range_matches) in &level_of_detail_range_matches {
-        if *range_matches {
-            selected_ordinal_by_group
-                .entry(*group)
-                .and_modify(|selected| *selected = (*selected).min(*ordinal))
-                .or_insert(*ordinal);
-        }
-    }
-    for ((_, ordinal, _), (_, _, range, mut visibility)) in
-        level_of_detail_range_matches.into_iter().zip(&mut lods)
-    {
-        let requested_visibility = if selected_ordinal_by_group.get(&range.group) == Some(&ordinal)
+    for (members, transform) in &groups {
+        if !refresh_all
+            && !members.is_changed()
+            && transform.as_ref().is_some_and(|t| !t.is_changed())
         {
-            Visibility::Inherited
-        } else {
-            Visibility::Hidden
-        };
-        if *visibility != requested_visibility {
-            *visibility = requested_visibility;
+            continue;
+        }
+        let transform = transform.as_deref();
+        let scale = transform.map_or(1.0, |transform| {
+            transform
+                .to_scale_rotation_translation()
+                .0
+                .abs()
+                .max_element()
+        }) * detail_scale;
+        let mut previous_depth = None;
+        let mut selected = None;
+        for member in members.iter() {
+            let Ok((fallback, range, _)) = lods.get(member) else {
+                continue;
+            };
+            let matches = range.active_without_range || {
+                let layers = inherited_layers.get(member);
+                selection
+                    .cameras
+                    .iter()
+                    .find(|(_, _, _, camera_layers)| camera_layers.intersects(&layers))
+                    .is_some_and(|(camera, position, forward, _)| {
+                        let origin = transform.map_or_else(
+                            || fallback.translation(),
+                            |t| t.transform_point(range.center_m),
+                        );
+                        let depth = match previous_depth {
+                            Some((id, center, depth)) if id == *camera && center == origin => depth,
+                            _ => {
+                                let depth = forward.dot(origin - *position);
+                                previous_depth = Some((*camera, origin, depth));
+                                depth
+                            }
+                        };
+                        depth >= range.near_m * scale && depth < range.far_m * scale
+                    })
+            };
+            if matches {
+                selected =
+                    Some(selected.map_or(range.ordinal, |value: u16| value.min(range.ordinal)));
+            }
+        }
+        for member in members.iter() {
+            if let Ok((_, range, mut visibility)) = lods.get_mut(member) {
+                visibility.set_if_neq(if Some(range.ordinal) == selected {
+                    Visibility::Inherited
+                } else {
+                    Visibility::Hidden
+                });
+            }
         }
     }
 }

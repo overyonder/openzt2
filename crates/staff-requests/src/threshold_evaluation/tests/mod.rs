@@ -32,39 +32,34 @@ fn number_row(
 }
 
 #[test]
-fn finite_threshold_results_are_exact_signed_edges() {
+fn finite_thresholds_raise_only_on_entry() {
     let cases = [
-        (Comparison::EntersEquality, 25, 24, 1),
-        (Comparison::EntersEquality, 25, 25, -1),
-        (Comparison::FallsBelow, 24, 25, 1),
-        (Comparison::FallsBelow, 24, 24, -1),
-        (Comparison::RisesAbove, 26, 25, 1),
-        (Comparison::RisesAbove, 26, 26, -1),
-        (Comparison::ReachesOrBelow, 25, 26, 1),
-        (Comparison::ReachesOrBelow, 25, 25, -1),
-        (Comparison::ReachesOrAbove, 25, 24, 1),
-        (Comparison::ReachesOrAbove, 25, 25, -1),
+        (Comparison::EntersEquality, 25, 24, true),
+        (Comparison::EntersEquality, 25, 25, false),
+        (Comparison::FallsBelow, 24, 25, true),
+        (Comparison::FallsBelow, 24, 24, false),
+        (Comparison::FallsBelow, 26, 24, false),
+        (Comparison::RisesAbove, 26, 25, true),
+        (Comparison::RisesAbove, 26, 26, false),
+        (Comparison::ReachesOrBelow, 25, 26, true),
+        (Comparison::ReachesOrBelow, 25, 25, false),
+        (Comparison::ReachesOrAbove, 25, 24, true),
+        (Comparison::ReachesOrAbove, 25, 25, false),
     ];
+    let target = Entity::from_bits(7);
+    let sample = |value| Some(StaffRequestControllerSample::NumberQ16(value * 65_536));
     for (comparison, current, previous, expected) in cases {
+        let row = number_row(comparison, false);
+        let mut state = bind_rows(row.id, std::slice::from_ref(&row)).remove(0);
+        let _ = evaluate_staff_request_row(&row, &mut state, target, sample(previous));
         assert_eq!(
-            evaluate_staff_threshold(
-                comparison,
-                StaffRequestThresholdValue::Number(25.0),
-                Some(StaffRequestControllerSample::NumberQ16(previous * 65_536)),
-                StaffRequestControllerSample::NumberQ16(current * 65_536),
+            matches!(
+                evaluate_staff_request_row(&row, &mut state, target, sample(current)),
+                Some(StaffRequestJobEvent::Raised { .. })
             ),
             expected
         );
     }
-    assert_eq!(
-        evaluate_staff_threshold(
-            Comparison::FallsBelow,
-            StaffRequestThresholdValue::Number(25.0),
-            Some(StaffRequestControllerSample::NumberQ16(24 * 65_536)),
-            StaffRequestControllerSample::NumberQ16(26 * 65_536),
-        ),
-        0
-    );
 }
 
 #[test]
@@ -189,4 +184,67 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
         ),
         Some(StaffRequestJobEvent::Cancelled { .. })
     ));
+}
+
+#[test]
+fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
+    use openzt2_game_data::world_definitions::world_objects::WaterFilterPolicy;
+    use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
+    use openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex;
+    let mut row = number_row(Comparison::RisesAbove, false);
+    row.attribute_key = Some(AssetId::from_key("f_filterdirtylevel"));
+    row.request.token = Some(AssetId::from_key("t_cleanwaterfilter"));
+    row.cancel_comparison = Comparison::FallsBelow;
+    let filter = WaterFilter {
+        policy: WaterFilterPolicy {
+            cleanup_interval_seconds: 2.0,
+            cleanup_rate: 750.0,
+            maximum_dirt_capacity: 75_000.0,
+            maintenance_thresholds: Some([[20.0, 10.0], [50.0, 10.0], [80.0, 10.0]]),
+        },
+        seconds_until_cleanup: 0.0,
+        dirt_percent: 0.0,
+    };
+    let thresholds = |schedule| {
+        filter_schedule_row(&row, &filter, schedule)
+            .map(|row| (row.threshold, row.cancel_threshold))
+    };
+    // The panel starts on regular.
+    assert_eq!(
+        thresholds(None),
+        Some((
+            StaffRequestThresholdValue::Number(50.0),
+            StaffRequestThresholdValue::Number(10.0)
+        ))
+    );
+    assert_eq!(
+        thresholds(Some(&MaintenanceScheduleIndex(0))),
+        Some((
+            StaffRequestThresholdValue::Number(20.0),
+            StaffRequestThresholdValue::Number(10.0)
+        ))
+    );
+    assert_eq!(
+        thresholds(Some(&MaintenanceScheduleIndex(2))).map(|(threshold, _)| threshold),
+        Some(StaffRequestThresholdValue::Number(80.0))
+    );
+    // Other requests keep their authored thresholds.
+    assert!(
+        filter_schedule_row(&number_row(Comparison::RisesAbove, false), &filter, None).is_none()
+    );
+
+    let regular = filter_schedule_row(&row, &filter, None).unwrap();
+    let preemptive =
+        filter_schedule_row(&row, &filter, Some(&MaintenanceScheduleIndex(0))).unwrap();
+    let target = Entity::from_bits(7);
+    let rows = std::slice::from_ref(&row);
+    let mut state = bind_rows(row.id, rows).remove(0);
+    let dirt = |percent| Some(StaffRequestControllerSample::NumberQ16(percent * 65_536));
+    assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(40)).is_none());
+    assert!(matches!(
+        evaluate_staff_request_row(&preemptive, &mut state, target, dirt(40)),
+        Some(StaffRequestJobEvent::Raised { .. })
+    ));
+    let mut state = reconcile_rows(row.id, rows, &[state]).remove(0);
+    assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt(55)).is_none());
 }

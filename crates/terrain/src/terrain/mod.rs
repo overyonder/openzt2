@@ -53,10 +53,11 @@ use crate::terrain::terrain_chunk_render_refresh::refresh_changed_terrain_chunk_
 use crate::terrain::terrain_collision_rebuilding::rebuild_pending_terrain_chunk_collisions_within_tick_budget;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
-use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
 use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_requiring_ground_path_surface_recomposition;
+use crate::terrain::terrain_ground_path_surface_projection::mark_terrain_chunks_under_changed_painted_textures;
 use crate::terrain::terrain_ground_path_surface_projection::recompose_ground_path_surfaces_into_terrain_chunk_images;
 use crate::terrain::terrain_ground_path_surface_projection::retain_ground_path_surface_image_dependencies;
+use crate::terrain::terrain_ground_path_surface_projection::GroundPathSurfaceImageDependencies;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
 use crate::terrain::terrain_live_brush_application::roll_back_cancelled_live_terrain_brush_edit;
 use crate::terrain::terrain_object_placement_flattening_preparation::prepare_authored_object_placement_terrain_flattening;
@@ -87,6 +88,7 @@ use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_world_state::application_schedule::WaterPresentationSet;
+use openzt2_world_state::model_render::ModelRenderPresentationSet;
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
 use openzt2_zoo_state::construction::FixedConstructionSet;
 use openzt2_zoo_state::construction::FixedConstructionTransactionMaterializationSet;
@@ -147,6 +149,12 @@ impl Plugin for TerrainPlugin {
             )
             .add_systems(
                 Update,
+                terrain_water_renderer_targets::reconcile_water_material_render_views
+                    .after(project_changed_terrain_water_surfaces_and_waterfalls)
+                    .in_set(WaterPresentationSet::View),
+            )
+            .add_systems(
+                Update,
                 (
                     update_authored_terrain_water_renderer_inputs,
                     terrain_water_disturbance_presentation::present_authored_water_surface_spray_samples,
@@ -184,6 +192,7 @@ impl Plugin for TerrainPlugin {
                     refresh_changed_terrain_chunk_meshes_and_surface_images,
                     retain_ground_path_surface_image_dependencies,
                     mark_terrain_chunks_requiring_ground_path_surface_recomposition,
+                    mark_terrain_chunks_under_changed_painted_textures,
                     recompose_ground_path_surfaces_into_terrain_chunk_images,
                     project_terrain_brush_cursor_onto_terrain_surfaces,
                     remove_despawned_terrain_chunks_from_spatial_index,
@@ -196,16 +205,20 @@ impl Plugin for TerrainPlugin {
                 (
                     terrain_water_caustics::scene_projection::project_scene_caustic_targets
                         .after(openzt2_world_state::model_render::ModelRenderPresentationSet::LevelOfDetail),
-                    terrain_water_caustics::scene_projection::project_scene_caustic_passes,
-                    terrain_water_caustics::scene_projection::update_scene_caustic_bindings,
+                    terrain_water_caustics::scene_projection::project_scene_caustic_passes
+                        .after(terrain_water_caustics::scene_projection::project_scene_caustic_targets)
+                        .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
+                        .after(ModelRenderPresentationSet::SourceMaterials)
+                        .in_set(ModelRenderPresentationSet::VisibilityInputCommands),
+                    terrain_water_caustics::scene_projection::update_scene_caustic_bindings
+                        .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands)
+                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
                     bevy::transform::systems::propagate_transforms_for::<With<
                         openzt2_zoo_state::terrain::terrain_water_caustic_types::TerrainWaterCausticScenePass,
-                    >>,
-                )
-                    .chain()
-                    .after(openzt2_world_state::model_render::ModelRenderPresentationSet::MaterialProjection)
-                    .after(openzt2_game_assets::material::runtime::texture_coordinate_animation::TextureCoordinateAnimationSet)
-                    .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate),
+                    >>
+                        .after(ModelRenderPresentationSet::ApplyVisibilityInputCommands)
+                        .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+                ),
             )
             .add_systems(
                 Update,

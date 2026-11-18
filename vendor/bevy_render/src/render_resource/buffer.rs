@@ -1,15 +1,20 @@
 use super::uniform_buffer_pages::UniformBufferPageAllocation;
-use crate::renderer::WgpuWrapper;
+use crate::renderer::wgpu_wrapper;
 use bevy_utils::define_atomic_id;
 use core::ops::{Deref, RangeBounds};
 use std::sync::Arc;
 
 define_atomic_id!(BufferId);
 
+wgpu_wrapper! {
+    #[derive(Clone, Debug)]
+    struct WgpuBuffer(wgpu::Buffer);
+}
+
 #[derive(Clone, Debug)]
 pub struct Buffer {
     id: BufferId,
-    value: WgpuWrapper<wgpu::Buffer>,
+    value: WgpuBuffer,
     uniform_allocation: Option<Arc<UniformBufferPageAllocation>>,
 }
 
@@ -105,7 +110,7 @@ impl From<wgpu::Buffer> for Buffer {
     fn from(value: wgpu::Buffer) -> Self {
         Buffer {
             id: BufferId::new(),
-            value: WgpuWrapper::new(value),
+            value: WgpuBuffer::new(value),
             uniform_allocation: None,
         }
     }

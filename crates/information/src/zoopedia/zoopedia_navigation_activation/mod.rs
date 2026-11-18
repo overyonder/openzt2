@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use super::{
     super::{
@@ -10,13 +11,13 @@ use super::{
 
 pub(crate) fn navigate_to_subject_from_pressed_zoopedia_table_of_contents_row(
     table_of_contents_rows: Query<
-        (&ZoopediaTableOfContentsRow, &Interaction),
-        Changed<Interaction>,
+        (&ZoopediaTableOfContentsRow, &UiPointerInteraction),
+        Changed<UiPointerInteraction>,
     >,
     mut zoopedia_pages: Query<(&mut ZoopediaPage, Option<&mut ZoopediaHistory>)>,
 ) {
     for (table_of_contents_row, interaction) in &table_of_contents_rows {
-        if *interaction != Interaction::Pressed {
+        if *interaction != UiPointerInteraction::Pressed {
             continue;
         }
         let Ok((mut page, history)) =
@@ -36,19 +37,19 @@ pub(crate) fn navigate_to_subject_from_pressed_zoopedia_rich_content_link(
     rich_content_links: Query<&ZoopediaRichLink>,
     pressed_text_blocks: Query<
         (
-            &Interaction,
+            &UiPointerInteraction,
             &bevy::ui::RelativeCursorPosition,
             &bevy::text::ComputedTextBlock,
             &bevy::text::TextLayoutInfo,
             &ComputedNode,
             &UiGlobalTransform,
         ),
-        Changed<Interaction>,
+        Changed<UiPointerInteraction>,
     >,
     mut zoopedia_pages: Query<(&mut ZoopediaPage, Option<&mut ZoopediaHistory>)>,
 ) {
     for (interaction, cursor, block, layout, node, transform) in &pressed_text_blocks {
-        if *interaction != Interaction::Pressed || !cursor.cursor_over() {
+        if *interaction != UiPointerInteraction::Pressed || !cursor.cursor_over() {
             continue;
         }
         let Some(cursor) = cursor.normalized else {
@@ -69,7 +70,10 @@ pub(crate) fn navigate_to_subject_from_pressed_zoopedia_rich_content_link(
             if !run.bounds.contains(text_position) {
                 return None;
             }
-            let entity = block.entities().get(run.section_index)?.entity;
+            let entity = block
+                .entities()
+                .get(usize::try_from(run.section_index).ok()?)?
+                .entity;
             rich_content_links.get(entity).ok()
         }) else {
             continue;

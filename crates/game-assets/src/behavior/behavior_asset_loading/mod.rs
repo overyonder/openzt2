@@ -31,15 +31,13 @@ impl AssetLoader for BehaviorDocumentAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_behavior", skip_all))]
     async fn load(
         &self,
         source_reader: &mut dyn Reader,
         _: &(),
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("behavior");
         let mut source_bytes = Vec::new();
         source_reader.read_to_end(&mut source_bytes).await?;
         let behavior_asset_path = load_context

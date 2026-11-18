@@ -9,8 +9,8 @@ use crate::source_document::{
     },
 };
 use openzt2_game_data::{
-    AssetId,
     world_definitions::catalogue_and_progression::animal_adoption_species_eligibility::AnimalAdoptionSpeciesEligibility,
+    AssetId,
 };
 
 pub(super) fn lower_animal_adoption_species_eligibility(

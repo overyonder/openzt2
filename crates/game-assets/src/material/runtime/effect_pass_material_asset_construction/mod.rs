@@ -175,7 +175,7 @@ fn create_effect_pass_material_asset(
             let label = format!("{labelled_asset_prefix}-{index}-fixed-fragment");
             create_fixed_function_fragment_shader_for_programmable_vertex_outputs(
                 vertex,
-                format!("{}#{label}", context.path()),
+                format!("{}#{label}.wesl", context.path()),
             )
             .map(|shader| context.add_labeled_asset(label, shader))
         })

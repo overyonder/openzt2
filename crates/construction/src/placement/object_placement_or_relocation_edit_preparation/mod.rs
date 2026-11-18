@@ -181,6 +181,7 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
                 affordable: permission.affordable,
                 topology_valid: permission.topology_valid,
                 headroom_valid: permission.headroom_valid,
+                surface_valid: permission.surface_valid,
             },
         );
         let PlacementValidity::Valid { cost } = validity else {

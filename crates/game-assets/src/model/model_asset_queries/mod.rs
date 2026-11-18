@@ -25,7 +25,7 @@ pub fn loaded_gltf_model_aggregate_local_bounds(
     meshes: &Assets<Mesh>,
 ) -> Option<(Vec3, Vec3)> {
     loaded_gltf_model_mesh_asset_handles(model, gltf_meshes)
-        .filter_map(|handle| meshes.get(handle)?.compute_aabb())
+        .filter_map(|handle| meshes.get(handle)?.get_aabb())
         .fold(None, |bounds, aabb| {
             let center = Vec3::from(aabb.center);
             let half = Vec3::from(aabb.half_extents);

@@ -5,7 +5,7 @@
 /// ```txt
 /// particle.velocity += acceleration * simulation.delta_time;
 /// ```
-use std::hash::Hash;
+use std::{borrow::Cow, hash::Hash};
 
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -68,8 +68,8 @@ impl Modifier for AccelModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::VELOCITY]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -151,8 +151,8 @@ impl Modifier for RadialAccelModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::POSITION, Attribute::VELOCITY]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::POSITION, Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -166,6 +166,7 @@ impl Modifier for RadialAccelModifier {
         context.make_fn(
             &func_name,
             "particle: ptr<function, Particle>",
+            None,
             module,
             &mut |m: &mut Module, ctx: &mut dyn EvalContext| -> Result<String, ExprError> {
                 let origin = ctx.eval(m, self.origin)?;
@@ -270,8 +271,8 @@ impl Modifier for TangentAccelModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::POSITION, Attribute::VELOCITY]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::POSITION, Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -310,7 +311,7 @@ impl Modifier for TangentAccelModifier {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ParticleLayout, Property, PropertyLayout, ToWgslString};
+    use crate::{ParticleLayout, Property, PropertyLayout, TextureLayout, ToWgslString};
 
     #[test]
     fn mod_accel() {
@@ -320,8 +321,13 @@ mod tests {
 
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
-        let mut context =
-            ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let texture_layout = TextureLayout::default();
+        let mut context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(modifier.apply(&mut module, &mut context).is_ok());
 
         assert!(context.main_code.contains(&accel.to_wgsl_string()));
@@ -332,12 +338,17 @@ mod tests {
         let mut module = Module::default();
         let property_layout = PropertyLayout::new(&[Property::new("my_prop", 3.)]);
         let particle_layout = ParticleLayout::default();
+        let texture_layout = TextureLayout::default();
 
         let origin = Vec3::new(-1.2, 5.3, -8.5);
         let accel = 6.;
         let modifier = RadialAccelModifier::constant(&mut module, origin, accel);
-        let mut context =
-            ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let mut context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(modifier.apply(&mut module, &mut context).is_ok());
         // TODO: less weak check...
         assert!(context.extra_code.contains(&accel.to_wgsl_string()));
@@ -346,8 +357,12 @@ mod tests {
         let my_prop = module.add_property("my_prop", 3.0.into());
         let accel = module.prop(my_prop);
         let modifier = RadialAccelModifier::new(origin, accel);
-        let mut context =
-            ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let mut context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(modifier.apply(&mut module, &mut context).is_ok());
         // TODO: less weak check...
         assert!(context.extra_code.contains(Attribute::POSITION.name()));
@@ -364,8 +379,13 @@ mod tests {
 
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
-        let mut context =
-            ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let texture_layout = TextureLayout::default();
+        let mut context = ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         assert!(modifier.apply(&mut module, &mut context).is_ok());
 
         // TODO: less weak check...

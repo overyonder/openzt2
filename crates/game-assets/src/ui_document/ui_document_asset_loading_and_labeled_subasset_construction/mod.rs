@@ -3,7 +3,7 @@
 use std::{collections::BTreeMap, io};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_data::ui_document::document::UiDocumentRole;

@@ -13,13 +13,14 @@ use bevy::{
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
         renderer::{RenderContext, RenderDevice, ViewQuery},
-        view::ViewDepthTexture,
+        view::ViewDepthStencilTexture,
         Render, RenderApp, RenderSystems,
     },
 };
 
 /// Camera-owned draw input and asynchronous result, shared only across extraction.
 #[derive(Component, Clone, ExtractComponent)]
+#[extract_app(RenderApp)]
 pub(in crate::terrain) struct WaterRayViewOcclusion {
     pub clip_corners: [Vec4; 4],
     pub full_sample_count: f32,
@@ -74,6 +75,7 @@ struct ViewQueryBuffers {
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
     pipeline: wgpu::RenderPipeline,
+    format: wgpu::TextureFormat,
     samples: u32,
     issued: AtomicBool,
     pending: Arc<AtomicBool>,
@@ -88,7 +90,7 @@ fn query_water_ray_occlusion(
     view: ViewQuery<(
         Entity,
         &WaterRayViewOcclusion,
-        &ViewDepthTexture,
+        &ViewDepthStencilTexture,
         Option<&WaterRayGpuQuery>,
     )>,
     mut commands: Commands,
@@ -103,7 +105,8 @@ fn query_water_ray_occlusion(
         .0
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let samples = depth.texture.sample_count();
+    let samples = depth.texture().sample_count();
+    let format = depth.texture().format();
     if state
         .as_ref()
         .is_some_and(|state| state.pending.load(Ordering::Acquire))
@@ -118,11 +121,13 @@ fn query_water_ray_occlusion(
         return;
     }
     if state.as_ref().is_none_or(|state| {
-        state.samples != samples || !Arc::ptr_eq(&state.result, &request.result)
+        state.samples != samples
+            || state.format != format
+            || !Arc::ptr_eq(&state.result, &request.result)
     }) {
         *state = Some(create_view_query(
             context.render_device(),
-            depth.texture.format(),
+            format,
             samples,
             request,
         ));
@@ -148,14 +153,7 @@ fn query_water_ray_occlusion(
             .begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("water ray occlusion"),
                 color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: depth.view(),
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
+                depth_stencil_attachment: Some(depth.get_attachment(wgpu::StoreOp::Store)),
                 occlusion_query_set: Some(&state.query),
                 timestamp_writes: None,
                 multiview_mask: None,
@@ -200,7 +198,7 @@ fn create_view_query(
             module: &shader,
             entry_point: Some("vertex"),
             compilation_options: default(),
-            buffers: &[wgpu::VertexBufferLayout {
+            buffers: &[Some(wgpu::VertexBufferLayout {
                 array_stride: 16,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &[wgpu::VertexAttribute {
@@ -208,7 +206,7 @@ fn create_view_query(
                     offset: 0,
                     shader_location: 0,
                 }],
-            }],
+            })],
         },
         primitive: wgpu::PrimitiveState {
             cull_mode: None,
@@ -248,6 +246,7 @@ fn create_view_query(
             mapped_at_creation: false,
         }),
         pipeline,
+        format,
         samples,
         issued: AtomicBool::new(false),
         pending: Arc::default(),
@@ -280,14 +279,15 @@ fn map_water_ray_occlusion(queries: Query<&WaterRayGpuQuery>) {
             .slice(..)
             .map_async(wgpu::MapMode::Read, move |status| {
                 if status.is_ok() {
-                    let bytes = buffer.slice(..).get_mapped_range();
-                    let count =
-                        u64::from_ne_bytes(bytes[..8].try_into().expect("eight byte query buffer"));
-                    *result
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner) =
-                        Some((count as f32 / denominator).clamp(0.0, 1.0));
-                    drop(bytes);
+                    if let Ok(bytes) = buffer.slice(..).get_mapped_range() {
+                        let count = u64::from_ne_bytes(
+                            bytes[..].try_into().expect("eight byte query buffer"),
+                        );
+                        *result
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+                            Some((count as f32 / denominator).clamp(0.0, 1.0));
+                    }
                     buffer.unmap();
                 }
                 pending.store(false, Ordering::Release);

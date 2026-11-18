@@ -107,7 +107,10 @@ pub(super) fn enter_guest_view_for_pending_guest_subject(
 
 pub(super) fn enter_first_person_mode_for_pending_navigable_subject(
     pending_entries: Query<(Entity, &PendingImmersiveEntry)>,
-    navigable_subjects: Query<(), (Or<(With<NavAgent>, With<TransportVehicle>)>, Without<Dead>)>,
+    navigable_subjects: Query<
+        Has<TransportVehicle>,
+        (Or<(With<NavAgent>, With<TransportVehicle>)>, Without<Dead>),
+    >,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     zoo_cameras: Query<Entity, With<ZooCamera>>,
@@ -136,7 +139,7 @@ pub(super) fn enter_first_person_mode_for_pending_navigable_subject(
         );
         return;
     };
-    if navigable_subjects.get(subject_entity).is_err() {
+    let Ok(riding_transport_vehicle) = navigable_subjects.get(subject_entity) else {
         record_pending_immersive_mode_entry_failure(
             controller_entity,
             pending_entry,
@@ -144,7 +147,7 @@ pub(super) fn enter_first_person_mode_for_pending_navigable_subject(
             &mut commands,
         );
         return;
-    }
+    };
     let Some((interaction_tool, camera_definition, lock_subject, restore_camera_on_exit)) =
         resolve_required_authored_interaction_policy(
             ImmersiveMode::FirstPerson,
@@ -165,7 +168,9 @@ pub(super) fn enter_first_person_mode_for_pending_navigable_subject(
         Some(interaction_tool),
         CameraMode::FirstPerson(subject_entity),
         camera_definition,
-        lock_subject,
+        // "Ride in vehicle" leaves the vehicle on its tour: in the original
+        // the arrow keys don't steer or stop it, the rider only looks around.
+        lock_subject && !riding_transport_vehicle,
         restore_camera_on_exit,
         &mut commands,
         &mut camera_mode_requests,

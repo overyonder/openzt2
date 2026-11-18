@@ -538,6 +538,7 @@ fn site_is_still_valid(
             affordable: true,
             topology_valid: false,
             headroom_valid: false,
+            surface_valid: true,
         },
     );
     matches!(validity, PlacementValidity::Valid { .. })

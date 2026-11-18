@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::audio::audio_asset_types::{AudioAsset, AudioAssets};
-use openzt2_game_data::{AssetId as CueId, audio::AudioCrowdPolicy};
+use openzt2_game_data::{audio::AudioCrowdPolicy, AssetId as CueId};
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::{
     audio::audio_environment_types::{AudioSoundscape, WorldAudioPreset},
@@ -17,16 +17,8 @@ pub(super) struct CrowdCuePlayback {
 }
 
 fn select_crowd_band(count: i32, current: Option<u8>, policy: &AudioCrowdPolicy) -> Option<u8> {
-    let [
-        quiet_high,
-        small_low,
-        small_high,
-        medium_low,
-        medium_high,
-        large_low,
-        large_high,
-        huge_low,
-    ] = policy.thresholds;
+    let [quiet_high, small_low, small_high, medium_low, medium_high, large_low, large_high, huge_low] =
+        policy.thresholds;
     if count < quiet_high && current != Some(0) {
         Some(0)
     } else if count > huge_low && matches!(current, Some(3) | None) {

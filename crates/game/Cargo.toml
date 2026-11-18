@@ -9,11 +9,13 @@ license.workspace = true
 
 [features]
 default = []
-trace-tracy-gpu = ["bevy/trace", "bevy/trace_tracy", "bevy/debug"]
-trace-tracy-memory = ["bevy/trace", "bevy/trace_tracy_memory", "bevy/debug"]
+tracing = ["bevy/trace_tracy", "bevy/debug", "openzt2_game_assets/tracing", "openzt2_world/tracing"]
+trace-tracy-gpu = ["tracing"]
+trace-tracy-memory = ["tracing", "bevy/trace_tracy_memory"]
 dev-tools = [
     "dep:bevy-inspector-egui",
     "bevy/bevy_dev_tools",
+    "bevy/render_dev_tools",
     "bevy/bevy_ui_debug",
     "bevy/track_location",
     "bevy/debug",
@@ -63,8 +65,9 @@ z2f.workspace = true
 avian3d.workspace = true
 bevy.workspace = true
 bevy_hanabi.workspace = true
-bevy-inspector-egui = { version = "0.37", optional = true }
+bevy-inspector-egui = { version = "0.38", optional = true }
 dirs.workspace = true
+indexmap = "2"
 
 # Apple's wgpu backend is Metal; raw Vulkan initialization is unavailable there.
 [target.'cfg(not(target_vendor = "apple"))'.dependencies]

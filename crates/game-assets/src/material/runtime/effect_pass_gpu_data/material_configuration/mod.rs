@@ -253,7 +253,8 @@ impl EffectPassMaterial {
         self.fixed_function.values[46].x = 0.0;
         self.pipeline_specialization_key.cull_face = None;
         self.pipeline_specialization_key.depth_write_enabled = true;
-        self.pipeline_specialization_key.depth_compare = CompareFunction::LessEqual;
+        // D3DCMP_LESSEQUAL under the reverse-Z depth buffer.
+        self.pipeline_specialization_key.depth_compare = CompareFunction::GreaterEqual;
         self.pipeline_specialization_key.blend_state = None;
         self.pipeline_specialization_key.color_writes = ColorWrites::ALL;
         true
@@ -289,6 +290,10 @@ impl EffectPassMaterial {
             return false;
         }
         self.fixed_function.values[5].x = 1.0; // D3DTOP_DISABLE for stage one.
+                                               // The shipped decal textures carry at most half alpha. The original
+                                               // paints a road into the terrain through its opaque paint mask, so
+                                               // the decal doubles the texture alpha to draw it as solid.
+        self.fixed_function.values[0].w = 5.0; // D3DTOP_MODULATE2X alpha
         self.pipeline_specialization_key.cull_face = None;
         self.pipeline_specialization_key.depth_write_enabled = false;
         self.pipeline_specialization_key.blend_state = Some(BlendState::ALPHA_BLENDING);
@@ -369,6 +374,39 @@ impl EffectPassMaterial {
         }
         self.fixed_transforms.values[1] = next;
         true
+    }
+
+    /// A copy drawn as its texture times `colour`, whatever the lights: the
+    /// material lights itself with only an emissive `colour` (a highlighted
+    /// road), so it needs no vertex colours.
+    pub fn clone_tinted(&self, colour: Vec4, buffers: &mut Assets<ShaderBuffer>) -> Option<Self> {
+        let mut tinted =
+            self.clone_with_fixed_function_world_lighting_context(Some(true), false, 0, buffers)?;
+        tinted.fixed_function.values[0].x = 4.0; // D3DTOP_MODULATE
+        tinted.fixed_function.values[0].y = 2.0; // D3DTA_TEXTURE
+        tinted.fixed_function.values[0].z = 1.0; // D3DTA_CURRENT (lit diffuse)
+        tinted.fixed_function.values[40] = Vec4::new(0.0, 0.0, 0.0, colour.w); // diffuse
+        tinted.fixed_function.values[41] = Vec4::ZERO; // ambient
+        tinted.fixed_function.values[43] = colour; // emissive
+        tinted.fixed_function.values[46] = Vec4::new(1.0, 0.0, 0.0, 0.0); // all from material
+        tinted.uniform_buffer_assets.fixed_function =
+            buffers.add(shader_buffer_from_uniform_value(&tinted.fixed_function));
+        Some(tinted)
+    }
+
+    /// `colour` in the texture's shape: like [`Self::clone_tinted`], but the
+    /// colour replaces the texture's colour instead of multiplying it, so a
+    /// dark texture still shows the colour.
+    pub fn clone_flat_coloured(
+        &self,
+        colour: Vec4,
+        buffers: &mut Assets<ShaderBuffer>,
+    ) -> Option<Self> {
+        let mut coloured = self.clone_tinted(colour, buffers)?;
+        coloured.fixed_function.values[0].x = 3.0; // D3DTOP_SELECTARG2
+        coloured.uniform_buffer_assets.fixed_function =
+            buffers.add(shader_buffer_from_uniform_value(&coloured.fixed_function));
+        Some(coloured)
     }
 
     pub fn clone_with_fixed_function_world_lighting_context(

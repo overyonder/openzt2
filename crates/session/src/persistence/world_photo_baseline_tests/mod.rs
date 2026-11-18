@@ -1,17 +1,12 @@
 use openzt2_environment::EnvironmentPlugin;
-use std::{
-    fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{document::WorldDefinitionDocument, environment::EnvironmentDefinition},
     world_scenario::{
         PhotoChallengeRule, StartingTopologyNodeRecord, StartingZooRecord, WorldScenarioDocument,
     },
+    AssetId,
 };
 
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
@@ -25,13 +20,12 @@ use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFr
 use crate::persistence::{
     persistence_failure_types::WorldSnapshotPersistenceFailed,
     slot_io::photo_baseline_snapshot_tests::{
-        FIRST, PROFILE, SCENARIO, SECOND, initialize_fixture_album_localization, loading_app,
-        photo_fixture_catalogue, prepare_photo_snapshot_application,
+        initialize_fixture_album_localization, loading_app, photo_fixture_catalogue,
+        prepare_photo_snapshot_application, FIRST, PROFILE, SCENARIO, SECOND,
     },
 };
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    asset_source::create_bevy_asset_source_for_enabled_z2f_archives,
     {
         world_definitions::{
             world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -51,35 +45,15 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-
-struct EmptyArchiveFixture(PathBuf);
-
-impl Drop for EmptyArchiveFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
 
 #[test]
 fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_localization() {
     for delay_localization in [false, true] {
-        let archive = EmptyArchiveFixture(std::env::temp_dir().join(format!(
-            "openzt2-photo-baseline-{}-{}.z2f", std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-        )));
-        zip::ZipWriter::new(fs::File::create_new(&archive.0).unwrap())
-            .finish()
-            .unwrap();
-        let (_, archives) =
-            create_bevy_asset_source_for_enabled_z2f_archives(vec![archive.0.clone()]).unwrap();
         let (mut app, root) = loading_app();
         app.add_plugins(EnvironmentPlugin)
             .add_message::<openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue>()
             .add_message::<openzt2_game_assets::effect::SpawnParticleEffectEmitter>()
             .add_message::<openzt2_game_assets::effect::StopParticleEffectsAttachedToEntity>()
-            .insert_resource(archives)
-            .init_resource::<WorldLoadingPerformanceAttribution>()
             .add_systems(
                 Update,
                 (
@@ -216,11 +190,10 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
         if delay_localization {
             assert!(app.world().get::<Name>(album).is_none());
             app.update();
-            assert!(
-                app.world()
-                    .resource::<Messages<WorldSnapshotLoadedFromSlot>>()
-                    .is_empty()
-            );
+            assert!(app
+                .world()
+                .resource::<Messages<WorldSnapshotLoadedFromSlot>>()
+                .is_empty());
             assert!(matches!(
                 app.world().resource::<NextState<GamePhase>>(),
                 NextState::Unchanged
@@ -246,11 +219,10 @@ fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_loca
                 .len(),
             1
         );
-        assert!(
-            app.world()
-                .resource::<Messages<WorldSnapshotPersistenceFailed>>()
-                .is_empty()
-        );
+        assert!(app
+            .world()
+            .resource::<Messages<WorldSnapshotPersistenceFailed>>()
+            .is_empty());
         let mut challenges = app
             .world_mut()
             .query::<(&PhotoChallenge, &PhotoChallengeProgress)>();

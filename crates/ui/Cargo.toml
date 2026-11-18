@@ -18,6 +18,7 @@ openzt2_world_state.workspace = true
 openzt2_zoo_state.workspace = true
 
 bevy.workspace = true
+image.workspace = true
 serde.workspace = true
 ron.workspace = true
 

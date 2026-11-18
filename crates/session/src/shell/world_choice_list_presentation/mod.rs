@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -136,15 +137,17 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
                 let row = commands
                     .spawn((
                         Name::new(format!("map choice {index}")),
-                        Button,
-                        Interaction::None,
+                        bevy::ui_widgets::Button,
+                        UiPointerInteraction::None,
                         UiFocusable {
                             order: index as u32,
                             enabled: true,
                         },
                         UiFocusPresentation::default(),
                         UiInteractionEnabled(true),
-                        UiPreviousPointerInteraction::from_current_interaction(Interaction::None),
+                        UiPreviousPointerInteraction::from_current_interaction(
+                            UiPointerInteraction::None,
+                        ),
                         UiPreviousPointerPressTimeSeconds::default(),
                         (
                             UiSelected(false),

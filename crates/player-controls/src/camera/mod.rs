@@ -38,7 +38,7 @@ use systems::{
 };
 use world_pointer_ray_types::WorldPointerRay;
 
-use bevy::{prelude::*, transform::TransformSystems};
+use bevy::prelude::*;
 
 use openzt2_world_state::application_schedule::GameSet;
 
@@ -113,10 +113,9 @@ impl Plugin for ZooCameraPlugin {
                     .in_set(ZooCameraPoseUpdateSystems),
             )
             .add_systems(
-                PostUpdate,
-                project_pointer_ray
-                    .after(TransformSystems::Propagate)
-                    .in_set(GameSet::Presentation),
+                PreUpdate,
+                // Pick against the last presented camera pose with this frame's pointer.
+                project_pointer_ray.after(GameSet::Input),
             )
             .add_systems(
                 PostUpdate,

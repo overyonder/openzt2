@@ -54,3 +54,65 @@ pub(super) fn lower_termination_action_source_node(
     }
     Ok(Some(BehaviorAction::Termination(termination_action)))
 }
+
+/// `BFBehKill` that destroys its target with a clip: the fence a raptor
+/// smashes (`radiusKillType="fence"`) becomes its broken variant, as
+/// `ZTBehMorph` makes it for an elephant, and a building an ankylosaur bashes
+/// (`killUsingDestroyEntity`) gives way to its ruin.
+// Only the target breaks; the authored `radius` would also break
+// fences beside it.
+pub(crate) fn lower_fence_kill_actions(node: &DataNode) -> io::Result<Option<[BehaviorAction; 2]>> {
+    if node.name != "BFBehKill" {
+        return Ok(None);
+    }
+    let breaks_fences = node.attribute("radiusKillType").map(str::trim) == Some("fence");
+    if !breaks_fences
+        && !(read_boolean_attribute_or_false(node, "killUsingDestroyEntity")?
+            && node.attribute("radius").is_none()
+            && node.attribute("targetAnim").is_some())
+    {
+        return Ok(None);
+    }
+    if node.attributes.iter().any(|attribute| {
+        !matches!(
+            attribute.name(),
+            "targetAnim"
+                | "killTarget"
+                | "radius"
+                | "radiusKillType"
+                | "fadeOutPeriod"
+                | "killUsingDestroyEntity"
+        )
+    }) || !read_boolean_attribute_or_false(node, "killTarget")?
+    {
+        return Err(invalid_behavior_source_data(
+            "BFBehKill on a fence has unmapped authored policy",
+        ));
+    }
+    let animation_clip_asset_key = node
+        .attribute("targetAnim")
+        .map(str::trim)
+        .filter(|key| !key.is_empty())
+        .ok_or_else(|| invalid_behavior_source_data("BFBehKill on a fence has no targetAnim"))?
+        .to_owned();
+    Ok(Some([
+        BehaviorAction::AnimationClip(
+            openzt2_game_data::behavior::action::animation::BehaviorAnimationClipAction {
+                animation_clip_asset_key,
+                looping: false,
+                physical_object: None,
+                play_duration_seconds: None,
+                interrupts_current_animation: false,
+                interruptible: false,
+                ground_fit: None,
+                blend_duration_seconds: None,
+                playback_speed: None,
+            },
+        ),
+        if breaks_fences {
+            BehaviorAction::MorphTarget(openzt2_game_data::AssetId::from_key("s_broken"))
+        } else {
+            BehaviorAction::DestroyTarget
+        },
+    ]))
+}

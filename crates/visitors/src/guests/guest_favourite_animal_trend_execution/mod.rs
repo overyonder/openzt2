@@ -6,11 +6,11 @@ use openzt2_game_assets::world_definitions::{
 use std::collections::BTreeSet;
 
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         catalogue_and_progression::animal_adoption_species_eligibility::AnimalAdoptionSpeciesEligibility,
         guest_favourite_animal_trend_policy::GuestFavouriteAnimalTrendPolicy,
     },
+    AssetId,
 };
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::world_spawn::{

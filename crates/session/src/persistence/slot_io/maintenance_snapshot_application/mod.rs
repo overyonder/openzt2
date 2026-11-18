@@ -23,7 +23,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::maintenance::maintenance_types::{
     AnimalHabitatWaste, AnimalWasteProductionSchedule,
     AnimalWasteProductionScheduleResolutionMarker, CompostPooLevel, FacilityContainedWaste,
-    LooseLitterWaste, MaintainableObjectConditionPermille,
+    LooseLitterWaste,
 };
 
 pub(super) fn resolve_loose_waste_prefabs(
@@ -151,7 +151,7 @@ pub(super) fn apply_loose_waste_records(
     Ok(restored_identities)
 }
 
-/// Restores saved condition, bin contents, compost levels and animal production deadlines. Authored
+/// Restores saved bin contents, compost levels and animal production deadlines. Authored
 /// initial facts only fill values that are still absent.
 pub(super) fn apply_maintained_object_records(
     commands: &mut Commands,
@@ -163,11 +163,6 @@ pub(super) fn apply_maintained_object_records(
             continue;
         };
         let mut object = commands.entity(entity);
-        if let Some(condition) = record.condition_permille {
-            object
-                .remove::<MaintainableObjectConditionPermille>()
-                .insert(MaintainableObjectConditionPermille(condition));
-        }
         if let Some([units, capacity]) = record.contained_waste {
             object
                 .remove::<FacilityContainedWaste>()

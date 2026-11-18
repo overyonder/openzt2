@@ -16,32 +16,47 @@ use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER
 
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialRenderViewProjection;
 use crate::model_render::authored_model_material_pass_projection::EffectPassMaterialSourceRenderLayers;
-use crate::model_render::prefab_render_layer_camera_matching::render_layers_for_prefab_entity_and_ancestor_chain;
-use crate::model_render::world_entity_model_suppression::SuppressedModelRenderLayers;
+use crate::model_render::prefab_render_layer_camera_matching::PrefabRenderLayers;
 use openzt2_world_state::model_render::ModelExpanded;
 
 #[derive(Component)]
-pub(super) struct ProjectedPrefabFixedFunctionWorldLightingMaterial(Handle<EffectPassMaterial>);
+pub(super) struct ProjectedPrefabFixedFunctionWorldLightingMaterial {
+    source: Handle<EffectPassMaterial>,
+    projected: AssetId<EffectPassMaterial>,
+    policy: Option<PrefabFixedFunctionWorldLightingPolicy>,
+    context: usize,
+}
 
 pub(super) fn project_prefab_fixed_function_world_lighting_policies(
     mut commands: Commands,
-    roots: Query<(Entity, Ref<ModelExpanded>)>,
-    changed_lighting_policies: Query<(), Changed<PrefabFixedFunctionWorldLightingPolicy>>,
-    changed_render_layers: Query<(), Changed<RenderLayers>>,
-    changed_effect_materials: Query<(), Changed<MeshMaterial3d<EffectPassMaterial>>>,
-    hierarchy: Query<(
-        Option<&PrefabFixedFunctionWorldLightingPolicy>,
-        Option<&ChildOf>,
-    )>,
-    render_layer_hierarchy: Query<(
-        Option<&ChildOf>,
-        Option<&RenderLayers>,
-        Option<&SuppressedModelRenderLayers>,
-    )>,
-    children: Query<&Children>,
+    mut changes: super::model_projection_changes::ModelProjectionChanges,
+    branches: Query<
+        Entity,
+        Or<(
+            Changed<PrefabFixedFunctionWorldLightingPolicy>,
+            Changed<RenderLayers>,
+            Changed<super::world_entity_model_suppression::SuppressedModelRenderLayers>,
+        )>,
+    >,
+    mut removed_policy: RemovedComponents<PrefabFixedFunctionWorldLightingPolicy>,
+    mut removed_layers: RemovedComponents<RenderLayers>,
+    mut unsuppressed: RemovedComponents<
+        super::world_entity_model_suppression::SuppressedModelRenderLayers,
+    >,
+    changed_materials: Query<
+        Entity,
+        Or<(
+            Changed<MeshMaterial3d<EffectPassMaterial>>,
+            Changed<EffectPassMaterialSourceRenderLayers>,
+        )>,
+    >,
+    mut removed_source_layers: RemovedComponents<EffectPassMaterialSourceRenderLayers>,
+    parents: Query<&ChildOf>,
+    expanded: Query<(), With<ModelExpanded>>,
+    policies: Query<&PrefabFixedFunctionWorldLightingPolicy>,
+    mut inherited_layers: PrefabRenderLayers,
     primitives: Query<
         (
-            Entity,
             &MeshMaterial3d<EffectPassMaterial>,
             Option<&ProjectedPrefabFixedFunctionWorldLightingMaterial>,
             Option<&EffectPassMaterialSourceRenderLayers>,
@@ -51,60 +66,78 @@ pub(super) fn project_prefab_fixed_function_world_lighting_policies(
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let projection_policy_changed = !changed_lighting_policies.is_empty()
-        || !changed_render_layers.is_empty()
-        || !changed_effect_materials.is_empty();
-    for (root, expanded) in &roots {
-        if !expanded.is_added() && !projection_policy_changed {
+    changes.collect(
+        branches
+            .iter()
+            .chain(removed_policy.read())
+            .chain(removed_layers.read())
+            .chain(unsuppressed.read()),
+        changed_materials.iter().chain(removed_source_layers.read()),
+    );
+    let mut missing = Vec::new();
+    for entity in changes.candidates() {
+        let Ok((current, previous, source_layers)) = primitives.get(entity) else {
             continue;
-        }
-        let lighting_policy = find_nearest_fixed_function_world_lighting_policy(root, &hierarchy);
-        let lighting_override = lighting_policy.map(|policy| policy.enabled);
-        for entity in
-            std::iter::once(root).chain(children.iter_descendants_depth_first::<Children>(root))
-        {
-            let Ok((entity, current, projected, effect_source_layers)) = primitives.get(entity)
-            else {
-                continue;
-            };
-            let render_layers = effect_source_layers.map_or_else(
-                || {
-                    render_layers_for_prefab_entity_and_ancestor_chain(
-                        entity,
-                        &render_layer_hierarchy,
-                    )
-                },
-                |source_layers| source_layers.0.clone(),
-            );
-            let world_light_context = render_layers
+        };
+        let ancestors = || std::iter::once(entity).chain(parents.iter_ancestors(entity));
+        let model = ancestors().find(|ancestor| expanded.contains(*ancestor));
+        let policy = model.and_then(|root| {
+            std::iter::once(root)
+                .chain(parents.iter_ancestors(root))
+                .find_map(|node| policies.get(node).ok().copied())
+        });
+        let context = if model.is_some() {
+            source_layers
+                .map_or_else(|| inherited_layers.get(entity), |saved| saved.0.clone())
                 .iter()
                 .next()
-                .filter(|context| *context < FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT)
-                .unwrap_or_default();
-            if lighting_override.is_none() && world_light_context == 0 {
-                continue;
+                .filter(|index| *index < FIXED_FUNCTION_WORLD_LIGHT_CONTEXT_COUNT)
+                .unwrap_or_default()
+        } else {
+            0
+        };
+        let owned = previous.filter(|previous| previous.projected == current.id());
+        if policy.is_none() && context == 0 {
+            if let Some(previous) = owned {
+                commands
+                    .entity(entity)
+                    .insert(MeshMaterial3d(previous.source.clone()));
             }
-            if projected.is_some_and(|projected| projected.0 == current.0) {
-                continue;
+            if previous.is_some() {
+                commands
+                    .entity(entity)
+                    .remove::<ProjectedPrefabFixedFunctionWorldLightingMaterial>();
             }
-            let Some(material) = materials.get(&current.0).and_then(|material| {
-                material.clone_with_fixed_function_world_lighting_context(
-                    lighting_override,
-                    lighting_policy
-                        .is_some_and(|policy| policy.preserve_authored_material_lighting),
-                    world_light_context,
-                    &mut effect_uniform_buffers,
-                )
-            }) else {
-                continue;
-            };
-            let handle = materials.add(material);
-            commands.entity(entity).insert((
-                MeshMaterial3d(handle.clone()),
-                ProjectedPrefabFixedFunctionWorldLightingMaterial(handle),
-            ));
+            continue;
         }
+        if owned.is_some_and(|old| old.policy == policy && old.context == context) {
+            continue;
+        }
+        let source = owned.map_or(&current.0, |previous| &previous.source);
+        let Some(material) = materials.get(source) else {
+            missing.push(entity);
+            continue;
+        };
+        let Some(material) = material.clone_with_fixed_function_world_lighting_context(
+            policy.map(|p| p.enabled),
+            policy.is_some_and(|p| p.preserve_authored_material_lighting),
+            context,
+            &mut effect_uniform_buffers,
+        ) else {
+            continue;
+        };
+        let handle = materials.add(material);
+        commands.entity(entity).insert((
+            ProjectedPrefabFixedFunctionWorldLightingMaterial {
+                source: source.clone(),
+                projected: handle.id(),
+                policy,
+                context,
+            },
+            MeshMaterial3d(handle),
+        ));
     }
+    changes.retry_missing(&mut missing);
 }
 
 pub(super) fn update_fixed_function_world_light_buffer(
@@ -140,7 +173,7 @@ pub(super) fn update_fixed_function_world_light_buffer(
     let Some(mut buffer) = buffers.get_mut(FIXED_FUNCTION_WORLD_LIGHT_BUFFER.id()) else {
         return;
     };
-    buffer.set_data(contexts);
+    contexts.write_shader_buffer(&mut buffer);
     *previous_contexts = Some(contexts);
 }
 
@@ -206,22 +239,4 @@ fn collect_fixed_function_world_light_registers_for_render_layers(
     }
     registers.ambient_color_and_directional_light_count.w = directional_light_count as f32;
     registers
-}
-
-fn find_nearest_fixed_function_world_lighting_policy(
-    mut entity: Entity,
-    hierarchy: &Query<(
-        Option<&PrefabFixedFunctionWorldLightingPolicy>,
-        Option<&ChildOf>,
-    )>,
-) -> Option<PrefabFixedFunctionWorldLightingPolicy> {
-    loop {
-        let Ok((policy, parent)) = hierarchy.get(entity) else {
-            return None;
-        };
-        if policy.is_some() {
-            return policy.copied();
-        }
-        entity = parent?.parent();
-    }
 }

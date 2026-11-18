@@ -16,14 +16,13 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 use openzt2_zoo_state::staff::staff_assignment_types::StaffAssignment;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
-use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
-
-use super::information_list_row_identity_projection::find_information_list_row_source_in_ancestors;
+use super::{visit_information_row, InformationRows};
 
 /// Updates information-list values from the referenced entities.
 pub(crate) fn project_live_world_subject_values_to_information_list_rows(
-    information_entity_sources: Query<Ref<InformationEntitySource>>,
-    parent_relationships: Query<&ChildOf>,
+    information_entity_sources: InformationRows,
+    children: Query<&Children>,
+    mut scratch: Local<(Vec<Entity>, String)>,
     animal_need_points: Query<&CumulativeNeedPoints>,
     animal_diseases: Query<(), With<Disease>>,
     animal_pregnancies: Query<(), With<Pregnancy>>,
@@ -35,43 +34,54 @@ pub(crate) fn project_live_world_subject_values_to_information_list_rows(
     donation_totals: Query<&DonationTotal>,
     transport_vehicles: Query<&TransportVehicle>,
     zoo_clock: Res<ZooClock>,
-    mut bound_values: Query<(Entity, &UiValueBinding, &mut UiValue, Option<&mut Text>)>,
+    mut bound_values: Query<(&UiValueBinding, &mut UiValue, Option<&mut Text>)>,
 ) {
-    for (value_entity, value_binding, mut projected_value, text) in &mut bound_values {
-        let Some((world_subject, _)) = find_information_list_row_source_in_ancestors(
-            value_entity,
+    let (stack, formatted) = &mut *scratch;
+    for (row, source) in &information_entity_sources {
+        visit_information_row(
+            row,
+            &children,
             &information_entity_sources,
-            &parent_relationships,
-        ) else {
-            continue;
-        };
-        let Some((next_value, currency)) = project_information_list_value(
-            &value_binding.0,
-            world_subject,
-            &animal_need_points,
-            &animal_diseases,
-            &animal_pregnancies,
-            &guest_satisfaction,
-            &staff_assignments,
-            &service_facilities,
-            &facility_operating_dates,
-            &facility_profits,
-            &donation_totals,
-            &transport_vehicles,
-            zoo_clock.absolute_day,
-        ) else {
-            continue;
-        };
-        projected_value.0 = next_value;
-        if let Some(mut text) = text {
-            text.0.clear();
-            if currency {
-                write_whole_dollar_currency_with_thousands_separators(&mut text.0, next_value);
-            } else {
-                use std::fmt::Write;
-                let _ = write!(text.0, "{next_value}");
-            }
-        }
+            stack,
+            |entity| {
+                let Ok((value_binding, mut projected_value, text)) = bound_values.get_mut(entity)
+                else {
+                    return;
+                };
+                let Some((next_value, currency)) = project_information_list_value(
+                    &value_binding.0,
+                    source.0,
+                    &animal_need_points,
+                    &animal_diseases,
+                    &animal_pregnancies,
+                    &guest_satisfaction,
+                    &staff_assignments,
+                    &service_facilities,
+                    &facility_operating_dates,
+                    &facility_profits,
+                    &donation_totals,
+                    &transport_vehicles,
+                    zoo_clock.absolute_day,
+                ) else {
+                    return;
+                };
+                projected_value.set_if_neq(UiValue(next_value));
+                if let Some(mut text) = text {
+                    formatted.clear();
+                    if currency {
+                        write_whole_dollar_currency_with_thousands_separators(
+                            formatted, next_value,
+                        );
+                    } else {
+                        use std::fmt::Write;
+                        let _ = write!(formatted, "{next_value}");
+                    }
+                    if text.0 != *formatted {
+                        text.0.clone_from(formatted);
+                    }
+                }
+            },
+        );
     }
 }
 

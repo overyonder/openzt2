@@ -10,15 +10,18 @@ use openzt2_game_assets::{
 use openzt2_game_data::behavior::{
     action::token::BehaviorTokenRecipient, action_record::BehaviorAction,
 };
+use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     animal_health::types::Dead,
+    animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
         abandon_behavior_task_for_reconsideration, advance_behavior_task_to_next_action,
-        find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+        find_current_behavior_task_action, BehaviorTaskExecutionState, BehaviorTaskFailed,
+        PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
 };
@@ -51,15 +54,25 @@ fn discard_expired_and_consumed_tokens(
         Option<&ClaimedBehaviorSelfToken>,
     )>,
     recipients: Query<Option<&BehaviorTaskExecutionState>, Without<Dead>>,
+    mut failures: MessageReader<BehaviorTaskFailed>,
 ) {
+    let failed = failures
+        .read()
+        .map(|failure| (failure.actor, failure.execution_id))
+        .collect::<Vec<_>>();
     for (entity, token, recipient, claim) in &tokens {
         let Ok(task) = recipients.get(recipient.parent()) else {
             commands.entity(entity).despawn();
             continue;
         };
         // A selected token remains the task's object until that execution ends.
-        // Both completion and failure consume it; retain-on-failure deliveries
-        // are a distinct policy which the loader does not accept here.
+        // Completion consumes it; failure does too unless it retains on failure.
+        if token.retain_on_failure
+            && claim.is_some_and(|claim| failed.contains(&(recipient.parent(), claim.execution_id)))
+        {
+            commands.entity(entity).remove::<ClaimedBehaviorSelfToken>();
+            continue;
+        }
         let expired_or_consumed = claim.map_or(clock.tick >= token.expires_at, |claim| {
             task.is_none_or(|task| task.execution_id != claim.execution_id)
         });
@@ -85,6 +98,14 @@ fn execute_current_self_token_deliveries(
         (Without<Dead>, Without<PendingBehaviorTaskFailure>),
     >,
     recipients: Query<Has<BehaviorTaskExecutionState>, Without<Dead>>,
+    animals: Query<(Entity, &GlobalTransform, &SpeciesHandle), (With<Animal>, Without<Dead>)>,
+    animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
+    held_tokens: Query<(&BehaviorSelfToken, &ChildOf)>,
+    staff: Query<
+        (Entity, &GlobalTransform),
+        With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+    >,
+    staff_on_job: Query<(), With<openzt2_zoo_state::staff::staff_job_types::CurrentJob>>,
 ) {
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
@@ -101,7 +122,15 @@ fn execute_current_self_token_deliveries(
         };
         if deliveries
             .iter()
-            .any(|delivery| delivery.chance_percent > 0.0 && delivery.chance_percent < 100.0)
+            .flat_map(|delivery| {
+                [
+                    delivery.chance_percent,
+                    delivery
+                        .nearby
+                        .map_or(100.0, |nearby| nearby.chance_percent),
+                ]
+            })
+            .any(|chance| chance > 0.0 && chance < 100.0)
             && random.is_none()
             && guest_random.is_none()
         {
@@ -131,29 +160,103 @@ fn execute_current_self_token_deliveries(
                     .tick
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX))
             };
-            let recipient = match delivery.recipient {
-                BehaviorTokenRecipient::Subject => actor,
-                BehaviorTokenRecipient::Target => {
-                    let Some(target) = task.target().filter(|target| recipients.contains(*target))
-                    else {
+            let mut delivered_to = Vec::new();
+            if let Some(nearby) = delivery.nearby {
+                let Ok((_, origin, _)) = animals.get(actor) else {
+                    continue;
+                };
+                for (animal, transform, species) in &animals {
+                    let is_type = animal_types
+                        .borrow_for(animal)
+                        .contains(&nearby.entity_type)
+                        || species.species == nearby.entity_type
+                        || nearby.entity_type == AssetId::from_key("animal");
+                    if animal == actor
+                        || !is_type
+                        || transform.translation().distance(origin.translation()) > nearby.radius_m
+                    {
+                        continue;
+                    }
+                    let drawn = nearby.chance_percent >= 100.0
+                        || random.as_deref_mut().is_some_and(|random| {
+                            random.0.unit_f32() * 100.0 < nearby.chance_percent
+                        });
+                    if drawn {
+                        delivered_to.push(animal);
+                    }
+                }
+                // An attacking animal warns staff nearby (`GiveTo="Staff"`).
+                if nearby.entity_type == AssetId::from_key("staff") {
+                    for (member, transform) in &staff {
+                        if transform.translation().distance(origin.translation()) > nearby.radius_m
+                        {
+                            continue;
+                        }
+                        let drawn = nearby.chance_percent >= 100.0
+                            || random.as_deref_mut().is_some_and(|random| {
+                                random.0.unit_f32() * 100.0 < nearby.chance_percent
+                            });
+                        if drawn {
+                            delivered_to.push(member);
+                        }
+                    }
+                }
+            } else {
+                delivered_to.push(match delivery.recipient {
+                    BehaviorTokenRecipient::Subject => actor,
+                    BehaviorTokenRecipient::Target => {
+                        let Some(target) =
+                            task.target().filter(|target| recipients.contains(*target))
+                        else {
+                            continue;
+                        };
+                        target
+                    }
+                });
+            }
+            let payload = match delivery.payload {
+                None => None,
+                Some(BehaviorTokenRecipient::Subject) => Some(actor),
+                Some(BehaviorTokenRecipient::Target) => {
+                    let Some(target) = task.target() else {
                         continue;
                     };
-                    target
+                    Some(target)
                 }
             };
-            // Reconsideration drops the recipient's current task before it
-            // chooses again with the delivered token.
-            if delivery.reconsider && recipients.get(recipient).is_ok_and(|busy| busy) {
-                abandon_behavior_task_for_reconsideration(recipient, &mut commands);
+            for recipient in delivered_to {
+                if delivery.only_one
+                    && held_tokens.iter().any(|(held, holder)| {
+                        holder.parent() == recipient
+                            && held.name == delivery.token
+                            && clock.tick < held.expires_at
+                    })
+                {
+                    continue;
+                }
+                // Reconsideration drops the recipient's current task before it
+                // chooses again with the delivered token. A sender's own task
+                // is kept: it chooses again when the task ends, after its
+                // completion. Staff on a claimed job finish it first; the
+                // job's task would otherwise end while the job stays claimed.
+                if delivery.reconsider
+                    && recipient != actor
+                    && !staff_on_job.contains(recipient)
+                    && recipients.get(recipient).is_ok_and(|busy| busy)
+                {
+                    abandon_behavior_task_for_reconsideration(recipient, &mut commands);
+                }
+                commands.spawn((
+                    BehaviorSelfToken {
+                        name: delivery.token,
+                        available_at: at_tick(delivery.delay),
+                        expires_at: delivery.lifetime.map_or(u64::MAX, at_tick),
+                        payload,
+                        retain_on_failure: delivery.retain_on_failure,
+                    },
+                    ChildOf(recipient),
+                ));
             }
-            commands.spawn((
-                BehaviorSelfToken {
-                    name: delivery.token,
-                    available_at: at_tick(delivery.delay),
-                    expires_at: delivery.lifetime.map_or(u64::MAX, at_tick),
-                },
-                ChildOf(recipient),
-            ));
         }
         advance_behavior_task_to_next_action(&mut task, clock.tick);
     }

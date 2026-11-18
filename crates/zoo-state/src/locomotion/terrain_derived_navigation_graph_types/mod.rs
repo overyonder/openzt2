@@ -11,6 +11,8 @@ pub struct TerrainDerivedNavigationGraph {
     pub terrain_tile_size_centimetres: u32,
     pub terrain_tile_grid_dimensions: [u32; 2],
     pub navigation_nodes: Box<[TerrainDerivedNavigationGraphNode]>,
+    pub(super) terrain_neighbors: Box<[[u32; 4]]>,
+    pub(super) terrain_centres_xz: Box<[[i32; 2]]>,
     pub(super) path_surfaces: Vec<NavigationPathSurface>,
     pub(super) path_surface_edges: BTreeMap<u32, Vec<TerrainDerivedNavigationGraphEdge>>,
     pub(super) path_surfaces_by_cell: BTreeMap<[u32; 2], Vec<u32>>,

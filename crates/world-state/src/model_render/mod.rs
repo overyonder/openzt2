@@ -10,6 +10,10 @@ pub struct ModelExpanded;
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModelRenderPresentationSet {
     LevelOfDetail,
-    MaterialProjection,
-    PassTransforms,
+    /// The source effect materials and their per-model texture replacements are ready.
+    SourceMaterials,
+    /// Queues changes to scene caustic draws and suppressed render layers.
+    VisibilityInputCommands,
+    /// Applies those commands before visibility reads their results.
+    ApplyVisibilityInputCommands,
 }

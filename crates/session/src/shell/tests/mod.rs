@@ -1,9 +1,9 @@
 use bevy::state::app::StatesPlugin;
 use bevy::{app::AppExit, prelude::*};
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_scenario::{
     WorldMapRecord, WorldMapSupportedGameModeFlags, WorldScenarioDocument,
 };
+use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
@@ -385,12 +385,10 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
                 GamePhase::InGame
             );
             assert!(app.world().entities().contains(old_world));
-            assert!(
-                loads
-                    .read(app.world().resource::<Messages<BeginWorldLoad>>())
-                    .next()
-                    .is_none()
-            );
+            assert!(loads
+                .read(app.world().resource::<Messages<BeginWorldLoad>>())
+                .next()
+                .is_none());
             app.world_mut()
                 .resource_mut::<ProfileScenarioVariables>()
                 .set(target, Some("unlocked"))
@@ -399,12 +397,10 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
         app.world_mut().write_message(ContinueCampaign(target));
         app.update();
         assert!(app.world().entities().contains(old_world));
-        assert!(
-            loads
-                .read(app.world().resource::<Messages<BeginWorldLoad>>())
-                .next()
-                .is_none()
-        );
+        assert!(loads
+            .read(app.world().resource::<Messages<BeginWorldLoad>>())
+            .next()
+            .is_none());
         app.update();
         assert!(!app.world().entities().contains(old_world));
         assert!(!app.world().entities().contains(old_member));
@@ -425,11 +421,9 @@ fn campaign_next_and_retry_unload_before_start_and_preserve_locks() {
             *app.world().resource::<State<GamePhase>>().get(),
             GamePhase::Loading
         );
-        assert!(
-            loads
-                .read(app.world().resource::<Messages<BeginWorldLoad>>())
-                .next()
-                .is_none()
-        );
+        assert!(loads
+            .read(app.world().resource::<Messages<BeginWorldLoad>>())
+            .next()
+            .is_none());
     }
 }

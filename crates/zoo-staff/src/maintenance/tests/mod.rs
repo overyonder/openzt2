@@ -5,7 +5,7 @@ use super::{
     },
     maintenance_types::{
         FacilityContainedWaste, FacilityContainedWastePresentationLevel,
-        IncrementalZooCleanlinessTotals, LooseLitterWaste, MaintainableObjectConditionPermille,
+        IncrementalZooCleanlinessTotals, LooseLitterWaste,
     },
     MaintenancePlugin,
 };
@@ -54,7 +54,6 @@ fn component_hooks_track_spawn_and_despawn_without_an_entity_registry() {
     let entity = app
         .world_mut()
         .spawn((
-            MaintainableObjectConditionPermille(600),
             FacilityContainedWaste {
                 contained_waste_units: 2,
                 contained_waste_capacity_units: 8,
@@ -65,8 +64,6 @@ fn component_hooks_track_spawn_and_despawn_without_an_entity_registry() {
         ))
         .id();
     let totals = *app.world().resource::<IncrementalZooCleanlinessTotals>();
-    assert_eq!(totals.maintainable_condition_permille_sum, 600);
-    assert_eq!(totals.maintainable_object_count, 1);
     assert_eq!(totals.contained_waste_units, 2);
     assert_eq!(totals.contained_waste_capacity_units, 8);
     assert_eq!(totals.uncontained_waste_units, 3);
@@ -84,8 +81,6 @@ fn component_hooks_track_spawn_and_despawn_without_an_entity_registry() {
 #[test]
 fn cleanliness_uses_nearest_integer_weighting() {
     let totals = IncrementalZooCleanlinessTotals {
-        maintainable_condition_permille_sum: 1_501,
-        maintainable_object_count: 2,
         contained_waste_units: 1,
         contained_waste_capacity_units: 3,
         uncontained_waste_units: 1,
@@ -93,13 +88,12 @@ fn cleanliness_uses_nearest_integer_weighting() {
     };
     assert_eq!(divide_unsigned_ratio_with_half_up_rounding(1_501, 2), 751);
     assert_eq!(
-        calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(totals, 2, 1, 1, 4,),
-        730
+        calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(totals, 1, 1, 4),
+        709
     );
     assert_eq!(
         calculate_weighted_zoo_cleanliness_permille_from_explicit_weights(
             IncrementalZooCleanlinessTotals::default(),
-            1,
             1,
             1,
             10,

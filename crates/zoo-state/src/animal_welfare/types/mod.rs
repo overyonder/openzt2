@@ -28,6 +28,12 @@ need_component!(EnvironmentNeed);
 need_component!(HealthNeed);
 need_component!(HygieneNeed);
 need_component!(BathroomNeed);
+// Outside the welfare score; its trigger is `REPRODUCTION_TRIGGER_INDEX`.
+need_component!(ReproductionNeed);
+
+/// The `NeedTriggerState` bit of the reproduction need, after the eleven
+/// welfare needs.
+pub const REPRODUCTION_TRIGGER_INDEX: usize = 11;
 
 /// Hysteretic BFAI need-trigger facts. A bit sets and clears only at the
 /// species-authored trigger and cessation thresholds.
@@ -76,6 +82,16 @@ pub struct CumulativeNeedPoints {
     pub bad: f32,
 }
 
+/// The current BFAI need-point branches, `f_needPointsGood` and
+/// `f_needPointsBad`: every update one of them grows and the other shrinks.
+/// A task such as bashing a fence waits for its `needPointsBad`.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq)]
+pub struct NeedPoints {
+    pub good: f32,
+    pub bad: f32,
+    pub seconds_until_update: f32,
+}
+
 /// A focused outcome emitted by whichever behavior changed the active BFAI
 /// need-point branch. Values are the raw deltas, before current-branch clamps.
 #[derive(Message, Debug, Clone, Copy, PartialEq)]
@@ -116,6 +132,7 @@ adjustment_message!(AdjustEnvironment);
 adjustment_message!(AdjustHealthNeed);
 adjustment_message!(AdjustHygiene);
 adjustment_message!(AdjustBathroom);
+adjustment_message!(AdjustReproduction);
 
 /// Sets one canonical animal need to an authored Q16 value.
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]

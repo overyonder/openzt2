@@ -91,6 +91,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
         }
     }
     let changed = graph
+        .bypass_change_detection()
         .terrain_derived_navigation_graph_mut()
         .replace_navigation_path_surfaces(elevated, ground, |point| {
             let (chunk, edited) = terrain_chunks
@@ -102,6 +103,7 @@ pub(super) fn project_path_surfaces_into_navigation_graph(
     if !changed {
         return;
     }
+    graph.set_changed();
     if rebuild_colliders {
         for collider in &colliders {
             commands.entity(collider).despawn();

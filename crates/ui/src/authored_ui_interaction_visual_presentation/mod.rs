@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::node_presentation::UiNodeVisualState;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioClip;
 
@@ -16,7 +17,7 @@ use super::{
 pub(super) fn present_authored_ui_interaction_visual_state(
     parents: Query<(
         Entity,
-        Ref<Interaction>,
+        Ref<UiPointerInteraction>,
         Option<Ref<UiInteractionEnabled>>,
         Option<Ref<UiFocusable>>,
         Option<Ref<UiFocusPresentation>>,
@@ -53,18 +54,18 @@ pub(super) fn present_authored_ui_interaction_visual_state(
             .map(|enabled| enabled.0)
             .unwrap_or_else(|| focusable.is_none_or(|focusable| focusable.enabled));
         let focused = focused.is_some_and(|focused| focused.0);
-        let presented_interaction = if focused && *interaction == Interaction::None {
-            Interaction::Hovered
+        let presented_interaction = if focused && *interaction == UiPointerInteraction::None {
+            UiPointerInteraction::Hovered
         } else {
             *interaction
         };
         let requested = match (enabled, presented_interaction, alternate) {
             (false, _, false) => UiNodeVisualState::Disabled,
             (false, _, true) => UiNodeVisualState::AlternateDisabled,
-            (true, Interaction::Pressed, false) => UiNodeVisualState::Activated,
-            (true, Interaction::Pressed, true) => UiNodeVisualState::AlternateActivated,
-            (true, Interaction::Hovered, false) => UiNodeVisualState::Highlighted,
-            (true, Interaction::Hovered, true) => UiNodeVisualState::AlternateHighlighted,
+            (true, UiPointerInteraction::Pressed, false) => UiNodeVisualState::Activated,
+            (true, UiPointerInteraction::Pressed, true) => UiNodeVisualState::AlternateActivated,
+            (true, UiPointerInteraction::Hovered, false) => UiNodeVisualState::Highlighted,
+            (true, UiPointerInteraction::Hovered, true) => UiNodeVisualState::AlternateHighlighted,
             (true, _, false) => UiNodeVisualState::Normal,
             (true, _, true) => UiNodeVisualState::AlternateNormal,
         };

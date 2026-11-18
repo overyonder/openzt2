@@ -1,7 +1,7 @@
 //! Animal adoption selection, placement, payment, and completion contracts.
 
 use bevy::prelude::*;
-use openzt2_game_data::{AssetId, species::Sex};
+use openzt2_game_data::{species::Sex, AssetId};
 
 use crate::economy::money_types::Money;
 

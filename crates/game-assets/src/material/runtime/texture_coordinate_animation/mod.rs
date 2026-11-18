@@ -6,7 +6,7 @@ mod tests;
 use std::{collections::HashMap, ops::RangeInclusive};
 
 use bevy::{
-    asset::AssetId, math::cubic_splines::CubicSegment, prelude::*, render::storage::ShaderBuffer,
+    asset::AssetId, curve::cubic_splines::CubicSegment, prelude::*, render::storage::ShaderBuffer,
 };
 
 use super::effect_pass_gpu_data::EffectPassMaterial;

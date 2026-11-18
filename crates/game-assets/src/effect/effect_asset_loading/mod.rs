@@ -9,35 +9,21 @@ use openzt2_game_data::particle::ParticleEffectDocument as ParticleDocument;
 use super::{source, ParticleEffectDocumentAsset};
 use crate::material::material_asset_types::MaterialAsset;
 
-#[derive(TypePath)]
-pub(super) struct EffectAssetLoader {
-    asset_archives: crate::asset_source::AssetArchives,
-}
-
-impl FromWorld for EffectAssetLoader {
-    fn from_world(world: &mut World) -> Self {
-        Self {
-            asset_archives: world
-                .resource::<crate::asset_source::AssetArchives>()
-                .clone(),
-        }
-    }
-}
+#[derive(Default, TypePath)]
+pub(super) struct EffectAssetLoader;
 
 impl AssetLoader for EffectAssetLoader {
     type Asset = ParticleEffectDocumentAsset;
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_particle_effect", skip_all))]
     async fn load(
         &self,
         reader: &mut dyn Reader,
         _: &(),
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("particle_effect");
         let mut particle_system_source_bytes = Vec::new();
         reader
             .read_to_end(&mut particle_system_source_bytes)

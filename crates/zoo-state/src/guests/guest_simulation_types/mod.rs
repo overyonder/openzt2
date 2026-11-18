@@ -1,10 +1,10 @@
 use arrayvec::ArrayVec;
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
-use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::{
     GuestMemoryKind, GuestVisitPurpose,
 };
+use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
+use openzt2_game_data::AssetId;
 
 use crate::animal_welfare::types::NeedTriggerState;
 use crate::behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame};
@@ -101,6 +101,11 @@ pub struct AdjustGuestSatisfaction {
 
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct GuestEducation(pub u16);
+
+/// A guest a rampaging animal has attacked (`b_Attacked`); no animal attacks
+/// it again.
+#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct GuestAttacked;
 
 /// Authored f_departurePoints, in source units rather than wellness permille.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]

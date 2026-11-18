@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
+use openzt2_zoo_state::terrain::terrain_edit_types::{TerrainChanged, TerrainPresentationRestored};
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -31,6 +34,10 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
         .init_resource::<Assets<Mesh>>()
+        .init_resource::<TerrainIndex>()
+        .init_resource::<Assets<TerrainAsset>>()
+        .add_message::<TerrainChanged>()
+        .add_message::<TerrainPresentationRestored>()
         .add_systems(
             Update,
             rebuild_object_placement_preview_footprint_and_grid_decals,
@@ -71,12 +78,15 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
+            terrain_fit_water_offset_m: None,
             real_physics_water_impact: None,
             price_cents: 1_250,
             upkeep_cents_per_month: 0,
             properties: default(),
             affordances: default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         placeables: vec![placeable],
         ..default()
@@ -91,12 +101,14 @@ fn unchanged_placement_preview_keeps_its_footprint_and_grid_decals() {
     let preview = app
         .world_mut()
         .spawn((
+            Visibility::Inherited,
             ConstructionPreview {
                 definition,
                 transform: Transform::default(),
                 validity: PlacementValidity::Pending,
             },
             ObjectPlacementPreviewMaterials {
+                entrance_arrow: Handle::default(),
                 footprint_valid: Handle::default(),
                 footprint_invalid: Handle::default(),
                 grid_cardinal: default(),

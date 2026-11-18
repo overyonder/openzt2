@@ -41,12 +41,8 @@ pub(super) fn route_authored_research_ui_actions_to_start_requests(
             }
             if let Some(definition) = selected
                 .0
-                .and_then(|selected| {
-                    definitions.research().find(|project| {
-                        project.id == selected || project.unlocks.contains(&selected)
-                    })
-                })
-                .and_then(|project| research.iter().find(|item| item.item == project.id))
+                .and_then(|selected| definitions.research_for_definition(selected))
+                .and_then(|id| research.iter().find(|item| item.item == id))
                 .filter(|item| item.available)
                 .map(|item| item.item)
             {

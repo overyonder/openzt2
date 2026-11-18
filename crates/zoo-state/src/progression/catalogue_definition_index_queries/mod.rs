@@ -7,7 +7,6 @@ pub fn find_catalogue_definition_index(
     definition: AssetId,
 ) -> Option<u32> {
     definitions
-        .catalogue()
-        .position(|row| row.definition.0 == definition.0)
-        .and_then(|index| u32::try_from(index).ok())
+        .catalogue_entry_for_definition(definition)
+        .and_then(|(index, _)| u32::try_from(index).ok())
 }

@@ -90,6 +90,7 @@ fn route_across_terrain(
         destination,
         &mut route,
         &mut scratch,
+        crate::locomotion::pathfinding::LONG_PATH_ITERATIONS,
     )?;
     Ok(route)
 }

@@ -47,6 +47,8 @@ pub(super) fn lower_water_docking_action_source_node(
     Ok(None)
 }
 
+const FENCE_DOCK_DISTANCE_M: f32 = 2.0;
+
 pub(super) fn lower_docking_action_source_node(
     docking_action_source_node: &DataNode,
 ) -> io::Result<Option<BehaviorAction>> {
@@ -56,9 +58,14 @@ pub(super) fn lower_docking_action_source_node(
     let radial = match docking_action_source_node.name.as_str() {
         "BFBehDock" => false,
         "BFBehDockRadial" => true,
+        // An animal docks its subject node on the fence it bashes, jumps,
+        // climbs or tunnels under, at the segment's middle.
+        "ZTBehDockFence" => true,
         _ => return Ok(None),
     };
-    // Interpolation and target-node alignment remain unsupported for radial docks.
+    // Interpolation and target-node alignment remain unsupported for radial
+    // docks, except `Floor`, the target's own ground point that radial docks
+    // already circle, as in the keeper's `DockCure_Land`.
     if docking_action_source_node
         .attributes
         .iter()
@@ -72,7 +79,8 @@ pub(super) fn lower_docking_action_source_node(
                         | "targetAnim"
                         | "locoSpeed"
                         | "subjectNode"
-                )
+                ) && !(attribute.name() == "targetNode"
+                    && attribute.value().trim().eq_ignore_ascii_case("floor"))
             } else {
                 !matches!(
                     attribute.name(),
@@ -90,7 +98,13 @@ pub(super) fn lower_docking_action_source_node(
             docking_action_source_node.name
         )));
     }
-    let radial_distance_m = if radial {
+    let fence = docking_action_source_node.name == "ZTBehDockFence";
+    let radial_distance_m = if fence {
+        // ponytail: the fence line blocks navigation, so the animal stops this
+        // far short of it on its own side; read a per-species reach if one
+        // turns up in the data.
+        Some(FENCE_DOCK_DISTANCE_M)
+    } else if radial {
         // Without a radius the actor docks on the target itself, as the
         // guest viewing tasks do on the path they view from.
         let distance = read_optional_float_attribute(docking_action_source_node, "targetRadius")?
@@ -129,11 +143,16 @@ pub(super) fn lower_docking_action_source_node(
                 },
             )
             .transpose()?;
+    // ponytail: a fence dock's subject node (`Node_Front`, `p_FenceJumpNode`)
+    // is often no model node, and a radial dock without it fails; the animal
+    // docks its origin on the fence instead. Align the node once the
+    // position attributes are read.
     Ok(Some(BehaviorAction::Dock(BehaviorDockAction {
         subject_node_name: read_optional_trimmed_string_attribute(
             docking_action_source_node,
             "subjectNode",
-        ),
+        )
+        .filter(|_| !fence),
         target_node_name: read_optional_trimmed_string_attribute(
             docking_action_source_node,
             "targetNode",

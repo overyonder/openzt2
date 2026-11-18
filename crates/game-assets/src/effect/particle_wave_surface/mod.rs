@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use bevy::prelude::*;
 use bevy_hanabi::prelude::{
     Attribute, BoxedModifier, ExprError, Modifier, ModifierContext, Module, RenderContext,
@@ -14,8 +16,8 @@ impl Modifier for WaveSurfaceRenderModifier {
     fn context(&self) -> ModifierContext {
         ModifierContext::Render
     }
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::AGE, Attribute::LIFETIME, Attribute::F32_0]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::AGE, Attribute::LIFETIME, Attribute::F32_0])
     }
     fn boxed_clone(&self) -> BoxedModifier {
         Box::new(self.clone())

@@ -1,6 +1,6 @@
 //! Modifiers to influence the output (rendering) of each particle.
 
-use std::hash::Hash;
+use std::{borrow::Cow, hash::Hash};
 
 use bevy::prelude::*;
 use bitflags::bitflags;
@@ -72,7 +72,7 @@ pub struct ParticleTextureModifier {
     /// [`EffectMaterial`] component.
     ///
     /// [`EffectMaterial`]: crate::EffectMaterial
-    pub texture_slot: ExprHandle,
+    pub texture_slot: u32,
 
     /// The mapping of the texture image samples to the base particle color.
     pub sample_mapping: ImageSampleMapping,
@@ -80,7 +80,7 @@ pub struct ParticleTextureModifier {
 
 impl ParticleTextureModifier {
     /// Create a new modifier with the default [`ImageSampleMapping`].
-    pub fn new(texture_slot: ExprHandle) -> Self {
+    pub fn new(texture_slot: u32) -> Self {
         Self {
             texture_slot,
             sample_mapping: default(),
@@ -88,7 +88,8 @@ impl ParticleTextureModifier {
     }
 }
 
-impl_mod_render!(ParticleTextureModifier, &[]); // TODO - should require some UV maybe?
+impl_mod_render!(ParticleTextureModifier, &[]); // TODO - should require some UV
+                                                // maybe?
 
 impl RenderModifier for ParticleTextureModifier {
     fn apply_render(
@@ -115,33 +116,21 @@ impl ParticleTextureModifier {
     /// Evaluate the modifier to generate the shader code.
     pub fn eval(
         &self,
-        module: &Module,
-        context: &mut dyn EvalContext,
+        _module: &Module,
+        _context: &mut dyn EvalContext,
     ) -> Result<String, ExprError> {
-        let texture_slot = module.try_get(self.texture_slot)?;
-        let texture_slot = texture_slot.eval(module, context)?;
-        let sample_mapping = self.sample_mapping.to_shader_code(&texture_slot[..]);
-
+        let texture_slot = self.texture_slot.to_string();
+        let sample_mapping = self.sample_mapping.to_shader_code(&texture_slot);
         let sample_mapping_name = format!("{:?}", self.sample_mapping);
 
         // Build a switch statement to select the texture/sampler.
-        // FIXME - Ideally with bindless (texture/sampler arrays with dynamic indices)
-        // we don't need this. But bindless is not available on Web anyway, so this is a
-        // safe fallback.
+        // FIXME - Ideally with bindless (texture/sampler arrays with dynamic
+        // indices) we don't need this. But bindless is not available on
+        // Web anyway, so this is a safe fallback.
         let mut code = String::with_capacity(1024);
         code += &format!(
             "    // ParticleTextureModifier
-    var texColor{texture_slot}: vec4<f32>;
-    switch ({texture_slot}) {{\n"
-        );
-        let count = module.texture_layout().layout.len() as u32;
-        for index in 0..count {
-            let wgsl_index = index.to_wgsl_string();
-            code += &format!("      case {wgsl_index}: {{ texColor{texture_slot} = textureSample(material_texture_{index}, material_sampler_{index}, uv); }}\n");
-        }
-        code += &format!("      default: {{ texColor{texture_slot} = vec4<f32>(0.0); }}\n");
-        code += &format!(
-            "    }}
+    var texColor{texture_slot} = textureSample(material_texture_{texture_slot}, material_sampler_{texture_slot}, uv);
     // Sample mapping: {sample_mapping_name}
     {sample_mapping}"
         );
@@ -599,15 +588,15 @@ impl Modifier for OrientModifier {
         Some(self)
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        // Note: don't required AXIS_X/Y/Z, they're written at the last minute in the
-        // render shader alone, so don't need to be stored as part of the particle's
-        // layout for simulation.
-        match self.mode {
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        // Note: don't required AXIS_X/Y/Z, they're written at the last minute
+        // in the render shader alone, so don't need to be stored as part of the
+        // particle's layout for simulation.
+        Cow::Borrowed(match self.mode {
             OrientMode::ParallelCameraDepthPlane => &[],
             OrientMode::FaceCameraPosition => &[Attribute::POSITION],
             OrientMode::AlongVelocity => &[Attribute::POSITION, Attribute::VELOCITY],
-        }
+        })
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -656,7 +645,8 @@ axis_z = cam_rot[2].xyz;
 let particle_rot_in_cam_space = {};
 let particle_rot_in_cam_space_cos = cos(particle_rot_in_cam_space);
 let particle_rot_in_cam_space_sin = sin(particle_rot_in_cam_space);
-let axis_x0 = normalize(cross(view.world_from_view[1].xyz, axis_z));
+let cam_up = get_camera_rotation_effect_space()[1];
+let axis_x0 = normalize(cross(cam_up, axis_z));
 let axis_y0 = cross(axis_z, axis_x0);
 axis_x = axis_x0 * particle_rot_in_cam_space_cos + axis_y0 * particle_rot_in_cam_space_sin;
 axis_y = axis_x0 * particle_rot_in_cam_space_sin - axis_y0 * particle_rot_in_cam_space_cos;
@@ -665,7 +655,8 @@ axis_y = axis_x0 * particle_rot_in_cam_space_sin - axis_y0 * particle_rot_in_cam
                     );
                 } else {
                     context.vertex_code += r#"axis_z = normalize(get_camera_position_effect_space() - position);
-axis_x = normalize(cross(view.world_from_view[1].xyz, axis_z));
+let cam_up = get_camera_rotation_effect_space()[1];
+axis_x = normalize(cross(cam_up, axis_z));
 axis_y = cross(axis_z, axis_x);
 "#;
                 }
@@ -737,15 +728,13 @@ axis_z = cross(axis_x, axis_y);
 ///     .expr();
 /// let update_sprite_index = SetAttributeModifier::new(Attribute::SPRITE_INDEX, sprite_index);
 ///
-/// let texture_slot = writer.lit(0u32).expr();
-///
 /// let asset = EffectAsset::new(32768, SpawnerSettings::once(32.0.into()), writer.finish())
 ///     .with_name("flipbook")
 ///     .init(init_age)
 ///     .init(init_lifetime)
 ///     .update(update_sprite_index)
 ///     .render(ParticleTextureModifier {
-///         texture_slot,
+///         texture_slot: 0,
 ///         sample_mapping: ImageSampleMapping::ModulateOpacityFromR,
 ///     })
 ///     .render(FlipbookModifier {
@@ -840,15 +829,16 @@ impl RenderModifier for ScreenSpaceSizeModifier {
         _module: &mut Module,
         context: &mut RenderContext,
     ) -> Result<(), ExprError> {
-        // Get perspective divide factor from clip space position. This is the "average"
-        // factor for the entire particle, taken at its position (mesh origin),
-        // and applied uniformly for all vertices. Scale size by w_cs to negate
-        // the perspective divide which will happen later after the vertex shader.
-        // The 2.0 factor is because clip space is in [-1:1] so we need to divide by the
-        // half screen size only.
-        // Note: here "size" is the built-in render size, which is always defined and
-        // called "size", and which may or may not be the Attribute::SIZE/2
-        // attribute(s).
+        // Get perspective divide factor from clip space position. This is the
+        // "average" factor for the entire particle, taken at its
+        // position (mesh origin), and applied uniformly for all
+        // vertices. Scale size by w_cs to negate the perspective divide
+        // which will happen later after the vertex shader.
+        // The 2.0 factor is because clip space is in [-1:1] so we need to
+        // divide by the half screen size only.
+        // Note: here "size" is the built-in render size, which is always
+        // defined and called "size", and which may or may not be the
+        // Attribute::SIZE/2 attribute(s).
         context.vertex_code += &format!(
             "let w_cs = transform_position_simulation_to_clip(particle.{0}).w;\n
             let screen_size_pixels = view.viewport.zw;\n
@@ -964,9 +954,7 @@ mod tests {
     #[test]
     fn mod_particle_texture() {
         let mut module = Module::default();
-        let slot = module.lit(42u32);
-        // let texture = Handle::<Image>::default();
-        let modifier = ParticleTextureModifier::new(slot);
+        let modifier = ParticleTextureModifier::new(42);
 
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
@@ -975,7 +963,9 @@ mod tests {
         modifier.apply_render(&mut module, &mut context).unwrap();
 
         // TODO - no validation at the minute
-        assert_eq!(context.texture_layout.layout.len(), 0); // we "forgot" to add the slot to Module
+        assert_eq!(context.texture_layout.layout.len(), 0); // we "forgot" to
+                                                            // add the slot to
+                                                            // Module
         assert_eq!(context.textures.len(), 0); // we "forgot" the EffectMaterial
     }
 
@@ -1147,6 +1137,9 @@ mod tests {
         assert!(context
             .vertex_code
             .contains("get_camera_position_effect_space"));
+        assert!(context
+            .vertex_code
+            .contains("get_camera_rotation_effect_space"));
         assert!(context
             .vertex_code
             .contains("cos(particle_rot_in_cam_space)"));

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
 
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
@@ -10,7 +11,6 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 
 use super::{
     animal_entity_spawning::spawn_animal_entity_from_resolved_components,
-    animal_habitat_placement_validation::AnimalPlacementSiteQueries,
     animal_spawn_operation_contracts::{AnimalSpawnRejected, AnimalSpawned, SpawnAnimalRequest},
     animal_spawn_resolution::resolve_animal_spawn_request_to_identifiers_and_components,
 };
@@ -25,7 +25,7 @@ pub(super) fn spawn_animals_requested_by_gameplay_operations(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     mut persistent_identifiers: ResMut<PersistentIdAllocator>,
-    placement_sites: AnimalPlacementSiteQueries,
+    placement_sites: PlacementSiteQueries,
     mut spawned_animals: MessageWriter<AnimalSpawned>,
     mut rejected_spawns: MessageWriter<AnimalSpawnRejected>,
 ) {

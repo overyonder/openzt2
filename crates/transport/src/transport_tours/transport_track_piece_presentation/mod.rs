@@ -8,6 +8,7 @@ use bevy::render::storage::ShaderBuffer;
 use openzt2_game_data::world_definitions::transportation_and_tours::GroundTransportTrackPiecePresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::SkyTowerTrackPresentationDefinition;
 use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
+use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -18,6 +19,7 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_zoo_state::terrain::terrain_world_sampling::sample_terrain;
 use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
+use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainPaintedTexture;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
@@ -25,6 +27,7 @@ use openzt2_zoo_state::terrain::terrain_fitted_surface_mesh_construction::constr
 
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackProfile;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
+use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportTrackJunction;
 use openzt2_zoo_state::transport_tours::transport_track_construction_types::TransportTrackConstructionPiece;
 
@@ -40,60 +43,68 @@ pub(super) struct AuthoredLinkedSkyTowerPresentationProjected {
 
 pub(super) const AUTHORED_TERRAIN_DECAL_MATERIAL_PATH: &str = "Materials/terraindecal.bfmat";
 
-fn signed_planar_cross_product(left: Vec3, right: Vec3) -> i8 {
-    let cross_product = left.x * right.z - left.z * right.x;
-    if cross_product > 0.0 {
-        1
-    } else if cross_product < 0.0 {
-        -1
-    } else {
-        0
-    }
-}
-
-fn authored_ground_track_piece_type(direction: Vec3) -> u8 {
+/// The compass point a direction heads to: 0 = north (-Z, source +Y),
+/// 2 = east (+X), counting clockwise in eighths.
+fn compass_point(direction: Vec3) -> u8 {
     let heading = direction
         .x
-        .atan2(direction.z)
+        .atan2(-direction.z)
         .to_degrees()
         .rem_euclid(360.0);
-    match ((heading / 45.0).round() as u8) & 7 {
-        0 | 4 => 1,
-        2 | 6 => 2,
-        1 | 5 => 3,
-        3 | 7 => 4,
-        _ => unreachable!(),
+    ((heading / 45.0).round() as u8) & 7
+}
+
+/// `pieceType` of `ZTTransportGroundTrackTextureData`: 1 north-south,
+/// 2 east-west, 3 north-east to south-west, 4 north-west to south-east.
+const fn authored_ground_track_piece_type(heading: u8) -> u8 {
+    match heading & 3 {
+        0 => 1,
+        2 => 2,
+        1 => 3,
+        _ => 4,
     }
 }
 
-fn authored_ground_track_piece_appearance(piece_type: u8, flags: [i8; 2]) -> u8 {
-    match (piece_type, flags) {
-        (1, [-1, _]) => 6,
-        (1, [1, _]) => 7,
-        (1, [0, -1]) => 2,
-        (1, [0, 1]) => 3,
-        (2, [-1, _]) => 8,
-        (2, [1, _]) => 1,
-        (2, [0, -1]) => 4,
-        (2, [0, 1]) => 5,
-        (3, [-1, -1]) => 14,
-        (3, [-1, 1]) => 11,
-        (3, [-1, 0]) => 3,
-        (3, [1, -1]) => 9,
-        (3, [1, 1]) => 15,
-        (3, [1, 0]) => 4,
-        (3, [0, -1]) => 7,
-        (3, [0, 1]) => 8,
-        (4, [-1, -1]) => 16,
-        (4, [-1, 1]) => 12,
-        (4, [-1, 0]) => 1,
-        (4, [1, -1]) => 10,
-        (4, [1, 1]) => 13,
-        (4, [1, 0]) => 2,
-        (4, [0, -1]) => 5,
-        (4, [0, 1]) => 6,
-        _ => 0,
-    }
+/// `appearance` of a piece whose end at compass point `end` meets a piece
+/// leaving towards `away`, named by its texture: `NtoSE` comes from the north
+/// and turns south-east at its south end. A diagonal shares the appearance of
+/// the straight it meets, so `SWtoCurve` is laid where a road from the
+/// south-west meets a straight at the diagonal's north-east end.
+const fn authored_ground_track_turn_appearance(end: u8, away: u8) -> Option<u8> {
+    Some(match (end, away) {
+        (4, 3) => 2,
+        (4, 5) => 3,
+        (0, 7) => 6,
+        (0, 1) => 7,
+        (2, 3) => 1,
+        (2, 1) => 8,
+        (6, 5) => 4,
+        (6, 7) => 5,
+        (7, _) => 1,
+        (1, _) => 3,
+        (3, _) => 5,
+        (5, _) => 7,
+        _ => return None,
+    })
+}
+
+/// The heading of the piece at `index`, and the turn appearance at its start
+/// and end where a neighbouring piece leaves at an angle.
+fn authored_ground_track_turns(route: &[Vec3], index: usize) -> (u8, [Option<u8>; 2]) {
+    let heading = compass_point(route[index + 1] - route[index]);
+    let turn = |end: u8, leaving: Vec3| {
+        let away = compass_point(leaving);
+        (away != end)
+            .then(|| authored_ground_track_turn_appearance(end, away))
+            .flatten()
+    };
+    let start = index
+        .checked_sub(1)
+        .and_then(|previous| turn((heading + 4) & 7, route[previous] - route[index]));
+    let end = route
+        .get(index + 2)
+        .and_then(|next| turn(heading, *next - route[index + 1]));
+    (heading, [start, end])
 }
 
 pub(super) fn select_authored_ground_track_piece_presentation<'a>(
@@ -101,20 +112,79 @@ pub(super) fn select_authored_ground_track_piece_presentation<'a>(
     route: &[Vec3],
     index: usize,
 ) -> Option<&'a GroundTransportTrackPiecePresentationDefinition> {
-    let direction = (route[index + 1] - route[index]).normalize_or_zero();
-    let flags = [
-        index.checked_sub(1).map_or(0, |previous| {
-            signed_planar_cross_product(direction, route[index] - route[previous])
-        }),
-        route.get(index + 2).map_or(0, |next| {
-            signed_planar_cross_product(direction, *next - route[index + 1])
-        }),
-    ];
-    let piece_type = authored_ground_track_piece_type(direction);
-    let appearance = authored_ground_track_piece_appearance(piece_type, flags);
+    let (heading, turns) = authored_ground_track_turns(route, index);
+    let piece_type = authored_ground_track_piece_type(heading);
+    let appearance = match (piece_type, turns) {
+        (_, [None, None]) => 0,
+        // A diagonal curving at both ends.
+        (3, [Some(_), Some(_)]) => 9,
+        (4, [Some(_), Some(_)]) => 10,
+        (_, [Some(first), _] | [None, Some(first)]) => first,
+    };
     definitions.iter().find(|definition| {
         definition.piece_type == piece_type && definition.appearance == appearance
     })
+}
+
+/// How far a straight piece turning at one end is painted towards that end:
+/// its turn texture's strip stops short of the joint, where the diagonal's
+/// curve texture meets it.
+// ponytail: 0.75 m was fitted against the shipped textures, not read from zt.exe.
+const AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES: f32 = 0.75;
+
+fn authored_ground_track_paint_shift(route: &[Vec3], index: usize) -> Vec3 {
+    let direction = (route[index + 1] - route[index])
+        .with_y(0.0)
+        .normalize_or_zero();
+    match authored_ground_track_turns(route, index) {
+        (heading, _) if heading % 2 == 1 => Vec3::ZERO,
+        (_, [Some(_), _]) => -direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        (_, [None, Some(_)]) => direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES,
+        _ => Vec3::ZERO,
+    }
+}
+
+/// A straight's turn texture is painted towards its turn, which leaves the
+/// other end bare: that end is painted a second time towards it, with the end's
+/// own turn texture, or with the plain road where a straight carries on.
+fn authored_ground_track_second_paint<'a>(
+    definitions: &'a [GroundTransportTrackPiecePresentationDefinition],
+    route: &[Vec3],
+    index: usize,
+) -> Option<(&'a GroundTransportTrackPiecePresentationDefinition, Vec3)> {
+    let (heading, turns) = authored_ground_track_turns(route, index);
+    if heading % 2 == 1 {
+        return None;
+    }
+    let (appearance, towards_end) = match turns {
+        [Some(_), Some(end)] => (end, true),
+        [Some(_), None] if route.get(index + 2).is_some() => (0, true),
+        [None, Some(_)] if index > 0 => (0, false),
+        _ => return None,
+    };
+    let piece_type = authored_ground_track_piece_type(heading);
+    let definition = definitions.iter().find(|definition| {
+        definition.piece_type == piece_type && definition.appearance == appearance
+    })?;
+    let direction = (route[index + 1] - route[index])
+        .with_y(0.0)
+        .normalize_or_zero();
+    let shift = direction * AUTHORED_GROUND_TRACK_TURN_SHIFT_METRES;
+    Some((definition, if towards_end { shift } else { -shift }))
+}
+
+/// Lays a road texture as the original paints it: V runs north (-Z).
+pub(super) fn mirror_texture_rows(mut mesh: Mesh) -> Mesh {
+    for attribute in [Mesh::ATTRIBUTE_UV_0, Mesh::ATTRIBUTE_UV_1] {
+        if let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+            mesh.attribute_mut(attribute)
+        {
+            for uv in uvs {
+                uv[1] = 1.0 - uv[1];
+            }
+        }
+    }
+    mesh
 }
 
 fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegment>) -> u8 {
@@ -146,6 +216,90 @@ fn authored_sky_tower_top_kind(route: &TrackSegment, routes: &Query<&TrackSegmen
                 0
             }
         })
+}
+
+/// A ground route's points with, at each end where exactly one other route
+/// joins it, that route's next point, so a piece at a joint turns towards
+/// the road it meets; and the index of the route's first point in them.
+fn ground_route_points_with_joined_neighbours(
+    route: &TrackSegment,
+    routes: &Query<&TrackSegment>,
+) -> (Vec<Vec3>, usize) {
+    // A station's two ends share its entity, so an end is the pair.
+    let neighbour = |junction: (Entity, u8)| {
+        let mut joined = routes.iter().filter_map(|candidate| {
+            if core::ptr::eq(candidate, route) {
+                return None;
+            }
+            let points = &candidate.path_points;
+            if (candidate.from, candidate.from_endpoint_index) == junction {
+                points.get(1).copied()
+            } else if (candidate.to, candidate.to_endpoint_index) == junction {
+                points.len().checked_sub(2).map(|index| points[index])
+            } else {
+                None
+            }
+        });
+        match (joined.next(), joined.next()) {
+            (Some(point), None) => Some(point),
+            _ => None,
+        }
+    };
+    let before = neighbour((route.from, route.from_endpoint_index));
+    let points = before
+        .into_iter()
+        .chain(route.path_points.iter().copied())
+        .chain(neighbour((route.to, route.to_endpoint_index)))
+        .collect();
+    (points, usize::from(before.is_some()))
+}
+
+/// The decal or elevated strip a ground piece draws, redrawn with it.
+#[derive(Component)]
+pub(super) struct GroundTrackPieceDecal;
+
+/// Redraws the road pieces next to a joint a route was added to or removed
+/// from, so they turn towards (or no longer towards) the road there.
+pub(super) fn invalidate_ground_track_pieces_at_changed_joints(
+    mut commands: Commands,
+    added: Query<(Entity, &TrackSegment), Added<TrackSegment>>,
+    mut removed: RemovedComponents<TrackSegment>,
+    mut joints: Local<bevy::platform::collections::HashMap<Entity, [Entity; 2]>>,
+    routes: Query<(Entity, &TrackSegment)>,
+    pieces: Query<(Entity, &TransportTrackConstructionPiece, &Children)>,
+    decals: Query<(), With<GroundTrackPieceDecal>>,
+) {
+    let mut changed = removed
+        .read()
+        .filter_map(|route| joints.remove(&route))
+        .flatten()
+        .collect::<HashSet<_>>();
+    for (entity, route) in &added {
+        joints.insert(entity, [route.from, route.to]);
+        changed.extend([route.from, route.to]);
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let neighbours = routes
+        .iter()
+        .filter(|(entity, route)| {
+            !added.contains(*entity)
+                && (changed.contains(&route.from) || changed.contains(&route.to))
+        })
+        .map(|(entity, _)| entity)
+        .collect::<HashSet<_>>();
+    for (piece, construction, children) in &pieces {
+        if !neighbours.contains(&construction.route_segment) {
+            continue;
+        }
+        for child in children.iter().filter(|child| decals.contains(*child)) {
+            commands.entity(child).despawn();
+        }
+        commands
+            .entity(piece)
+            .remove::<AuthoredTransportTrackPiecePresentationProjected>();
+    }
 }
 
 pub(super) fn invalidate_sky_tower_presentations_after_connection_topology_changes(
@@ -200,6 +354,21 @@ pub(super) fn spawn_authored_sky_tower(
     } else {
         point - points[index - 1]
     };
+    // The construction marker over a tower's top, shown while a line ends
+    // there (skytower's constructionMarker binders).
+    if let Some(marker) = definitions.scene(openzt2_game_data::AssetId::from_virtual_path(
+        &openzt2_game_assets::model_source::native_model_source_lowering::native_model_scene_labelled_asset_path(
+            "ui/fx/underconstruction/underconstruction_sky.nif",
+        ),
+    )) {
+        commands.spawn((
+            Transform::from_translation(local + Vec3::Y * height),
+            Visibility::Hidden,
+            ChildOf(parent),
+            openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation::new(marker),
+            SkyTowerConstructionMarker,
+        ));
+    }
     openzt2_world::world_spawn::expanding_column_presentation::spawn_expanding_column_presentation(
         commands,
         definitions,
@@ -300,12 +469,15 @@ pub(super) fn ground_track_piece_is_elevated_above_terrain(
             .and_then(|(chunk, edited)| {
                 sample_terrain(chunk, terrain_assets.get(&chunk.asset)?, edited, point.xz())
             })
-            .is_some_and(|terrain| point.y > terrain.height_m + 0.05)
+            // A road end at a station on a slope sits a little off the
+            // ground; only a real gap gets the elevated strip.
+            // ponytail: fixed 1 m; read a clearance from the track if one exists.
+            .is_some_and(|terrain| point.y > terrain.height_m + 1.0)
     })
 }
 
 #[allow(clippy::too_many_arguments)]
-fn spawn_authored_sky_track_rope(
+pub(super) fn spawn_authored_sky_track_rope(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     material: Handle<EffectPassMaterial>,
@@ -382,7 +554,122 @@ fn spawn_authored_sky_track_rope(
         Mesh3d(meshes.add(mesh)),
         MeshMaterial3d(material),
         ChildOf(parent),
+        SkyTrackRope,
     ));
+}
+
+/// The construction marker over a sky tower.
+#[derive(Component)]
+pub(super) struct SkyTowerConstructionMarker;
+
+/// A sky tower shows its construction marker while no line leaves it, as
+/// the original marks where a line can be continued.
+pub(super) fn show_construction_markers_at_open_sky_towers(
+    towers: Query<(Entity, &AuthoredLinkedSkyTowerPresentationProjected)>,
+    routes: Query<&TrackSegment>,
+    mut markers: Query<(&ChildOf, &mut Visibility), With<SkyTowerConstructionMarker>>,
+) {
+    for (tower, projected) in &towers {
+        let open = !routes.iter().any(|route| route.from == tower);
+        for (parent, mut visibility) in &mut markers {
+            if parent.parent() != projected.root {
+                continue;
+            }
+            let next = if open {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
+
+/// A sky track's rope, which keeps its colour while its towers and stations
+/// are highlighted.
+#[derive(Component)]
+pub(super) struct SkyTrackRope;
+
+/// A sky station's rope wheels (`link_wheel`, `link_wheel2`), where its ropes
+/// turn.
+#[derive(bevy::ecs::system::SystemParam)]
+pub(super) struct SkyRopeAnchors<'w, 's> {
+    stations: Query<'w, 's, (), With<TransportStation>>,
+    children: Query<'w, 's, &'static Children>,
+    nodes: Query<
+        'w,
+        's,
+        (
+            &'static openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier,
+            &'static GlobalTransform,
+        ),
+    >,
+}
+
+impl SkyRopeAnchors<'_, '_> {
+    /// The station's wheel nearest to its rope end at `near`.
+    pub(super) fn station_wheel(&self, station: Entity, near: Vec3) -> Option<Vec3> {
+        if !self.stations.contains(station) {
+            return None;
+        }
+        let wheels = ["link_wheel", "link_wheel2"].map(openzt2_game_data::AssetId::from_key);
+        self.children
+            .iter_descendants(station)
+            .filter_map(|node| self.nodes.get(node).ok())
+            .filter(|(id, _)| wheels.contains(&id.0))
+            .map(|(_, transform)| transform.translation())
+            .min_by(|a, b| {
+                a.xz()
+                    .distance(near.xz())
+                    .total_cmp(&b.xz().distance(near.xz()))
+            })
+    }
+}
+
+/// A road piece's decal over its painted road, shown only while the piece is
+/// highlighted.
+#[derive(Component)]
+pub(super) struct PaintedTrackHighlight;
+
+/// The road a ground piece paints into the terrain (`paintTexture`), and the
+/// size of a decal of the whole texture laid over it. Paint textures are
+/// authored at the terrain's texel size with their copy window centred, so a
+/// 43-texel window sits in 64 texels and an 86-texel one in 128.
+fn authored_ground_track_paint(
+    presentation: &GroundTransportTrackPiecePresentationDefinition,
+    centre: Vec2,
+    texture: Handle<Image>,
+    terrain_assets: &Assets<TerrainAsset>,
+    terrain_chunks: &Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+) -> Option<(TerrainPaintedTexture, f32)> {
+    let start = Vec2::from(presentation.paint_sample_start_texels);
+    let copy = Vec2::from(presentation.paint_copy_dimension_texels);
+    if copy.cmple(Vec2::ZERO).any() {
+        return None;
+    }
+    let (chunk, _) = terrain_chunks.iter().next()?;
+    let presentation_grid = &terrain_assets
+        .get(&chunk.asset)?
+        .canonical_terrain_grid()
+        .presentation;
+    // A chunk's surface image also covers its margin cells on each side.
+    let texel_metres = f32::from(presentation_grid.surface_margin_cells)
+        .mul_add(2.0, f32::from(chunk.side.checked_sub(1)?))
+        * chunk.spacing_m
+        / f32::from(presentation_grid.surface_resolution);
+    let reference = start.x.mul_add(2.0, copy.x).max(1.0).log2().ceil().exp2();
+    Some((
+        TerrainPaintedTexture {
+            centre,
+            size_m: copy.x * texel_metres,
+            texture,
+            uv_min: start / reference,
+            uv_max: (start + copy) / reference,
+        },
+        reference * texel_metres,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -399,7 +686,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
-    endpoint_transforms: Query<&GlobalTransform, With<TransportTrackJunction>>,
+    (endpoint_transforms, rope_anchors): (
+        Query<&GlobalTransform, With<TransportTrackJunction>>,
+        SkyRopeAnchors,
+    ),
     existing_sky_towers: Query<&AuthoredLinkedSkyTowerPresentationProjected>,
     routes: Query<&TrackSegment>,
     pieces: Query<
@@ -439,16 +729,18 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 continue;
             };
             if piece.piece_index == 0 && route.path_points.len() == 2 {
-                let Ok(tower_global_transform) = endpoint_transforms.get(route.to) else {
+                let tower_world_transform = endpoint_transforms
+                    .get(route.to)
+                    .ok()
+                    .map(GlobalTransform::compute_transform);
+                let Some(template) = terrain_decal_pass.as_ref() else {
                     continue;
                 };
-                let tower_world_transform = tower_global_transform.compute_transform();
-                let (Some(texture), Some(template)) = (
-                    definitions.texture_image(presentation.rope_texture),
-                    terrain_decal_pass.as_ref(),
-                ) else {
-                    continue;
-                };
+                // The shipped rope names elevpathtest.tga, which no archive
+                // contains; the original draws the rope untextured then.
+                let texture = definitions
+                    .texture_image(presentation.rope_texture)
+                    .unwrap_or_default();
                 let mut line_material = template.clone();
                 if !line_material.configure_for_authored_blue_fang_line(texture) {
                     error!("sky track could not bind the authored BFLine fixed-function state");
@@ -461,9 +753,10 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     route.from_position.y - route.to_position.y
                         + track.sky_rope_clearance_metres.unwrap_or_default(),
                 );
-                if existing_sky_towers.get(route.to).is_err()
-                    && tower_targets_projected_this_run.insert(route.to)
-                {
+                if let Some(tower_world_transform) = tower_world_transform.filter(|_| {
+                    existing_sky_towers.get(route.to).is_err()
+                        && tower_targets_projected_this_run.insert(route.to)
+                }) {
                     let top_kind = authored_sky_tower_top_kind(route, &routes);
                     let tower_presentation_root = commands
                         .spawn((
@@ -495,14 +788,22 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 let source_height_metres = presentation
                     .initial_height_metres
                     .max(route.to_position.y - route.from_position.y + rope_clearance);
+                // The rope runs between tower tops, and at a station over the
+                // wheel (link_wheel) next to the end it leaves from.
+                let start = rope_anchors
+                    .station_wheel(route.from, route.path_points[0])
+                    .unwrap_or(route.path_points[0] + Vec3::Y * source_height_metres);
+                let end = rope_anchors
+                    .station_wheel(route.to, route.path_points[1])
+                    .unwrap_or(route.path_points[1] + Vec3::Y * promoted_height_metres);
                 spawn_authored_sky_track_rope(
                     &mut commands,
                     &mut meshes,
                     material,
                     entity,
                     transform,
-                    route.path_points[0] + Vec3::Y * (source_height_metres - rope_clearance),
-                    route.path_points[1] + Vec3::Y * (promoted_height_metres - rope_clearance),
+                    start,
+                    end,
                     presentation,
                 );
             }
@@ -512,10 +813,11 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
             else {
                 continue;
             };
+            let (joined_points, first) = ground_route_points_with_joined_neighbours(route, &routes);
             let Some(presentation) = select_authored_ground_track_piece_presentation(
                 &track.ground_piece_presentations,
-                &route.path_points,
-                usize::from(piece.piece_index),
+                &joined_points,
+                usize::from(piece.piece_index) + first,
             ) else {
                 error!("ground track has no authored pieceType/appearance texture case");
                 commands
@@ -569,6 +871,7 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                     MeshMaterial3d(effect_pass_materials.add(material)),
                     Transform::from_rotation(transform.rotation.inverse()),
                     ChildOf(entity),
+                    GroundTrackPieceDecal,
                 ));
                 commands
                     .entity(entity)
@@ -579,27 +882,83 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
                 presentation.ground_decal_offset_metres[0],
                 0.0,
                 presentation.ground_decal_offset_metres[1],
-            ));
+            )) + authored_ground_track_paint_shift(
+                &joined_points,
+                usize::from(piece.piece_index) + first,
+            );
+            let paint = definitions
+                .texture_image(presentation.paint_texture)
+                .and_then(|paint_texture| {
+                    authored_ground_track_paint(
+                        presentation,
+                        decal_centre.xz(),
+                        paint_texture,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    )
+                });
+            let decal_size = paint
+                .as_ref()
+                .map_or(presentation.ground_decal_size_metres[0], |(_, size)| *size);
             let Some(mesh) = construct_square_surface_mesh_fitted_to_canonical_terrain_samples_with_rotated_texture_coordinates(
-                presentation.ground_decal_size_metres[0],
+                decal_size,
                 decal_centre,
                 presentation.ground_decal_rotation_radians,
                 &terrain_index,
                 &terrain_assets,
                 &terrain_chunks,
             ) else { continue; };
-            commands.spawn((
-                Mesh3d(meshes.add(mesh)),
-                MeshMaterial3d(effect_pass_materials.add(material)),
-                Transform::from_translation(
-                    transform
-                        .compute_affine()
-                        .inverse()
-                        .transform_point3(decal_centre),
+            let decal = commands
+                .spawn((
+                    Mesh3d(meshes.add(mirror_texture_rows(mesh))),
+                    MeshMaterial3d(effect_pass_materials.add(material)),
+                    Transform::from_translation(
+                        transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(decal_centre),
+                    )
+                    .with_rotation(transform.rotation.inverse()),
+                    ChildOf(entity),
+                    GroundTrackPieceDecal,
+                ))
+                .id();
+            // As in the original, the road is painted into the ground; the
+            // decal only shows a highlight.
+            if let Some((paint, _)) = paint {
+                commands.entity(entity).insert(paint);
+                let end_paint = authored_ground_track_second_paint(
+                    &track.ground_piece_presentations,
+                    &joined_points,
+                    usize::from(piece.piece_index) + first,
                 )
-                .with_rotation(transform.rotation.inverse()),
-                ChildOf(entity),
-            ));
+                .and_then(|(end, shift)| {
+                    let centre = transform.transform_point(Vec3::new(
+                        end.ground_decal_offset_metres[0],
+                        0.0,
+                        end.ground_decal_offset_metres[1],
+                    )) + shift;
+                    authored_ground_track_paint(
+                        end,
+                        centre.xz(),
+                        definitions.texture_image(end.paint_texture)?,
+                        &terrain_assets,
+                        &terrain_chunks,
+                    )
+                });
+                if let Some((end_paint, _)) = end_paint {
+                    commands.spawn((
+                        end_paint,
+                        Transform::IDENTITY,
+                        Visibility::Inherited,
+                        ChildOf(entity),
+                        GroundTrackPieceDecal,
+                    ));
+                }
+                commands
+                    .entity(decal)
+                    .insert((PaintedTrackHighlight, Visibility::Hidden));
+            }
         }
         commands
             .entity(entity)
@@ -609,3 +968,199 @@ pub(super) fn project_committed_transport_track_piece_authored_prefabs(
 
 #[cfg(test)]
 mod tests;
+
+/// Shows a road's construction marker only where the road stops at a
+/// junction no road leaves or starts at one no road leads into, as the original marks an unfinished road
+/// ("Click to place road"); every other piece keeps its markers hidden.
+pub(super) fn show_construction_markers_at_unconnected_road_ends(
+    pieces: Query<
+        (
+            &TransportTrackConstructionPiece,
+            &Transform,
+            &Children,
+            &TrackProfile,
+        ),
+        Without<PrefabAuthoredAttachmentIdentifier>,
+    >,
+    routes: Query<&TrackSegment>,
+    junctions: Query<(), With<TransportTrackJunction>>,
+    mut markers: Query<
+        (
+            &PrefabAuthoredAttachmentIdentifier,
+            &mut Visibility,
+            &mut Transform,
+        ),
+        Without<TransportTrackConstructionPiece>,
+    >,
+) {
+    let marker = openzt2_game_data::AssetId::from_key("constructionmarker1");
+    let hidden_marker = openzt2_game_data::AssetId::from_key("constructionmarker2");
+    for (piece, piece_transform, children, profile) in &pieces {
+        // A sky tower carries its own marker on its top.
+        let ground = profile.kind == TransportationTrackKind::Ground;
+        // A road left after a gap starts at a junction no road leads into,
+        // and the original marks that end too.
+        let open_end = routes.get(piece.route_segment).ok().and_then(|route| {
+            let last = usize::from(piece.piece_index) + 2 == route.path_points.len();
+            if !ground {
+                None
+            } else if last
+                && junctions.contains(route.to)
+                && !routes.iter().any(|other| other.from == route.to)
+            {
+                Some(route.to_position)
+            } else if piece.piece_index == 0
+                && junctions.contains(route.from)
+                && !routes.iter().any(|other| other.to == route.from)
+            {
+                Some(route.from_position)
+            } else {
+                None
+            }
+        });
+        for child in children {
+            let Ok((name, mut visibility, mut transform)) = markers.get_mut(*child) else {
+                continue;
+            };
+            let shown = if name.0 == marker {
+                open_end
+                    .inspect(|end| {
+                        let local = piece_transform
+                            .compute_affine()
+                            .inverse()
+                            .transform_point3(*end);
+                        if transform.translation != local {
+                            transform.translation = local;
+                        }
+                    })
+                    .is_some()
+            } else if name.0 == hidden_marker {
+                false
+            } else {
+                continue;
+            };
+            let next = if shown {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}
+
+/// Whether a station carries the four markers of a sky station.
+fn names_in_pairs(
+    children: &Query<&Children>,
+    markers: &Query<(
+        &PrefabAuthoredAttachmentIdentifier,
+        &ChildOf,
+        &mut Visibility,
+        &mut Transform,
+    )>,
+    station: Entity,
+    names: [openzt2_game_data::AssetId; 4],
+) -> bool {
+    children.iter_descendants(station).any(|entity| {
+        markers
+            .get(entity)
+            .is_ok_and(|(name, ..)| name.0 == names[3])
+    })
+}
+
+/// A station shows the marker of each end no road is connected to yet, where
+/// the original marks the place a road can start ("Click to place road").
+#[allow(clippy::type_complexity)]
+pub(super) fn show_construction_markers_at_unconnected_station_ends(
+    definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_definitions: Res<WorldDefinitions>,
+    stations: Query<(Entity, &TransportStation, &GlobalTransform)>,
+    routes: Query<&TrackSegment>,
+    children: Query<&Children>,
+    parents: Query<&GlobalTransform>,
+    mut markers: Query<(
+        &PrefabAuthoredAttachmentIdentifier,
+        &ChildOf,
+        &mut Visibility,
+        &mut Transform,
+    )>,
+    rope_anchors: SkyRopeAnchors,
+) {
+    let Some(definitions) = active_definitions.get(&definition_assets) else {
+        return;
+    };
+    // A ground station marks each end with one marker; a sky station marks
+    // each rope end with a pair (markers 1-2 and 3-4).
+    let names = [
+        "constructionmarker1",
+        "constructionmarker2",
+        "constructionmarker3",
+        "constructionmarker4",
+    ]
+    .map(openzt2_game_data::AssetId::from_key);
+    for (station_entity, station, station_transform) in &stations {
+        let pair = names_in_pairs(&children, &markers, station_entity, names);
+        for descendant in children.iter_descendants(station_entity) {
+            let Ok((name, parent, mut visibility, mut transform)) = markers.get_mut(descendant)
+            else {
+                continue;
+            };
+            let Some(marker) = (0_u8..)
+                .zip(names)
+                .find_map(|(index, marker)| (marker == name.0).then_some(index))
+            else {
+                continue;
+            };
+            let endpoint = if pair { marker / 2 } else { marker };
+            let connected = routes.iter().any(|route| {
+                (route.from == station_entity && route.from_endpoint_index == endpoint)
+                    || (route.to == station_entity && route.to_endpoint_index == endpoint)
+            });
+            let open_end = (!connected)
+                .then(|| {
+                    crate::transport_tours::topology::calculate_authored_transport_station_endpoint_world_position(
+                        definitions,
+                        station,
+                        station_transform,
+                        endpoint,
+                    )
+                })
+                .flatten();
+            if let (Some(end), Ok(parent_transform)) = (open_end, parents.get(parent.parent())) {
+                // ponytail: fixed 1.5 m step out of the building, tune if a station hides it
+                let outward = (end - station_transform.translation())
+                    .with_y(0.0)
+                    .normalize_or_zero();
+                // A sky station's pair hangs over its rope wheel, one each side.
+                let position = if pair {
+                    let side = Vec3::Y.cross(outward) * if marker % 2 == 0 { 1.0 } else { -1.0 };
+                    rope_anchors
+                        .station_wheel(station_entity, end)
+                        .unwrap_or(end)
+                        + side
+                        // ponytail: fixed lift above the roof, match zt.exe if a station differs
+                        + Vec3::Y * 3.0
+                } else {
+                    end + outward * 1.5
+                };
+                let local = parent_transform
+                    .affine()
+                    .inverse()
+                    .transform_point3(position);
+                if transform.translation != local {
+                    transform.translation = local;
+                }
+            }
+            let next = if open_end.is_some() {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if *visibility != next {
+                *visibility = next;
+            }
+        }
+    }
+}

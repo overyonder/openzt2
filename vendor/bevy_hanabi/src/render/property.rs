@@ -4,28 +4,38 @@ use std::{
 };
 
 use bevy::{
-    ecs::{lifecycle::Remove, observer::On, system::Commands, world::Mut},
+    asset::Handle,
+    ecs::{lifecycle::Remove, observer::On, query::Without, system::Commands, world::Mut},
+    image::Image,
     log::{error, trace},
-    platform::collections::HashMap,
+    platform::collections::{hash_map::EntryRef, HashMap},
     prelude::{Component, Entity, Query, Res, ResMut, Resource},
     render::{
+        render_asset::RenderAssets,
         render_resource::{
             binding_types::{storage_buffer_read_only, storage_buffer_read_only_sized},
             BindGroup, BindGroupEntries, BindGroupLayoutDescriptor, BindGroupLayoutEntries, Buffer,
-            PipelineCache, ShaderSize,
+            PipelineCache, Sampler, ShaderSize,
         },
         renderer::{RenderDevice, RenderQueue},
+        texture::GpuImage,
     },
+    utils::default,
 };
 use bytemuck::{cast_slice, Pod};
+use thiserror::Error;
 use wgpu::{
-    BindingResource, BufferAddress, BufferBinding, BufferDescriptor, BufferUsages, ShaderStages,
+    BindGroupEntry, BindingResource, BufferAddress, BufferBinding, BufferDescriptor, BufferUsages,
+    ShaderStages,
 };
 
 use super::effect_cache::SlabState;
 use crate::{
-    render::{ExtractedProperties, GpuBatchInfo, GpuSpawnerParams, StorageType},
-    PropertyLayout,
+    render::{
+        ExtractedEffect, ExtractedProperties, GpuBatchInfo, GpuSpawnerParams, Material,
+        MaterialBindingError, StorageType as _,
+    },
+    PropertyLayout, TextureLayout,
 };
 
 /// Allocation into the [`PropertyCache`] for an effect instance. This component
@@ -49,6 +59,7 @@ impl CachedEffectProperties {
         PropertyBindGroupKey {
             buffer_index: self.buffer_index,
             binding_size,
+            ..default()
         }
     }
 }
@@ -125,12 +136,13 @@ impl PropertyBuffer {
     #[allow(dead_code)]
     #[inline]
     pub fn max_binding(&self) -> Option<BindingResource<'_>> {
-        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then from that
-        // wrapper implement all the xxx_binding() helpers. That avoids a bunch of "if
-        // let Some()" everywhere when we know the buffer is valid. The only reason the
-        // buffer might not be valid is if it was not created, and in that case
-        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied out
-        // before.
+        // FIXME - Return a Buffer wrapper first, which can be unwrapped, then
+        // from that wrapper implement all the xxx_binding() helpers.
+        // That avoids a bunch of "if let Some()" everywhere when we
+        // know the buffer is valid. The only reason the buffer might
+        // not be valid is if it was not created, and in that case
+        // we wouldn't be calling the xxx_bindings() helpers, we'd have earlied
+        // out before.
         let buffer = self.buffer()?;
         Some(BindingResource::Buffer(BufferBinding {
             buffer,
@@ -198,7 +210,8 @@ impl PropertyBuffer {
                 break;
             }
 
-            // Otherwise try to find the smallest oversized slot to reduce wasted space
+            // Otherwise try to find the smallest oversized slot to reduce
+            // wasted space
             if let Some(best_slot) = best_slot.as_mut() {
                 if wasted_size < best_slot.0 {
                     *best_slot = (wasted_size, index);
@@ -218,7 +231,8 @@ impl PropertyBuffer {
 
             let padding_bytes = aligned_start - range.start;
             if padding_bytes > 0 {
-                // If the allocation doesn't span the entire free space, splice it.
+                // If the allocation doesn't span the entire free space, splice
+                // it.
                 self.free_ranges[index].0.end = aligned_start;
             } else if size < free_size {
                 self.free_ranges[index].0.start += size;
@@ -269,8 +283,8 @@ impl PropertyBuffer {
         }
 
         if range.end == end {
-            // Walk the (sorted) free list to also dequeue any range which is now at the end
-            // of the buffer
+            // Walk the (sorted) free list to also dequeue any range which is
+            // now at the end of the buffer
             let mut new_end = range.start;
             while let Some(free_range) = self.free_ranges.pop() {
                 if free_range.0.end == new_end {
@@ -281,8 +295,9 @@ impl PropertyBuffer {
                 }
             }
 
-            // Note: we can't really recover any padding here because we don't know the
-            // exact size of that allocation, only its row-aligned size.
+            // Note: we can't really recover any padding here because we don't
+            // know the exact size of that allocation, only its
+            // row-aligned size.
             if new_end > 0 {
                 self.values.truncate(new_end as usize);
             } else {
@@ -343,8 +358,8 @@ impl PropertyBuffer {
                     }
                 }
             } else {
-                // The range exists in the free list, this means it's already removed. This is a
-                // duplicate; ignore it.
+                // The range exists in the free list, this means it's already
+                // removed. This is a duplicate; ignore it.
                 return false;
             }
         }
@@ -459,10 +474,12 @@ impl PropertyBuffer {
     /// was allocated. On failure, this returns `None`.
     #[inline]
     pub fn allocate(&mut self, layout: &PropertyLayout) -> Option<u32> {
-        // Note: allocate with min_binding_size() and not cpu_size(), because the buffer
-        // needs to be large enough to host at least one struct when bound to a shader,
-        // and in WGSL the struct is padded to its align size.
+        // Note: allocate with min_binding_size() and not cpu_size(), because
+        // the buffer needs to be large enough to host at least one
+        // struct when bound to a shader, and in WGSL the struct is
+        // padded to its align size.
         let size = layout.min_binding_size().get() as u32;
+        assert!(size > 0);
 
         // For now, we expand a single buffer infinitely. TODO to add a limit...
         let offset = self.alloc_aligned(size);
@@ -509,50 +526,112 @@ impl PropertyBuffer {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct BindGroupLayoutKey {
+    /// Binding size, in bytes, of the property block.
+    pub binding_byte_size: u32,
+    /// Is this binding using the prefix sum buffer?
+    pub with_prefix_sum: bool,
+    /// Texture layout for the material bindings.
+    pub texture_layout: TextureLayout,
+}
+
+impl BindGroupLayoutKey {
+    /// Get the base variant, without any property nor texture.
+    fn base(with_prefix_sum: bool) -> Self {
+        Self {
+            binding_byte_size: 0,
+            with_prefix_sum,
+            texture_layout: TextureLayout::default(),
+        }
+    }
+}
+
 /// Cache for effect properties.
 #[derive(Resource)]
 pub struct PropertyCache {
+    clamp_linear_sampler: Sampler,
     /// Collection of property buffers managed by this cache. Some buffers might
     /// be `None` if the entry is not used. Since the buffers are referenced
     /// by index, we cannot move them once they're allocated.
     buffers: Vec<Option<PropertyBuffer>>,
-    /// Map from a binding size in bytes to its bind group layout. The binding
-    /// size zero is valid, and corresponds to the variant without properties,
-    /// which by abuse is stored here even though it's not related to properties
-    /// (contains only the spawner binding).
-    bind_group_layout_descs: HashMap<u32, BindGroupLayoutDescriptor>,
+    /// Map from an effect layout (properties and material textures) to its bind
+    /// group layout. The binding size zero is valid, and corresponds to the
+    /// variant without properties, which by abuse is stored here even
+    /// though it's not related to properties (contains only the spawner
+    /// binding).
+    bind_group_layout_descs: HashMap<BindGroupLayoutKey, BindGroupLayoutDescriptor>,
 }
 
 impl PropertyCache {
     pub fn new(device: &RenderDevice) -> Self {
         let align = device.limits().min_storage_buffer_offset_alignment;
         let spawner_min_binding_size = GpuSpawnerParams::aligned_size(align);
+        let batch_info_min_binding_size = GpuBatchInfo::aligned_size(align);
 
-        // Create the default bind group layout when no properties are present
-        let bgl = BindGroupLayoutDescriptor::new(
+        // HAS_BATCHED_DRAW
+        // let has_multi_draw = false;
+        // TODO
+        //  device
+        //     .features()
+        //     .features_webgpu
+        //     .contains(FeaturesWebGPU::INDIRECT_FIRST_INSTANCE)
+        //     && (instance.has(VALIDATION_INDIRECT_CALL) || (backend != DX12));
+        //
+        // Anyway we create both with/without prefix sum variants, because
+        // init/update unconditionally use the "with" variant, and
+        // render conditionally use one or the other depending on
+        // multi-draw availability. Technically we could skip the
+        // no-prefix-sum variant if we're sure we always use multi-draw though.
+
+        // Create the default bind group layout when no properties and no
+        // material textures are present.
+        let bgl_prefix = BindGroupLayoutDescriptor::new(
             "hanabi:bgl:no_property",
             &BindGroupLayoutEntries::sequential(
                 ShaderStages::COMPUTE | ShaderStages::VERTEX,
                 (
                     // @group(2) @binding(0) var<storage, read> spawners : array<Spawner>;
-                    //storage_buffer_read_only::<GpuSpawnerParams>(false), // TODO - vfx_sort_fill
-                    // still needs align
                     storage_buffer_read_only_sized(false, Some(spawner_min_binding_size)),
                     // @group(2) @binding(1) var<storage, read> prefix_sum : array<u32>;
                     storage_buffer_read_only::<u32>(false),
                     // @group(2) @binding(2) var<storage, read> batch_info : BatchInfo;
-                    storage_buffer_read_only_sized(true, Some(GpuBatchInfo::aligned_size(align))),
+                    storage_buffer_read_only_sized(true, Some(batch_info_min_binding_size)),
                 ),
             ),
         );
         trace!(
             "-> created bind group layout desc for no-property variant: {:?}",
-            bgl
+            bgl_prefix
         );
-        let mut bind_group_layout_descs = HashMap::with_capacity_and_hasher(1, Default::default());
-        bind_group_layout_descs.insert(0, bgl);
+        let bgl_noprefix = BindGroupLayoutDescriptor::new(
+            "hanabi:bgl:no_property",
+            &BindGroupLayoutEntries::sequential(
+                ShaderStages::COMPUTE | ShaderStages::VERTEX,
+                (
+                    // @group(2) @binding(0) var<storage, read> spawner : Spawner;
+                    storage_buffer_read_only_sized(false, Some(spawner_min_binding_size)),
+                    // @group(2) @binding(1) var<storage, read> batch_info : BatchInfo;
+                    storage_buffer_read_only_sized(true, Some(batch_info_min_binding_size)),
+                ),
+            ),
+        );
+        trace!(
+            "-> created bind group layout desc for no-property variant: {:?}",
+            bgl_noprefix
+        );
+        let mut bind_group_layout_descs = HashMap::with_capacity_and_hasher(16, Default::default());
+        bind_group_layout_descs.insert(BindGroupLayoutKey::base(true), bgl_prefix);
+        bind_group_layout_descs.insert(BindGroupLayoutKey::base(false), bgl_noprefix);
 
         Self {
+            clamp_linear_sampler: device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("hanabi_clamp_linear"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
+                ..default()
+            }),
             buffers: vec![],
             bind_group_layout_descs,
         }
@@ -573,47 +652,84 @@ impl PropertyCache {
     pub fn bind_group_layout_desc(
         &self,
         min_binding_size: Option<NonZeroU64>,
+        with_prefix_sum: bool,
+        texture_layout: &TextureLayout,
     ) -> Option<&BindGroupLayoutDescriptor> {
-        let key = min_binding_size.map(NonZeroU64::get).unwrap_or(0) as u32;
+        let binding_byte_size = min_binding_size.map(NonZeroU64::get).unwrap_or(0) as u32;
+        let key = BindGroupLayoutKey {
+            binding_byte_size,
+            with_prefix_sum,
+            texture_layout: texture_layout.clone(), // TODO - Q: Equivalent<K> to avoid clone
+        };
         self.bind_group_layout_descs.get(&key)
     }
 
-    pub fn allocate(&mut self, property_layout: &PropertyLayout) -> CachedEffectProperties {
-        assert!(!property_layout.is_empty());
+    /// Ensure there's a bind group layout for the property variant with that
+    /// binding size and the given texture layout.
+    pub fn ensure_layout_exists(
+        &mut self,
+        property_layout: &PropertyLayout,
+        texture_layout: &TextureLayout,
+    ) {
+        let properties_min_binding_size = if property_layout.is_empty() {
+            0
+        } else {
+            property_layout.min_binding_size().get() as u32
+        };
+        for with_prefix_sum in [false, true] {
+            // Get the base layout that we will clone and modify
+            let base_key = BindGroupLayoutKey::base(with_prefix_sum);
+            let mut bgl = self.bind_group_layout_descs.get(&base_key).unwrap().clone();
 
-        // Use the no-property layout descriptor as the base, that we'll customize. It's
-        // always available. But since it's stored inside the hash map, we need to
-        // eagerly clone in advance, for the borrow checker.
-        let mut bgl = self.bind_group_layout_descs.get(&0).unwrap().clone();
-
-        // Ensure there's a bind group layout for the property variant with that binding
-        // size.
-        let properties_min_binding_size = property_layout.min_binding_size();
-        self.bind_group_layout_descs
-            .entry(properties_min_binding_size.get() as u32)
-            .or_insert_with(|| {
+            // Make a layout for the given binding size and texture layout if
+            // needed
+            let key = BindGroupLayoutKey {
+                binding_byte_size: properties_min_binding_size,
+                with_prefix_sum,
+                texture_layout: texture_layout.clone(), // TODO - Q: Equivalent<K> to avoid clone
+            };
+            self.bind_group_layout_descs.entry(key).or_insert_with(|| {
                 let label = format!(
-                    "hanabi:bgl:property_size{}",
-                    properties_min_binding_size.get()
+                    "hanabi:bgl:property_size{}_tex{}",
+                    properties_min_binding_size,
+                    texture_layout.layout.len(),
                 );
                 trace!(
-                    "Create new property bind group layout '{}' for binding size {} bytes.",
+                    "Create new property bind group layout '{}' for binding size {} bytes with {} textures.",
                     label,
-                    properties_min_binding_size.get()
+                    properties_min_binding_size,
+                    texture_layout.layout.len(),
                 );
-                // Append the Properties array binding
                 bgl.label = label.into();
-                bgl.entries.push(
-                    storage_buffer_read_only_sized(false, Some(properties_min_binding_size))
-                        .build(3, ShaderStages::COMPUTE | ShaderStages::VERTEX),
-                );
+
+                // Append the Properties array binding
+                if properties_min_binding_size > 0 {
+                    bgl.entries.push(
+                        storage_buffer_read_only_sized(false, Some(NonZeroU64::new(properties_min_binding_size as u64).unwrap()))
+                            .build(3, ShaderStages::COMPUTE | ShaderStages::VERTEX | ShaderStages::FRAGMENT),
+                    );
+                }
+
+                // Append the texture bindings, if any
+                texture_layout.append_layout_bindings(4, &mut bgl.entries);
+
                 trace!(
-                    "-> created bind group layout desc for size {}: {:?}",
-                    properties_min_binding_size.get(),
-                    bgl
+                    "-> created bind group layout desc for size {} with {} textures: {:?}",
+                    properties_min_binding_size,
+                    texture_layout.layout.len(),
+                    bgl,
                 );
                 bgl
             });
+        }
+    }
+
+    pub fn allocate(
+        &mut self,
+        property_layout: &PropertyLayout,
+        texture_layout: &TextureLayout,
+    ) -> CachedEffectProperties {
+        self.ensure_layout_exists(property_layout, texture_layout);
 
         self.buffers
             .iter_mut()
@@ -691,31 +807,195 @@ impl PropertyCache {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Bind group key for the effect batch "property" binding.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 pub struct PropertyBindGroupKey {
+    /// Index of the property buffer.
     pub buffer_index: u32,
+    /// Binding size, in bytes, of the property block. 0 means no property use.
     pub binding_size: u32,
+    /// Texture layout for the material binding points.
+    pub texture_layout: TextureLayout,
+}
+
+// Note: use by HashMap to turn a key reference into an owned key when inserting
+// an entry. We use the same struct (even if we shouldn't, to avoid
+// TextureLayout cloning) for both.
+impl From<&PropertyBindGroupKey> for PropertyBindGroupKey {
+    fn from(value: &PropertyBindGroupKey) -> Self {
+        value.clone()
+    }
+}
+
+impl PropertyBindGroupKey {
+    pub fn new(properties: &CachedEffectProperties, texture_layout: TextureLayout) -> Self {
+        Self {
+            buffer_index: properties.buffer_index,
+            binding_size: properties.property_layout.min_binding_size().get() as u32,
+            texture_layout,
+        }
+    }
+
+    /// Get a key for an effect without property.
+    pub fn texture_only(texture_layout: TextureLayout) -> Self {
+        Self {
+            buffer_index: 0,
+            binding_size: 0,
+            texture_layout,
+        }
+    }
+
+    pub fn has_properties(&self) -> bool {
+        self.binding_size > 0
+    }
+
+    #[allow(dead_code)]
+    pub fn has_textures(&self) -> bool {
+        !self.texture_layout.layout.is_empty()
+    }
 }
 
 #[derive(Default, Resource)]
 pub struct PropertyBindGroups {
     /// Map from a [`PropertyBuffer`] index and a binding size to the
     /// corresponding bind group.
-    property_bind_groups: HashMap<PropertyBindGroupKey, BindGroup>,
-    /// Bind group for the variant without any property.
-    no_property_bind_group: Option<BindGroup>,
+    property_bind_groups: HashMap<PropertyBindGroupKey, [BindGroup; 2]>,
+}
+
+#[derive(Debug, Error)]
+pub(crate) enum PropertyBindGroupError {
+    #[error("Missing property layout for binding size {0:?}.")]
+    MissingLayout(Option<NonZeroU64>),
+
+    #[error("Missing GPU property buffer #{0}.")]
+    MissingPropertyBuffer(u32),
+
+    #[error("Material binding error: {0:?}.")]
+    Material(MaterialBindingError),
 }
 
 impl PropertyBindGroups {
-    /// Clear all bind groups.
-    ///
-    /// If `with_no_property` is `true`, also clear the no-property bind group,
-    /// which doesn't depend on any property buffer.
-    pub fn clear(&mut self, with_no_property: bool) {
+    /// Clear all cached bind groups.
+    pub fn clear(&mut self) {
         self.property_bind_groups.clear();
-        if with_no_property {
-            self.no_property_bind_group = None;
+    }
+
+    fn make_bind_group(
+        property_key: &PropertyBindGroupKey,
+        property_cache: &PropertyCache,
+        with_prefix_sum: bool,
+        texture_layout: &TextureLayout,
+        textures: &[Handle<Image>],
+        spawner_buffer: &Buffer,
+        prefix_sum_buffer: &Buffer,
+        batch_info_buffer: &Buffer,
+        property_buffer: Option<&Buffer>,
+        render_device: &RenderDevice,
+        pipeline_cache: &PipelineCache,
+        gpu_images: &RenderAssets<GpuImage>,
+    ) -> Result<BindGroup, PropertyBindGroupError> {
+        trace!(
+            "Creating new spawner@2 bind group for property buffer #{} and binding size {} (w/ prefix sum: {})",
+            property_key.buffer_index,
+            property_key.binding_size,
+            with_prefix_sum
+        );
+
+        // This should always be non-zero if the property key is Some().
+        let property_binding_size = if property_key.has_properties() {
+            Some(NonZeroU64::new(property_key.binding_size as u64).unwrap())
+        } else {
+            None
+        };
+        let Some(layout_desc) = property_cache.bind_group_layout_desc(
+            property_binding_size,
+            with_prefix_sum,
+            texture_layout,
+        ) else {
+            return Err(PropertyBindGroupError::MissingLayout(property_binding_size));
+        };
+
+        let align = render_device.limits().min_storage_buffer_offset_alignment;
+
+        let mut entries: Vec<BindGroupEntry<'_>> = if with_prefix_sum {
+            (*BindGroupEntries::sequential((
+                spawner_buffer.as_entire_binding(),
+                prefix_sum_buffer.as_entire_binding(),
+                BufferBinding {
+                    buffer: batch_info_buffer,
+                    offset: 0,
+                    size: Some(GpuBatchInfo::aligned_size(align)),
+                },
+            )))
+            .to_vec()
+        } else {
+            (*BindGroupEntries::with_indices((
+                (0, spawner_buffer.as_entire_binding()),
+                (
+                    1,
+                    BufferBinding {
+                        buffer: batch_info_buffer,
+                        offset: 0,
+                        size: Some(GpuBatchInfo::aligned_size(align)),
+                    },
+                ),
+            )))
+            .to_vec()
+        };
+        if let Some(property_buffer) = property_buffer {
+            // @group(2) @binding(3) var<storage, read> properties :
+            // array<Properties>
+            entries.push(BindGroupEntry {
+                binding: 3,
+                resource: property_buffer.as_entire_binding(),
+            });
         }
+        // TODO = move
+        let material = Material {
+            layout: texture_layout.clone(),
+            textures: textures.iter().map(|h| h.id()).collect(),
+        };
+        assert_eq!(material.layout.layout.len(), material.textures.len());
+        material
+            .append_binding_entries(
+                4,
+                gpu_images,
+                |clamp_linear, sampler| {
+                    if clamp_linear { &property_cache.clamp_linear_sampler } else { sampler }
+                },
+                &mut entries,
+            )
+            .map_err(PropertyBindGroupError::Material)?;
+
+        trace!("Creating @2 bind group with {} entries:", entries.len());
+        for e in &entries {
+            trace!("+ {}: {:?}", e.binding, e.resource);
+        }
+
+        let bind_group = if with_prefix_sum {
+            render_device.create_bind_group(
+                Some(
+                    &format!(
+                        "hanabi:bg:spawner@2:property{}_size{}_md",
+                        property_key.buffer_index, property_key.binding_size
+                    )[..],
+                ),
+                &pipeline_cache.get_bind_group_layout(layout_desc),
+                &entries[..],
+            )
+        } else {
+            render_device.create_bind_group(
+                Some(
+                    &format!(
+                        "hanabi:bg:spawner@2:property{}_size{}",
+                        property_key.buffer_index, property_key.binding_size
+                    )[..],
+                ),
+                &pipeline_cache.get_bind_group_layout(layout_desc),
+                &entries[..],
+            )
+        };
+        Ok(bind_group)
     }
 
     /// Ensure the bind group for the given key exists, creating it if needed.
@@ -725,106 +1005,68 @@ impl PropertyBindGroups {
         property_cache: &PropertyCache,
         spawner_buffer: &Buffer,
         prefix_sum_buffer: &Buffer,
+        texture_layout: &TextureLayout,
+        textures: &[Handle<Image>],
         batch_info_buffer: &Buffer,
         render_device: &RenderDevice,
         pipeline_cache: &PipelineCache,
-    ) -> Result<(), ()> {
-        let Some(property_buffer) = property_cache.get_buffer(property_key.buffer_index) else {
-            error!(
-                "Missing property buffer #{}, referenced by effect batch.",
-                property_key.buffer_index,
-            );
-            return Err(());
-        };
+        gpu_images: &RenderAssets<GpuImage>,
+    ) -> Result<(), PropertyBindGroupError> {
+        trace!("PropertyBindGroups::ensure_exists() key={property_key:?}");
 
-        // This should always be non-zero if the property key is Some().
-        let property_binding_size = NonZeroU64::new(property_key.binding_size as u64).unwrap();
-        let Some(layout_desc) = property_cache.bind_group_layout_desc(Some(property_binding_size))
-        else {
-            error!(
-                "Missing property bind group layout for binding size {}, referenced by effect batch.",
-                property_binding_size.get(),
-            );
-            return Err(());
-        };
-
-        let align = render_device.limits().min_storage_buffer_offset_alignment;
-        self.property_bind_groups
-            .entry(*property_key)
-            .or_insert_with(|| {
-                trace!(
-                    "Creating new spawner@2 bind group for property buffer #{} and binding size {}",
+        let property_buffer = if property_key.has_properties() {
+            let Some(property_buffer) = property_cache.get_buffer(property_key.buffer_index) else {
+                return Err(PropertyBindGroupError::MissingPropertyBuffer(
                     property_key.buffer_index,
-                    property_key.binding_size
-                );
-                render_device.create_bind_group(
-                    Some(
-                        &format!(
-                            "hanabi:bg:spawner@2:property{}_size{}",
-                            property_key.buffer_index, property_key.binding_size
-                        )[..],
-                    ),
-                    &pipeline_cache.get_bind_group_layout(layout_desc),
-                    &BindGroupEntries::sequential((
-                        spawner_buffer.as_entire_binding(),
-                        prefix_sum_buffer.as_entire_binding(),
-                        BufferBinding {
-                            buffer: batch_info_buffer,
-                            offset: 0,
-                            size: Some(GpuBatchInfo::aligned_size(align)),
-                        },
-                        property_buffer.as_entire_binding(),
-                    )),
-                )
-            });
-        Ok(())
-    }
-
-    /// Ensure the bind group for the given key exists, creating it if needed.
-    pub fn ensure_exists_no_property(
-        &mut self,
-        property_cache: &PropertyCache,
-        spawner_buffer: &Buffer,
-        prefix_sum_buffer: &Buffer,
-        batch_info_buffer: &Buffer,
-        render_device: &RenderDevice,
-        pipeline_cache: &PipelineCache,
-    ) -> Result<(), ()> {
-        let Some(layout_desc) = property_cache.bind_group_layout_desc(None) else {
-            error!(
-                "Missing property bind group layout for no-property variant, referenced by effect batch.",
-            );
-            return Err(());
+                ));
+            };
+            Some(property_buffer)
+        } else {
+            None
         };
 
-        if self.no_property_bind_group.is_none() {
-            let align = render_device.limits().min_storage_buffer_offset_alignment;
-            trace!("Creating new spawner@2 bind group for no-property variant");
-            self.no_property_bind_group = Some(render_device.create_bind_group(
-                Some("hanabi:bg:spawner@2:no-property"),
-                &pipeline_cache.get_bind_group_layout(layout_desc),
-                &BindGroupEntries::sequential((
-                    spawner_buffer.as_entire_binding(),
-                    prefix_sum_buffer.as_entire_binding(),
-                    BufferBinding {
-                        buffer: batch_info_buffer,
-                        offset: 0,
-                        size: Some(GpuBatchInfo::aligned_size(align)),
-                    },
-                )),
-            ));
-        }
-
+        match self.property_bind_groups.entry_ref(property_key) {
+            EntryRef::Vacant(entry) => {
+                let without = Self::make_bind_group(
+                    property_key,
+                    property_cache,
+                    false,
+                    texture_layout,
+                    textures,
+                    spawner_buffer,
+                    prefix_sum_buffer,
+                    batch_info_buffer,
+                    property_buffer,
+                    render_device,
+                    pipeline_cache,
+                    gpu_images,
+                )?;
+                let with = Self::make_bind_group(
+                    property_key,
+                    property_cache,
+                    true,
+                    texture_layout,
+                    textures,
+                    spawner_buffer,
+                    prefix_sum_buffer,
+                    batch_info_buffer,
+                    property_buffer,
+                    render_device,
+                    pipeline_cache,
+                    gpu_images,
+                )?;
+                entry.insert([without, with]);
+            }
+            EntryRef::Occupied(_) => (),
+        };
         Ok(())
     }
 
     /// Get the bind group for the given key.
-    pub fn get(&self, key: Option<&PropertyBindGroupKey>) -> Option<&BindGroup> {
-        if let Some(key) = key {
-            self.property_bind_groups.get(key)
-        } else {
-            self.no_property_bind_group.as_ref()
-        }
+    pub fn get(&self, key: &PropertyBindGroupKey, with_prefix_sum: bool) -> Option<&BindGroup> {
+        self.property_bind_groups
+            .get(key)
+            .map(|arr| &arr[with_prefix_sum as usize])
     }
 }
 
@@ -869,37 +1111,47 @@ pub(crate) fn allocate_properties(
     mut property_cache: ResMut<PropertyCache>,
     mut q_effects: Query<(
         Entity,
+        &ExtractedEffect,
         &ExtractedProperties,
         Option<&mut CachedEffectProperties>,
     )>,
+    q_noprop_effects: Query<&ExtractedEffect, Without<ExtractedProperties>>,
 ) {
     #[cfg(feature = "trace")]
     let _span = bevy::log::info_span!("allocate_properties").entered();
     trace!("allocate_properties");
 
-    for (entity, extracted_properties, maybe_cached_effect_properties) in &mut q_effects {
+    for (entity, extracted_effect, extracted_properties, maybe_cached_effect_properties) in
+        &mut q_effects
+    {
         if let Some(mut cached_effect_properties) = maybe_cached_effect_properties {
-            // Note: Technically we should compare the entire layout, but in practice the
-            // allocation only cares about the size of the layout to store all properties,
-            // and not about the actual layout itself (where each property is). So to reduce
-            // updates and maximize the chance of reuse, compare the allocation size only.
+            // Note: Technically we should compare the entire layout, but in
+            // practice the allocation only cares about the size of
+            // the layout to store all properties, and not about the
+            // actual layout itself (where each property is). So to reduce
+            // updates and maximize the chance of reuse, compare the allocation
+            // size only.
             if cached_effect_properties.property_layout.min_binding_size()
                 != extracted_properties.property_layout.min_binding_size()
             {
-                // Free the old allocations. We're sure there's one because the component
-                // exists.
-                // TODO - handle SlabState return value to invalidate property bind groups!!
+                // Free the old allocations. We're sure there's one because the
+                // component exists.
+                // TODO - handle SlabState return value to invalidate property
+                // bind groups!!
                 if let Err(err) = property_cache.free(cached_effect_properties.as_ref()) {
                     error!("Error while freeing cached properties for effect {entity:?}: {err:?}");
                 }
 
-                // If the layout is not empty, which means we need to store at least one
-                // property, then allocate a new storate. Otherwise remove the component.
+                // If the layout is not empty, which means we need to store at
+                // least one property, then allocate a new
+                // storate. Otherwise remove the component.
                 if extracted_properties.property_layout.is_empty() {
                     commands.entity(entity).remove::<CachedEffectProperties>();
                 } else {
-                    *cached_effect_properties =
-                        property_cache.allocate(&extracted_properties.property_layout);
+                    *cached_effect_properties = property_cache.allocate(
+                        &extracted_properties.property_layout,
+                        &extracted_effect.texture_layout,
+                    );
                 }
             }
 
@@ -916,8 +1168,10 @@ pub(crate) fn allocate_properties(
                 );
             }
         } else {
-            let cached_effect_properties =
-                property_cache.allocate(&extracted_properties.property_layout);
+            let cached_effect_properties = property_cache.allocate(
+                &extracted_properties.property_layout,
+                &extracted_effect.texture_layout,
+            );
             trace!("First-time properties, allocated a new CachedEffectProperties : {cached_effect_properties:?}");
             upload_properties(
                 extracted_properties,
@@ -927,13 +1181,21 @@ pub(crate) fn allocate_properties(
             commands.entity(entity).insert(cached_effect_properties);
         }
     }
+
+    // For no-property bind groups, just ensure the layout exists because we
+    // will need it when creating the pipelines.
+    let empty_propert_layout = PropertyLayout::default();
+    for extracted_effect in &q_noprop_effects {
+        property_cache
+            .ensure_layout_exists(&empty_propert_layout, &extracted_effect.texture_layout);
+    }
 }
 
 /// Observer raised when the [`CachedEffectProperties`] component is removed,
 /// which indicates that the effect doesn't use properties anymore (including,
 /// when the effect itself is despawned).
 pub(crate) fn on_remove_cached_properties(
-    trigger: On<Remove, CachedEffectProperties>,
+    trigger: On<Remove<CachedEffectProperties>>,
     query: Query<(Entity, &CachedEffectProperties)>,
     mut property_cache: ResMut<PropertyCache>,
     mut property_bind_groups: ResMut<PropertyBindGroups>,
@@ -958,7 +1220,7 @@ pub(crate) fn on_remove_cached_properties(
             trace!("Destroying property bind group for key {key:?} due to property buffer deallocated.");
             property_bind_groups
                 .property_bind_groups
-                .retain(|&k, _| k.buffer_index != key.buffer_index);
+                .retain(|k, _| k.buffer_index != key.buffer_index);
         }
     }
 }
@@ -981,7 +1243,7 @@ pub(crate) fn prepare_property_buffers(
             trace!("Destroying all bind groups for property buffer #{buffer_index}");
             bind_groups
                 .property_bind_groups
-                .retain(|&k, _| k.buffer_index != buffer_index as u32);
+                .retain(|k, _| k.buffer_index != buffer_index as u32);
         }
     }
 }
@@ -995,8 +1257,8 @@ mod gpu_tests {
     use crate::{test_utils::MockRenderer, Property};
 
     fn submit_and_wait(device: &RenderDevice, queue: &RenderQueue) {
-        // Create a dummy CommandBuffer to force the write_buffer() call to have any
-        // effect.
+        // Create a dummy CommandBuffer to force the write_buffer() call to have
+        // any effect.
         let encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("test"),
         });
@@ -1025,7 +1287,9 @@ mod gpu_tests {
             timeout: None,
         });
         futures::executor::block_on(rx).unwrap().unwrap();
-        buffer.get_mapped_range()
+        buffer
+            .get_mapped_range()
+            .expect("Buffer must be mapped for reading")
     }
 
     #[test]
@@ -1062,8 +1326,8 @@ mod gpu_tests {
 
         // [----][2---][3333]
 
-        // Alloc 4 (x2); fit inside start of buffer (16B), but gap after #2 is smaller
-        // (12B)
+        // Alloc 4 (x2); fit inside start of buffer (16B), but gap after #2 is
+        // smaller (12B)
         let index4 = pb.allocate(&layout4).unwrap();
         let index5 = pb.allocate(&layout4).unwrap();
         let end2 = (index2 + 1) * size4;

@@ -11,10 +11,11 @@ pub(super) fn score_animal_task(
     target_distance: f32,
     random: &mut BehaviorRandomStream,
 ) -> Option<f32> {
-    openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task(
+    openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_behavior_task_with_need_points(
         task,
         outside_range_need_value,
         target_distance,
+        facts.need_points(),
         |attribute| facts.source_need(attribute),
         |value| value.sample_q16(|upper| random.range_u32(upper).unwrap_or_default()),
     )

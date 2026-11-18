@@ -21,7 +21,8 @@ pub struct ActiveAuthoredUiContext<'w, 's> {
     enabled: Query<'w, 's, &'static UiInteractionEnabled>,
     focusables: Query<'w, 's, &'static UiFocusable>,
     visibility: Query<'w, 's, &'static InheritedVisibility>,
-    modals: Query<'w, 's, &'static UiAuthoredModalPresentation>,
+    modals: Query<'w, 's, (Entity, &'static UiAuthoredModalPresentation)>,
+    stack_indices: Query<'w, 's, &'static bevy::ui::ComputedStackIndex>,
     nodes: Query<
         'w,
         's,
@@ -56,10 +57,12 @@ impl ActiveAuthoredUiContext<'_, '_> {
     }
 
     pub fn top_modal(&self) -> Option<Entity> {
-        self.stack.uinodes.iter().rev().copied().find(|entity| {
-            self.modals.get(*entity).is_ok_and(|modal| modal.is_modal())
-                && self.visible_and_enabled(*entity)
-        })
+        self.modals
+            .iter()
+            .filter(|(entity, modal)| modal.is_modal() && self.visible_and_enabled(*entity))
+            .filter_map(|(entity, _)| Some((self.stack_position(entity)?, entity)))
+            .max_by_key(|(position, _)| *position)
+            .map(|(_, entity)| entity)
     }
 
     /// A reusable row is a document for assets, but participates in its list's
@@ -110,12 +113,16 @@ impl ActiveAuthoredUiContext<'_, '_> {
         self.ancestors(entity).any(|ancestor| ancestor == modal)
     }
 
+    fn stack_position(&self, entity: Entity) -> Option<usize> {
+        if let Ok(index) = self.stack_indices.get(entity) {
+            let position = index.0 as usize;
+            return (self.stack.uinodes.get(position) == Some(&entity)).then_some(position);
+        }
+        self.stack.uinodes.iter().position(|node| *node == entity)
+    }
+
     pub fn navigation_order(&self, entity: Entity) -> u32 {
-        self.stack
-            .uinodes
-            .iter()
-            .position(|node| *node == entity)
-            .unwrap_or(0) as u32
+        self.stack_position(entity).unwrap_or(0) as u32
     }
 
     pub fn hotkey_receiver_is_eligible(
@@ -139,7 +146,10 @@ pub fn capture_authored_modal_for_input_frame(
     context: ActiveAuthoredUiContext,
     mut capture: ResMut<AuthoredModalInputCapture>,
 ) {
-    capture.0 = context.top_modal();
+    let modal = context.top_modal();
+    if capture.0 != modal {
+        capture.0 = modal;
+    }
 }
 
 pub fn capture_overhead_mode_for_input_frame(
@@ -152,7 +162,10 @@ pub fn capture_overhead_mode_for_input_frame(
     >,
     mut capture: ResMut<OverheadModeInputCapture>,
 ) {
-    capture.0 = tool.is_some_and(|tool| {
+    let overhead = tool.is_some_and(|tool| {
         *tool == openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool::Inspect
     }) && immersive_modes.is_empty();
+    if capture.0 != overhead {
+        capture.0 = overhead;
+    }
 }

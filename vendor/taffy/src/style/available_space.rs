@@ -6,7 +6,7 @@ use crate::{
 };
 
 #[cfg(feature = "parse")]
-use crate::util::parse::{from_str_from_css, parse_css_str_entirely, CssParseResult, FromCss, Parser, Token};
+use crate::util::parse::{from_str_from_css, CssParseResult, FromCss, Parser, Token};
 
 /// The amount of space available to a node in a given axis
 /// <https://www.w3.org/TR/css-sizing-3/#available>
@@ -30,8 +30,8 @@ impl TaffyMinContent for AvailableSpace {
     const MIN_CONTENT: Self = Self::MinContent;
 }
 impl FromLength for AvailableSpace {
-    fn from_length<Input: Into<f32> + Copy>(value: Input) -> Self {
-        Self::Definite(value.into())
+    fn from_length<Input: Into<f64> + Copy>(value: Input) -> Self {
+        Self::Definite(value.into() as f32)
     }
 }
 

@@ -1,7 +1,7 @@
 use bevy::prelude::Component;
 use openzt2_game_data::{
-    AssetId,
     world_definitions::guest_favourite_animal_trend_policy::GuestFavouriteAnimalTrendPolicy,
+    AssetId,
 };
 
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]

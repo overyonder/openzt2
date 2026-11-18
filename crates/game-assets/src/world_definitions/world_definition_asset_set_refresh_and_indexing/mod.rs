@@ -6,13 +6,13 @@ use std::{
 };
 
 use bevy::{asset::AssetLoadFailedEvent, prelude::*};
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
 use crate::asset_source::AssetArchives;
 
 use super::{
     world_definition_asset_set_state_and_borrowing_queries::{
-        DefinitionKind, SingletonKind, WorldDefinitions, kind_range,
+        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,
@@ -89,6 +89,7 @@ fn world_definition_source_path(path: &Path, binder_directories: &BTreeSet<PathB
         "config/traversability.xml"
             | "config/favorite.xml"
             | "config/adoption.xml"
+            | "config/diseasemgr.xml"
             | "config/timekeeper.xml"
             | "config/puzzlemgr.xml"
             | "config/showmixer.xml"
@@ -379,6 +380,17 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
                 Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
             )
     });
+    definitions.fame_documents = definitions
+        .handles
+        .iter()
+        .filter(|handle| {
+            assets.get(*handle).is_some_and(|asset| {
+                !asset.document.fame_thresholds.is_empty()
+                    || !asset.document.starting_fame.is_empty()
+            })
+        })
+        .cloned()
+        .collect();
     if definitions.catalogue_authored_purchase_order != catalogue_authored_purchase_order
         || definitions.unlock_definition_identifiers_by_target
             != unlock_definition_identifiers_by_target
@@ -386,6 +398,8 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         definitions.catalogue_revision = definitions.catalogue_revision.wrapping_add(1);
     }
     definitions.records = records;
+    definitions.catalogue_by_definition.take();
+    definitions.research_by_definition.take();
     definitions.singletons = singletons;
     definitions.unlock_definition_identifiers_by_target = unlock_definition_identifiers_by_target;
     definitions.catalogue_authored_purchase_order = catalogue_authored_purchase_order;
@@ -511,6 +525,7 @@ pub(super) fn index_world_definition_document_records_and_singletons(
     singleton!(TankSurface, tank_surface_policy);
     singleton!(TankDepth, tank_depth_policy);
     singleton!(TankEdit, tank_edit_policy);
+    singleton!(DiseaseExposure, disease_exposure);
     singleton!(FencePlacementMode, fence_placement_mode_policy);
     singleton!(ShowPresentation, show_presentation);
     singleton!(ShowScheduling, show_scheduling);

@@ -14,10 +14,12 @@ use super::{
         EarnedProgressionAward, ProgressionFactChanged, ScenarioAwardPointTotal,
     },
     catalogue_definition_index_queries::find_catalogue_definition_index,
-    catalogue_unlock_set_operations::mark_catalogue_definition_unlocked_at_index,
+    catalogue_unlock_set_operations::{
+        catalogue_definition_is_unlocked_at_index, mark_catalogue_definition_unlocked_at_index,
+    },
     fame_calculations::{
-        ZooFameCalculationInputs, calculate_authentic_zoo_fame,
-        select_fame_level_for_rating_and_guest_count, update_current_and_maximum_fame,
+        calculate_authentic_zoo_fame, select_fame_level_for_rating_and_guest_count,
+        update_current_and_maximum_fame, ZooFameCalculationInputs,
     },
     fame_types::Fame,
     profile_challenge_types::TotalAnimalsReleasedCount,
@@ -118,7 +120,9 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         })
     };
 
-    if update_current_and_maximum_fame(&mut fame, next_half_stars, current_percent) {
+    let mut next_fame = *fame;
+    if update_current_and_maximum_fame(&mut next_fame, next_half_stars, current_percent) {
+        *fame = next_fame;
         changed.write(ProgressionFactChanged::Fame);
     }
     for threshold in definitions
@@ -135,6 +139,9 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
         for target in targets {
             let id = *target;
             if let Some(index) = find_catalogue_definition_index(definitions, id) {
+                if catalogue_definition_is_unlocked_at_index(&unlocks, index) {
+                    continue;
+                }
                 if mark_catalogue_definition_unlocked_at_index(&mut unlocks, index) == Some(true) {
                     changed.write(ProgressionFactChanged::Unlock(id));
                 }
@@ -146,8 +153,8 @@ pub(super) fn update_fame_and_apply_authored_fame_unlocks(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use openzt2_game_data::AssetId;
     use openzt2_game_data::world_definitions::document::WorldDefinitionDocument;
+    use openzt2_game_data::AssetId;
 
     #[test]
     fn authentic_fame_progression_advances_fame_and_emits_change() {

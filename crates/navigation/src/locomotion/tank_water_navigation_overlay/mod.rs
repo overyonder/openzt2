@@ -74,13 +74,18 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             }
         }
     }
-    let navigation = graph.terrain_derived_navigation_graph_mut();
+    let mut changed = false;
+    let navigation = graph
+        .bypass_change_detection()
+        .terrain_derived_navigation_graph_mut();
     let still_tank_water = |index: &u32| tank_cells.iter().any(|(cell, _)| cell == index);
     overridden.terrain_values.retain(|index, (water, depth)| {
         if still_tank_water(index) {
             return true;
         }
         if let Some(node) = navigation.find_navigation_node_mut(*index) {
+            changed |= node.eligibility_flags.contains(NavFlags::WATER) != *water
+                || node.water_depth_centimetres != *depth;
             node.eligibility_flags.0 = if *water {
                 node.eligibility_flags.0 | NavFlags::WATER.0
             } else {
@@ -98,7 +103,12 @@ pub(super) fn project_tank_water_onto_navigation_cells(
             node.eligibility_flags.contains(NavFlags::WATER),
             node.water_depth_centimetres,
         ));
+        changed |= !node.eligibility_flags.contains(NavFlags::WATER)
+            || node.water_depth_centimetres != depth_cm;
         node.eligibility_flags.0 |= NavFlags::WATER.0;
         node.water_depth_centimetres = depth_cm;
+    }
+    if changed {
+        graph.set_changed();
     }
 }

@@ -4,6 +4,7 @@ use openzt2_game_data::ui_document::{
     widget_live_collection::UiWidgetLiveCollectionSource,
 };
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::{
     localization::{
@@ -206,10 +207,10 @@ pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
     mut pressed_legend_rows: Query<
         (
             &mut OverviewLegendRow,
-            &Interaction,
+            &UiPointerInteraction,
             Option<&mut UiSelected>,
         ),
-        Changed<Interaction>,
+        Changed<UiPointerInteraction>,
     >,
     ui_document_roots: Query<&UiDocumentRoot>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
@@ -220,7 +221,7 @@ pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
     >,
 ) {
     for (mut legend_row, interaction, selected_state) in &mut pressed_legend_rows {
-        if *interaction != Interaction::Pressed {
+        if *interaction != UiPointerInteraction::Pressed {
             continue;
         }
         legend_row.visible = !legend_row.visible;

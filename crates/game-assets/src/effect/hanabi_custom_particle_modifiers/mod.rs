@@ -1,5 +1,7 @@
 //! Custom Hanabi initialization and update modifiers required by authored particle effects.
 
+use std::borrow::Cow;
+
 use bevy::prelude::*;
 use bevy_hanabi::graph::EvalContext;
 use bevy_hanabi::prelude::{
@@ -37,8 +39,8 @@ impl Modifier for CollisionSpawnParticleInitializationModifier {
         ModifierContext::Init
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::POSITION, Attribute::VELOCITY]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::POSITION, Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -87,8 +89,8 @@ impl Modifier for PointGravityParticleUpdateModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[Attribute::POSITION, Attribute::VELOCITY]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[Attribute::POSITION, Attribute::VELOCITY])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -101,7 +103,7 @@ impl Modifier for PointGravityParticleUpdateModifier {
         shader_writer: &mut ShaderWriter,
     ) -> Result<(), ExprError> {
         shader_writer.main_code += &format!(
-            "let gravity_offset = vec3<f32>({},{},{}) - particle.position; let gravity_distance = max(length(gravity_offset), 0.0001); particle.velocity += normalize(gravity_offset) * {} / pow(gravity_distance, {}) * sim_params.delta_time;\n",
+            "let gravity_offset = vec3<f32>({},{},{}) - particle.position; let gravity_distance = max(length(gravity_offset), 0.0001); particle.velocity += normalize(gravity_offset) * {} / pow(gravity_distance, {}) * effect_delta_time;\n",
             self.gravity_position.x,
             self.gravity_position.y,
             self.gravity_position.z,
@@ -125,13 +127,13 @@ impl Modifier for PlaneCollisionParticleUpdateModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[
             Attribute::POSITION,
             Attribute::VELOCITY,
             Attribute::AGE,
             Attribute::LIFETIME,
-        ]
+        ])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -201,15 +203,15 @@ impl Modifier for AuthoredParticleUpdateModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        match self {
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(match self {
             Self::AngularDrag { .. } => &[Attribute::F32_0],
             Self::FlutterVelocity { .. } => &[Attribute::VELOCITY],
             Self::FlutterPosition { .. } | Self::Drift { .. } | Self::KillPlane { .. } => {
                 &[Attribute::POSITION]
             }
             Self::SpawnOnPlane { .. } => &[Attribute::POSITION, Attribute::VELOCITY],
-        }
+        })
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -224,22 +226,22 @@ impl Modifier for AuthoredParticleUpdateModifier {
         match self {
             Self::AngularDrag { coefficient } => {
                 shader_writer.main_code += &format!(
-                    "particle.f32_0 *= max(0.0, 1.0 - {coefficient} * sim_params.delta_time);\n"
+                    "particle.f32_0 *= max(0.0, 1.0 - {coefficient} * effect_delta_time);\n"
                 );
             }
             Self::FlutterVelocity { acceleration } => {
                 shader_writer.main_code += &format!(
-                    "particle.velocity += (frand3() * 2.0 - vec3<f32>(1.0)) * {acceleration} * sim_params.delta_time;\n"
+                    "particle.velocity += (frand3() * 2.0 - vec3<f32>(1.0)) * {acceleration} * effect_delta_time;\n"
                 );
             }
             Self::FlutterPosition { acceleration } => {
                 shader_writer.main_code += &format!(
-                    "particle.position += (frand3() * 2.0 - vec3<f32>(1.0)) * {acceleration} * sim_params.delta_time * sim_params.delta_time;\n"
+                    "particle.position += (frand3() * 2.0 - vec3<f32>(1.0)) * {acceleration} * effect_delta_time * effect_delta_time;\n"
                 );
             }
             Self::Drift { velocity } => {
                 shader_writer.main_code += &format!(
-                    "particle.position += vec3<f32>({},{},{}) * sim_params.delta_time;\n",
+                    "particle.position += vec3<f32>({},{},{}) * effect_delta_time;\n",
                     velocity.x, velocity.y, velocity.z,
                 );
             }
@@ -265,7 +267,7 @@ impl Modifier for AuthoredParticleUpdateModifier {
             } => {
                 let plane = shader_writer.eval(expression_module, *override_plane)?;
                 shader_writer.main_code += &format!(
-                    "let plane_{0} = select(vec4<f32>({1},{2},{3},{4}), {plane}, dot({plane}.xyz, {plane}.xyz) > 0.0); let previous_position_{0} = particle.position - particle.velocity * sim_params.delta_time; if dot(previous_position_{0}, plane_{0}.xyz) + plane_{0}.w < 0.0 && dot(particle.position, plane_{0}.xyz) + plane_{0}.w >= 0.0 && frand() <= {5} {{ let spawn_count_{0} = u32(floor(frand() * f32({6} - {7} + 1u))) + {7}u; append_spawn_events_{0}((*effect_metadata).base_child_index, particle_index, spawn_count_{0}); }}\n",
+                    "let plane_{0} = select(vec4<f32>({1},{2},{3},{4}), {plane}, dot({plane}.xyz, {plane}.xyz) > 0.0); let previous_position_{0} = particle.position - particle.velocity * effect_delta_time; if dot(previous_position_{0}, plane_{0}.xyz) + plane_{0}.w < 0.0 && dot(particle.position, plane_{0}.xyz) + plane_{0}.w >= 0.0 && frand() <= {5} {{ let spawn_count_{0} = u32(floor(frand() * f32({6} - {7} + 1u))) + {7}u; append_spawn_events_{0}((*effect_metadata).base_child_index, particle_index, spawn_count_{0}); }}\n",
                     child_index,
                     normal.x,
                     normal.y,

@@ -24,6 +24,7 @@ pub struct ObjectPlacementPreviewPermissionFacts {
     pub affordable: bool,
     pub topology_valid: bool,
     pub headroom_valid: bool,
+    pub surface_valid: bool,
     pub prefab_ready: bool,
 }
 
@@ -67,6 +68,14 @@ pub struct ObjectPlacementPreviewOwner(pub Entity);
 #[derive(Component, Debug, Clone, Copy, Default)]
 pub struct ObjectPlacementPreviewDecal;
 
+/// The entrance arrow in front of a building being placed, which slides
+/// back and forth along `direction` from `rest`.
+#[derive(Component, Debug, Clone, Copy)]
+pub struct ObjectPlacementEntranceArrow {
+    pub rest: Vec3,
+    pub direction: Vec3,
+}
+
 #[derive(Component, Debug, Clone)]
 pub struct ObjectPlacementPreviewMaterials {
     pub footprint_valid: Handle<StandardMaterial>,
@@ -74,6 +83,8 @@ pub struct ObjectPlacementPreviewMaterials {
     pub grid_cardinal: [Handle<StandardMaterial>; 3],
     pub grid_diagonal: [Handle<StandardMaterial>; 3],
     pub grid_radius: [f32; 3],
+    /// `ui/fx/footprint/entrance_arrow.tga`, which `zt.exe` names itself.
+    pub entrance_arrow: Handle<StandardMaterial>,
     pub model_valid: Color,
     pub model_invalid: Color,
 }
@@ -87,6 +98,10 @@ pub struct ObjectPlacementPreviewVisualState {
     pub footprint_material: Handle<StandardMaterial>,
     pub grid_material: Handle<StandardMaterial>,
     pub grid_radius: f32,
+    /// Where the preview stood, as its decals follow the terrain there.
+    pub world_translation: Vec3,
+    /// The entrance arrow waits for the model to load.
+    pub arrow_pending: bool,
 }
 
 #[derive(Component, Debug, Clone)]

@@ -24,6 +24,13 @@ pub struct RemovePlacedObjectRequest {
     pub entity: Entity,
 }
 
+/// A rampaging animal smashed a placed object: it is removed and its ruin is
+/// put down where it stood.
+#[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DestroyPlacedObject {
+    pub entity: Entity,
+}
+
 #[derive(Message, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ObjectPlacementCommitted {
     pub transaction: Entity,

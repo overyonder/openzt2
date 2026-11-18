@@ -216,3 +216,66 @@ fn pending_junction_segment_matches_committed_curve_and_transform() {
         );
     }
 }
+
+#[test]
+fn a_fence_built_over_a_broken_segment_replaces_it_and_another_fence_occupies_the_run() {
+    use crate::topology::topology_construction_planning::{
+        calculate_fence_construction_plan, GateHostEdges,
+    };
+    use crate::topology::topology_construction_preview_types::FencePreview;
+    use bevy::ecs::system::RunSystemOnce;
+    use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::FencePlacementShape;
+    let mut app = fence_preview_app();
+    let broken = AssetId::from_key("fence_broken");
+    crate::topology::topology_fence_definition_test_fixture::install_fence_definition_with_broken_variant(
+        &mut app,
+        AssetId::from_key("fence"),
+        Some(broken),
+    );
+    let gap = insert_fence(&mut app, broken, IVec3::new(2, 2, 0), IVec3::new(3, 2, 0));
+    let plan = |app: &mut App, to: i32| {
+        app.world_mut()
+            .run_system_once(
+                move |index: Res<TopologyIndex>,
+                      grid: Res<TopologyGrid>,
+                      definitions: Res<Assets<WorldDefinitionAsset>>,
+                      active: Res<WorldDefinitions>,
+                      terrain: Res<TerrainIndex>,
+                      terrain_assets: Res<Assets<TerrainAsset>>,
+                      chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
+                      hosts: GateHostEdges| {
+                    calculate_fence_construction_plan(
+                        &FencePreview {
+                            definition: AssetId::from_key("fence"),
+                            from: IVec3::new(1, 2, 0),
+                            to: IVec3::new(to, 2, 0),
+                            shape: FencePlacementShape::Freeform,
+                            heading_eighth_turns: 0,
+                        },
+                        &index,
+                        *grid,
+                        active.get(&definitions).unwrap(),
+                        &terrain,
+                        &terrain_assets,
+                        &chunks,
+                        &hosts,
+                    )
+                    .map(|(.., replaced)| replaced)
+                },
+            )
+            .unwrap()
+    };
+    // A run across the broken segment replaces it.
+    assert_eq!(plan(&mut app, 4), Ok(vec![gap]));
+    // A run over a sound segment is refused.
+    insert_fence(
+        &mut app,
+        AssetId::from_key("fence"),
+        IVec3::new(4, 2, 0),
+        IVec3::new(5, 2, 0),
+    );
+    assert_eq!(
+        plan(&mut app, 6),
+        Err(openzt2_zoo_state::construction::construction_interaction_types::PlacementFailure::Occupied)
+    );
+}

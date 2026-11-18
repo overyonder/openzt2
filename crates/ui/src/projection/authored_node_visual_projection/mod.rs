@@ -397,7 +397,7 @@ pub(super) fn project_authored_node_visuals_into_bevy_presentation(
         .and_then(|value| value.font_family.as_deref())
         .map_or_else(
             || match &style.font {
-                UiSystemFont::Arial => FontSource::SansSerif,
+                UiSystemFont::Arial => FontSource::sans_serif(),
                 UiSystemFont::ComicSansMs => {
                     FontSource::Family(AUTHORED_COMIC_SANS_COMPATIBLE_FONT_FAMILY.into())
                 }

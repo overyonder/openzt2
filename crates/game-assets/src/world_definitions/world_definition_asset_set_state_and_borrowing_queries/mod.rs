@@ -3,14 +3,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -40,6 +39,7 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
+    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -135,6 +135,7 @@ pub(super) enum SingletonKind {
     TankSurface,
     TankDepth,
     TankEdit,
+    DiseaseExposure,
     FencePlacementMode,
     ShowPresentation,
     ShowScheduling,
@@ -151,6 +152,7 @@ pub struct WorldDefinitions {
     pub(super) revision: Option<u64>,
     pub(super) dirty: bool,
     pub(super) handles: Vec<Handle<WorldDefinitionAsset>>,
+    pub(super) fame_documents: Vec<Handle<WorldDefinitionAsset>>,
     pub(super) loading_task: Option<bevy::tasks::Task<Vec<Handle<WorldDefinitionAsset>>>>,
     pub(super) complete: bool,
     pub(super) completed_loads: Arc<AtomicUsize>,
@@ -159,6 +161,8 @@ pub struct WorldDefinitions {
     pub(super) singletons: BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     pub(super) unlock_definition_identifiers_by_target: BTreeMap<AssetId, Vec<AssetId>>,
     pub(super) catalogue_authored_purchase_order: Vec<(usize, AssetId)>,
+    pub(super) catalogue_by_definition: std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
+    pub(super) research_by_definition: std::sync::OnceLock<BTreeMap<AssetId, AssetId>>,
     pub(super) catalogue_revision: u64,
     pub(super) topology_cell_size_cm: u16,
     /// Whether an indexed handle lacked its asset. Indexing reruns whenever
@@ -214,6 +218,8 @@ impl WorldDefinitions {
             &mut self.records,
             &mut self.singletons,
         );
+        self.catalogue_by_definition.take();
+        self.research_by_definition.take();
         document.unlocks.iter().for_each(|record| {
             self.unlock_definition_identifiers_by_target
                 .entry(record.target)
@@ -236,7 +242,26 @@ impl WorldDefinitions {
             .map(|path| path.width_cm / 2)
             .min()
             .unwrap_or_default();
+        if !document.fame_thresholds.is_empty() || !document.starting_fame.is_empty() {
+            self.fame_documents.push(handle.clone());
+        }
         self.handles.push(handle);
+    }
+
+    /// Lets fixtures demand-load the scenes added with
+    /// `WorldDefinitionAsset::with_test_scene` through `server`.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn index_test_scenes(
+        &mut self,
+        server: AssetServer,
+        handle: &Handle<WorldDefinitionAsset>,
+        asset: &WorldDefinitionAsset,
+    ) {
+        for scene in &asset.scenes {
+            self.records
+                .insert((DefinitionKind::SceneDependency, scene.id), handle.clone());
+        }
+        self.server = Some(server);
     }
 
     pub fn get<'a>(
@@ -250,11 +275,13 @@ impl WorldDefinitions {
                 .contains_key(&SingletonKind::SimulationTiming);
         ready.then_some(WorldDefinitionsView {
             server: self.server.as_ref(),
-            handles: &self.handles,
+            fame_documents: &self.fame_documents,
             records: &self.records,
             singletons: &self.singletons,
             unlock_definition_identifiers_by_target: &self.unlock_definition_identifiers_by_target,
             catalogue_authored_purchase_order: &self.catalogue_authored_purchase_order,
+            catalogue_by_definition: &self.catalogue_by_definition,
+            research_by_definition: &self.research_by_definition,
             topology_cell_size_cm: self.topology_cell_size_cm,
             pending_assets: self.pending_assets,
             assets,
@@ -265,11 +292,13 @@ impl WorldDefinitions {
 #[derive(Clone, Copy)]
 pub struct WorldDefinitionsView<'a> {
     server: Option<&'a AssetServer>,
-    handles: &'a [Handle<WorldDefinitionAsset>],
+    fame_documents: &'a [Handle<WorldDefinitionAsset>],
     records: &'a BTreeMap<(DefinitionKind, AssetId), Handle<WorldDefinitionAsset>>,
     singletons: &'a BTreeMap<SingletonKind, Handle<WorldDefinitionAsset>>,
     unlock_definition_identifiers_by_target: &'a BTreeMap<AssetId, Vec<AssetId>>,
     catalogue_authored_purchase_order: &'a [(usize, AssetId)],
+    catalogue_by_definition: &'a std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
+    research_by_definition: &'a std::sync::OnceLock<BTreeMap<AssetId, AssetId>>,
     topology_cell_size_cm: u16,
     pending_assets: bool,
     assets: &'a Assets<WorldDefinitionAsset>,
@@ -346,8 +375,8 @@ impl<'a> WorldDefinitionsView<'a> {
         self.pending_assets
     }
 
-    fn documents(self) -> impl Iterator<Item = &'a WorldDefinitionAsset> {
-        self.handles
+    fn fame_documents(self) -> impl Iterator<Item = &'a WorldDefinitionAsset> {
+        self.fame_documents
             .iter()
             .rev()
             .filter_map(|handle| self.assets.get(handle))
@@ -652,6 +681,36 @@ impl<'a> WorldDefinitionsView<'a> {
             .filter_map(move |((_, id), _)| self.find_catalogue_entry(*id))
     }
 
+    pub fn catalogue_entry_for_definition(
+        self,
+        definition: AssetId,
+    ) -> Option<(usize, &'a CatalogueEntry)> {
+        let index = self.catalogue_by_definition.get_or_init(|| {
+            let mut index = BTreeMap::new();
+            for (order, entry) in self.catalogue().enumerate() {
+                index.entry(entry.definition).or_insert((order, entry.id));
+            }
+            index
+        });
+        let &(order, id) = index.get(&definition)?;
+        Some((order, self.find_catalogue_entry(id)?))
+    }
+
+    pub fn research_for_definition(self, definition: AssetId) -> Option<AssetId> {
+        self.research_by_definition
+            .get_or_init(|| {
+                let mut index = BTreeMap::new();
+                for research in self.research() {
+                    for target in std::iter::once(&research.id).chain(&research.unlocks) {
+                        index.entry(*target).or_insert(research.id);
+                    }
+                }
+                index
+            })
+            .get(&definition)
+            .copied()
+    }
+
     pub fn catalogue_in_authored_purchase_order(
         self,
     ) -> impl Iterator<Item = (usize, &'a CatalogueEntry)> {
@@ -776,13 +835,13 @@ impl<'a> WorldDefinitionsView<'a> {
     }
 
     pub fn starting_fame(self, mode: AssetId) -> Option<&'a StartingFamePolicy> {
-        self.documents()
+        self.fame_documents()
             .flat_map(|asset| asset.document.starting_fame.iter())
             .find(|policy| policy.mode == mode)
     }
 
     pub fn fame_thresholds(self) -> impl Iterator<Item = &'a FameThreshold> {
-        self.documents()
+        self.fame_documents()
             .flat_map(|asset| asset.document.fame_thresholds.iter())
     }
 
@@ -954,6 +1013,12 @@ impl<'a> WorldDefinitionsView<'a> {
         TankDepthPolicy
     );
     singleton!(tank_edit_policy, TankEdit, tank_edit_policy, TankEditPolicy);
+    singleton!(
+        disease_exposure,
+        DiseaseExposure,
+        disease_exposure,
+        openzt2_game_data::world_definitions::animal_health::DiseaseExposurePolicy
+    );
     singleton!(
         fence_placement_mode_policy,
         FencePlacementMode,

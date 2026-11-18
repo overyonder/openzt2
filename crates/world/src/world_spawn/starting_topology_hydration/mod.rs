@@ -4,7 +4,6 @@ use bevy::prelude::Entity;
 use bevy::prelude::Name;
 use bevy::prelude::Query;
 use bevy::prelude::Res;
-use bevy::prelude::ResMut;
 use bevy::prelude::Transform;
 use bevy::prelude::Vec3;
 use bevy::prelude::Visibility;
@@ -24,8 +23,6 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_topology_edge
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 /// Installs source-resolved starting fence endpoints and edges into the same
@@ -33,15 +30,12 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 /// position/rotation encoding do not reach the runtime.
 pub(super) fn hydrate_all_starting_fence_nodes_and_edges_into_topology_once(
     mut commands: Commands,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     grid: Res<TopologyGrid>,
     mut pending: Query<(Entity, &mut WorldHydration)>,
 ) {
-    let _performance_timer =
-        performance.measure(WorldLoadingPerformanceStage::StartingFenceHydration);
     let Ok((root, mut pending)) = pending.single_mut() else {
         return;
     };

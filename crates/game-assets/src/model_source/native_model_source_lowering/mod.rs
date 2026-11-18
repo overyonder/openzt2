@@ -29,6 +29,7 @@ use super::{
     particles,
 };
 
+#[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 pub fn lower_native_model_source(
     native_model_asset_path: &str,
     native_model_source_bytes: &[u8],

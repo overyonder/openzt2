@@ -126,6 +126,7 @@ fn lower_modifiable_behavior_fact(authored_fact_name: &str) -> io::Result<Behavi
         "b_Pregnant" => BehaviorFact::Pregnancy,
         "b_Rampage" => BehaviorFact::Rampage,
         "b_Escaped" => BehaviorFact::Escaped,
+        "b_Attacked" => BehaviorFact::Attacked,
         "lifespan" => BehaviorFact::Lifespan,
         "isSwimming" => BehaviorFact::Swimming,
         "inWater" => BehaviorFact::InWater,
@@ -141,6 +142,8 @@ fn lower_modifiable_behavior_fact(authored_fact_name: &str) -> io::Result<Behavi
         "b_Dead" => BehaviorFact::Dead,
         "b_Frozen" => BehaviorFact::Frozen,
         "b_InGlacier" => BehaviorFact::InGlacier,
+        "b_CaffeineMode" => BehaviorFact::CaffeineMode,
+        "b_DeCaffeineMode" => BehaviorFact::DeCaffeineMode,
         "b_NurseYoung" => BehaviorFact::NursingYoung,
         _ => {
             return Err(invalid_behavior_source_data(format!(

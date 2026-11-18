@@ -184,7 +184,7 @@ pub struct TerrainWaterScumConfiguration {
     pub top_rate: Option<[f32; 2]>,
 }
 
-#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
 pub struct TerrainWaterSideConfiguration {
     pub colour_rgba255: Option<[u8; 4]>,
     pub lit_colour_rgba255: Option<[u8; 4]>,

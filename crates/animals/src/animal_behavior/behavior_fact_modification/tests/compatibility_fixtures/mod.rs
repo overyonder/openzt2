@@ -66,9 +66,11 @@ pub(super) fn install_definitions(
                     .map(AssetId::from_key)
                     .to_vec(),
                 navigation_collision_policy: None,
+                virtual_nodes: Vec::new(),
                 ground_navigation_clip_asset_key: None,
                 medium_ground_navigation_clip_asset_key: None,
                 fast_ground_navigation_clip_asset_key: None,
+                named_ground_navigation_clip_asset_keys: Vec::new(),
                 surface_water_locomotion: None,
                 sex: Sex::Female,
                 life_stage: LifeStage::Adult,
@@ -163,12 +165,15 @@ pub(super) fn install_definitions(
         preview_offset_cm: [0; 3],
         preview_scale: 1.0,
         terrain_fitted: false,
+        terrain_fit_height_offset_m: 0.0,
+        terrain_fit_water_offset_m: None,
         real_physics_water_impact: None,
         price_cents: 0,
         upkeep_cents_per_month: 0,
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     })
     .collect();
     let world_document = WorldDefinitionDocument {

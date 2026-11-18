@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 use bevy::ui::UiGlobalTransform;
 use bevy::window::PrimaryWindow;
+use openzt2_game_data::AssetId;
 use openzt2_game_data::localization::LocalizationFormatArgument;
 use openzt2_game_data::ui_document::node_property_binding::UiTextPropertyBindingSource;
-use openzt2_game_data::AssetId;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -32,6 +32,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     containers: Query<(&ComputedNode, &UiGlobalTransform), With<CursorMoneyContainer>>,
     preview_fragment_owners: Query<(), With<CursorMoneyPreviewFragmentOwner>>,
     mut spend_fragment_owners: Query<&mut CursorMoneySpendFragmentOwner>,
+    mut fragment_layouts: Query<&mut Node, Without<UiDocumentRoot>>,
     previews: Query<(&ConstructionPreview, Has<PlacedObjectRelocationSource>)>,
     animal_placements: Query<&AnimalSpeciesAwaitingHabitatPlacement>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -90,17 +91,8 @@ pub(super) fn project_cursor_money_text_position_and_animation(
     };
     let current_pointer_screen_position = primary_window.cursor_position();
 
-    for (
-        root,
-        parent,
-        binding,
-        mut text,
-        mut font,
-        mut node,
-        mut visibility,
-        mut animation,
-        origin,
-    ) in &mut roots
+    for (root, parent, binding, text, font, mut node, mut visibility, mut animation, origin) in
+        &mut roots
     {
         let UiTextPropertyBindingSource::ConstructionPreviewCost {
             positive_format,
@@ -117,7 +109,7 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             let (Some(cost), Some(position)) =
                 (construction_preview_cost, current_pointer_screen_position)
             else {
-                *visibility = Visibility::Hidden;
+                visibility.set_if_neq(Visibility::Hidden);
                 continue;
             };
             (cost, position, true, false, false)
@@ -139,6 +131,16 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             .inverse()
             .transform_point2(screen_position)
             + cursor_money_container_node.size() * 0.5;
+        if let Ok(mut layout) = fragment_layouts.get_mut(parent.parent()) {
+            layout.set_if_neq(Node {
+                position_type: PositionType::Absolute,
+                left: px(0.0),
+                top: px(0.0),
+                width: percent(100.0),
+                height: percent(100.0),
+                ..default()
+            });
+        }
         write_localized_cursor_money_text_and_font(
             localization,
             cost,
@@ -147,10 +149,10 @@ pub(super) fn project_cursor_money_text_position_and_animation(
             *no_cents,
             *no_minus,
             spending,
-            &mut text,
-            &mut font,
+            text,
+            font,
         );
-        *visibility = Visibility::Inherited;
+        visibility.set_if_neq(Visibility::Inherited);
         if let Some(mut origin) = origin {
             origin.0 = authored_position;
         } else {
@@ -158,27 +160,27 @@ pub(super) fn project_cursor_money_text_position_and_animation(
                 .entity(root)
                 .insert(UiAnimationOrigin(authored_position));
         }
-        commands.entity(parent.parent()).insert((
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0.0),
-                top: px(0.0),
-                width: percent(100.0),
-                height: percent(100.0),
-                ..default()
-            },
-            Pickable::IGNORE,
-        ));
         if !animate || start_animation {
-            node.position_type = PositionType::Absolute;
-            node.left = px(authored_position.x
-                + animation.base_rect[0]
-                + animation.rect_intervals[0].map_or(animation.base_rect[0], |[_, end]| end));
-            node.top = px(authored_position.y
-                + animation.base_rect[1]
-                + animation.rect_intervals[1].map_or(animation.base_rect[1], |[_, end]| end));
-            node.width = px(animation.base_rect[2]);
-            node.height = px(animation.base_rect[3]);
+            node.reborrow()
+                .map_unchanged(|n| &mut n.position_type)
+                .set_if_neq(PositionType::Absolute);
+            node.reborrow()
+                .map_unchanged(|n| &mut n.left)
+                .set_if_neq(px(authored_position.x
+                    + animation.base_rect[0]
+                    + animation.rect_intervals[0]
+                        .map_or(animation.base_rect[0], |[_, end]| end)));
+            node.reborrow()
+                .map_unchanged(|n| &mut n.top)
+                .set_if_neq(px(authored_position.y
+                    + animation.base_rect[1]
+                    + animation.rect_intervals[1]
+                        .map_or(animation.base_rect[1], |[_, end]| end)));
+            node.reborrow()
+                .map_unchanged(|n| &mut n.width)
+                .set_if_neq(px(animation.base_rect[2]));
+            node.map_unchanged(|n| &mut n.height)
+                .set_if_neq(px(animation.base_rect[3]));
         }
         if animate && start_animation {
             animation.elapsed_ms = animation.duration_ms;
@@ -203,10 +205,9 @@ fn write_localized_cursor_money_text_and_font(
     no_cents: bool,
     no_minus: bool,
     spending: bool,
-    text: &mut Text,
-    font: &mut TextFont,
+    text: Mut<Text>,
+    mut font: Mut<TextFont>,
 ) {
-    text.0.clear();
     let absolute_amount = Money(cost.0.saturating_abs());
     let mut raw_localized_currency = String::new();
     let _ = localization.write_localized_currency_amount(
@@ -214,35 +215,39 @@ fn write_localized_cursor_money_text_and_font(
         !no_cents,
         &mut raw_localized_currency,
     );
-    if spending && !no_minus {
-        text.0 = format_accounting_currency(&raw_localized_currency, true, no_minus);
+    let unformatted_currency_text = if spending && !no_minus {
+        format_accounting_currency(&raw_localized_currency, true, no_minus)
     } else {
-        text.0.push_str(&raw_localized_currency);
-    }
+        raw_localized_currency
+    };
     let localized_format_identifier = if spending {
         negative_format
     } else {
         positive_format
     };
-    let unformatted_currency_text = std::mem::take(&mut text.0);
+    let mut formatted = String::new();
     if localization
         .write_localized_text_with_format_arguments(
             localized_format_identifier,
             &[LocalizationFormatArgument::Text(&unformatted_currency_text)],
-            &mut text.0,
+            &mut formatted,
         )
         .is_err()
     {
-        text.0 = unformatted_currency_text;
+        formatted = unformatted_currency_text;
     }
+    text.map_unchanged(|text| &mut text.0).set_if_neq(formatted);
     if let Some(presentation) =
         localization.find_localized_text_presentation(localized_format_identifier)
     {
         if let Some(font_size) = presentation.font_size_pixels {
-            font.font_size = FontSize::Px(font_size);
+            font.reborrow()
+                .map_unchanged(|font| &mut font.font_size)
+                .set_if_neq(FontSize::Px(font_size));
         }
         if presentation.bold_text {
-            font.weight = FontWeight::BOLD;
+            font.map_unchanged(|font| &mut font.weight)
+                .set_if_neq(FontWeight::BOLD);
         }
     }
 }

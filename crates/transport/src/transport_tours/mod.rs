@@ -84,6 +84,7 @@ impl Plugin for TransportToursPlugin {
                 (
                     crate::transport_tours::transport_track_construction_preview::update_transport_track_construction_preview_from_pointer_and_station_endpoints,
                     crate::transport_tours::transport_track_construction_preview::begin_or_commit_transport_track_construction_from_primary_pointer_action,
+                    crate::transport_tours::transport_track_construction_preview::highlight_transport_track_connection_stations,
                 )
                     .chain()
                     .after(openzt2_zoo_state::construction::ConstructionCursorUpdateSet)
@@ -94,8 +95,12 @@ impl Plugin for TransportToursPlugin {
                 Update,
                 (
                     crate::transport_tours::transport_track_piece_presentation::invalidate_sky_tower_presentations_after_connection_topology_changes,
+                    crate::transport_tours::transport_track_piece_presentation::invalidate_ground_track_pieces_at_changed_joints,
+crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_open_sky_towers,
                     crate::transport_tours::transport_track_preview_presentation::project_transport_track_construction_preview_authored_prefabs,
                     crate::transport_tours::transport_track_piece_presentation::project_committed_transport_track_piece_authored_prefabs,
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_road_ends,
+                    crate::transport_tours::transport_track_piece_presentation::show_construction_markers_at_unconnected_station_ends,
                 )
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -115,7 +120,11 @@ impl Plugin for TransportToursPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits
+                (
+                    crate::transport_tours::transport_track_construction_transaction::apply_stepped_transport_track_construction_edits,
+                    crate::transport_tours::transport_track_construction_transaction::apply_prepared_transport_track_construction_edits,
+                )
+                    .chain()
                     .in_set(FixedConstructionSet::Apply)
                     .after(openzt2_zoo_state::construction::ConstructionDomainApplicationDispatchSet)
                     .run_if(in_state(GamePhase::InGame)),

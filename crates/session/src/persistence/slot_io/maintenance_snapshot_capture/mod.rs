@@ -11,7 +11,7 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::maintenance::maintenance_types::{
     AnimalHabitatWaste, AnimalWasteProductionSchedule, CompostPooLevel, FacilityContainedWaste,
-    LooseLitterWaste, MaintainableObjectConditionPermille,
+    LooseLitterWaste,
 };
 
 pub(in crate::persistence) type LooseWasteSnapshotFilter =
@@ -68,20 +68,18 @@ pub(super) fn capture_loose_waste_records(
     Ok(records)
 }
 
-/// Entities carrying worn condition, retained bin waste, compost or waste-production deadlines.
+/// Entities carrying retained bin waste, compost or waste-production deadlines.
 pub(in crate::persistence) type MaintainedObjectSnapshotEntities<'w, 's> = Query<
     'w,
     's,
     (
         &'static PersistentId,
-        Option<&'static MaintainableObjectConditionPermille>,
         Option<&'static FacilityContainedWaste>,
         Option<&'static AnimalWasteProductionSchedule>,
         Option<&'static CompostPooLevel>,
     ),
     (
         Or<(
-            With<MaintainableObjectConditionPermille>,
             With<FacilityContainedWaste>,
             With<AnimalWasteProductionSchedule>,
             With<CompostPooLevel>,
@@ -96,9 +94,9 @@ pub(super) fn capture_maintained_object_records(
     let mut records = objects
         .iter()
         .map(
-            |(id, condition, waste, production, compost)| MaintainedObjectSnapshotRecord {
+            |(id, waste, production, compost)| MaintainedObjectSnapshotRecord {
                 persistent_identifier: id.0,
-                condition_permille: condition.map(|condition| condition.0),
+                condition_permille: None,
                 contained_waste: waste.map(|waste| {
                     [
                         waste.contained_waste_units,

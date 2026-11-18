@@ -1,8 +1,8 @@
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_game_data::AssetId;
 
 pub(super) fn create_object_placeable_definition_test_fixture(
     constraints: PlacementConstraints,
@@ -25,6 +25,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
         constraints,
         max_slope_permille: 250,
         minimum_headroom_metres: 2.0,
+        adjacent_to_water: false,
         apply_height_modifier: true,
         price_cents: 1_250,
         unlock: AssetId([9; 16]),
@@ -32,6 +33,7 @@ pub(super) fn create_object_placeable_definition_test_fixture(
         moving_footprint: false,
         automatic_footprint: false,
         ground_paths_block_placement: false,
+        dock_arrow: None,
     }
 }
 

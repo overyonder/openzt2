@@ -3,6 +3,70 @@
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.20.0] 2026-11-01
+
+_This version is compatible with Bevy 0.20_
+
+### Added
+
+- Added `SetPositionBoxModifier` to set the particle position randomly inside or
+  at the surface of a cube.
+- Added `HanabiMainCamera`, a component to tag the "main" camera that Hanabi uses
+  for camera-specific features. Add to exactly one `Camera` to tag it.
+- Added `KillFrustumModifier` to kill particles outside of the main camera frustum.
+- Added the ability to access the effect's material (the user bound textures) from all passes.
+- Added support for 1D and 3D textures, and 2D array textures, as well as cube textures
+  and depth textures, to the `TextureSampleExpr`. See `SlotDimension` for all supported variants.
+- Added a new `TextureLoadExpr` doing a non-sampling texture load (`textureLoad()` in WGSL).
+  This can be used in all passes (all modifier contexts).
+- Added a new `lut.rs` example that demonstrates using a 2D array texture as a look-up table (LUT).
+  This can be used to approximate any kind of curve or gradient.
+- Added `Module::gather_parent_attributes()`, the counterpart of `gather_attributes()`
+  for `Expr::ParentAttribute` expressions.
+
+### Changed
+
+- Migrated to Bevy 0.20 and wgpu 30. The minimum supported Rust version is now 1.97.1.
+- Migrated generated particle shaders and shader templates to WESL. Custom shader code
+  using naga_oil imports or preprocessor directives must use WESL syntax instead.
+  The common shader module is now imported as `bevy_hanabi::render::vfx_common`
+  (previously `bevy_hanabi::vfx_common`).
+- Batch same-effect instances. This greatly improves performance when using many instances
+  of the same effect, by reducing the number of compute jobs dispatched to the GPU, and instead
+  taking full advantage of all GPU threads to process the init/update of all particles in parallel.
+  Batching is still limited to same-effect instances (same `EffectAsset`), and is currently not
+  available for GPU particle spawning.
+- Parallelized most of the GPU sort. This dramatically improves performance when using ribbon effects.
+- `EvalContext::make_fn()` now takes an optional return token for the function return value.
+- Renamed `TextureSampleExpr::image` to `slot_index`, and changed its type to be a `u32` slot index
+  defined at module build time. Dynamically switching between texture with a slot expression
+  was broken, and is explicitly not supported anymore. If you want to dynamically switch between textures,
+  consider using an array texture instead, which is a better way to achieve the same result.
+- Added `TextureSlot::dimension` to specify the type of texture that a texture slot accepts.
+- Added `TextureSampleExpr::slot_dimension` to specify the type of texture being sampled.
+  This must match the associated slot's `TextureSlot::dimension` when bound.
+- `TextureSamplerExpr` now correctly returns an error if used from any pass but the Render one,
+  instead of generating invalid WGSL code. This is a restriction of the WGSL language itself
+  (sampled texture read, via `textureSample()`, can only be used in the fragment shader).
+- All examples are now merged into a single `demo.rs` executable. Run with `cargo r --example demo`.
+
+### Fixed
+
+- Fixed a bug where some GPU operations queued with a buffer reference could be reused
+  after the buffer was reallocated, leading to use-after-free (stale data) on GPU.
+- Fixed a double-free of a GPU buffer when despawning a particle effect with a child effect. (#510)
+- Fixed the camera position in effect space used by camera-oriented particles
+  (`OrientMode::FaceCameraPosition`, `OrientMode::AlongVelocity`) in
+  `SimulationSpace::Local` effects: the emitter translation was ignored, most noticeable when emitter is far from origin.
+- Fixed `SimulationSpace::Local` effects applying the emitter transform twice to
+  `SetPositionCone3dModifier`, `SetVelocityCircleModifier`, and `SetVelocityTangentModifier`.
+  Local-space effects with a rotated, scaled, or off-origin emitter may render differently
+  than before; this is the corrected behavior.
+- Fixed a child effect reading a parent attribute (with `InheritAttributeModifier` or
+  `ExprWriter::parent_attr()`) that its parent doesn't store generating an init shader
+  that fails to compile. `EffectShaderSources::generate()` now returns a validation error
+  naming the effect and the missing attributes.
+
 ## [0.19.0] 2026-06-27
 
 _This version is compatible with Bevy 0.19_

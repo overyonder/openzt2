@@ -91,12 +91,15 @@ fn document() -> WorldDefinitionDocument {
             preview_offset_cm: [0; 3],
             preview_scale: 1.0,
             terrain_fitted: false,
+            terrain_fit_height_offset_m: 0.0,
+            terrain_fit_water_offset_m: None,
             real_physics_water_impact: None,
             price_cents: 1250,
             upkeep_cents_per_month: 0,
             properties: WorldObjectPropertyFlags::DONATION_ACCEPTOR,
             affordances: Default::default(),
             destruction: None,
+            virtual_nodes: Vec::new(),
         }],
         placeables: vec![PlaceableDefinition {
             surface_policy: Default::default(),
@@ -113,6 +116,7 @@ fn document() -> WorldDefinitionDocument {
             constraints: Default::default(),
             max_slope_permille: 250,
             minimum_headroom_metres: 2.0,
+            adjacent_to_water: false,
             apply_height_modifier: true,
             price_cents: 1250,
             unlock: id,
@@ -120,6 +124,7 @@ fn document() -> WorldDefinitionDocument {
             moving_footprint: false,
             automatic_footprint: false,
             ground_paths_block_placement: false,
+            dock_arrow: None,
         }],
         ..Default::default()
     }

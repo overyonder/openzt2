@@ -7,13 +7,13 @@ use crate::source_document::ordered_source_document_types::{
 };
 use crate::source_document::path::AssetPath;
 use openzt2_game_data::{
-    AssetId,
     scene_prefab::{
         PrefabDirectionalLightKey, PrefabEntity, PrefabEnvironmentKey, PrefabRailCamera,
         PrefabRailCameraCommand, PrefabRailCameraHotkey, PrefabRailCameraKey, PrefabRenderable,
         PrefabTransform, ScenePrefabAssetDependency, ScenePrefabAssetDependencyKind,
         ScenePrefabDocument, ScenePrefabEntityFlags, ScenePrefabRenderableVisibilityFlags,
     },
+    AssetId,
 };
 
 use crate::source_coordinate_conversion::{

@@ -263,7 +263,7 @@ impl EffectPassMaterial {
             .model_reflection_projections
             .iter()
             .any(Option::is_some);
-        if has_reflection_projection {
+        if (model_changed || view_changed) && has_reflection_projection {
             // Direction generation is in camera space. Remove model scale before
             // rotating those directions into the texture effect's mesh-local frame.
             let (_, rotation, _) = model_to_world.to_scale_rotation_translation();
@@ -288,6 +288,9 @@ impl EffectPassMaterial {
             }
             let mut inputs_changed = !binding.initialized;
             for parameter in &mut binding.parameters {
+                if binding.initialized && parameter.semantic.input_dependencies() & changed == 0 {
+                    continue;
+                }
                 if let Some(input) =
                     parameter_input(parameter.semantic, &transforms, wind, light, fog)
                 {

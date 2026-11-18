@@ -40,15 +40,13 @@ impl AssetLoader for WorldScenarioDocumentLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_world_scenario", skip_all))]
     async fn load(
         &self,
         reader: &mut dyn Reader,
         _: &(),
         context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .archives
-            .measure_scene_loading_asset_translation("world_scenario");
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
         let path = context.path().path().to_string_lossy().replace('\\', "/");

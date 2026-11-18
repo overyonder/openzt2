@@ -39,6 +39,7 @@ struct EntityFacts {
     crated: bool,
     needs: [Option<i32>; 11],
     trash: Option<u16>,
+    relocating: bool,
 }
 
 fn entity_facts(
@@ -65,6 +66,7 @@ fn collect_entity_facts(
             crated: animal.crated,
             needs: NEEDS.map(|(name, _)| animal.need_wellness_q16(name)),
             trash: animal.trash.map(|trash| trash.contained_waste_units),
+            relocating: animal.relocating,
         })
         .collect::<Vec<_>>();
     let pending = pending.borrow();
@@ -87,6 +89,7 @@ fn collect_entity_facts(
                     .map(|(_, value)| *value)
             }),
             trash: None,
+            relocating: false,
         });
     }
     for command in &pending.commands {
@@ -146,6 +149,32 @@ fn authored_entity_string_attribute(
         .ok_or_else(|| mlua::Error::runtime("entity has no authored species"))
 }
 
+fn same_entity(left: &Table, right: &Table) -> mlua::Result<bool> {
+    if let (Some(left), Some(right)) = (
+        left.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+        right.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
+    ) {
+        return Ok(left == right);
+    }
+    Ok(left.get::<u64>(ENTITY_FIELD)? == right.get::<u64>(ENTITY_FIELD)?)
+}
+
+/// Each query builds a new table, and scripts compare them with `==` as they
+/// would the same object.
+fn entity_component_metatable(lua: &Lua) -> mlua::Result<Table> {
+    const KEY: &str = "__openzt2_entity_component_metatable";
+    if let Some(metatable) = lua.named_registry_value::<Option<Table>>(KEY)? {
+        return Ok(metatable);
+    }
+    let metatable = lua.create_table()?;
+    metatable.set(
+        "__eq",
+        lua.create_function(|_, (left, right): (Table, Table)| same_entity(&left, &right))?,
+    )?;
+    lua.set_named_registry_value(KEY, &metatable)?;
+    Ok(metatable)
+}
+
 fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool> {
     if let Some(id) = reference.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)? {
         Ok(fact.persistent_id == Some(id))
@@ -154,7 +183,7 @@ fn matches_reference(fact: &EntityFacts, reference: &Table) -> mlua::Result<bool
     }
 }
 
-fn resolve_reference_entity(
+pub(super) fn resolve_reference_entity(
     reference: &Table,
     queries: ScenarioLuaQueryFacts<'_>,
     pending: &PendingEntityOperations,
@@ -217,15 +246,7 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
     )?;
     lua.globals().set(
         "areCompsEqual",
-        lua.create_function(|_, (left, right): (Table, Table)| {
-            if let (Some(left), Some(right)) = (
-                left.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
-                right.get::<Option<u64>>(PERSISTENT_ENTITY_FIELD)?,
-            ) {
-                return Ok(left == right);
-            }
-            Ok(left.get::<u64>(ENTITY_FIELD)? == right.get::<u64>(ENTITY_FIELD)?)
-        })?,
+        lua.create_function(|_, (left, right): (Table, Table)| same_entity(&left, &right))?,
     )?;
     lua.globals().set(
         "isKindOf",
@@ -259,7 +280,12 @@ pub(super) fn create_scenario_lua_entity_manager<'scope, 'env: 'scope>(
             let table = lua.create_table()?;
             for (index, fact) in entity_facts(queries, pending)
                 .into_iter()
-                .filter(|v| !(direct == Some(true) && v.crated) && matches_kind(v, &kind, queries))
+                .filter(|v| {
+                    // An object being carried has left the world, though it stays selected.
+                    !v.relocating
+                        && !(direct == Some(true) && v.crated)
+                        && matches_kind(v, &kind, queries)
+                })
                 .enumerate()
             {
                 let reference = lua.create_table()?;
@@ -340,6 +366,7 @@ fn create_entity_component<'scope, 'env: 'scope>(
     let species_id = fact.species;
     let variant_id = fact.variant;
     let component = lua.create_table()?;
+    component.set_metatable(Some(entity_component_metatable(lua)?))?;
     component.set(ENTITY_FIELD, entity.to_bits())?;
     component.set(PERSISTENT_ENTITY_FIELD, fact.persistent_id)?;
     component.set("_this", component.clone())?;
@@ -430,64 +457,68 @@ fn create_entity_component<'scope, 'env: 'scope>(
     )?;
     component.set(
         "BFG_SET_ATTR_FLOAT",
-        scope.create_function(move |_, (_, attribute, value): (Table, mlua::Value, Option<f64>)| {
-            // Scripts pass either a named attribute table or the name and value.
-            if let (mlua::Value::String(name), Some(level)) = (&attribute, value) {
-                if name.to_str()?.as_ref() != "f_TrashLevel" {
-                    return Err(mlua::Error::runtime("unsupported float attribute"));
+        scope.create_function(
+            move |_, (_, attribute, value): (Table, mlua::Value, Option<f64>)| {
+                // Scripts pass either a named attribute table or the name and value.
+                if let (mlua::Value::String(name), Some(level)) = (&attribute, value) {
+                    if name.to_str()?.as_ref() != "f_TrashLevel" {
+                        return Err(mlua::Error::runtime("unsupported float attribute"));
+                    }
+                    let current = entity_facts(queries, pending)
+                        .iter()
+                        .find(|v| v.entity == entity)
+                        .and_then(|v| v.trash)
+                        .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
+                    pending
+                        .borrow_mut()
+                        .commands
+                        .push(ScenarioEntityCommand::TrashLevel {
+                            entity,
+                            delta: level as i32 - i32::from(current),
+                        });
+                    return Ok(());
                 }
-                let current = entity_facts(queries, pending)
+                let mlua::Value::Table(attribute) = attribute else {
+                    return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
+                };
+                if attribute.get::<String>("_type")? != "BFGFloatAttribute" {
+                    return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
+                }
+                let name = attribute.get::<String>("name")?;
+                let need = NEEDS
                     .iter()
-                    .find(|v| v.entity == entity)
-                    .and_then(|v| v.trash)
-                    .ok_or_else(|| mlua::Error::runtime("entity holds no trash"))?;
-                pending.borrow_mut().commands.push(ScenarioEntityCommand::TrashLevel {
-                    entity,
-                    delta: level as i32 - i32::from(current),
-                });
-                return Ok(());
-            }
-            let mlua::Value::Table(attribute) = attribute else {
-                return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
-            };
-            if attribute.get::<String>("_type")? != "BFGFloatAttribute" {
-                return Err(mlua::Error::runtime("expected BFGFloatAttribute"));
-            }
-            let name = attribute.get::<String>("name")?;
-            let need = NEEDS
-                .iter()
-                .find(|(key, _)| *key == name)
-                .map(|(_, kind)| *kind)
-                .ok_or_else(|| mlua::Error::runtime("unsupported animal need"))?;
-            let distress = attribute.get::<f64>("value")?;
-            if !distress.is_finite() || !(0.0..=100.0).contains(&distress) {
-                return Err(mlua::Error::runtime(
-                    "animal distress must be between zero and one hundred",
-                ));
-            }
-            let value_q16 = ((1000.0 - distress * 10.0) * f64::from(Q16_ONE)).round() as i32;
-            let mut pending = pending.borrow_mut();
-            if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {
-                spawn.initial_needs.push((need, value_q16));
-            } else {
-                pending
-                    .commands
-                    .push(ScenarioEntityCommand::Need(SetAnimalNeed {
-                        animal: entity,
-                        need,
-                        value_q16,
-                    }));
-            }
-            Ok(())
-        })?,
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, kind)| *kind)
+                    .ok_or_else(|| mlua::Error::runtime("unsupported animal need"))?;
+                let distress = attribute.get::<f64>("value")?;
+                if !distress.is_finite() || !(0.0..=100.0).contains(&distress) {
+                    return Err(mlua::Error::runtime(
+                        "animal distress must be between zero and one hundred",
+                    ));
+                }
+                let value_q16 = ((1000.0 - distress * 10.0) * f64::from(Q16_ONE)).round() as i32;
+                let mut pending = pending.borrow_mut();
+                if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {
+                    spawn.initial_needs.push((need, value_q16));
+                } else {
+                    pending
+                        .commands
+                        .push(ScenarioEntityCommand::Need(SetAnimalNeed {
+                            animal: entity,
+                            need,
+                            value_q16,
+                        }));
+                }
+                Ok(())
+            },
+        )?,
     )?;
     component.set(
         "BFG_SEND_SIGNAL_SHARED",
         scope.create_function(move |_, (_, signal): (Table, String)| {
             if signal != "ZT_CRATE_ENTITY" {
-                return Err(mlua::Error::runtime(format!(
-                    "unsupported entity signal {signal}"
-                )));
+                super::scenario_lua_ui::warn_unhandled_scenario_message(&signal);
+                return Ok(());
             }
             let mut pending = pending.borrow_mut();
             if let Some(spawn) = pending.spawns.iter_mut().find(|v| v.entity == entity) {
@@ -543,7 +574,9 @@ pub(super) fn create_world_manager<'scope, 'env: 'scope>(
         (
             "BFG_GET_CAMERA_X",
             (|rig| rig.focus.x)
-                as fn(&openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig) -> f32,
+                as fn(
+                    &openzt2_interface_state::camera::camera_runtime_state_types::OverheadRig,
+                ) -> f32,
         ),
         ("BFG_GET_CAMERA_Y", |rig| rig.focus.y),
         ("BFG_GET_CAMERA_Z", |rig| rig.height_m),

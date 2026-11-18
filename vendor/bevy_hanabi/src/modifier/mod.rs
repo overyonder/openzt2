@@ -42,6 +42,7 @@
 //! cannot be read back into an application running on Wasm.
 
 use std::{
+    borrow::Cow,
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
 };
@@ -171,7 +172,7 @@ pub trait Modifier: Reflect + Send + Sync + 'static {
     }
 
     /// Get the list of attributes required for this modifier to be used.
-    fn attributes(&self) -> &[Attribute];
+    fn attributes(&self) -> Cow<'_, [Attribute]>;
 
     /// Clone self.
     fn boxed_clone(&self) -> BoxedModifier;
@@ -212,6 +213,8 @@ pub struct ShaderWriter<'a> {
     pub property_layout: &'a PropertyLayout,
     /// Layout of attributes of a particle for the current effect.
     pub particle_layout: &'a ParticleLayout,
+    /// Layout of textures for the current effect.
+    pub texture_layout: &'a TextureLayout,
     /// Modifier context the writer is being used from.
     modifier_context: ModifierContext,
     /// Counter for unique variable names.
@@ -230,12 +233,14 @@ impl<'a> ShaderWriter<'a> {
         modifier_context: ModifierContext,
         property_layout: &'a PropertyLayout,
         particle_layout: &'a ParticleLayout,
+        texture_layout: &'a TextureLayout,
     ) -> Self {
         Self {
             main_code: String::new(),
             extra_code: String::new(),
             property_layout,
             particle_layout,
+            texture_layout,
             modifier_context,
             var_counter: 0,
             expr_cache: Default::default(),
@@ -306,9 +311,13 @@ impl EvalContext for ShaderWriter<'_> {
         self.particle_layout
     }
 
+    fn texture_layout(&self) -> &TextureLayout {
+        self.texture_layout
+    }
+
     fn eval(&mut self, module: &Module, handle: ExprHandle) -> Result<String, ExprError> {
-        // On cache hit, don't re-evaluate the expression to prevent any duplicate
-        // side-effect.
+        // On cache hit, don't re-evaluate the expression to prevent any
+        // duplicate side-effect.
         if let Some(s) = self.expr_cache.get(&handle) {
             Ok(s.clone())
         } else {
@@ -333,6 +342,7 @@ impl EvalContext for ShaderWriter<'_> {
         &mut self,
         func_name: &str,
         args: &str,
+        ret: Option<&str>,
         module: &mut Module,
         f: &mut dyn FnMut(&mut Module, &mut dyn EvalContext) -> Result<String, ExprError>,
     ) -> Result<(), ExprError> {
@@ -342,6 +352,7 @@ impl EvalContext for ShaderWriter<'_> {
             self.modifier_context,
             self.property_layout,
             self.particle_layout,
+            self.texture_layout,
         )
         .with_attribute_pointer();
 
@@ -352,8 +363,9 @@ impl EvalContext for ShaderWriter<'_> {
         self.extra_code += &ctx.extra_code;
 
         // Append the function itself
+        let ret = ret.map(|x| format!("-> {x} ")).unwrap_or_default();
         self.extra_code += &format!(
-            r##"fn {0}({1}) {{
+            r##"fn {0}({1}) {ret}{{
 {2}{3}}}"##,
             func_name, args, ctx.main_code, body
         );
@@ -510,9 +522,13 @@ impl EvalContext for RenderContext<'_> {
         self.particle_layout
     }
 
+    fn texture_layout(&self) -> &TextureLayout {
+        self.texture_layout
+    }
+
     fn eval(&mut self, module: &Module, handle: ExprHandle) -> Result<String, ExprError> {
-        // On cache hit, don't re-evaluate the expression to prevent any duplicate
-        // side-effect.
+        // On cache hit, don't re-evaluate the expression to prevent any
+        // duplicate side-effect.
         if let Some(s) = self.expr_cache.get(&handle) {
             Ok(s.clone())
         } else {
@@ -538,6 +554,7 @@ impl EvalContext for RenderContext<'_> {
         &mut self,
         func_name: &str,
         args: &str,
+        ret: Option<&str>,
         module: &mut Module,
         f: &mut dyn FnMut(&mut Module, &mut dyn EvalContext) -> Result<String, ExprError>,
     ) -> Result<(), ExprError> {
@@ -555,8 +572,9 @@ impl EvalContext for RenderContext<'_> {
         self.render_extra += &ctx.render_extra;
 
         // Append the function itself
+        let ret = ret.map(|x| format!("-> {x} ")).unwrap_or_default();
         self.render_extra += &format!(
-            r##"fn {0}({1}) {{
+            r##"fn {0}({1}) {ret}{{
             {2};
         }}
         "##,
@@ -613,8 +631,8 @@ macro_rules! impl_mod_render {
                 Some(self)
             }
 
-            fn attributes(&self) -> &[$crate::Attribute] {
-                $attrs
+            fn attributes(&self) -> std::borrow::Cow<'_, [$crate::Attribute]> {
+                std::borrow::Cow::Borrowed($attrs)
             }
 
             fn boxed_clone(&self) -> $crate::BoxedModifier {
@@ -629,6 +647,7 @@ macro_rules! impl_mod_render {
                 Err(ExprError::InvalidModifierContext(
                     context.modifier_context(),
                     ModifierContext::Render,
+                    "",
                 ))
             }
         }
@@ -690,7 +709,8 @@ impl EmitSpawnEventModifier {
         module: &mut Module,
         context: &mut dyn EvalContext,
     ) -> Result<String, ExprError> {
-        // FIXME - mixing (ex-)channel and event buffer index; this should be automated
+        // FIXME - mixing (ex-)channel and event buffer index; this should be
+        // automated
         let channel_index = self.child_index;
         // TODO - validate GPU spawn events are in use in the eval context...
 
@@ -717,8 +737,8 @@ impl Modifier for EmitSpawnEventModifier {
         ModifierContext::Update
     }
 
-    fn attributes(&self) -> &[Attribute] {
-        &[]
+    fn attributes(&self) -> Cow<'_, [Attribute]> {
+        Cow::Borrowed(&[])
     }
 
     fn boxed_clone(&self) -> BoxedModifier {
@@ -758,6 +778,8 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
     {
         let mut type_registry = type_registry.write();
 
+        // mod.rs
+        type_registry.register::<EmitSpawnEventModifier>();
         // accel.rs
         type_registry.register::<AccelModifier>();
         type_registry.register::<RadialAccelModifier>();
@@ -771,6 +793,7 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
         // kill.rs
         type_registry.register::<KillSphereModifier>();
         type_registry.register::<KillAabbModifier>();
+        type_registry.register::<KillFrustumModifier>();
         // output.rs
         type_registry.register::<ParticleTextureModifier>();
         type_registry.register::<SetColorModifier>();
@@ -785,6 +808,7 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
         type_registry.register::<SetPositionCircleModifier>();
         type_registry.register::<SetPositionSphereModifier>();
         type_registry.register::<SetPositionCone3dModifier>();
+        type_registry.register::<SetPositionBoxModifier>();
         // velocity.rs
         type_registry.register::<SetVelocityCircleModifier>();
         type_registry.register::<SetVelocitySphereModifier>();
@@ -795,6 +819,13 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
     }
 
     // accel.rs
+    register_reflect_modifier::<EmitSpawnEventModifier>(type_registry, |module| {
+        Box::new(EmitSpawnEventModifier {
+            condition: EventEmitCondition::OnDie,
+            count: module.lit(1u32),
+            child_index: 0,
+        })
+    });
     register_reflect_modifier::<AccelModifier>(type_registry, |module| {
         let accel = module.lit(Vec3::X);
         Box::new(AccelModifier::new(accel))
@@ -853,9 +884,8 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
     });
 
     // output.rs
-    register_reflect_modifier::<ParticleTextureModifier>(type_registry, |module| {
-        let slot = module.lit(0u32);
-        Box::new(ParticleTextureModifier::new(slot))
+    register_reflect_modifier::<ParticleTextureModifier>(type_registry, |_| {
+        Box::new(ParticleTextureModifier::new(0))
     });
     register_reflect_modifier::<SetColorModifier>(type_registry, |_| {
         Box::new(SetColorModifier::new(Vec4::ONE))
@@ -913,6 +943,13 @@ pub fn register_modifiers(type_registry: &AppTypeRegistry) {
             dimension: ShapeDimension::Surface,
         })
     });
+    register_reflect_modifier::<SetPositionBoxModifier>(type_registry, |module| {
+        Box::new(SetPositionBoxModifier {
+            center: module.lit(Vec3::ZERO),
+            extent: module.lit(Vec3::ONE),
+            dimension: ShapeDimension::Surface,
+        })
+    });
 
     // velocity.rs
     register_reflect_modifier::<SetVelocityCircleModifier>(type_registry, |module| {
@@ -946,8 +983,8 @@ mod tests {
     use crate::{BuiltInOperator, ExprWriter, ScalarType};
 
     fn make_test_modifier() -> SetPositionSphereModifier {
-        // We use a dummy module here because we don't care about the values and won't
-        // evaluate the modifier.
+        // We use a dummy module here because we don't care about the values and
+        // won't evaluate the modifier.
         let mut m = Module::default();
         SetPositionSphereModifier {
             center: m.lit(Vec3::ZERO),
@@ -1020,8 +1057,9 @@ mod tests {
         let m = make_test_modifier();
         let bm: BoxedModifier = Box::new(m);
 
-        // Use reflect-based serialization with a TypeRegistry so the boxed trait
-        // object can be serialized via the registered ReflectModifier factories.
+        // Use reflect-based serialization with a TypeRegistry so the boxed
+        // trait object can be serialized via the registered
+        // ReflectModifier factories.
         let type_registry = AppTypeRegistry::new_with_derived_types();
         register_modifiers(&type_registry);
         let registry = type_registry.read();
@@ -1031,8 +1069,9 @@ mod tests {
         let s = ron::to_string(&serializer).unwrap();
         println!("modifier: {:?}", s);
 
-        // Deserialize via ReflectDeserializer and construct a concrete instance using
-        // the ReflectModifier factory (same approach as in registry serde_impl).
+        // Deserialize via ReflectDeserializer and construct a concrete instance
+        // using the ReflectModifier factory (same approach as in
+        // registry serde_impl).
         let mut de = ron::de::Deserializer::from_str(&s).unwrap();
         let reflect_deser = bevy::reflect::serde::ReflectDeserializer::new(&registry);
         let boxed_partial = reflect_deser.deserialize(&mut de).unwrap();
@@ -1122,14 +1161,19 @@ mod tests {
             assert!(modifier.context().contains(ModifierContext::Init));
             let property_layout = PropertyLayout::default();
             let particle_layout = ParticleLayout::default();
-            let mut context =
-                ShaderWriter::new(ModifierContext::Init, &property_layout, &particle_layout);
+            let texture_layout = TextureLayout::default();
+            let mut context = ShaderWriter::new(
+                ModifierContext::Init,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             assert!(modifier.apply(&mut module, &mut context).is_ok());
             let main_code = context.main_code;
             let extra_code = context.extra_code;
 
             let mut particle_layout = ParticleLayout::new();
-            for &attr in modifier.attributes() {
+            for &attr in modifier.attributes().as_ref() {
                 particle_layout = particle_layout.append(attr);
             }
             let particle_layout = particle_layout.build();
@@ -1151,7 +1195,6 @@ struct Particle {{
 @compute @workgroup_size(64)
 fn main() {{
     var particle = Particle();
-    var transform: mat4x4<f32> = mat4x4<f32>();
 {main_code}
 }}"##
             );
@@ -1224,14 +1267,19 @@ fn main() {{
             assert!(modifier.context().contains(ModifierContext::Update));
             let property_layout = PropertyLayout::default();
             let particle_layout = ParticleLayout::default();
-            let mut context =
-                ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+            let texture_layout = TextureLayout::default();
+            let mut context = ShaderWriter::new(
+                ModifierContext::Update,
+                &property_layout,
+                &particle_layout,
+                &texture_layout,
+            );
             assert!(modifier.apply(&mut module, &mut context).is_ok());
             let update_code = context.main_code;
             let update_extra = context.extra_code;
 
             let mut particle_layout = ParticleLayout::new();
-            for &attr in modifier.attributes() {
+            for &attr in modifier.attributes().as_ref() {
                 particle_layout = particle_layout.append(attr);
             }
             let particle_layout = particle_layout.build();
@@ -1282,7 +1330,6 @@ fn proj(u: vec3<f32>, v: vec3<f32>) -> vec3<f32> {{
 @compute @workgroup_size(64)
 fn main() {{
     var particle: Particle = particle_buffer.particles[0];
-    var transform: mat4x4<f32> = mat4x4<f32>();
     var is_alive = true;
 {update_code}
 }}"##
@@ -1304,10 +1351,9 @@ fn main() {{
 
     #[test]
     fn validate_render() {
-        let mut base_module = Module::default();
-        let slot_zero = base_module.lit(0u32);
+        let base_module = Module::default();
         let modifiers: &[&dyn RenderModifier] = &[
-            &ParticleTextureModifier::new(slot_zero),
+            &ParticleTextureModifier::new(0),
             &ColorOverLifetimeModifier::default(),
             &SizeOverLifetimeModifier::default(),
             &OrientModifier::new(OrientMode::ParallelCameraDepthPlane),
@@ -1316,9 +1362,12 @@ fn main() {{
         ];
         for &modifier in modifiers.iter() {
             let mut module = base_module.clone();
+            module.add_texture_slot("tex", crate::SlotDimension::D2);
             let property_layout = PropertyLayout::default();
             let particle_layout = ParticleLayout::default();
             let texture_layout = module.texture_layout();
+            assert_eq!(texture_layout.layout.len(), 1);
+            let texture_bindinds = texture_layout.to_wgsl_binding(2, 4);
             let mut context =
                 RenderContext::new(&property_layout, &particle_layout, &texture_layout);
             modifier
@@ -1329,7 +1378,7 @@ fn main() {{
             let render_extra = context.render_extra;
 
             let mut particle_layout = ParticleLayout::new();
-            for &attr in modifier.attributes() {
+            for &attr in modifier.attributes().as_ref() {
                 particle_layout = particle_layout.append(attr);
             }
             let particle_layout = particle_layout.build();
@@ -1383,6 +1432,7 @@ struct VertexOutput {{
 }};
 
 @group(0) @binding(0) var<uniform> view: View;
+{texture_bindinds}
 
 {render_extra}
 
@@ -1415,11 +1465,10 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {{
             let res = frontend.parse(&code);
             if let Err(err) = &res {
                 println!(
-                    "Modifier: {:?}",
+                    "Modifier: {:?}\n",
                     modifier.get_represented_type_info().unwrap().type_path()
                 );
-                println!("Code: {:?}", code);
-                println!("Err: {:?}", err);
+                println!("Code: {code:?}\n\nError: {err:?}");
             }
             assert!(res.is_ok());
         }
@@ -1430,12 +1479,20 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {{
         let mut module = Module::default();
         let property_layout = PropertyLayout::default();
         let particle_layout = ParticleLayout::default();
+        let texture_layout = TextureLayout::default();
         let x = module.builtin(BuiltInOperator::Rand(ScalarType::Float.into()));
-        let texture_layout = module.texture_layout();
-        let init: &mut dyn EvalContext =
-            &mut ShaderWriter::new(ModifierContext::Init, &property_layout, &particle_layout);
-        let update: &mut dyn EvalContext =
-            &mut ShaderWriter::new(ModifierContext::Update, &property_layout, &particle_layout);
+        let init: &mut dyn EvalContext = &mut ShaderWriter::new(
+            ModifierContext::Init,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
+        let update: &mut dyn EvalContext = &mut ShaderWriter::new(
+            ModifierContext::Update,
+            &property_layout,
+            &particle_layout,
+            &texture_layout,
+        );
         let render: &mut dyn EvalContext =
             &mut RenderContext::new(&property_layout, &particle_layout, &texture_layout);
         for ctx in [init, update, render] {

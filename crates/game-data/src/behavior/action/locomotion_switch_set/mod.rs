@@ -9,6 +9,9 @@ pub struct BehaviorLocomotionSwitchSetAction {
     pub ground: Option<AssetId>,
     pub water: Option<AssetId>,
     pub underwater: Option<AssetId>,
+    /// The `default` row, for a medium without a row of its own.
+    #[serde(default)]
+    pub default: Option<AssetId>,
     /// Without `switch="false"` the set follows the subject's medium while it
     /// plays, switching to the other medium's set when that medium changes.
     #[serde(default)]
@@ -23,4 +26,7 @@ pub struct BehaviorAnimationSwitchSetAction {
     pub sets_by_animation_graph_node: Vec<(String, AssetId)>,
     /// The `default` row, for any other node.
     pub default_set: Option<AssetId>,
+    /// `loopFlag="true"` selects again each time the selected set ends.
+    #[serde(default)]
+    pub loops: bool,
 }

@@ -3,11 +3,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Component, Path, PathBuf},
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex, RwLock,
-    },
-    time::{Duration, Instant},
+    sync::{Arc, Mutex, RwLock},
 };
 
 use bevy::{
@@ -30,10 +26,6 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
     let files = Arc::new(z2f::ArchiveSet::open(enabled_archive_paths)?);
     let events = Arc::new(Mutex::new(None));
     let resolved = Arc::new(Mutex::new(ResolvedPaths::default()));
-    let scene_loading_reads = Arc::new(Mutex::new(
-        SceneLoadingAssetReadPerformanceAttribution::default(),
-    ));
-    let scene_loading_reads_active = Arc::new(AtomicBool::new(false));
     let shared_source_byte_cache = Arc::new(RwLock::new(SharedSourceByteCache::default()));
     let watcher_events = Arc::clone(&events);
     let archives = AssetArchives {
@@ -41,8 +33,6 @@ pub fn create_bevy_asset_source_for_enabled_z2f_archives(
         installation_root,
         events,
         resolved,
-        scene_loading_reads,
-        scene_loading_reads_active,
         shared_source_byte_cache,
     };
     let reader_archives = archives.clone();
@@ -68,8 +58,6 @@ pub struct AssetArchives {
     installation_root: PathBuf,
     events: Arc<Mutex<Option<async_channel::Sender<AssetSourceEvent>>>>,
     resolved: Arc<Mutex<ResolvedPaths>>,
-    scene_loading_reads: Arc<Mutex<SceneLoadingAssetReadPerformanceAttribution>>,
-    scene_loading_reads_active: Arc<AtomicBool>,
     shared_source_byte_cache: Arc<RwLock<SharedSourceByteCache>>,
 }
 
@@ -111,75 +99,6 @@ impl SharedSourceByteCache {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct AssetReadPerformanceAttribution {
-    pub reads: u64,
-    pub bytes: u64,
-    pub elapsed: Duration,
-    pub maximum: Duration,
-}
-
-#[derive(Debug, Clone)]
-pub struct SlowAssetReadPerformanceAttribution {
-    pub path: PathBuf,
-    pub source: &'static str,
-    pub bytes: usize,
-    pub elapsed: Duration,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SceneLoadingAssetReadPerformanceSnapshot {
-    pub archive: AssetReadPerformanceAttribution,
-    pub loose: AssetReadPerformanceAttribution,
-    pub memory_cache: AssetReadPerformanceAttribution,
-    pub extensions: BTreeMap<String, AssetReadPerformanceAttribution>,
-    pub paths: BTreeMap<PathBuf, AssetReadPerformanceAttribution>,
-    pub loaders: BTreeMap<&'static str, AssetReadPerformanceAttribution>,
-    pub slowest: Vec<SlowAssetReadPerformanceAttribution>,
-}
-
-#[derive(Default)]
-struct SceneLoadingAssetReadPerformanceAttribution {
-    snapshot: SceneLoadingAssetReadPerformanceSnapshot,
-}
-
-impl SceneLoadingAssetReadPerformanceAttribution {
-    fn record(&mut self, path: &Path, source: &'static str, bytes: usize, elapsed: Duration) {
-        let update = |attribution: &mut AssetReadPerformanceAttribution| {
-            attribution.reads = attribution.reads.saturating_add(1);
-            attribution.bytes = attribution
-                .bytes
-                .saturating_add(u64::try_from(bytes).unwrap_or(u64::MAX));
-            attribution.elapsed = attribution.elapsed.saturating_add(elapsed);
-            attribution.maximum = attribution.maximum.max(elapsed);
-        };
-        update(match source {
-            "archive" => &mut self.snapshot.archive,
-            "memory-cache" => &mut self.snapshot.memory_cache,
-            _ => &mut self.snapshot.loose,
-        });
-        let extension = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .unwrap_or("<none>")
-            .to_ascii_lowercase();
-        update(self.snapshot.extensions.entry(extension).or_default());
-        update(self.snapshot.paths.entry(path.to_owned()).or_default());
-        let read = SlowAssetReadPerformanceAttribution {
-            path: path.to_owned(),
-            source,
-            bytes,
-            elapsed,
-        };
-        let insertion = self
-            .snapshot
-            .slowest
-            .partition_point(|existing| existing.elapsed >= elapsed);
-        self.snapshot.slowest.insert(insertion, read);
-        self.snapshot.slowest.truncate(20);
-    }
-}
-
 #[derive(Default)]
 struct ResolvedPaths {
     revision: Option<u64>,
@@ -187,45 +106,10 @@ struct ResolvedPaths {
 }
 
 impl AssetArchives {
-    pub fn measure_scene_loading_asset_translation(
-        &self,
-        loader: &'static str,
-    ) -> SceneLoadingAssetTranslationPerformanceTimer {
-        SceneLoadingAssetTranslationPerformanceTimer {
-            attribution: self
-                .scene_loading_reads_active
-                .load(Ordering::Relaxed)
-                .then(|| Arc::clone(&self.scene_loading_reads)),
-            loader,
-            started: Instant::now(),
-        }
-    }
-
-    pub fn begin_scene_loading_asset_read_performance_attribution(&self) {
-        let mut attribution = self
-            .scene_loading_reads
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *attribution = SceneLoadingAssetReadPerformanceAttribution::default();
-        self.scene_loading_reads_active
-            .store(true, Ordering::Release);
-    }
-
-    pub fn finish_scene_loading_asset_read_performance_attribution(
-        &self,
-    ) -> SceneLoadingAssetReadPerformanceSnapshot {
-        self.scene_loading_reads_active
-            .store(false, Ordering::Release);
-        let attribution = self
-            .scene_loading_reads
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        attribution.snapshot.clone()
-    }
-
     pub fn read_source(&self, path: &Path) -> std::io::Result<Vec<u8>> {
         let path = z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(path);
-        let started = Instant::now();
+        #[cfg(feature = "tracing")]
+        let _read = bevy::log::info_span!("read_asset_source", path = %path.display()).entered();
         let cached = self
             .shared_source_byte_cache
             .read()
@@ -249,13 +133,9 @@ impl AssetArchives {
                     .retain_after_read(&path, bytes);
             }
         }
-        if self.scene_loading_reads_active.load(Ordering::Relaxed) {
-            if let Ok(bytes) = &result {
-                self.scene_loading_reads
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .record(&path, source, bytes.len(), started.elapsed());
-            }
+        #[cfg(feature = "tracing")]
+        if let Ok(bytes) = &result {
+            bevy::log::debug!(target: "openzt2_profile_counts", source, bytes = bytes.len(), "asset read");
         }
         result
     }
@@ -537,28 +417,6 @@ impl AssetArchives {
     }
 }
 
-pub struct SceneLoadingAssetTranslationPerformanceTimer {
-    attribution: Option<Arc<Mutex<SceneLoadingAssetReadPerformanceAttribution>>>,
-    loader: &'static str,
-    started: Instant,
-}
-
-impl Drop for SceneLoadingAssetTranslationPerformanceTimer {
-    fn drop(&mut self) {
-        let Some(attribution) = &self.attribution else {
-            return;
-        };
-        let elapsed = self.started.elapsed();
-        let mut attribution = attribution
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let loader = attribution.snapshot.loaders.entry(self.loader).or_default();
-        loader.reads = loader.reads.saturating_add(1);
-        loader.elapsed = loader.elapsed.saturating_add(elapsed);
-        loader.maximum = loader.maximum.max(elapsed);
-    }
-}
-
 struct Z2fAssetWatcher;
 
 impl AssetWatcher for Z2fAssetWatcher {}
@@ -642,7 +500,7 @@ fn compatible_bevy_image_asset_path_for_changed_source_path(path: &Path) -> Opti
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{
         fs::File,
         io::Write,
@@ -665,10 +523,10 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory(PathBuf);
+    pub(crate) struct TestDirectory(PathBuf);
 
     impl TestDirectory {
-        fn new() -> std::io::Result<Self> {
+        pub(crate) fn new() -> std::io::Result<Self> {
             let path = std::env::temp_dir().join(format!(
                 "openzt2-bevy-assets-{}-{}",
                 std::process::id(),
@@ -678,7 +536,11 @@ mod tests {
             Ok(Self(path))
         }
 
-        fn archive(&self, name: &str, entries: &[(&str, &[u8])]) -> std::io::Result<PathBuf> {
+        pub(crate) fn archive(
+            &self,
+            name: &str,
+            entries: &[(&str, &[u8])],
+        ) -> std::io::Result<PathBuf> {
             let path = self.0.join(name);
             let mut writer = ZipWriter::new(File::create(&path)?);
             for (entry, bytes) in entries {

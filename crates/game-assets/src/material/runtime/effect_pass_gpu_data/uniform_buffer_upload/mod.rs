@@ -2,15 +2,17 @@
 
 use super::{
     parameter_register_binding::shader_stage_dirty_bit, D3d9BooleanShaderRegisters,
-    D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters, D3d9PackedShaderRegisters,
-    D3d9ProgrammableShaderStage, EffectPassMaterial, EffectPassUniformBufferAssets,
+    D3d9FixedFunctionWorldLightContexts, D3d9FloatShaderRegisters, D3d9IntegerShaderRegisters,
+    D3d9PackedShaderRegisters, D3d9ProgrammableShaderStage, EffectPassMaterial,
+    EffectPassUniformBufferAssets,
 };
 use bevy::{
     asset::RenderAssetUsages,
+    platform::collections::AlignedVec,
     prelude::*,
     render::{
         render_resource::{encase::UniformBuffer, BufferUsages, ShaderType},
-        storage::ShaderBuffer,
+        storage::{ShaderBuffer, ShaderBufferData},
     },
 };
 
@@ -250,12 +252,12 @@ fn programmable_shader_registers_in_upload_order<'a>(
 pub(in crate::material::runtime) fn shader_buffer_from_packed_registers(
     value: &D3d9PackedShaderRegisters,
 ) -> ShaderBuffer {
-    let mut bytes = bevy::render::render_resource::encase::StorageBuffer::new(Vec::new());
+    let mut bytes = bevy::render::render_resource::encase::StorageBuffer::new(Vec::<u8>::new());
     bytes
         .write(&value.values[..value.active_register_count])
         .expect("vec4 registers have a fixed 16-byte layout");
-    let mut buffer = ShaderBuffer::new(&bytes.into_inner(), RenderAssetUsages::default());
-    buffer.buffer_description.usage = BufferUsages::UNIFORM | BufferUsages::COPY_DST;
+    let mut buffer = ShaderBuffer::new(bytes.into_inner(), RenderAssetUsages::default());
+    buffer.buffer_usage = BufferUsages::UNIFORM | BufferUsages::COPY_DST;
     buffer.use_uniform_buffer_pages = true;
     buffer
 }
@@ -271,8 +273,7 @@ fn write_packed_registers_to_shader_buffer(
     if let Some(mut buffer) = buffers.get_mut(handle) {
         let registers =
             programmable_shader_registers_in_upload_order(values, integers, booleans, order);
-        let bytes = buffer.data.get_or_insert_with(Vec::new);
-        bytes.resize(registers.len() * 16, 0);
+        let bytes = shader_upload_bytes(&mut buffer, registers.len() * 16);
         // Registers are 16-byte vec4 values; overwrite the retained staging buffer.
         for (destination, register) in bytes.chunks_exact_mut(16).zip(registers) {
             for (component, value) in destination.chunks_exact_mut(4).zip(register.to_array()) {
@@ -287,8 +288,8 @@ where
     T: ShaderType + bevy::render::render_resource::encase::internal::WriteInto,
 {
     let bytes = shader_uniform_bytes(value);
-    let mut buffer = ShaderBuffer::new(&bytes, RenderAssetUsages::default());
-    buffer.buffer_description.usage = BufferUsages::UNIFORM | BufferUsages::COPY_DST;
+    let mut buffer = ShaderBuffer::new(bytes, RenderAssetUsages::default());
+    buffer.buffer_usage = BufferUsages::UNIFORM | BufferUsages::COPY_DST;
     buffer.use_uniform_buffer_pages = true;
     buffer
 }
@@ -313,11 +314,38 @@ fn write_uniform_value_to_shader_buffer<T>(
 {
     if let Some(mut buffer) = buffers.get_mut(handle) {
         // Reuse pending staging bytes until Bevy extracts the buffer.
-        let mut staging = UniformBuffer::new(buffer.data.take().unwrap_or_default());
+        let mut staging = UniformBuffer::new(shader_upload_bytes(
+            &mut buffer,
+            value.size().get() as usize,
+        ));
         staging
             .write(value)
             .expect("effect pass register types have valid uniform layouts");
-        buffer.data = Some(staging.into_inner());
+    }
+}
+
+fn shader_upload_bytes(buffer: &mut ShaderBuffer, len: usize) -> &mut [u8] {
+    let mut pending = match std::mem::take(&mut buffer.data) {
+        ShaderBufferData::Initialized { data, .. } => data,
+        ShaderBufferData::Uninitialized(_) => AlignedVec::new(1),
+    };
+    pending.resize(len, 0);
+    buffer.data = ShaderBufferData::Initialized {
+        data: pending,
+        buffer_size: len as u64,
+    };
+    buffer
+        .cast_slice_mut::<u8>()
+        .expect("shader upload initialized its byte array")
+}
+
+impl D3d9FixedFunctionWorldLightContexts {
+    /// Writes the active light registers in the shader's storage-buffer layout.
+    pub fn write_shader_buffer(&self, buffer: &mut ShaderBuffer) {
+        let bytes = shader_upload_bytes(buffer, self.size().get() as usize);
+        bevy::render::render_resource::encase::StorageBuffer::new(bytes)
+            .write(self)
+            .expect("world light registers have a fixed storage layout");
     }
 }
 

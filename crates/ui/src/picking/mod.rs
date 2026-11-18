@@ -7,9 +7,10 @@ use bevy::{
         PickingSystems,
     },
     prelude::*,
-    ui::{clip_check_recursive, ComputedUiTargetCamera, UiGlobalTransform, UiStack, UiSystems},
+    ui::{ComputedUiTargetCamera, UiGlobalTransform, UiStack, UiSystems},
     window::PrimaryWindow,
 };
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
 
@@ -46,18 +47,19 @@ pub(super) fn alpha_ui_picking(
     cameras: Query<(Entity, &Camera, &RenderTarget)>,
     primary_window: Query<Entity, With<PrimaryWindow>>,
     ui_stack: Res<UiStack>,
+    layouts: Query<&Node>,
     nodes: Query<(
         Entity,
         &ComputedNode,
         &UiGlobalTransform,
         Option<&Pickable>,
-        Option<&UiInteractionEnabled>,
+        Has<UiInteractionEnabled>,
+        Has<UiPointerInteraction>,
         Option<&InheritedVisibility>,
         &ComputedUiTargetCamera,
         Option<&UiAlphaHitTest>,
+        Option<&CalculatedClip>,
     )>,
-    clipping: Query<(&ComputedNode, &UiGlobalTransform, &Node)>,
-    parents: Query<&ChildOf, Without<OverrideClip>>,
     hierarchy: Query<&ChildOf>,
     scroll_panels: Query<
         (
@@ -66,6 +68,7 @@ pub(super) fn alpha_ui_picking(
             &Node,
             Option<&UiListPolicy>,
             Option<&UiAuthoredWindowInteractionPolicy>,
+            Option<&CalculatedClip>,
         ),
         With<ScrollPosition>,
     >,
@@ -76,7 +79,11 @@ pub(super) fn alpha_ui_picking(
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
     >,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
-    mut interactions: Query<(Entity, &UiInteractionEnabled, &mut Interaction)>,
+    mut interactions: Query<(
+        Entity,
+        Option<&UiInteractionEnabled>,
+        &mut UiPointerInteraction,
+    )>,
     mut output: MessageWriter<PointerHits>,
 ) {
     let AuthoredPointerCaptureState {
@@ -84,7 +91,8 @@ pub(super) fn alpha_ui_picking(
         mut pressed_target,
     } = capture_state;
     let previous_pressed_target = *pressed_target;
-    *capture = UiPointerCapture {
+    let previous_hovered = capture.target;
+    let mut next_capture = UiPointerCapture {
         over_ui: modal_input.0.is_some(),
         target: None,
         wheel: if modal_input.0.is_some() {
@@ -118,25 +126,49 @@ pub(super) fn alpha_ui_picking(
             let mut depth = 0.0;
             let mut wheel_hit = None;
             'stack: for partition in ui_stack.partition.iter().rev() {
+                // Bevy groups the stack by target camera. A stale or missing
+                // root falls back to checking individual nodes below.
+                if let Some(&root) = ui_stack.uinodes[partition.clone()].first() {
+                    if layouts
+                        .get(root)
+                        .is_ok_and(|node| node.display == Display::None)
+                        || nodes
+                            .get(root)
+                            .ok()
+                            .and_then(|node| node.7.get())
+                            .is_some_and(|target| target != camera_entity)
+                    {
+                        continue;
+                    }
+                }
                 for entity in ui_stack.uinodes[partition.clone()].iter().rev().copied() {
                     let Ok((
                         entity,
                         node,
                         transform,
                         pickable,
-                        interaction_enabled,
+                        has_interaction_gate,
+                        has_pointer_state,
                         inherited_visibility,
                         target_camera,
                         alpha,
+                        clip,
                     )) = nodes.get(entity)
                     else {
                         continue;
                     };
-                    let interactive = interaction_enabled.is_some();
-                    if modal_input
-                        .0
-                        .is_some_and(|modal| !context.is_in_modal(entity, modal))
-                        || target_camera.get() != Some(camera_entity)
+                    let interactive = has_interaction_gate || has_pointer_state;
+                    let can_pick = pickable.map_or(interactive, |policy| {
+                        policy.is_hoverable || policy.should_block_lower
+                    });
+                    if !can_pick
+                        && !(pointer.is_mouse()
+                            && wheel_hit.is_none()
+                            && scroll_panels.contains(entity))
+                    {
+                        continue;
+                    }
+                    if target_camera.get() != Some(camera_entity)
                         || node.size() == Vec2::ZERO
                         || inherited_visibility.is_none_or(|visibility| !visibility.get())
                         || !authored_node_rectangle_contains_point(
@@ -144,7 +176,10 @@ pub(super) fn alpha_ui_picking(
                             *transform,
                             pointer_position,
                         )
-                        || !clip_check_recursive(pointer_position, entity, &clipping, &parents)
+                        || clip.is_some_and(|clip| !clip.contains_point(pointer_position))
+                        || modal_input
+                            .0
+                            .is_some_and(|modal| !context.is_in_modal(entity, modal))
                     {
                         continue;
                     }
@@ -153,7 +188,7 @@ pub(super) fn alpha_ui_picking(
                     if pointer.is_mouse() && wheel_hit.is_none() {
                         if scroll_panels
                             .get(entity)
-                            .is_ok_and(|(_, _, node, list, window)| {
+                            .is_ok_and(|(_, _, node, list, window, _)| {
                                 (list.is_some()
                                     || window.is_some_and(|policy| policy.accepts_wheel_scroll()))
                                     && (node.overflow.x == OverflowAxis::Scroll
@@ -163,15 +198,7 @@ pub(super) fn alpha_ui_picking(
                             wheel_hit = Some(UiWheelCapture::Scroll(entity));
                         }
                     }
-                    if (pickable.is_none() && !interactive)
-                        // Every projected node carries an explicit policy.
-                        // `Pickable::IGNORE` must pass through to the world;
-                        // reporting it would make the canvas root capture the
-                        // entire viewport even though Bevy later discards it.
-                        || pickable.is_some_and(|pickable| {
-                            !pickable.is_hoverable && !pickable.should_block_lower
-                        })
-                    {
+                    if !can_pick {
                         continue;
                     }
                     let local = transform.inverse().transform_point2(pointer_position);
@@ -190,7 +217,7 @@ pub(super) fn alpha_ui_picking(
                             .chain(hierarchy.iter_ancestors::<ChildOf>(entity))
                             .find(|candidate| {
                                 scroll_panels.get(*candidate).is_ok_and(
-                                    |(node, transform, policy, list, window)| {
+                                    |(node, transform, policy, list, window, clip)| {
                                         (list.is_some()
                                             || window.is_some_and(|policy| {
                                                 policy.accepts_wheel_scroll()
@@ -202,12 +229,9 @@ pub(super) fn alpha_ui_picking(
                                                 *transform,
                                                 pointer_position,
                                             )
-                                            && clip_check_recursive(
-                                                pointer_position,
-                                                *candidate,
-                                                &clipping,
-                                                &parents,
-                                            )
+                                            && clip.is_none_or(|clip| {
+                                                clip.contains_point(pointer_position)
+                                            })
                                     },
                                 )
                             });
@@ -250,17 +274,18 @@ pub(super) fn alpha_ui_picking(
             }
             if !picks.is_empty() {
                 if pointer.is_mouse() {
-                    capture.over_ui = true;
+                    next_capture.over_ui = true;
                 }
                 output.write(PointerHits::new(pointer, picks, camera.order as f32 + 0.5));
             }
         }
     }
 
-    capture.target = mouse_hit.map(|(_, entity)| entity);
+    next_capture.target = mouse_hit.map(|(_, entity)| entity);
     if let Some((_, wheel_hit)) = mouse_wheel_hit {
-        capture.wheel = wheel_hit;
+        next_capture.wheel = wheel_hit;
     }
+    capture.set_if_neq(next_capture);
     *pressed_target = if pointer_input.just_pressed {
         capture.target
     } else if pointer_input.pressed {
@@ -275,20 +300,26 @@ pub(super) fn alpha_ui_picking(
                 .is_none_or(|modal| context.is_in_modal(*entity, modal))
     });
 
-    // Bevy's legacy `Interaction` owner performs rectangle-only focus before
-    // the picking backends run. Replace those authored-control states with the
-    // same alpha-aware, topmost result emitted above so presentation, tooltips,
-    // and activation cannot disagree with picking.
-    for (entity, enabled, mut interaction) in &mut interactions {
-        let hit = enabled.0 && mouse_hit.is_some_and(|(_, hovered)| hovered == entity);
-        // Never retain Pressed from Bevy's earlier rectangle-only focus pass:
-        // it may name another control beneath a transparent part of its skin.
-        let next = if enabled.0 && *pressed_target == Some(entity) {
-            Interaction::Pressed
+    for entity in [
+        previous_hovered,
+        previous_pressed_target,
+        capture.target,
+        *pressed_target,
+    ]
+    .into_iter()
+    .flatten()
+    {
+        let Ok((_, enabled, mut interaction)) = interactions.get_mut(entity) else {
+            continue;
+        };
+        let enabled = enabled.is_none_or(|enabled| enabled.0);
+        let hit = enabled && mouse_hit.is_some_and(|(_, hovered)| hovered == entity);
+        let next = if enabled && *pressed_target == Some(entity) {
+            UiPointerInteraction::Pressed
         } else if hit {
-            Interaction::Hovered
+            UiPointerInteraction::Hovered
         } else {
-            Interaction::None
+            UiPointerInteraction::None
         };
         interaction.set_if_neq(next);
     }
@@ -336,6 +367,19 @@ fn alpha_hit(
 }
 
 pub(super) fn initialize(app: &mut App) {
+    // Authored controls use alpha picking. Bevy's rectangular focus pass has
+    // work only for widgets that consume one of its two outputs.
+    app.configure_sets(
+        PreUpdate,
+        UiSystems::Focus.run_if(
+            bevy::ecs::schedule::common_conditions::any_match_filter::<
+                Or<(
+                    With<bevy::ui::DeprecatedInteraction>,
+                    With<bevy::ui::RelativeCursorPosition>,
+                )>,
+            >,
+        ),
+    );
     app.init_resource::<UiPointerCapture>().add_systems(
         PreUpdate,
         alpha_ui_picking

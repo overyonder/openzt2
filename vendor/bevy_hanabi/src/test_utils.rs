@@ -2,7 +2,7 @@ use std::ops::Sub;
 
 use bevy::prelude::{Quat, Vec2, Vec3, Vec4};
 #[cfg(feature = "gpu_tests")]
-use bevy::render::renderer::{RenderDevice, RenderQueue, WgpuWrapper};
+use bevy::render::renderer::{RenderDevice, RenderQueue};
 
 /// Utility trait to compare floating-point values with a tolerance.
 pub(crate) trait AbsDiffEq {
@@ -152,8 +152,8 @@ impl MockRenderer {
         let flags = wgpu::InstanceFlags::empty();
 
         // Create the WGPU adapter. Use PRIMARY backends (Vulkan, Metal, DX12,
-        // Browser+WebGPU) to ensure we get a backend that supports compute and other
-        // modern features we might need.
+        // Browser+WebGPU) to ensure we get a backend that supports compute and
+        // other modern features we might need.
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             flags,
@@ -166,6 +166,7 @@ impl MockRenderer {
                 power_preference: wgpu::PowerPreference::default(),
                 force_fallback_adapter: false,
                 compatible_surface: None,
+                ..Default::default()
             }))
             .expect("Failed to find an appropriate adapter");
 
@@ -175,16 +176,14 @@ impl MockRenderer {
                 // Request MAPPABLE_PRIMARY_BUFFERS to allow MAP_WRITE|COPY_DST.
                 // FIXME - Should use a separate buffer from primary to support more platforms.
                 required_features: wgpu::Features::MAPPABLE_PRIMARY_BUFFERS,
-                // Request downlevel_defaults() for maximum compatibility in testing. The actual
-                // Hanabi library uses the default requested mode of the app.
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: wgpu::Limits::defaults(),
                 ..Default::default()
             }))
             .expect("Failed to create device");
 
         // Turn into Bevy objects
         let device = RenderDevice::from(device);
-        let queue = RenderQueue(std::sync::Arc::new(WgpuWrapper::new(queue)));
+        let queue = RenderQueue::new(queue);
 
         Self {
             instance,
@@ -203,4 +202,27 @@ impl MockRenderer {
     pub fn queue(&self) -> RenderQueue {
         self.queue.clone()
     }
+}
+
+/// Compile shader tests with the same conditional-translation defaults as Bevy.
+pub(crate) fn compile_wesl(
+    source: &str,
+    features: &[&str],
+    modules: &[(&str, &str)],
+) -> Result<String, wesl::Error> {
+    let mut resolver = wesl::resolver::VirtualResolver::new();
+    let path = "package::test".parse().unwrap();
+    resolver.add_module(path, source.into());
+    for (path, source) in modules {
+        resolver.add_module(path.parse().unwrap(), (*source).into());
+    }
+    let mut options = wesl::CompileOptions {
+        visibility: false,
+        ..Default::default()
+    };
+    for feature in features {
+        options.features.set(feature, true);
+    }
+    wesl::compile(&"package::test".parse().unwrap(), &options, &resolver)
+        .map(|result| result.to_string())
 }

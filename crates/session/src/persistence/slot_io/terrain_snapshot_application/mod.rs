@@ -195,9 +195,7 @@ pub(super) fn apply_terrain_snapshot_record<'a>(
             max: UVec2::splat(u32::from(chunk.side - 1)),
         });
     }
-    Ok(TerrainSnapshotApplication {
-        changed_chunks,
-    })
+    Ok(TerrainSnapshotApplication { changed_chunks })
 }
 
 #[cfg(test)]

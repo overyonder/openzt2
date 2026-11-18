@@ -21,7 +21,7 @@ use bevy::{
     time::{time_system, TimeSystems},
 };
 
-use crate::asset::EffectAssetLoader;
+use crate::{asset::EffectAssetLoader, render::extract_main_view};
 use crate::{
     asset::{DefaultMesh, EffectAsset},
     compile_effects,
@@ -37,24 +37,28 @@ use crate::{
         prepare_indirect_pipeline, prepare_init_update_pipelines, prepare_property_buffers,
         propagate_ready_state, queue_effects, queue_init_fill_dispatch_ops,
         queue_init_indirect_workgroup_update, queue_sort_fill_dispatch_ops, report_ready_state,
-        start_stop_gpu_debug_capture, update_mesh_locations, DebugSettings,
+        start_stop_gpu_debug_capture, update_mesh_locations, Batcher, DebugSettings,
         DispatchIndirectPipeline, DrawEffects, EffectAssetEvents, EffectBindGroups, EffectCache,
-        EffectsMeta, EventCache, GpuBatchInfo, GpuBufferOperations, GpuEffectMetadata,
-        GpuSpawnerParams, HanabiRenderPlugin, InitFillDispatchQueue, ParticlesInitPipeline,
-        ParticlesRenderPipeline, ParticlesUpdatePipeline, PrefixSumPipeline, PropertyBindGroups,
-        PropertyCache, RenderDebugSettings, ShaderCache, SimParams, SortBindGroups,
-        SortFillDispatchQueue, SortedEffectBatches, StorageType as _, UtilsPipeline,
+        EffectsMeta, EventCache, GpuBatchInfo, GpuBufferOperations, GpuSpawnerParams,
+        HanabiRenderPlugin, InitFillDispatchQueue, ParticlesInitPipeline, ParticlesRenderPipeline,
+        ParticlesUpdatePipeline, PrefixSumPipeline, PropertyBindGroups, PropertyCache,
+        RenderDebugSettings, ShaderCache, SimParams, SortBindGroups, SortFillDispatchQueue,
+        StorageType as _, UtilsPipeline,
     },
     spawn::{self, Random},
     tick_spawners,
     time::effect_simulation_time_system,
     update_properties_from_asset, EffectSimulation, EffectVisibilityClass, ParticleEffect,
-    SpawnerSettings, ToWgslString,
+    SpawnerSettings,
 };
 
 /// Source code for the `vfx_sort` compute shader.
-pub(crate) const VFX_SORT_WGSL: Cow<'static, str> =
-    Cow::Borrowed(include_str!("render/vfx_sort.wgsl"));
+pub(crate) const VFX_SORT_WESL: Cow<'static, str> =
+    Cow::Borrowed(include_str!("render/vfx_sort.wesl"));
+
+/// Source code for the `vfx_sort_merge` compute shader.
+pub(crate) const VFX_SORT_MERGE_WESL: Cow<'static, str> =
+    Cow::Borrowed(include_str!("render/vfx_sort_merge.wesl"));
 
 /// Labels for the Hanabi systems.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, SystemSet)]
@@ -115,9 +119,9 @@ const HANABI_COMMON_TEMPLATE_HANDLE: Handle<Shader> =
 pub struct HanabiPlugin;
 
 impl HanabiPlugin {
-    /// Create the `vfx_common.wgsl` shader with proper alignment.
+    /// Create the `vfx_common.wesl` shader with proper alignment.
     ///
-    /// This creates a new [`Shader`] from the `vfx_common.wgsl` template file,
+    /// This creates a new [`Shader`] from the `vfx_common.wesl` template file,
     /// by applying the given alignment for storage buffers. This produces a
     /// shader ready for the specific GPU device associated with that
     /// alignment.
@@ -126,33 +130,15 @@ impl HanabiPlugin {
             GpuSpawnerParams::padding_code(min_storage_buffer_offset_alignment);
         let batch_info_padding_code =
             GpuBatchInfo::padding_code(min_storage_buffer_offset_alignment);
-        let effect_metadata_padding_code =
-            GpuEffectMetadata::padding_code(min_storage_buffer_offset_alignment);
-        let render_effect_indirect_size =
-            GpuEffectMetadata::aligned_size(min_storage_buffer_offset_alignment);
-        let effect_metadata_stride_code =
-            (render_effect_indirect_size.get() as u32).to_wgsl_string();
-        let common_code = include_str!("render/vfx_common.wgsl")
+        let common_code = include_str!("render/vfx_common.wesl")
             .replace("{{SPAWNER_PADDING}}", &spawner_padding_code)
-            .replace("{{BATCH_INFO_PADDING}}", &batch_info_padding_code)
-            .replace("{{EFFECT_METADATA_PADDING}}", &effect_metadata_padding_code)
-            .replace("{{EFFECT_METADATA_STRIDE}}", &effect_metadata_stride_code);
-        Shader::from_wgsl(
-            common_code,
-            std::path::Path::new(file!())
-                .parent()
-                .unwrap()
-                .join(format!(
-                    "render/vfx_common_{}.wgsl",
-                    min_storage_buffer_offset_alignment
-                ))
-                .to_string_lossy(),
-        )
+            .replace("{{BATCH_INFO_PADDING}}", &batch_info_padding_code);
+        Shader::from_wesl(common_code, "embedded://bevy_hanabi/render/vfx_common.wesl")
     }
 
-    /// Create the `vfx_indirect.wgsl` shader with proper alignment.
+    /// Create the `vfx_indirect.wesl` shader with proper alignment.
     ///
-    /// This creates a new [`Shader`] from the `vfx_indirect.wgsl` template
+    /// This creates a new [`Shader`] from the `vfx_indirect.wesl` template
     /// file, by applying the given alignment for storage buffers. This
     /// produces a shader ready for the specific GPU device associated with
     /// that alignment.
@@ -160,43 +146,36 @@ impl HanabiPlugin {
         min_storage_buffer_offset_alignment: u32,
         has_events: bool,
     ) -> Shader {
-        let render_effect_indirect_size =
-            GpuEffectMetadata::aligned_size(min_storage_buffer_offset_alignment);
-        let render_effect_indirect_stride_code =
-            (render_effect_indirect_size.get() as u32).to_wgsl_string();
-        let indirect_code = include_str!("render/vfx_indirect.wgsl").replace(
-            "{{EFFECT_METADATA_STRIDE}}",
-            &render_effect_indirect_stride_code,
-        );
-        Shader::from_wgsl(
+        let indirect_code = include_str!("render/vfx_indirect.wesl");
+        Shader::from_wesl(
             indirect_code,
-            std::path::Path::new(file!())
-                .parent()
-                .unwrap()
-                .join(format!(
-                    "render/vfx_indirect_{}_{}.wgsl",
-                    min_storage_buffer_offset_alignment,
-                    if has_events { "events" } else { "noevent" },
-                ))
-                .to_string_lossy(),
+            embedded_path(&format!(
+                "vfx_indirect_{}_{}",
+                min_storage_buffer_offset_alignment,
+                if has_events { "events" } else { "noevent" },
+            )),
         )
     }
 
-    /// Create the `vfx_prefix_sum.wgsl` shader.
+    /// Create the `vfx_prefix_sum.wesl` shader.
     ///
-    /// This creates a new [`Shader`] from the `vfx_prefix_sum.wgsl` template
+    /// This creates a new [`Shader`] from the `vfx_prefix_sum.wesl` template
     /// file.
     pub(crate) fn make_prefix_sum_shader() -> Shader {
-        let prefix_sum_code = include_str!("render/vfx_prefix_sum.wgsl");
-        Shader::from_wgsl(
-            prefix_sum_code,
-            std::path::Path::new(file!())
-                .parent()
-                .unwrap()
-                .join("render/vfx_prefix_sum.wgsl")
-                .to_string_lossy(),
-        )
+        let prefix_sum_code = include_str!("render/vfx_prefix_sum.wesl");
+        Shader::from_wesl(prefix_sum_code, embedded_path("vfx_prefix_sum"))
     }
+}
+
+/// Path of one of Hanabi's built-in shaders.
+///
+/// [`Shader::from_wesl`] derives a shader's module path from the path it is
+/// given. Under `embedded://` that is `bevy_hanabi::render::<name>`, the same
+/// for every build; a path from `file!()` would be wherever the source was
+/// compiled, which for a git or registry dependency is an absolute path on the
+/// build machine.
+fn embedded_path(name: &str) -> String {
+    format!("embedded://bevy_hanabi/render/{name}.wesl")
 }
 
 impl Plugin for HanabiPlugin {
@@ -277,9 +256,10 @@ impl Plugin for HanabiPlugin {
             info!("Initializing Hanabi for GPU adapter {}", adapter_name);
         }
 
-        // Insert the properly aligned `vfx_common.wgsl` shader into Assets<Shader>, so
-        // that the automated Bevy shader processing finds it as an import. This is used
-        // for init/update/render shaders (but not the indirect one).
+        // Insert the properly aligned `vfx_common.wesl` shader into
+        // Assets<Shader>, so that the automated Bevy shader processing
+        // finds it as an import. This is used for init/update/render
+        // shaders (but not the indirect one).
         {
             let common_shader = HanabiPlugin::make_common_shader(
                 render_device.limits().min_storage_buffer_offset_alignment,
@@ -290,43 +270,31 @@ impl Plugin for HanabiPlugin {
                 .unwrap();
         }
 
-        // Insert the two variants of the properly aligned `vfx_indirect.wgsl` shaders
-        // into Assets<Shader>.
+        // Insert the two variants of the properly aligned `vfx_indirect.wesl`
+        // shaders into Assets<Shader>.
         let (
             indirect_shader_noevent,
             indirect_shader_events,
             prefix_sum_shader,
             sort_fill_shader,
             sort_shader,
+            sort_merge_shader,
             sort_copy_shader,
         ) = {
             let align = render_device.limits().min_storage_buffer_offset_alignment;
             let indirect_shader_noevent = HanabiPlugin::make_indirect_shader(align, false);
             let indirect_shader_events = HanabiPlugin::make_indirect_shader(align, true);
             let prefix_sum_shader = HanabiPlugin::make_prefix_sum_shader();
-            let sort_fill_shader = Shader::from_wgsl(
-                include_str!("render/vfx_sort_fill.wgsl"),
-                std::path::Path::new(file!())
-                    .parent()
-                    .unwrap()
-                    .join("render/vfx_sort_fill.wgsl")
-                    .to_string_lossy(),
+            let sort_fill_shader = Shader::from_wesl(
+                include_str!("render/vfx_sort_fill.wesl"),
+                embedded_path("vfx_sort_fill"),
             );
-            let sort_shader = Shader::from_wgsl(
-                VFX_SORT_WGSL,
-                std::path::Path::new(file!())
-                    .parent()
-                    .unwrap()
-                    .join("render/vfx_sort.wgsl")
-                    .to_string_lossy(),
-            );
-            let sort_copy_shader = Shader::from_wgsl(
-                include_str!("render/vfx_sort_copy.wgsl"),
-                std::path::Path::new(file!())
-                    .parent()
-                    .unwrap()
-                    .join("render/vfx_sort_copy.wgsl")
-                    .to_string_lossy(),
+            let sort_shader = Shader::from_wesl(VFX_SORT_WESL, embedded_path("vfx_sort"));
+            let sort_merge_shader =
+                Shader::from_wesl(VFX_SORT_MERGE_WESL, embedded_path("vfx_sort_merge"));
+            let sort_copy_shader = Shader::from_wesl(
+                include_str!("render/vfx_sort_copy.wesl"),
+                embedded_path("vfx_sort_copy"),
             );
 
             let mut assets = app.world_mut().resource_mut::<Assets<Shader>>();
@@ -335,6 +303,7 @@ impl Plugin for HanabiPlugin {
             let prefix_sum_shader = assets.add(prefix_sum_shader);
             let sort_fill_shader = assets.add(sort_fill_shader);
             let sort_shader = assets.add(sort_shader);
+            let sort_merge_shader = assets.add(sort_merge_shader);
             let sort_copy_shader = assets.add(sort_copy_shader);
 
             (
@@ -343,6 +312,7 @@ impl Plugin for HanabiPlugin {
                 prefix_sum_shader,
                 sort_fill_shader,
                 sort_shader,
+                sort_merge_shader,
                 sort_copy_shader,
             )
         };
@@ -363,6 +333,7 @@ impl Plugin for HanabiPlugin {
             render_app.world_mut(),
             sort_fill_shader,
             sort_shader,
+            sort_merge_shader,
             sort_copy_shader,
         );
 
@@ -393,7 +364,7 @@ impl Plugin for HanabiPlugin {
             .init_resource::<SpecializedRenderPipelines<ParticlesRenderPipeline>>()
             .init_resource::<EffectAssetEvents>()
             .init_resource::<SimParams>()
-            .init_resource::<SortedEffectBatches>()
+            .init_resource::<Batcher>()
             .configure_sets(
                 Render,
                 (
@@ -411,6 +382,7 @@ impl Plugin for HanabiPlugin {
                     extract_effects,
                     extract_sim_params,
                     extract_effect_events,
+                    extract_main_view.after(bevy::render::camera::extract_cameras),
                 ));
             })
             .add_systems(
@@ -504,7 +476,7 @@ impl Plugin for HanabiPlugin {
                         .before(prepare_bind_groups),
                     prepare_effect_metadata
                         .in_set(EffectSystems::PrepareEffectGpuResources)
-                        // Need DispatchBufferIndices to be allocated
+                        //
                         .after(allocate_effects)
                         // Need the draw indirect args to be allocated
                         .after(update_mesh_locations)
@@ -521,9 +493,13 @@ impl Plugin for HanabiPlugin {
                     // effect metadata buffer has been (re-)allocated to this frame's size.
                     queue_sort_fill_dispatch_ops
                         .in_set(EffectSystems::PrepareEffectGpuResources)
+                        // The prefix sum buffer is allocated and uploaded while batching.
+                        .after(batch_effects)
                         // Need the metadata buffer (re-)allocated so the captured handle and
                         // dynamic offsets are correct and in-bounds
                         .after(prepare_effect_metadata)
+                        // Keep this aligned with other queue submissions that capture GPU buffers.
+                        .after(prepare_gpu_resources)
                         // Must submit into the shared GpuBufferOperations before
                         // queue_init_fill_dispatch_ops uploads its args buffer (end_frame)
                         .before(queue_init_fill_dispatch_ops)
@@ -550,10 +526,10 @@ impl Plugin for HanabiPlugin {
             world.add_observer(on_remove_cached_properties);
         }
 
-        // Register the draw function for drawing the particles. This will be called
-        // during the main 2D/3D pass, at the Transparent2d/3d phase, after the
-        // opaque objects have been rendered (or, rather, commands for those
-        // have been recorded).
+        // Register the draw function for drawing the particles. This will be
+        // called during the main 2D/3D pass, at the Transparent2d/3d
+        // phase, after the opaque objects have been rendered (or,
+        // rather, commands for those have been recorded).
         #[cfg(feature = "2d")]
         {
             let draw_particles = DrawEffects::new(render_app.world_mut());

@@ -219,6 +219,19 @@ pub(super) fn bind_authored_fence(
         segment_length_cm: 300,
         height_cm: 0,
         strength: number_or(record, &["f_FenceStrength", "fenceStrength"], 0)?,
+        // A fence names its broken variant as `s_Broken` or as the ruin
+        // `ZTEntityDestructionData` leaves when it is destroyed.
+        broken: record
+            .descendant_named("BFAIEntityDataShared")
+            .and_then(|data| data.attribute_named_any(&["s_Broken"]))
+            .or_else(|| {
+                record
+                    .descendant_named("ZTEntityDestructionData")
+                    .and_then(|data| data.attribute_named_any(&["entityRuinBinderName"]))
+            })
+            .map(str::trim)
+            .filter(|broken| !broken.is_empty())
+            .map(id),
         blocks: authored_fence_traversal_blocking_flags(record)?,
         gate,
         post_prefab: prefab("start_post"),
@@ -312,12 +325,15 @@ pub(super) fn bind_authored_fence(
         preview_offset_cm: [0; 3],
         preview_scale: 1.0,
         terrain_fitted: false,
+        terrain_fit_height_offset_m: 0.0,
+        terrain_fit_water_offset_m: None,
         real_physics_water_impact: None,
         price_cents,
         upkeep_cents_per_month: 0,
         properties: WorldObjectPropertyFlags::default(),
         affordances: WorldObjectAffordanceFlags::default(),
         destruction: None,
+        virtual_nodes: Vec::new(),
     });
     if let Some(button) = purchase_button {
         bind_authored_fence_catalogue_entry(record, button, object_id, output);

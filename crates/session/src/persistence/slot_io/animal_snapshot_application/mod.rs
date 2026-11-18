@@ -14,10 +14,12 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
+use openzt2_zoo_state::animal_behavior::behavior_token_types::BehaviorSelfToken;
 use openzt2_zoo_state::animal_health::types::Dead;
 use openzt2_zoo_state::animal_health::types::DeathCause;
 use openzt2_zoo_state::animal_lifecycle::types::*;
 use openzt2_zoo_state::animal_welfare::types::*;
+use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 use std::collections::BTreeMap;
 
 pub(super) fn resolve_saved_animal_components(
@@ -101,6 +103,13 @@ pub(super) fn apply_animal_snapshot_records(
         if record.release_restricted {
             entity.insert(ReleaseRestricted);
         }
+        if let Some(caffeinated) = record.caffeinated {
+            entity.insert(if caffeinated {
+                CaffeineMode::Caffeinated
+            } else {
+                CaffeineMode::Decaffeinated
+            });
+        }
         if record.crating_restricted {
             entity.insert(CratingRestricted);
         }
@@ -126,6 +135,9 @@ pub(super) fn apply_animal_snapshot_records(
             }
             if welfare.environment_habitat_assessed {
                 entity.insert(EnvironmentHabitatAssessed);
+            }
+            if let Some(reproduction) = welfare.reproduction_need {
+                entity.insert(ReproductionNeed(reproduction));
             }
             let values = welfare.needs;
             entity.insert((
@@ -170,11 +182,30 @@ pub(super) fn apply_animal_snapshot_records(
             mother: record.parents[0].map(|id| entities[&id]),
             father: record.parents[1].map(|id| entities[&id]),
         });
-        if let Some((father, due_tick)) = record.pregnancy {
+        if let Some((father, _)) = record.pregnancy {
             animal.insert(Pregnancy {
-                father: entities[&father],
-                due_tick,
+                father: Some(entities[&father]),
             });
+        } else if record.pregnant_without_father {
+            animal.insert(Pregnancy { father: None });
+        }
+        if let Some(mate) = record.mate {
+            animal.insert(Mate(entities[&mate]));
+        }
+        let recipient = animal.id();
+        for token in &record.pending_tokens {
+            commands.spawn((
+                BehaviorSelfToken {
+                    name: token.name,
+                    available_at: token.available_at,
+                    expires_at: token.expires_at,
+                    payload: token
+                        .payload
+                        .and_then(|payload| entities.get(&payload).copied()),
+                    retain_on_failure: token.retain_on_failure,
+                },
+                ChildOf(recipient),
+            ));
         }
     }
     Ok(entities)

@@ -189,6 +189,27 @@ fn spawn_set_preserves_authored_entity_joint_and_clip() {
 }
 
 #[test]
+fn guest_ground_trash_spawns_beside_the_actor() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // Trash.tsk ThrowAwayTrashGround.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("spawn.beh"),
+        br#"<BehaviorSets><DropTrash><behaviors><BFBehSpawn spawnEntity="TrashGround" randomPosOffset="0.5" randomRotOffset="180"/></behaviors></DropTrash></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::SpawnObjectAtActor { entity, pose }] = sets[0].actions.lowered_actions()
+    else {
+        panic!("spawn beside the actor expected");
+    };
+    assert_eq!(*entity, AssetId::from_key("trashground"));
+    assert_eq!(pose.random_position_offset_m, 0.5);
+    assert_eq!(pose.random_rotation_offset_radians, 180.0);
+}
+
+#[test]
 fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
     use openzt2_game_data::behavior::{
         action::{
@@ -230,6 +251,7 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             ground: Some(AssetId::from_key("placefood_land")),
             water: Some(AssetId::from_key("placefood_water")),
             underwater: Some(AssetId::from_key("placefood_underwater")),
+            default: None,
             follows_medium_changes: false,
         }
     );
@@ -239,4 +261,102 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
         panic!("following locomotion switch");
     };
     assert!(following.follows_medium_changes);
+}
+
+#[test]
+fn bashing_a_fence_docks_on_it_plays_out_the_bash_and_breaks_it() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped ElephantAfrican BashFence task acts on its fence.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/elephant.beh"),
+        br#"<BehaviorSets><Bash><behaviors><ZTBehDockFence subjectNode="Node_Front" targetAnim="Stand_HeadRam" locoSpeed="fast"/><BFBehPlaySet behSet="SmashFence" interruptEvent="collideWithTarget"/><ZTBehMorph morphEntity="target" morphTargetEntityType="s_Broken" morphFade="true" morphPeriod="1"/></behaviors></Bash></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::Dock(dock), BehaviorAction::PlaySet(_), BehaviorAction::MorphTarget(morph)] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("a fence dock, the bash set and the morph expected");
+    };
+    // The animal stops short of the fence segment's middle on its own side.
+    assert_eq!(dock.radial_distance_m, Some(2.0));
+    assert_eq!(dock.subject_node_name, None);
+    assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
+
+#[test]
+fn a_raptor_smashing_a_fence_plays_its_clip_then_breaks_the_fence() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped Utahraptor SmashFence set kills its fence.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/utahraptor.beh"),
+        br#"<BehaviorSets><SmashFence><behaviors><BFBehKill targetAnim="Stand_SmashFence" killTarget="true" radius="5" radiusKillType="fence" fadeOutPeriod="1" killUsingDestroyEntity="true"/></behaviors></SmashFence></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::AnimationClip(clip), BehaviorAction::MorphTarget(morph)] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("the smash clip, then the fence's morph expected");
+    };
+    assert_eq!(clip.animation_clip_asset_key, "Stand_SmashFence");
+    assert_eq!(*morph, openzt2_game_data::AssetId::from_key("s_broken"));
+}
+
+#[test]
+fn an_ankylosaur_destroying_a_building_plays_its_clip_then_destroys_it() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped Ankylosaurus DestroyBuilding set kills its building.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.beh"),
+        br#"<BehaviorSets><DestroyBuilding><behaviors><BFBehKill targetAnim="Stand_GuestAttack" killTarget="true" fadeOutPeriod="1" killUsingDestroyEntity="true"/></behaviors></DestroyBuilding></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::AnimationClip(clip), BehaviorAction::DestroyTarget] =
+        sets[0].actions.lowered_actions()
+    else {
+        panic!("the attack clip, then the building's destruction expected");
+    };
+    assert_eq!(clip.animation_clip_asset_key, "Stand_GuestAttack");
+}
+
+#[test]
+fn a_rampaging_ankylosaur_s_guest_attack_lowers_whole() {
+    // As the shipped Ankylosaurus AttackGuest_Rampage hails and scares off its guest.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/animals/ankylosaurus.tsk"),
+        br#"<BFAITaskTemplateList><BFAITaskTemplate Name="AttackGuest_Rampage" UniqueID="Ankylosaurus:AttackGuest_Rampage"><BFAICreateData><Subjects><Ankylosaurus/></Subjects><Targets><Guest_Adult_M/><Qualifiers_AND inSight="15" b_Attacked="E false"/></Targets><Objects/></BFAICreateData><BFAIEvalData fixedScore="150"/><BFBehExecTask><BFBehSendToken><BFAITokenList><BFAIToken Name="t_InteractAnimal" GiveTo="target" Payload="subject" Radius="30" Timeout="30" Reconsider="true"/></BFAITokenList></BFBehSendToken></BFBehExecTask><BFAICompletionData invalidateTarget="true"><BFAISubjectData b_Escaped="true"/><BFAITargetData b_Attacked="true" f_departurePoints="-100" happiness="100"/></BFAICompletionData></BFAITaskTemplate></BFAITaskTemplateList>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Tasks(tasks) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("tasks expected");
+    };
+    assert!(!tasks[0].execution.has_unsupported_suffix());
+    assert!(!tasks[0].completion.has_unsupported_suffix());
+}
+
+#[test]
+fn a_locomotion_switch_keeps_its_default_row_and_skips_carrying_rows() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    // As the shipped guest WaitAnimalInteraction and Ankylosaurus FailureSet author them.
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/guests/attack/attack.beh"),
+        br#"<BehaviorSets><WaitAnimalInteraction><behaviors><BFBehLocoSwitchSet><behaviorTable><ground behSet="Wait_Land"/><water behSet="Wait_Water"/><groundcarry behSet="Wait_Carry"/><default behSet="Wait_Land"/></behaviorTable></BFBehLocoSwitchSet></behaviors></WaitAnimalInteraction></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("sets expected");
+    };
+    let [BehaviorAction::LocomotionSwitchSet(switch)] = sets[0].actions.lowered_actions() else {
+        panic!("locomotion switch expected");
+    };
+    assert_eq!(switch.default, Some(AssetId::from_key("wait_land")));
+    assert_eq!(switch.ground, Some(AssetId::from_key("wait_land")));
 }

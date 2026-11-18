@@ -13,10 +13,10 @@ use super::authored_node_property_binding_projection::{
 };
 use super::authored_node_visual_projection::project_authored_node_visuals_into_bevy_presentation;
 use super::authored_widget_projection::project_widget;
+use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::document::UiDocument;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
@@ -24,6 +24,7 @@ use openzt2_game_data::ui_document::node::UiNodeFlags;
 use openzt2_game_data::ui_document::node::UiNodeKind;
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
+use openzt2_game_data::AssetId;
 
 use crate::animation::NotifyOnUiAnimationComplete;
 use crate::animation::UiShowHideAnimation;
@@ -171,6 +172,11 @@ pub fn project_document(
                 // Reusable rows retain their authored extent. Overflow belongs
                 // to the owning list's scroll area, not flex compression.
                 node.flex_shrink = 0.0;
+                // The list advances rows vertically; the row's authored x stays
+                // its inset (`ResolutionEntry` authors x="10").
+                if let Val::Px(inset) = node.left {
+                    node.margin.left = px(inset);
+                }
                 node.left = Val::Auto;
                 node.right = Val::Auto;
                 node.top = Val::Auto;
@@ -380,10 +386,10 @@ pub fn project_document(
                 UiFocusable { order, enabled },
                 UiInteractionEnabled(enabled),
                 UiFocusPresentation::default(),
-                Interaction::None,
+                UiPointerInteraction::None,
             ));
             commands.entity(entity).insert((
-                UiPreviousPointerInteraction::from_current_interaction(Interaction::None),
+                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
                 UiPreviousPointerPressTimeSeconds::default(),
             ));
             default_focus.get_or_insert(entity);
@@ -393,17 +399,17 @@ pub fn project_document(
         if interactive && !focusable {
             commands.entity(entity).insert((
                 UiInteractionEnabled(enabled),
-                Interaction::None,
-                UiPreviousPointerInteraction::from_current_interaction(Interaction::None),
+                UiPointerInteraction::None,
+                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
                 UiPreviousPointerPressTimeSeconds::default(),
             ));
         }
 
         if matches!(
             &record.kind,
-            UiNodeKind::Button | UiNodeKind::Toggle | UiNodeKind::Slider | UiNodeKind::Edit
+            UiNodeKind::Button | UiNodeKind::Toggle | UiNodeKind::Slider
         ) {
-            commands.entity(entity).insert(Button);
+            commands.entity(entity).insert(bevy::ui_widgets::Button);
         }
         if matches!(&record.kind, UiNodeKind::Edit) {
             commands.entity(entity).insert(UiSubmitTarget);
@@ -460,6 +466,29 @@ pub fn project_document(
     }
 
     for (index, record) in data.nodes.iter().enumerate() {
+        if matches!(record.widget, UiWidgetRecord::CatalogueDetails { .. }) {
+            let dynamic_rows = [
+                "cost",
+                "gender",
+                "biome",
+                "biome_location_endangerment",
+                "Items Sold",
+            ]
+            .map(|name| {
+                data.nodes
+                    .iter()
+                    .zip(&entities)
+                    .filter_map(|(row, &entity)| {
+                        row.name.eq_ignore_ascii_case(name).then_some(entity)
+                    })
+                    .collect()
+            });
+            commands.entity(entities[index]).insert(
+                openzt2_interface_state::information::catalogue_types::CatalogueDetails {
+                    dynamic_rows,
+                },
+            );
+        }
         if !matches!(record.widget, UiWidgetRecord::TextEdit { .. }) {
             continue;
         }

@@ -3,6 +3,9 @@ use openzt2_game_data::ui_document::node_property_binding::{
     UiBooleanPropertyBindingSource, UiIntegerPropertyBindingSource,
 };
 
+use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
+use openzt2_game_data::world_definitions::transportation_and_tours::TransportationTrackKind;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
@@ -28,7 +31,10 @@ pub(crate) fn project_selected_transport_status_to_visible_information_panels(
     )>,
     mut authored_integer_values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
     mut authored_boolean_visibility: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
+    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    active_world_definitions: Res<WorldDefinitions>,
 ) {
+    let world_definitions = active_world_definitions.get(&world_definition_assets);
     for (panel_entity, information_panel, inherited_visibility) in &information_panels {
         if !inherited_visibility.get() {
             continue;
@@ -76,6 +82,11 @@ pub(crate) fn project_selected_transport_status_to_visible_information_panels(
                 UiBooleanPropertyBindingSource::TransportCircuitClosed => {
                     circuit.is_some_and(|circuit| circuit.closed)
                 }
+                UiBooleanPropertyBindingSource::TransportStationRunsSkyTrack { sky } => station
+                    .and_then(|station| world_definitions?.find_station(station.definition))
+                    .is_some_and(|definition| {
+                        (definition.kind == TransportationTrackKind::Sky) == *sky
+                    }),
                 UiBooleanPropertyBindingSource::TransportWaiting => waiting.is_some(),
                 UiBooleanPropertyBindingSource::TransportRiding => rider.is_some(),
                 _ => continue,

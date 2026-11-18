@@ -25,10 +25,11 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
     template_declaration_paths: &BTreeMap<String, String>,
     load_context: &mut LoadContext<'_>,
 ) -> io::Result<Vec<OrderedSourceDocument>> {
-    let mut source_documents = vec![
-        parse_blue_fang_source_document(AssetPath::new(primary_source_path), primary_source_bytes)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
-    ];
+    let mut source_documents = vec![parse_blue_fang_source_document(
+        AssetPath::new(primary_source_path),
+        primary_source_bytes,
+    )
+    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?];
     let mut planned_source_paths = BTreeSet::from([AssetPath::new(primary_source_path).key()]);
 
     let (_, winning_asset_paths) = asset_archives.resolved_paths();

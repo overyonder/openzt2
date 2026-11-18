@@ -147,8 +147,7 @@ impl Plugin for ProgressionPlugin {
                 FixedUpdate,
                 (
                     zoo_rating_recomputation::recompute_animal_welfare_rating,
-                    zoo_rating_recomputation::recompute_guest_satisfaction_rating,
-                    zoo_rating_recomputation::recompute_education_rating,
+                    zoo_rating_recomputation::recompute_guest_ratings,
                     zoo_rating_recomputation::recompute_variety_rating,
                     zoo_rating_recomputation::recompute_scenery_rating,
                     zoo_rating_recomputation::recompute_finance_rating,
@@ -157,19 +156,27 @@ impl Plugin for ProgressionPlugin {
                     award_evaluation_and_granting::evaluate_all_progression_award_conditions_and_queue_grants
                         .run_if(simulation_is_running),
                     fame_progression::update_fame_and_apply_authored_fame_unlocks,
-                    profile_challenge_fact_recording::
-                        record_endangered_animal_births_for_profile_challenges,
                     profile_challenge_fact_recording::record_released_animals_for_zoo_fame,
-                    research_execution::advance_research_availability_unlock_countdowns
-                        .run_if(simulation_is_running),
-                    research_execution::refresh_authored_research_availability,
-                    research_execution::advance_active_research_projects_by_one_tick
-                        .run_if(simulation_is_running),
                 )
                     .chain()
                     .in_set(FixedGameSet::Economy)
                     .run_if(in_state(GamePhase::InGame))
                     .after(openzt2_zoo_state::maintenance::ZooCleanlinessProjection),
+            )
+            .add_systems(
+                FixedUpdate,
+                (
+                    profile_challenge_fact_recording::record_endangered_animal_births_for_profile_challenges,
+                    research_execution::advance_research_availability_unlock_countdowns
+                        .run_if(simulation_is_running)
+                        .before(research_execution::refresh_authored_research_availability),
+                    research_execution::refresh_authored_research_availability
+                        .after(fame_progression::update_fame_and_apply_authored_fame_unlocks),
+                    research_execution::advance_active_research_projects_by_one_tick
+                        .run_if(simulation_is_running),
+                )
+                    .in_set(FixedGameSet::Economy)
+                    .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
                 FixedUpdate,
@@ -193,7 +200,6 @@ impl Plugin for ProgressionPlugin {
                     profile_challenge_fact_recording::
                         record_completed_profile_challenge_family_counts,
                 )
-                    .chain()
                     .in_set(FixedGameSet::Cleanup)
                     .run_if(in_state(GamePhase::InGame)),
             );

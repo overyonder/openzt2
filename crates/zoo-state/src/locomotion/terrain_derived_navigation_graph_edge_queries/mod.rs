@@ -9,49 +9,13 @@ impl TerrainDerivedNavigationGraph {
         &self,
         source_navigation_node: u32,
     ) -> impl Iterator<Item = TerrainDerivedNavigationGraphEdge> + '_ {
-        let mut destination_navigation_nodes = [u32::MAX; 4];
-        let mut destination_navigation_node_count = 0;
-        if (source_navigation_node as usize) < self.navigation_nodes.len() {
-            if let Some(source_terrain_cell) =
-                self.calculate_terrain_cell_for_navigation_node(source_navigation_node)
-            {
-                for candidate_terrain_cell in [
-                    source_terrain_cell[0]
-                        .checked_sub(1)
-                        .map(|x| [x, source_terrain_cell[1]]),
-                    source_terrain_cell[0]
-                        .checked_add(1)
-                        .map(|x| [x, source_terrain_cell[1]]),
-                    source_terrain_cell[1]
-                        .checked_sub(1)
-                        .map(|z| [source_terrain_cell[0], z]),
-                    source_terrain_cell[1]
-                        .checked_add(1)
-                        .map(|z| [source_terrain_cell[0], z]),
-                ]
-                .into_iter()
-                .flatten()
-                {
-                    if let Some(destination_navigation_node) =
-                        self.calculate_navigation_node_for_terrain_cell(candidate_terrain_cell)
-                    {
-                        destination_navigation_nodes[destination_navigation_node_count] =
-                            destination_navigation_node;
-                        destination_navigation_node_count += 1;
-                    }
-                }
-            }
-        }
-        destination_navigation_nodes[..destination_navigation_node_count].sort_unstable();
-        destination_navigation_nodes
+        self.terrain_neighbors
+            .get(source_navigation_node as usize)
             .into_iter()
-            .take(destination_navigation_node_count)
-            .filter_map(move |destination_navigation_node| {
-                self.derive_navigation_graph_edge(
-                    source_navigation_node,
-                    destination_navigation_node,
-                )
-            })
+            .flatten()
+            .copied()
+            .filter(|&next| next != u32::MAX)
+            .filter_map(move |next| self.derive_navigation_graph_edge(source_navigation_node, next))
             .chain(
                 self.path_surface_edges
                     .get(&source_navigation_node)
@@ -88,12 +52,32 @@ impl TerrainDerivedNavigationGraph {
         }
         Some(TerrainDerivedNavigationGraphEdge {
             destination_node: destination_navigation_node,
-            traversal_cost_millimetres: calculate_distance_millimetres_between_centimetre_positions(
-                self.calculate_navigation_node_world_position_centimetres(source_navigation_node)?,
-                self.calculate_navigation_node_world_position_centimetres(
-                    destination_navigation_node,
-                )?,
-            ),
+            traversal_cost_millimetres: if source_navigation_node
+                < self.navigation_nodes.len() as u32
+                && destination_navigation_node < self.navigation_nodes.len() as u32
+            {
+                let horizontal = u64::from(self.terrain_cell_size_centimetres);
+                let rise = u64::from(
+                    source_node
+                        .height_centimetres
+                        .abs_diff(destination_node.height_centimetres),
+                );
+                let length = if rise == 0 {
+                    horizontal
+                } else {
+                    (horizontal * horizontal + rise * rise).isqrt()
+                };
+                u32::try_from(length * 10).unwrap_or(u32::MAX)
+            } else {
+                calculate_distance_millimetres_between_centimetre_positions(
+                    self.calculate_navigation_node_world_position_centimetres(
+                        source_navigation_node,
+                    )?,
+                    self.calculate_navigation_node_world_position_centimetres(
+                        destination_navigation_node,
+                    )?,
+                )
+            },
             // Clearance is a radius, so the narrower cell leaves twice its clearance.
             width_centimetres: source_node
                 .clearance_centimetres

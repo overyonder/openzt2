@@ -1,4 +1,4 @@
-use bevy::math::cubic_splines::CubicSegment;
+use bevy::curve::cubic_splines::CubicSegment;
 use bevy::prelude::*;
 use openzt2_game_data::scene_prefab::PrefabControllerClock;
 use openzt2_game_data::scene_prefab::PrefabRotationCurve;

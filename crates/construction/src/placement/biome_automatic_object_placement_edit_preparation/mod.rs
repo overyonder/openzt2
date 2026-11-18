@@ -413,6 +413,7 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                     affordable: true,
                     topology_valid: true,
                     headroom_valid: true,
+                    surface_valid: true,
                 },
             );
             if !matches!(validity, PlacementValidity::Valid { .. }) {
