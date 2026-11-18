@@ -119,6 +119,9 @@ pub fn attach_staff_presentation_variant(
             PrefabPresentation::new(prefab),
             PendingModelJointAttachment::new(staff, &head.joint),
             StaffAttachedHead,
+            openzt2_world_state::world_spawn::prefab_presentation_types::PrefabAttachmentKeepsOwnerScale {
+                owner: staff,
+            },
         ));
     }
     let textures = variant

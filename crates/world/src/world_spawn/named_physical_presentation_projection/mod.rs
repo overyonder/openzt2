@@ -149,6 +149,11 @@ pub(super) fn spawn_required_named_physical_presentations<'a>(
             if !presentation.inherit_attach_rotation {
                 holder.insert(PrefabAttachmentIndependentRotation);
             }
+            holder.insert(
+                openzt2_world_state::world_spawn::prefab_presentation_types::PrefabAttachmentKeepsOwnerScale {
+                    owner,
+                },
+            );
             holder.id()
         });
         let mut child = commands.spawn((
