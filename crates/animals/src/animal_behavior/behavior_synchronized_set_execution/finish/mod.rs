@@ -90,7 +90,8 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
                 .is_some_and(|task| task.stack.len() == owner.depth);
         let failed = failure.is_some() || !owns_partner || owner.target_outcome == Some(false);
         // A partner looping a wait, as a guest's `WaitAnimalInteraction`
-        // stands idle until the animal is done, ends with the subject.
+        // stands idle until the animal is done, ends with the subject. A loop
+        // with a `playTime` runs out on its own, so it isn't cut short.
         let partner_waits = owns_partner
             && outcomes
                 .partner_tasks
@@ -103,9 +104,10 @@ pub(super) fn finish_or_cancel_synchronized_behavior_sets(
                         .get(&partner.document)
                         .and_then(|document| find_current_behavior_task_action(document, partner))
                 })
-                .is_some_and(
-                    |action| matches!(action, BehaviorAction::AnimationClip(clip) if clip.looping),
-                );
+                .is_some_and(|action| {
+                    matches!(action, BehaviorAction::AnimationClip(clip)
+                        if clip.looping && clip.play_duration_seconds.is_none())
+                });
         if owns_task
             && !failed
             && !(subject_finished && (owner.target_outcome == Some(true) || partner_waits))

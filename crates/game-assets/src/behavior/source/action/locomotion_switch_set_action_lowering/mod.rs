@@ -65,7 +65,7 @@ pub(super) fn lower_locomotion_switch_set_action(
             "water" => &mut action.water,
             "underwater" => &mut action.underwater,
             "default" => &mut action.default,
-            // ponytail: an actor carrying something isn't tracked, so the
+            // An actor carrying something isn't tracked, so the
             // `groundcarry`, `watercarry` and `underwatercarry` rows go unused.
             "groundcarry" | "watercarry" | "underwatercarry" => continue,
             _ => {
