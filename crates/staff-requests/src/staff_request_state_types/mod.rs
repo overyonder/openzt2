@@ -22,6 +22,8 @@ pub(super) struct StaffRequestRowIdentity {
 pub(super) struct StaffRequestRuntimeState {
     pub(super) row: StaffRequestRowIdentity,
     pub(super) previous: Option<StaffRequestControllerSample>,
+    /// The maintenance schedule the previous sample was compared against.
+    pub(super) previous_schedule: Option<u8>,
 }
 
 #[derive(Component, Debug, Default)]

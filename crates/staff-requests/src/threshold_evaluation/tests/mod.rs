@@ -80,6 +80,7 @@ fn authored_hysteresis_uses_independent_cancel_threshold() {
             ordinal: 0,
         },
         previous: None,
+        previous_schedule: None,
     };
     assert!(evaluate_staff_request_row(
         &row,
@@ -149,6 +150,7 @@ fn creation_and_edges_emit_one_request_and_one_cancellation() {
             ordinal: 0,
         },
         previous: None,
+        previous_schedule: None,
     };
     assert!(matches!(
         evaluate_staff_request_row(
@@ -235,4 +237,52 @@ fn a_filter_is_cleaned_at_the_thresholds_of_its_chosen_schedule() {
     assert!(
         filter_schedule_row(&number_row(Comparison::RisesAbove, false), &filter, None).is_none()
     );
+}
+
+#[test]
+fn switching_to_a_lower_filter_schedule_raises_the_cleaning_request() {
+    use openzt2_game_data::world_definitions::world_objects::WaterFilterPolicy;
+    use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterFilter;
+    use openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex;
+    let mut row = number_row(Comparison::RisesAbove, false);
+    row.attribute_key = Some(AssetId::from_key("f_filterdirtylevel"));
+    row.request.token = Some(AssetId::from_key("t_cleanwaterfilter"));
+    // A cleaned filter cancels the request once its dirt falls back.
+    row.cancel_comparison = Comparison::FallsBelow;
+    let filter = WaterFilter {
+        policy: WaterFilterPolicy {
+            cleanup_interval_seconds: 2.0,
+            cleanup_rate: 750.0,
+            maximum_dirt_capacity: 75_000.0,
+            maintenance_thresholds: Some([[20.0, 10.0], [50.0, 10.0], [80.0, 10.0]]),
+        },
+        seconds_until_cleanup: 0.0,
+        dirt_percent: 40.0,
+    };
+    let regular = filter_schedule_row(&row, &filter, Some(&MaintenanceScheduleIndex(1))).unwrap();
+    let preemptive =
+        filter_schedule_row(&row, &filter, Some(&MaintenanceScheduleIndex(0))).unwrap();
+    let target = Entity::from_bits(8);
+    let mut state = StaffRequestRuntimeState {
+        row: StaffRequestRowIdentity {
+            definition: row.id,
+            binder: row.binder,
+            attribute_key: row.attribute_key,
+            token: row.request.token,
+            ordinal: 0,
+        },
+        previous: None,
+        previous_schedule: None,
+    };
+    let dirt = Some(StaffRequestControllerSample::NumberQ16(40 * 65_536));
+    // 40% is below regular's 50%.
+    assert!(evaluate_staff_request_row(&regular, &mut state, target, dirt).is_none());
+    // Held at 40%, a switch to preemptive's 20% raises the request.
+    assert!(matches!(
+        evaluate_staff_request_row_against(&preemptive, &regular, &mut state, target, dirt),
+        Some(StaffRequestJobEvent::Raised { .. })
+    ));
+    // Comparing both readings against 20% would never see the crossing.
+    state.previous = dirt;
+    assert!(evaluate_staff_request_row(&preemptive, &mut state, target, dirt).is_none());
 }

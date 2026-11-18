@@ -133,6 +133,7 @@ fn bind_rows(
                     ordinal: *ordinal,
                 },
                 previous: None,
+                previous_schedule: None,
             };
             *ordinal = ordinal.saturating_add(1);
             Some(state)
@@ -339,8 +340,23 @@ pub(super) fn evaluate_staff_request_rows(
                 continue;
             };
             let scheduled = filter.and_then(|filter| filter_schedule_row(row, filter, schedule));
-            if let Some(event) = evaluate_staff_request_row(
+            // The previous reading is compared against the schedule it was
+            // taken under, so a switch to a lower threshold still raises.
+            let schedule_index = schedule.map(|index| index.0);
+            let previously_scheduled = filter.and_then(|filter| {
+                filter_schedule_row(
+                    row,
+                    filter,
+                    state
+                        .previous_schedule
+                        .map(openzt2_zoo_state::economy::facility_economy_types::MaintenanceScheduleIndex)
+                        .as_ref(),
+                )
+            });
+            state.previous_schedule = schedule_index;
+            if let Some(event) = evaluate_staff_request_row_against(
                 scheduled.as_ref().unwrap_or(row),
+                previously_scheduled.as_ref().unwrap_or(row),
                 state,
                 entity,
                 Some(sample),
@@ -451,7 +467,35 @@ fn evaluate_staff_request_row(
     target: Entity,
     current: Option<StaffRequestControllerSample>,
 ) -> Option<StaffRequestJobEvent> {
+    evaluate_staff_request_row_against(row, row, state, target, current)
+}
+
+/// As [`evaluate_staff_request_row`], with the previous sample taken under
+/// `previous_row`'s thresholds. A previous sample that didn't meet its own
+/// threshold counts as not having met the current one either.
+fn evaluate_staff_request_row_against(
+    row: &StaffRequestControllerDefinition,
+    previous_row: &StaffRequestControllerDefinition,
+    state: &mut StaffRequestRuntimeState,
+    target: Entity,
+    current: Option<StaffRequestControllerSample>,
+) -> Option<StaffRequestJobEvent> {
     let previous = state.previous;
+    let previous_under = |comparison, old, new| {
+        previous.filter(|sample| {
+            old == new || evaluate_staff_threshold(comparison, old, None, *sample) != 0
+        })
+    };
+    let trigger_previous = previous_under(
+        row.threshold_comparison,
+        previous_row.threshold,
+        row.threshold,
+    );
+    let cancel_previous = previous_under(
+        row.cancel_comparison,
+        previous_row.cancel_threshold,
+        row.cancel_threshold,
+    );
     state.previous = current.or_else(|| {
         row.attribute_key
             .is_none()
@@ -459,13 +503,18 @@ fn evaluate_staff_request_row(
     });
     let token = row.request.token?;
     let trigger_result = current.map(|sample| {
-        evaluate_staff_threshold(row.threshold_comparison, row.threshold, previous, sample)
+        evaluate_staff_threshold(
+            row.threshold_comparison,
+            row.threshold,
+            trigger_previous,
+            sample,
+        )
     });
     let cancel_result = current.map(|sample| {
         evaluate_staff_threshold(
             row.cancel_comparison,
             row.cancel_threshold,
-            previous,
+            cancel_previous,
             sample,
         )
     });
