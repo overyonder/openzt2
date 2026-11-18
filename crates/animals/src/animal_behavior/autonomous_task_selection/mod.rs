@@ -476,6 +476,11 @@ pub(super) fn select_idle_animal_tasks(
                     {
                         continue;
                     }
+                    // Only a fence that can break is worth bashing; a broken
+                    // segment has no broken variant of its own.
+                    if task_name.contains("Bash") && definition.broken.is_none() {
+                        continue;
+                    }
                     let distance = facts.transform.translation().distance(
                         world_objects
                             .fence_middle(edge)
