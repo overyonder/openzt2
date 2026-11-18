@@ -346,6 +346,7 @@ mod tests {
             .add_message::<AnimationClipPlaybackRequestRejected>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest>()
             .add_message::<openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequestStarted>()
+            .add_message::<crate::animation_playback::SkippedAnimationGraphTransition>()
             .add_systems(Update, execute_explicit_animation_clip_playback_requests);
         let subject = application.world_mut().spawn_empty().id();
         let request_id = application
