@@ -89,7 +89,8 @@ pub(super) async fn load_world_definition_source_documents(
             binder_source_paths,
             &from,
             &reference,
-        ) else {
+        )?
+        else {
             continue;
         };
         if let Some(revision) = revision {
@@ -177,37 +178,39 @@ pub(super) async fn load_world_definition_source_documents(
     let mut references =
         collect_authored_world_definition_source_document_dependency_references(&documents);
     while let Some((from, reference)) = references.pop_first() {
-        let dependency =
-            match reference {
-                AuthoredWorldDefinitionSourceReference::Document(reference) => archives
-                    .resolve_source_reference(Path::new(&from), &reference)
-                    .ok_or_else(|| unresolved_reference(&from, "source document", &reference))?,
-                AuthoredWorldDefinitionSourceReference::OptionalDocument(reference) => {
-                    let Some(dependency) =
-                        archives.resolve_source_reference(Path::new(&from), &reference)
-                    else {
-                        continue;
-                    };
-                    dependency
+        let dependency = match reference {
+            AuthoredWorldDefinitionSourceReference::Document(reference) => archives
+                .resolve_source_reference(Path::new(&from), &reference)
+                .ok_or_else(|| unresolved_reference(&from, "source document", &reference))?,
+            AuthoredWorldDefinitionSourceReference::OptionalDocument(reference) => {
+                let Some(dependency) =
+                    archives.resolve_source_reference(Path::new(&from), &reference)
+                else {
+                    continue;
+                };
+                dependency
+            }
+            AuthoredWorldDefinitionSourceReference::GateCollisionType(actor_type) => {
+                // The context and selected binder remain load dependencies even
+                // when the loader's revision-scoped source-path index is warm.
+                let _ = context
+                    .read_asset_bytes("config/gamectxt.xml")
+                    .await
+                    .map_err(io::Error::other)?;
+                let (dependency, revision) = binder_source_paths
+                    .resolve_binder_type_source_path(archives, &from, &actor_type)?
+                    .ok_or_else(|| {
+                        unresolved_reference(&from, "authored binder type", &actor_type)
+                    })?;
+                if binder_source_index_revision.is_some_and(|previous| previous != revision) {
+                    return Err(io::Error::other(
+                        "archive revision changed while resolving authored binder references",
+                    ));
                 }
-                AuthoredWorldDefinitionSourceReference::GateCollisionType(actor_type) => {
-                    // The context and selected binder remain load dependencies even
-                    // when the loader's revision-scoped source-path index is warm.
-                    let _ = context
-                        .read_asset_bytes("config/gamectxt.xml")
-                        .await
-                        .map_err(io::Error::other)?;
-                    let (dependency, revision) = binder_source_paths
-                        .resolve_binder_type_source_path(archives, &from, &actor_type)?;
-                    if binder_source_index_revision.is_some_and(|previous| previous != revision) {
-                        return Err(io::Error::other(
-                            "archive revision changed while resolving authored binder references",
-                        ));
-                    }
-                    binder_source_index_revision = Some(revision);
-                    dependency
-                }
-            };
+                binder_source_index_revision = Some(revision);
+                dependency
+            }
+        };
         let dependency = dependency.to_string_lossy().replace('\\', "/");
         dependencies
             .entry(from)
@@ -234,31 +237,80 @@ pub(super) async fn load_world_definition_source_documents(
 /// of the file declaring it. Where the same-named file is another kind of
 /// document, such as `guests/YoungMale/Guest_Young_M.xml`, an animation graph
 /// beside the `Guest_Young_M` binder in `guests/ai/YoungMale.xml`, the binder
-/// index names the declaring file instead. Families with no same-named file,
-/// or that the index does not know, keep the file-name resolution.
+/// index names the declaring file, including for families with no same-named
+/// file. Fall back to file-name resolution when the index has no declaration.
 fn resolve_typed_binder_family_source_path(
     archives: &AssetArchives,
     binder_source_paths: &AuthoredBinderSourcePathIndex,
     from: &str,
     family: &str,
-) -> Option<(std::path::PathBuf, Option<u64>)> {
-    let by_name = archives.resolve_source_reference(Path::new(from), family)?;
-    let declares_family = archives.read_source(&by_name).ok().is_some_and(|bytes| {
-        parse_blue_fang_source_document(AssetPath::new(&by_name.to_string_lossy()), &bytes)
-            .is_ok_and(|document| {
-                document.root.name.eq_ignore_ascii_case("BFTypedBinder")
-                    && document
-                        .root
-                        .attribute_named_any(&["binderType"])
-                        .is_some_and(|binder_type| binder_type.eq_ignore_ascii_case(family))
-            })
+) -> io::Result<Option<(std::path::PathBuf, Option<u64>)>> {
+    let by_name = archives.resolve_source_reference(Path::new(from), family);
+    let declares_family = by_name.as_ref().is_some_and(|path| {
+        archives.read_source(path).ok().is_some_and(|bytes| {
+            parse_blue_fang_source_document(AssetPath::new(&path.to_string_lossy()), &bytes)
+                .is_ok_and(|document| {
+                    document.root.name.eq_ignore_ascii_case("BFTypedBinder")
+                        && document
+                            .root
+                            .attribute_named_any(&["binderType"])
+                            .is_some_and(|binder_type| binder_type.eq_ignore_ascii_case(family))
+                })
+        })
     });
-    if declares_family {
-        return Some((by_name, None));
+    if !declares_family {
+        if let Some((path, revision)) =
+            binder_source_paths.resolve_binder_type_source_path(archives, from, family)?
+        {
+            return Ok(Some((path, Some(revision))));
+        }
     }
-    match binder_source_paths.resolve_binder_type_source_path(archives, from, family) {
-        Ok((path, revision)) => Some((path, Some(revision))),
-        Err(_) => Some((by_name, None)),
+    Ok(by_name.map(|path| (path, None)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::asset_source::{
+        create_bevy_asset_source_for_enabled_z2f_archives, tests::TestDirectory,
+    };
+
+    #[test]
+    fn family_lookup_distinguishes_indexed_missing_and_ambiguous_declarations() -> io::Result<()> {
+        let directory = TestDirectory::new()?;
+        let archive = directory.archive(
+            "guests.z2f",
+            &[
+                (
+                    "config/gamectxt.xml",
+                    br#"<BFGameContext><BFBinderRoot><root path="guests/ai"/></BFBinderRoot></BFGameContext>"#,
+                ),
+                ("guests/ai/adult.xml", br#"<BFTypedBinder binderType="Guest_Adult"/>"#),
+                ("guests/ai/young.xml", br#"<BFTypedBinder binderType="Guest_Young"/>"#),
+                ("guests/ai/other.xml", br#"<BFTypedBinder binderType="Guest_Young"/>"#),
+                ("guests/guest_young.xml", b"<BFAnimationGraph/>"),
+                ("guests/guest_infant.xml", b"<BFAnimationGraph/>"),
+            ],
+        )?;
+        let (_, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![archive])?;
+        let index = AuthoredBinderSourcePathIndex::default();
+        let resolve = |family| {
+            resolve_typed_binder_family_source_path(&archives, &index, "guests/variant.xml", family)
+        };
+
+        assert_eq!(
+            resolve("Guest_Adult")?,
+            Some(("guests/ai/adult.xml".into(), Some(archives.revision())))
+        );
+        assert_eq!(
+            resolve("Guest_Infant")?,
+            Some(("guests/guest_infant.xml".into(), None))
+        );
+        assert_eq!(
+            resolve("Guest_Young").unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+        Ok(())
     }
 }
 

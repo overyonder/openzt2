@@ -500,7 +500,7 @@ fn compatible_bevy_image_asset_path_for_changed_source_path(path: &Path) -> Opti
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::{
         fs::File,
         io::Write,
@@ -523,10 +523,10 @@ mod tests {
 
     static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
 
-    struct TestDirectory(PathBuf);
+    pub(crate) struct TestDirectory(PathBuf);
 
     impl TestDirectory {
-        fn new() -> std::io::Result<Self> {
+        pub(crate) fn new() -> std::io::Result<Self> {
             let path = std::env::temp_dir().join(format!(
                 "openzt2-bevy-assets-{}-{}",
                 std::process::id(),
@@ -536,7 +536,11 @@ mod tests {
             Ok(Self(path))
         }
 
-        fn archive(&self, name: &str, entries: &[(&str, &[u8])]) -> std::io::Result<PathBuf> {
+        pub(crate) fn archive(
+            &self,
+            name: &str,
+            entries: &[(&str, &[u8])],
+        ) -> std::io::Result<PathBuf> {
             let path = self.0.join(name);
             let mut writer = ZipWriter::new(File::create(&path)?);
             for (entry, bytes) in entries {

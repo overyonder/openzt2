@@ -251,6 +251,7 @@ fn keeper_food_placement_lowers_with_its_holding_container_and_placement_set() {
             ground: Some(AssetId::from_key("placefood_land")),
             water: Some(AssetId::from_key("placefood_water")),
             underwater: Some(AssetId::from_key("placefood_underwater")),
+            default: None,
             follows_medium_changes: false,
         }
     );

@@ -25,11 +25,12 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use super::staff_request_state_types::StaffRequestControllerSample;
 use super::staff_request_state_types::StaffRequestRowIdentity;
 use super::staff_request_state_types::StaffRequestRuntimeState;
+use super::staff_request_state_types::StaffRequestThresholdState;
 use super::staff_request_state_types::StaffRequestRuntimeBinding;
 use super::staff_request_state_types::StaffRequestBindingPending;
 use super::staff_request_state_types::StaffRequestJobKey;
 use super::staff_request_state_types::StaffRequestJobEvent;
-use super::staff_request_threshold_comparison::evaluate_staff_threshold;
+use super::staff_request_threshold_comparison::staff_threshold_matches;
 
 #[cfg(test)]
 mod tests;
@@ -451,29 +452,21 @@ fn evaluate_staff_request_row(
     target: Entity,
     current: Option<StaffRequestControllerSample>,
 ) -> Option<StaffRequestJobEvent> {
+    let current = current.map(|sample| StaffRequestThresholdState {
+        trigger: staff_threshold_matches(row.threshold_comparison, row.threshold, sample),
+        cancel: staff_threshold_matches(row.cancel_comparison, row.cancel_threshold, sample),
+    });
+    // Keep each result under the thresholds in effect when it was sampled.
     let previous = state.previous;
-    state.previous = current.or_else(|| {
-        row.attribute_key
-            .is_none()
-            .then_some(StaffRequestControllerSample::NoValue)
-    });
+    state.previous =
+        current.or_else(|| row.attribute_key.is_none().then(StaffRequestThresholdState::default));
     let token = row.request.token?;
-    let trigger_result = current.map(|sample| {
-        evaluate_staff_threshold(row.threshold_comparison, row.threshold, previous, sample)
-    });
-    let cancel_result = current.map(|sample| {
-        evaluate_staff_threshold(
-            row.cancel_comparison,
-            row.cancel_threshold,
-            previous,
-            sample,
-        )
-    });
-    let event = if previous.is_none() && row.trigger_on_creation {
+    let trigger_on_creation = previous.is_none() && row.trigger_on_creation;
+    let previous = previous.unwrap_or_default();
+    let current = current.unwrap_or_default();
+    let event = if trigger_on_creation || (current.trigger && !previous.trigger) {
         true
-    } else if trigger_result == Some(1) {
-        true
-    } else if cancel_result == Some(1) {
+    } else if current.cancel && !previous.cancel {
         false
     } else {
         return None;

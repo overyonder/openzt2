@@ -180,7 +180,10 @@ pub(super) fn route_construction_ui_actions(
                         }
                         continue;
                     }
-                    if let Some((entity, placeable)) = selected.0.and_then(|entity| {
+                    let purchasing =
+                        matches!(*selected_tool, ConstructionTool::Place(_)) && relocating.is_empty();
+                    let rotation_selection = selected.0.filter(|_| !purchasing);
+                    if let Some((entity, placeable)) = rotation_selection.and_then(|entity| {
                         let entity = intents
                             .animal_crates
                             .get(entity)
