@@ -11,35 +11,21 @@ use super::{
     kfm_animation_set_lowering::lower_kfm_source_to_animation_set_document,
 };
 
-#[derive(TypePath)]
-pub(super) struct AnimationSetSourceAssetLoader {
-    asset_archives: crate::asset_source::AssetArchives,
-}
-
-impl FromWorld for AnimationSetSourceAssetLoader {
-    fn from_world(world: &mut World) -> Self {
-        Self {
-            asset_archives: world
-                .resource::<crate::asset_source::AssetArchives>()
-                .clone(),
-        }
-    }
-}
+#[derive(Default, TypePath)]
+pub(super) struct AnimationSetSourceAssetLoader;
 
 impl AssetLoader for AnimationSetSourceAssetLoader {
     type Asset = AnimationSetAsset;
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_animation_set", skip_all))]
     async fn load(
         &self,
         animation_set_source_reader: &mut dyn Reader,
         _animation_set_loader_settings: &Self::Settings,
         animation_set_load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("animation_set");
         let mut animation_set_source_bytes = Vec::new();
         animation_set_source_reader
             .read_to_end(&mut animation_set_source_bytes)

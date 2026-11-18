@@ -9,7 +9,6 @@ use bevy::prelude::Entity;
 use bevy::prelude::Quat;
 use bevy::prelude::Query;
 use bevy::prelude::Res;
-use bevy::prelude::ResMut;
 use bevy::prelude::Transform;
 use bevy::prelude::Vec3;
 use bevy::prelude::Visibility;
@@ -35,8 +34,6 @@ use openzt2_world_state::world_spawn::prefab_model_readiness::first_missing_pref
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::zoo_entrance_anchor_synchronization::zoo_entrance_from_authored_gate_anchor;
@@ -45,7 +42,6 @@ const WORLD_PREFAB_RECORD_HYDRATION_BATCH_SIZE: usize = 128;
 
 pub(super) fn hydrate_bounded_world_prefab_record_batch(
     mut commands: Commands,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -57,8 +53,6 @@ pub(super) fn hydrate_bounded_world_prefab_record_batch(
     allocator: Option<Res<PersistentIdAllocator>>,
     mut pending: Query<(Entity, &mut WorldHydration)>,
 ) {
-    let _performance_timer =
-        performance.measure(WorldLoadingPerformanceStage::WorldPrefabRecordHydration);
     let Some(allocator) = allocator else {
         return;
     };

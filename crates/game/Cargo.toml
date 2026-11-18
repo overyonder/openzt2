@@ -9,8 +9,9 @@ license.workspace = true
 
 [features]
 default = []
-trace-tracy-gpu = ["bevy/trace", "bevy/trace_tracy", "bevy/debug"]
-trace-tracy-memory = ["bevy/trace", "bevy/trace_tracy_memory", "bevy/debug"]
+tracing = ["bevy/trace_tracy", "bevy/debug", "openzt2_game_assets/tracing", "openzt2_world/tracing"]
+trace-tracy-gpu = ["tracing"]
+trace-tracy-memory = ["tracing", "bevy/trace_tracy_memory"]
 dev-tools = [
     "dep:bevy-inspector-egui",
     "bevy/bevy_dev_tools",

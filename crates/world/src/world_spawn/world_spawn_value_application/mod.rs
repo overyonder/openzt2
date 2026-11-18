@@ -22,14 +22,11 @@ use openzt2_zoo_state::progression::research_types::ResearchProject;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 /// Validate all starting-zoo values before applying them to spawned entities.
 pub(super) fn apply_all_authored_world_spawn_values_once(
     mut commands: Commands,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     scenarios: Res<Assets<WorldScenarioDocumentAsset>>,
     active_definitions: Res<WorldDefinitions>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -45,8 +42,6 @@ pub(super) fn apply_all_authored_world_spawn_values_once(
         )>,
     >,
 ) {
-    let _performance_timer =
-        performance.measure(WorldLoadingPerformanceStage::AuthoredSpawnValueApplication);
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };

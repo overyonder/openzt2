@@ -17,15 +17,11 @@ use super::animation_set_asset_types::AnimationClipSourceAsset;
 #[derive(TypePath)]
 pub(super) struct AnimationClipSourceAssetLoader {
     bevy_gltf_loader: GltfLoader,
-    asset_archives: crate::asset_source::AssetArchives,
 }
 
 impl FromWorld for AnimationClipSourceAssetLoader {
     fn from_world(world: &mut World) -> Self {
         Self {
-            asset_archives: world
-                .resource::<crate::asset_source::AssetArchives>()
-                .clone(),
             bevy_gltf_loader: create_bevy_gltf_loader_for_lowered_source_assets(world),
         }
     }
@@ -36,15 +32,13 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_animation_clip", skip_all))]
     async fn load(
         &self,
         animation_clip_source_reader: &mut dyn Reader,
         _animation_clip_loader_settings: &Self::Settings,
         animation_clip_load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("animation_clip");
         let mut animation_source_bytes = Vec::new();
         animation_clip_source_reader
             .read_to_end(&mut animation_source_bytes)

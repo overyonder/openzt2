@@ -25,7 +25,6 @@ pub mod world_hydration_types;
 pub mod world_load_completion_marker;
 pub mod world_load_failure;
 pub mod world_load_request_acceptance;
-pub mod world_loading_performance_attribution;
 pub mod world_membership_types;
 pub mod world_terrain_hydration;
 pub mod world_unloading;

@@ -87,8 +87,7 @@ impl Plugin for WorldSpawnPlugin {
                 .run_if(world_hydration_completion::loading_screen_is_ready),
         );
         app.add_message::<openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest>();
-        app.init_resource::<openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution>()
-            .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId>()
+        app.add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssigned>()
             .add_message::<openzt2_world_state::world_spawn::persistent_id_assignment::PersistentIdAssignmentFailed>()
             .add_message::<openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad>()

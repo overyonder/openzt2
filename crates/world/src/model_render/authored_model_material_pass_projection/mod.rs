@@ -352,7 +352,6 @@ pub(super) struct MaterialViews {
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn update_per_draw_effect_transform_semantics(
-    mut hot_loop_measurements: Local<MaterialHotLoopMeasurements>,
     mut visible_meshes: VisibleMaterialMeshes,
     mut views: Local<MaterialViews>,
     cameras: Query<
@@ -394,10 +393,9 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         With<DynamicEffectPassMaterial>,
     >,
 ) {
-    let measurement_started =
-        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::DEBUG)
-            .then(std::time::Instant::now);
+    #[cfg(feature = "tracing")]
     let mut scanned = 0_u64;
+    #[cfg(feature = "tracing")]
     let mut updated = 0_u64;
     let wind_changed = wind.is_changed();
     let light_changed = ambient_light.is_changed()
@@ -457,10 +455,15 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         Vec4::from_array(ambient_light.color.to_linear().to_f32_array()) * ambient_light.brightness;
     light_rig[6].w = 1.0;
     let wind_registers = wind.shader_registers();
+    #[cfg(feature = "tracing")]
+    let _span = bevy::log::info_span!("update_visible_materials").entered();
     for (entity, transform, material_handle, projected_marker, visibility, view_projection) in
         renderables.iter_many(visible_meshes.collect()).matched()
     {
-        scanned += 1;
+        #[cfg(feature = "tracing")]
+        {
+            scanned += 1;
+        }
         if !visibility.get() {
             continue;
         }
@@ -562,20 +565,17 @@ pub(super) fn update_per_draw_effect_transform_semantics(
         );
         material
             .write_programmable_float_registers_to_persistent_buffers(&mut effect_uniform_buffers);
-        updated += 1;
+        #[cfg(feature = "tracing")]
+        {
+            updated += 1;
+        }
     }
-    report_material_hot_loop_measurements(
-        "update_per_draw_effect_transform_semantics",
-        measurement_started,
-        scanned,
-        updated,
-        &mut hot_loop_measurements,
-    );
+    #[cfg(feature = "tracing")]
+    bevy::log::debug!(target: "openzt2_profile_counts", scanned, updated, "visible material updates");
 }
 
 #[allow(clippy::type_complexity)]
 pub(super) fn project_effect_pass_material_instances_for_additional_render_views(
-    mut hot_loop_measurements: Local<MaterialHotLoopMeasurements>,
     mut invalidation: crate::model_render::material_render_view_invalidation::MaterialRenderViewInvalidation,
     mut candidates: Local<Vec<Entity>>,
     mut changed_assets: Local<HashSet<bevy::asset::AssetId<EffectPassMaterial>>>,
@@ -620,10 +620,9 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
     mut effect_materials: ResMut<Assets<EffectPassMaterial>>,
     mut effect_uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    let measurement_started =
-        bevy::log::tracing::enabled!(target: "openzt2_material_hot_loops", bevy::log::Level::DEBUG)
-            .then(std::time::Instant::now);
+    #[cfg(feature = "tracing")]
     let mut scanned = 0_u64;
+    #[cfg(feature = "tracing")]
     let mut created = 0_u64;
     let (sweep_orphans, views_changed) =
         invalidation.collect_affected_sources(&mut candidates, &mut changed_assets);
@@ -646,6 +645,8 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
             },
         ));
     }
+    #[cfg(feature = "tracing")]
+    let _span = bevy::log::info_span!("project_materials_for_views").entered();
     for source_entity in candidates.iter().copied() {
         let Ok((
             source,
@@ -663,7 +664,10 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
         else {
             continue;
         };
-        scanned += 1;
+        #[cfg(feature = "tracing")]
+        {
+            scanned += 1;
+        }
         let source_render_layers = saved_render_layers.map_or_else(
             || render_layers.cloned().unwrap_or_default(),
             |saved| saved.0.clone(),
@@ -770,7 +774,10 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
                     source_material: source_material.0.clone(),
                 },
             ));
-            created += 1;
+            #[cfg(feature = "tracing")]
+            {
+                created += 1;
+            }
             if let Some(pass_submission_order) = pass_submission_order {
                 projection.insert(*pass_submission_order);
             }
@@ -788,37 +795,8 @@ pub(super) fn project_effect_pass_material_instances_for_additional_render_views
             }
         }
     }
-    report_material_hot_loop_measurements(
-        "project_effect_pass_material_instances_for_additional_render_views",
-        measurement_started,
-        scanned,
-        created,
-        &mut hot_loop_measurements,
-    );
-}
-
-/// Opt-in aggregate timings; excludes deferred command application and GPU work.
-fn report_material_hot_loop_measurements(
-    system_name: &str,
-    started: Option<std::time::Instant>,
-    visited: u64,
-    changed: u64,
-    measurements: &mut MaterialHotLoopMeasurements,
-) {
-    let Some(started) = started else { return };
-    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
-    measurements.calls += 1;
-    measurements.total_milliseconds += elapsed_ms;
-    measurements.worst_milliseconds = measurements.worst_milliseconds.max(elapsed_ms);
-    measurements.visited_items += visited;
-    measurements.changed_items += changed;
-    if measurements.calls == 120 {
-        debug!(target: "openzt2_material_hot_loops", system_name,
-            calls = measurements.calls, mean_ms = measurements.total_milliseconds / 120.0,
-            worst_ms = measurements.worst_milliseconds, visited_per_call = measurements.visited_items / 120,
-            changed_per_call = measurements.changed_items / 120, "material hot loop attribution");
-        *measurements = MaterialHotLoopMeasurements::default();
-    }
+    #[cfg(feature = "tracing")]
+    bevy::log::debug!(target: "openzt2_profile_counts", scanned, created, "additional view projections");
 }
 
 pub(super) fn invalidate_authored_model_material_pass_projection(
@@ -872,15 +850,6 @@ pub(super) fn invalidate_authored_model_material_pass_projection(
             }
         }
     }
-}
-
-#[derive(Default)]
-pub(crate) struct MaterialHotLoopMeasurements {
-    calls: u32,
-    total_milliseconds: f64,
-    worst_milliseconds: f64,
-    visited_items: u64,
-    changed_items: u64,
 }
 
 #[derive(Component)]

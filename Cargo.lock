@@ -5328,6 +5328,7 @@ dependencies = [
  "smol_str",
  "sysinfo",
  "thiserror 2.0.20",
+ "tracing",
  "ureq",
  "windows-sys 0.61.2",
  "z2f",
@@ -5459,7 +5460,6 @@ dependencies = [
  "serde_json",
  "ureq",
  "windows-sys 0.61.2",
- "zip",
 ]
 
 [[package]]

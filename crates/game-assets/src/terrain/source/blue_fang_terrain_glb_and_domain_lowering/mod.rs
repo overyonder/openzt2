@@ -20,6 +20,7 @@ pub struct LoweredBlueFangTerrain {
 /// Lowers one original terrain grid into an ordinary indexed GLB mesh.
 /// `heights` are the authored BFTerrain values resolved from the map's XML
 /// documents.
+#[cfg_attr(feature = "tracing", tracing::instrument(skip_all))]
 pub fn lower_blue_fang_terrain_to_domain_grid_and_glb(
     terrain: ParsedBlueFangTerrain,
     heights: AuthoredTerrainHeights,

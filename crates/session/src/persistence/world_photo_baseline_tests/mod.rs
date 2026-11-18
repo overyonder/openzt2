@@ -1,9 +1,4 @@
 use openzt2_environment::EnvironmentPlugin;
-use std::{
-    fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
 
 use bevy::prelude::*;
 use openzt2_game_data::{
@@ -31,7 +26,6 @@ use crate::persistence::{
 };
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    asset_source::create_bevy_asset_source_for_enabled_z2f_archives,
     {
         world_definitions::{
             world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -51,35 +45,15 @@ use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompletionSet;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-
-struct EmptyArchiveFixture(PathBuf);
-
-impl Drop for EmptyArchiveFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
 
 #[test]
 fn imported_ids_default_album_and_environment_keep_their_order_with_delayed_localization() {
     for delay_localization in [false, true] {
-        let archive = EmptyArchiveFixture(std::env::temp_dir().join(format!(
-            "openzt2-photo-baseline-{}-{}.z2f", std::process::id(),
-            SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-        )));
-        zip::ZipWriter::new(fs::File::create_new(&archive.0).unwrap())
-            .finish()
-            .unwrap();
-        let (_, archives) =
-            create_bevy_asset_source_for_enabled_z2f_archives(vec![archive.0.clone()]).unwrap();
         let (mut app, root) = loading_app();
         app.add_plugins(EnvironmentPlugin)
             .add_message::<openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioCue>()
             .add_message::<openzt2_game_assets::effect::SpawnParticleEffectEmitter>()
             .add_message::<openzt2_game_assets::effect::StopParticleEffectsAttachedToEntity>()
-            .insert_resource(archives)
-            .init_resource::<WorldLoadingPerformanceAttribution>()
             .add_systems(
                 Update,
                 (

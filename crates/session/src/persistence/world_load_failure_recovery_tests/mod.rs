@@ -1,9 +1,3 @@
-use std::{
-    fs,
-    path::PathBuf,
-    time::{SystemTime, UNIX_EPOCH},
-};
-
 use bevy::prelude::*;
 use openzt2_game_data::{world_scenario::StartingZooRecord, AssetId};
 
@@ -28,7 +22,6 @@ use crate::persistence::{
 };
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    asset_source::create_bevy_asset_source_for_enabled_z2f_archives,
     {
         terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset,
         world_scenario::{
@@ -50,34 +43,13 @@ use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailed;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::WorldLoadOperationOwner;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
-struct EmptyArchiveFixture(PathBuf);
-
-impl Drop for EmptyArchiveFixture {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.0);
-    }
-}
-
-fn recovery_app() -> (App, Entity, EmptyArchiveFixture) {
-    let archive = EmptyArchiveFixture(std::env::temp_dir().join(format!(
-        "openzt2-load-recovery-{}-{}.z2f",
-        std::process::id(),
-        SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos(),
-    )));
-    zip::ZipWriter::new(fs::File::create_new(&archive.0).unwrap())
-        .finish()
-        .unwrap();
-    let (_, archives) =
-        create_bevy_asset_source_for_enabled_z2f_archives(vec![archive.0.clone()]).unwrap();
+fn recovery_app() -> (App, Entity) {
     let (mut app, root) = loading_app();
-    app.insert_resource(archives)
-        .init_asset::<TerrainAsset>()
-        .init_resource::<WorldLoadingPerformanceAttribution>()
+    app.init_asset::<TerrainAsset>()
         .add_systems(
             Update,
             (
@@ -92,7 +64,7 @@ fn recovery_app() -> (App, Entity, EmptyArchiveFixture) {
                 .chain()
                 .in_set(GameSet::Intent),
         );
-    (app, root, archive)
+    (app, root)
 }
 
 fn fixture_start_document() -> WorldScenarioDocumentAsset {
@@ -174,7 +146,7 @@ fn begin_normal_reentry(app: &mut App) -> Entity {
 
 #[test]
 fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry() {
-    let (mut app, root, _archive) = recovery_app();
+    let (mut app, root) = recovery_app();
     let start = install_start_document(&mut app);
     initialize_fixture_album_localization(app.world_mut());
     prepare_photo_snapshot_application(app.world_mut());
@@ -237,7 +209,7 @@ fn post_baseline_reference_failure_retires_its_world_and_allows_normal_reentry()
 
 #[test]
 fn checksum_valid_unknown_scenario_fails_instead_of_retaining_a_pending_snapshot() {
-    let (mut app, old_root, _archive) = recovery_app();
+    let (mut app, old_root) = recovery_app();
     let _start = install_start_document(&mut app);
     let unknown = AssetId([99; 16]);
     let bytes = saved_photo_container_for_scenario(app.world_mut(), unknown);
@@ -264,7 +236,7 @@ fn checksum_valid_unknown_scenario_fails_instead_of_retaining_a_pending_snapshot
 
 #[test]
 fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
-    let (mut app, root, _archive) = recovery_app();
+    let (mut app, root) = recovery_app();
     app.world_mut().write_message(UnloadWorld(root));
     let handle = app
         .world()
@@ -316,7 +288,7 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
 
 #[test]
 fn hydration_failure_retires_simulation_before_the_snapshot_coordinator_observes_it() {
-    let (mut app, root, _archive) = recovery_app();
+    let (mut app, root) = recovery_app();
     let handle = install_start_document(&mut app);
     prepare_photo_snapshot_application(app.world_mut());
     let operation = app
@@ -355,7 +327,7 @@ fn hydration_failure_retires_simulation_before_the_snapshot_coordinator_observes
 
 #[test]
 fn stale_same_scenario_results_do_not_complete_or_fail_a_later_snapshot_operation() {
-    let (mut app, root, _archive) = recovery_app();
+    let (mut app, root) = recovery_app();
     let _start = install_start_document(&mut app);
     prepare_photo_snapshot_application(app.world_mut());
     let retired = app.world_mut().spawn_empty().id();

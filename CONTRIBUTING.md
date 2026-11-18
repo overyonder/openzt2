@@ -66,6 +66,12 @@ incremental compilation enabled and LTO disabled.
 Use `--profile profiling` for performance measurements. It uses optimization
 level 3 with LTO disabled and retains limited debug information.
 
+`cargo profile-cpu` builds for sampling with tools such as `perf`.
+`cargo profile-gpu` enables Tracy, including Bevy's CPU system spans and
+additional spans for asset loading and material projection. To include material
+work counts and asset read sizes, run that binary with
+`RUST_LOG=info,openzt2_profile_counts=debug`.
+
 | Setting | `dev` | `profiling` | `release` |
 | --- | --- | --- | --- |
 | Workspace optimization | 1 | 3 | 3 |

@@ -21,15 +21,11 @@ use super::blue_fang_source_image_decoding::{
 #[derive(TypePath)]
 pub(super) struct CompatibleSourceImageAssetLoader {
     supported_compressed_formats: CompressedImageFormats,
-    asset_archives: crate::asset_source::AssetArchives,
 }
 
 impl FromWorld for CompatibleSourceImageAssetLoader {
     fn from_world(world: &mut World) -> Self {
         Self {
-            asset_archives: world
-                .resource::<crate::asset_source::AssetArchives>()
-                .clone(),
             supported_compressed_formats: world
                 .get_resource::<CompressedImageFormatSupport>()
                 .map_or(CompressedImageFormats::NONE, |formats| formats.0),
@@ -42,15 +38,13 @@ impl AssetLoader for CompatibleSourceImageAssetLoader {
     type Settings = ImageLoaderSettings;
     type Error = io::Error;
 
+    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_compatible_image", skip_all))]
     async fn load(
         &self,
         reader: &mut dyn Reader,
         settings: &Self::Settings,
         load_context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
-        let _performance_timer = self
-            .asset_archives
-            .measure_scene_loading_asset_translation("compatible_image");
         let mut source_bytes = Vec::new();
         reader.read_to_end(&mut source_bytes).await?;
         let extension = load_context

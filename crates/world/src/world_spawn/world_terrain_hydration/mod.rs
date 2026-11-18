@@ -5,7 +5,6 @@ use bevy::prelude::Entity;
 use bevy::prelude::IVec2;
 use bevy::prelude::Query;
 use bevy::prelude::Res;
-use bevy::prelude::ResMut;
 use bevy::prelude::Vec2;
 use bevy::prelude::With;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -18,8 +17,6 @@ use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_world_state::world_spawn::selected_world_terrain_asset_handle::SelectedWorldTerrainAssetHandle;
 use openzt2_world_state::world_spawn::world_hydration_types::WorldHydration;
 use openzt2_world_state::world_spawn::world_load_failure::WorldLoadFailure;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceAttribution;
-use openzt2_world_state::world_spawn::world_loading_performance_attribution::WorldLoadingPerformanceStage;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
@@ -29,7 +26,6 @@ use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHoriz
 /// until this succeeds, so the camera never receives guessed extents.
 pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
     mut commands: Commands,
-    mut performance: ResMut<WorldLoadingPerformanceAttribution>,
     terrains: Res<Assets<TerrainAsset>>,
     asset_server: Res<AssetServer>,
     active_definitions: Res<WorldDefinitions>,
@@ -37,7 +33,6 @@ pub(super) fn hydrate_selected_terrain_chunks_world_bounds_and_topology_grid(
     roots: Query<&SelectedWorldTerrainAssetHandle, With<WorldRoot>>,
     mut pending: Query<(Entity, &mut WorldHydration)>,
 ) {
-    let _performance_timer = performance.measure(WorldLoadingPerformanceStage::TerrainHydration);
     let Ok((root, mut pending)) = pending.single_mut() else {
         return;
     };
