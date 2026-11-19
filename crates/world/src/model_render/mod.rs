@@ -2,7 +2,6 @@ mod active_model_view_cameras;
 mod configured_model_effect_materials;
 mod environment_layer_rendering;
 mod mirrored_model_primitive_winding;
-pub(crate) mod model_projection_changes;
 mod prefab_render_layer_camera_matching;
 // Instantiation and presentation policy for ordinary glTF model scenes.
 
@@ -16,15 +15,23 @@ mod prefab_fixed_function_world_lighting_projection;
 mod prefab_model_billboard_orientation;
 mod prefab_model_level_of_detail_projection;
 mod prefab_model_tint_projection;
+pub(crate) mod prefab_render_lod_tier_projection;
 pub(crate) mod world_entity_model_suppression;
 
 use bevy::camera::visibility::VisibilitySystems;
+use bevy::core_pipeline::core_3d::Transparent3d;
+use bevy::ecs::schedule::ScheduleCleanupPolicy;
 use bevy::extract::extract_instances::ExtractInstancesPlugin;
+use bevy::pbr::MeshPipeline;
 use bevy::prelude::*;
+use bevy::render::render_phase::{
+    sort_phase_system, AddRenderCommand, DrawFunctions, SortedRenderPhasePlugin,
+};
 use bevy::render::Render;
 use bevy::render::RenderApp;
 use bevy::render::RenderSystems;
 use bevy::transform::TransformSystems;
+use openzt2_game_assets::material::runtime::effect_pass_stencil_reference::DrawEffectPass;
 
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::ModelRenderPresentationSet;
@@ -53,7 +60,7 @@ impl Plugin for ModelRenderPlugin {
             app,
         );
         environment_layer_rendering::register_inherited_environment_render_layers(app);
-        model_projection_changes::register(app);
+        mirrored_model_primitive_winding::register_inherited_primitive_tint(app);
         app.add_plugins(ExtractInstancesPlugin::<
             AuthoredEffectTechniquePassSubmissionOrder,
             RenderApp,
@@ -63,18 +70,32 @@ impl Plugin for ModelRenderPlugin {
             environment_layer_rendering::EnvironmentPrimitiveLayer,
             RenderApp,
         >::new());
-        app.sub_app_mut(RenderApp)
-            .init_resource::<environment_layer_rendering::PreparedEnvironmentLayers>()
+        type EnvironmentPhase = environment_layer_rendering::EnvironmentPhaseItem;
+        app.add_plugins(SortedRenderPhasePlugin::<EnvironmentPhase, MeshPipeline>::new(default()));
+        let render_app = app.sub_app_mut(RenderApp);
+        render_app
+            .remove_systems_in_set(
+                Render,
+                sort_phase_system::<Transparent3d>,
+                ScheduleCleanupPolicy::RemoveSystemsOnly,
+            )
+            .expect("the Core3d transparent sort system is registered");
+        render_app
+            .init_resource::<DrawFunctions<EnvironmentPhase>>()
+            .add_render_command::<EnvironmentPhase, DrawEffectPass>()
             .add_systems(
                 Render,
-                environment_layer_rendering::restore_environment_phase_items_before_queueing
-                    .before(RenderSystems::Queue),
+                environment_layer_rendering::queue_environment_layers
+                    .in_set(RenderSystems::QueueMeshes)
+                    .after(bevy::pbr::queue_material_meshes),
             )
             .add_systems(
                 Render,
-                environment_layer_rendering::separate_prepared_environment_layers
-                    .after(RenderSystems::Prepare)
-                    .before(RenderSystems::Render),
+                (
+                    sort_phase_system::<EnvironmentPhase>,
+                    authored_effect_technique_pass_submission_order::sort_transparent_effect_phase,
+                )
+                    .in_set(RenderSystems::PhaseSort),
             )
             .add_systems(
                 bevy::core_pipeline::schedule::Core3d,
@@ -118,7 +139,10 @@ impl Plugin for ModelRenderPlugin {
             PostUpdate,
             (
                 initialize_model_geometry_texture_coordinate_clocks.before(project_authored_model_material_passes),
+                prefab_render_lod_tier_projection::project_prefab_render_lod_tier
+                    .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 project_prefab_model_level_of_detail_visibility
+                    .after(prefab_render_lod_tier_projection::project_prefab_render_lod_tier)
                     .in_set(ModelRenderPresentationSet::LevelOfDetail),
                 instantiate_visible_gltf_model_scenes
                     .after(VisibilitySystems::VisibilityPropagate)
@@ -130,7 +154,8 @@ impl Plugin for ModelRenderPlugin {
                 mirrored_model_primitive_winding::project_mirrored_and_tinted_model_primitive_meshes
                     .after(bevy::app::AnimationSystems)
                     .after(project_authored_model_material_passes)
-                    .before(TransformSystems::Propagate)
+                    .after(TransformSystems::Propagate)
+                    .before(VisibilitySystems::CalculateBounds)
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
                 project_authored_model_material_passes
                     .in_set(ModelRenderPresentationSet::SourceMaterials),
@@ -144,10 +169,5 @@ impl Plugin for ModelRenderPlugin {
                     openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial,
                 >),
         );
-        app.sub_app_mut(RenderApp)
-            .add_systems(Render,
-                crate::model_render::authored_effect_technique_pass_submission_order::sort_authored_effect_invocations_before_bevy_mesh_batch_preparation
-                    .after(RenderSystems::PhaseSort)
-                    .before(RenderSystems::Prepare));
     }
 }

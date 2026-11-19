@@ -1,93 +1,80 @@
 use std::time::Duration;
 
+use crate::input::input_execution_types::DeviceControlAxes;
 use bevy::{
     input::gamepad::{Gamepad, GamepadAxis, GamepadButton},
     prelude::*,
     time::Real,
 };
-
-use openzt2_interface_state::input::input_types::ActionRequest;
-use openzt2_interface_state::input::input_types::ActionSource;
-
-use super::input_types::ActiveInputDevice;
-use super::input_types::GameAction;
-use super::input_types::GameActionInputBinding;
-use super::input_types::GameActionInputBindings;
-use super::input_types::InputChord;
-use crate::input::input_execution_types::DeviceControlAxes;
+use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_interface_state::{
+    input::input_types::{GameAction, GameActionInputBindings, InputChord},
+    ui::{
+        input_frame_capture_types::AuthoredModalInputCapture,
+        pointer_capture_types::UiPointerCapture,
+    },
+};
 
 const GAMEPAD_RADIAL_DEAD_ZONE: f32 = 0.20;
 
 #[derive(Component, Default)]
+#[require(GamepadNavigationRepeat)]
+pub(super) struct GamepadInputSample {
+    pub(super) pointer_motion: Vec2,
+    pub(super) primary: bool,
+    pub(super) secondary: bool,
+    pub(super) axes: DeviceControlAxes,
+    pub(super) meaningful: bool,
+    pub(super) actions: Vec<GameAction>,
+}
+
+#[derive(Component, Default)]
 pub(super) struct GamepadNavigationRepeat(Option<(GameAction, Timer)>);
 
-pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes(
-    mut connected_gamepads: Query<(Entity, Ref<Gamepad>, &mut GamepadNavigationRepeat)>,
-    action_bindings: Res<GameActionInputBindings>,
-    real_time: Res<Time<Real>>,
-    mut control_axes: ResMut<DeviceControlAxes>,
-    mut active_input_device: ResMut<ActiveInputDevice>,
-    mut action_requests: MessageWriter<ActionRequest>,
-    phase: Res<State<openzt2_game_assets::application_lifecycle::GamePhase>>,
-    capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
-    modal_input: Res<
-        openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
-    >,
+pub(super) fn sample_connected_gamepads(
+    mut devices: Query<(
+        Ref<Gamepad>,
+        &mut GamepadInputSample,
+        &mut GamepadNavigationRepeat,
+    )>,
+    bindings: Res<GameActionInputBindings>,
+    time: Res<Time<Real>>,
+    phase: Res<State<GamePhase>>,
+    capture: Res<UiPointerCapture>,
+    modal: Res<AuthoredModalInputCapture>,
 ) {
-    for (gamepad_entity, gamepad, mut navigation_repeat) in &mut connected_gamepads {
+    let ui = *phase.get() != GamePhase::InGame || capture.over_ui || modal.0.is_some();
+    for (gamepad, mut sample, mut repeat) in &mut devices {
         if gamepad.is_added() {
-            navigation_repeat.0 = None;
+            repeat.0 = None;
         }
-        let ui_navigation = *phase.get()
-            != openzt2_game_assets::application_lifecycle::GamePhase::InGame
-            || capture.over_ui
-            || modal_input.0.is_some();
-        let right_stick = apply_radial_gamepad_dead_zone(Vec2::new(
-            gamepad.get(GamepadAxis::RightStickX).unwrap_or(0.0),
-            gamepad.get(GamepadAxis::RightStickY).unwrap_or(0.0),
+        sample.actions.clear();
+        sample.pointer_motion = radial_dead_zone(Vec2::new(
+            gamepad.get(GamepadAxis::LeftStickX).unwrap_or_default(),
+            -gamepad.get(GamepadAxis::LeftStickY).unwrap_or_default(),
         ));
-        let pan = if ui_navigation {
-            Vec2::ZERO
-        } else {
-            right_stick
-        };
-        let pan_directions = [
-            pan.y.max(0.0),
-            (-pan.y).max(0.0),
-            pan.x.max(0.0),
-            (-pan.x).max(0.0),
-        ];
-        let look = Vec2::ZERO;
-        let zoom = if ui_navigation {
-            0.0
-        } else {
-            f32::from(game_action_is_held(
-                GameAction::ZoomIn,
-                &action_bindings,
-                &gamepad,
-            )) - f32::from(game_action_is_held(
-                GameAction::ZoomOut,
-                &action_bindings,
-                &gamepad,
-            ))
-        };
-        let menu_direction = if !ui_navigation {
+        let right = radial_dead_zone(Vec2::new(
+            gamepad.get(GamepadAxis::RightStickX).unwrap_or_default(),
+            gamepad.get(GamepadAxis::RightStickY).unwrap_or_default(),
+        ));
+        let pan = if ui { Vec2::ZERO } else { right };
+        let navigation = if !ui {
             None
-        } else if gamepad.pressed(GamepadButton::DPadUp) || right_stick.y > 0.5 {
+        } else if gamepad.pressed(GamepadButton::DPadUp) || right.y > 0.5 {
             Some(GameAction::NavigateUp)
-        } else if gamepad.pressed(GamepadButton::DPadDown) || right_stick.y < -0.5 {
+        } else if gamepad.pressed(GamepadButton::DPadDown) || right.y < -0.5 {
             Some(GameAction::NavigateDown)
-        } else if gamepad.pressed(GamepadButton::DPadLeft) || right_stick.x < -0.5 {
+        } else if gamepad.pressed(GamepadButton::DPadLeft) || right.x < -0.5 {
             Some(GameAction::NavigateLeft)
-        } else if gamepad.pressed(GamepadButton::DPadRight) || right_stick.x > 0.5 {
+        } else if gamepad.pressed(GamepadButton::DPadRight) || right.x > 0.5 {
             Some(GameAction::NavigateRight)
         } else {
             None
         };
-        if let Some(direction) = menu_direction {
-            let emit = match &mut navigation_repeat.0 {
-                Some((action, timer)) if *action == direction => {
-                    if timer.tick(real_time.delta()).is_finished() {
+        if let Some(direction) = navigation {
+            let emit = match &mut repeat.0 {
+                Some((previous, timer)) if *previous == direction => {
+                    if timer.tick(time.delta()).is_finished() {
                         timer.set_duration(Duration::from_millis(120));
                         timer.reset();
                         true
@@ -96,7 +83,7 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
                     }
                 }
                 _ => {
-                    navigation_repeat.0 = Some((
+                    repeat.0 = Some((
                         direction,
                         Timer::new(Duration::from_millis(350), TimerMode::Once),
                     ));
@@ -104,36 +91,48 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
                 }
             };
             if emit {
-                action_requests.write(ActionRequest {
-                    action: direction,
-                    source: ActionSource::Controller(gamepad_entity),
-                });
+                sample.actions.push(direction);
             }
-        } else if navigation_repeat.0.is_some() {
-            navigation_repeat.0 = None;
+        } else if repeat.0.is_some() {
+            repeat.0 = None;
         }
-        if ui_navigation {
+        if ui {
             for (button, action) in [
                 (GamepadButton::South, GameAction::Confirm),
                 (GamepadButton::East, GameAction::Cancel),
             ] {
                 if gamepad.just_pressed(button) {
-                    action_requests.write(ActionRequest {
-                        action,
-                        source: ActionSource::Controller(gamepad_entity),
-                    });
+                    sample.actions.push(action);
                 }
             }
         }
-        let mut gamepad_input_was_meaningful = pan != Vec2::ZERO
-            || look != Vec2::ZERO
-            || zoom != 0.0
-            || menu_direction.is_some()
-            || gamepad.any_just_pressed([GamepadButton::South, GamepadButton::East]);
-        for action_binding in action_bindings.entries.iter() {
-            if modal_input.0.is_some()
+        let mut zoom_in = false;
+        let mut zoom_out = false;
+        sample.primary = false;
+        sample.secondary = false;
+        for binding in bindings.entries.iter() {
+            let buttons = [Some(binding.primary), binding.alternate]
+                .into_iter()
+                .flatten()
+                .filter_map(|chord| match chord {
+                    InputChord::Gamepad(button) => Some(button),
+                    _ => None,
+                });
+            for button in buttons.clone() {
+                if !gamepad.pressed(button) {
+                    continue;
+                }
+                match binding.action {
+                    GameAction::ZoomIn => zoom_in = true,
+                    GameAction::ZoomOut => zoom_out = true,
+                    GameAction::PrimaryPointer => sample.primary = true,
+                    GameAction::SecondaryPointer => sample.secondary = !ui,
+                    _ => {}
+                }
+            }
+            if modal.0.is_some()
                 && !matches!(
-                    action_binding.action,
+                    binding.action,
                     GameAction::PrimaryPointer
                         | GameAction::Confirm
                         | GameAction::Cancel
@@ -145,9 +144,9 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
             {
                 continue;
             }
-            if ui_navigation
+            if ui
                 && matches!(
-                    action_binding.action,
+                    binding.action,
                     GameAction::UseObject
                         | GameAction::SecondaryPointer
                         | GameAction::Pause
@@ -158,88 +157,43 @@ pub(super) fn translate_connected_gamepad_state_to_game_actions_and_control_axes
             {
                 continue;
             }
-            if game_action_binding_was_just_pressed_by_gamepad(action_binding, &gamepad) {
-                action_requests.write(ActionRequest {
-                    action: action_binding.action,
-                    source: ActionSource::Controller(gamepad_entity),
-                });
-                gamepad_input_was_meaningful = true;
+            if buttons
+                .into_iter()
+                .any(|button| gamepad.just_pressed(button))
+            {
+                sample.actions.push(binding.action);
             }
         }
-        if gamepad_input_was_meaningful {
-            *control_axes = DeviceControlAxes {
-                pan,
-                pan_directions,
-                look,
-                zoom,
-            };
-            active_input_device.source = ActionSource::Controller(gamepad_entity);
-            active_input_device.changed_at = real_time.elapsed();
-        }
+        let zoom = if ui {
+            0.0
+        } else {
+            f32::from(zoom_in) - f32::from(zoom_out)
+        };
+        sample.axes = DeviceControlAxes {
+            pan,
+            pan_directions: [
+                pan.y.max(0.0),
+                (-pan.y).max(0.0),
+                pan.x.max(0.0),
+                (-pan.x).max(0.0),
+            ],
+            look: Vec2::ZERO,
+            zoom,
+        };
+        sample.meaningful = pan != Vec2::ZERO
+            || zoom != 0.0
+            || navigation.is_some()
+            || gamepad.any_just_pressed([GamepadButton::South, GamepadButton::East])
+            || !sample.actions.is_empty();
     }
 }
 
-pub(super) fn clear_control_axes_after_active_gamepad_disconnects(
-    connected_gamepads: Query<(), With<Gamepad>>,
-    mut control_axes: ResMut<DeviceControlAxes>,
-    mut active_input_device: ResMut<ActiveInputDevice>,
-) {
-    let ActionSource::Controller(active_gamepad_entity) = active_input_device.source else {
-        return;
-    };
-    if !connected_gamepads.contains(active_gamepad_entity) {
-        *control_axes = DeviceControlAxes::default();
-        active_input_device.source = ActionSource::KeyboardMouse;
-    }
-}
-
-pub(super) fn apply_radial_gamepad_dead_zone(raw_axis_value: Vec2) -> Vec2 {
-    let raw_magnitude = raw_axis_value.length();
-    if raw_magnitude <= GAMEPAD_RADIAL_DEAD_ZONE {
+pub(super) fn radial_dead_zone(raw: Vec2) -> Vec2 {
+    let magnitude = raw.length();
+    if magnitude <= GAMEPAD_RADIAL_DEAD_ZONE {
         return Vec2::ZERO;
     }
-    let normalized_magnitude = ((raw_magnitude - GAMEPAD_RADIAL_DEAD_ZONE)
-        / (1.0 - GAMEPAD_RADIAL_DEAD_ZONE))
-        .clamp(0.0, 1.0);
-    raw_axis_value / raw_magnitude * normalized_magnitude
-}
-
-fn game_action_binding_was_just_pressed_by_gamepad(
-    action_binding: &GameActionInputBinding,
-    gamepad: &Gamepad,
-) -> bool {
-    input_chord_was_just_pressed_by_gamepad(action_binding.primary, gamepad)
-        || action_binding.alternate.is_some_and(|alternate_chord| {
-            input_chord_was_just_pressed_by_gamepad(alternate_chord, gamepad)
-        })
-}
-
-fn input_chord_was_just_pressed_by_gamepad(input_chord: InputChord, gamepad: &Gamepad) -> bool {
-    match input_chord {
-        InputChord::Gamepad(button) => gamepad.just_pressed(button),
-        InputChord::Unbound
-        | InputChord::Key(_)
-        | InputChord::KeyPair(_, _)
-        | InputChord::ModifiedKey { .. }
-        | InputChord::Mouse(_) => false,
-    }
-}
-
-pub(super) fn game_action_is_held(
-    action: GameAction,
-    bindings: &GameActionInputBindings,
-    gamepad: &Gamepad,
-) -> bool {
-    bindings
-        .entries
-        .iter()
-        .filter(|binding| binding.action == action)
-        .any(|binding| {
-            [Some(binding.primary), binding.alternate]
-                .into_iter()
-                .flatten()
-                .any(
-                    |chord| matches!(chord, InputChord::Gamepad(button) if gamepad.pressed(button)),
-                )
-        })
+    let scaled =
+        ((magnitude - GAMEPAD_RADIAL_DEAD_ZONE) / (1.0 - GAMEPAD_RADIAL_DEAD_ZONE)).clamp(0.0, 1.0);
+    raw / magnitude * scaled
 }

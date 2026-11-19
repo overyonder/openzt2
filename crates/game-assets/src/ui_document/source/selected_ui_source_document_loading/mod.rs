@@ -33,7 +33,7 @@ pub(super) async fn load_primary_supporting_and_referenced_ui_source_documents(
     .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?];
     let mut planned_source_paths = BTreeSet::from([AssetPath::new(primary_source_path).key()]);
 
-    let (_, winning_asset_paths) = asset_archives.resolved_paths();
+    let winning_asset_paths = asset_archives.resolved_paths();
     let load_authored_biome_panels =
         AssetPath::new(primary_source_path).key() == "ui/layout/shell.xml";
     let load_authored_credits =

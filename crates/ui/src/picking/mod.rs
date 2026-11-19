@@ -3,14 +3,13 @@
 use bevy::{
     camera::RenderTarget,
     picking::{
-        backend::HitData, backend::PointerHits, pointer::PointerId, pointer::PointerLocation,
-        PickingSystems,
+        backend::HitData, backend::PointerHits, pointer::PointerId, pointer::PointerInteraction,
+        pointer::PointerLocation, PickingSystems,
     },
     prelude::*,
     ui::{ComputedUiTargetCamera, UiGlobalTransform, UiStack, UiSystems},
     window::PrimaryWindow,
 };
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::texture::interactive_texture_metadata_asset_and_borrowing_queries::InteractiveTextureMetadataAsset;
 
@@ -32,11 +31,8 @@ pub(super) struct UiAlphaHitTest {
     pub(super) source_rect: Option<Rect>,
 }
 
-#[derive(bevy::ecs::system::SystemParam)]
-pub(super) struct AuthoredPointerCaptureState<'w, 's> {
-    capture: ResMut<'w, UiPointerCapture>,
-    pressed_target: Local<'s, Option<Entity>>,
-}
+#[derive(Message)]
+pub(super) struct AuthoredWheelTarget(UiWheelCapture);
 
 /// Replaces Bevy's rectangular-only UI backend. It retains Bevy's computed
 /// layout, clipping, camera targeting, render order, and pointer pipeline, but
@@ -54,7 +50,6 @@ pub(super) fn alpha_ui_picking(
         &UiGlobalTransform,
         Option<&Pickable>,
         Has<UiInteractionEnabled>,
-        Has<UiPointerInteraction>,
         Option<&InheritedVisibility>,
         &ComputedUiTargetCamera,
         Option<&UiAlphaHitTest>,
@@ -73,35 +68,13 @@ pub(super) fn alpha_ui_picking(
         With<ScrollPosition>,
     >,
     metadata: Res<Assets<InteractiveTextureMetadataAsset>>,
-    pointer_input: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
-    capture_state: AuthoredPointerCaptureState,
     modal_input: Res<
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
     >,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
-    mut interactions: Query<(
-        Entity,
-        Option<&UiInteractionEnabled>,
-        &mut UiPointerInteraction,
-    )>,
     mut output: MessageWriter<PointerHits>,
+    mut wheel_targets: MessageWriter<AuthoredWheelTarget>,
 ) {
-    let AuthoredPointerCaptureState {
-        mut capture,
-        mut pressed_target,
-    } = capture_state;
-    let previous_pressed_target = *pressed_target;
-    let previous_hovered = capture.target;
-    let mut next_capture = UiPointerCapture {
-        over_ui: modal_input.0.is_some(),
-        target: None,
-        wheel: if modal_input.0.is_some() {
-            UiWheelCapture::Blocked
-        } else {
-            UiWheelCapture::World
-        },
-    };
-    let mut mouse_hit = None::<(f32, Entity)>;
     let mut mouse_wheel_hit = None::<(f32, UiWheelCapture)>;
     for (pointer, location) in pointers
         .iter()
@@ -135,7 +108,7 @@ pub(super) fn alpha_ui_picking(
                         || nodes
                             .get(root)
                             .ok()
-                            .and_then(|node| node.7.get())
+                            .and_then(|node| node.6.get())
                             .is_some_and(|target| target != camera_entity)
                     {
                         continue;
@@ -148,7 +121,6 @@ pub(super) fn alpha_ui_picking(
                         transform,
                         pickable,
                         has_interaction_gate,
-                        has_pointer_state,
                         inherited_visibility,
                         target_camera,
                         alpha,
@@ -157,17 +129,10 @@ pub(super) fn alpha_ui_picking(
                     else {
                         continue;
                     };
-                    let interactive = has_interaction_gate || has_pointer_state;
+                    let interactive = has_interaction_gate;
                     let can_pick = pickable.map_or(interactive, |policy| {
                         policy.is_hoverable || policy.should_block_lower
                     });
-                    if !can_pick
-                        && !(pointer.is_mouse()
-                            && wheel_hit.is_none()
-                            && scroll_panels.contains(entity))
-                    {
-                        continue;
-                    }
                     if target_camera.get() != Some(camera_entity)
                         || node.size() == Vec2::ZERO
                         || inherited_visibility.is_none_or(|visibility| !visibility.get())
@@ -248,12 +213,6 @@ pub(super) fn alpha_ui_picking(
                         ),
                     ));
                     if interactive {
-                        if pointer.is_mouse() {
-                            let order = camera.order as f32 + 0.5;
-                            if mouse_hit.is_none_or(|(current, _)| order > current) {
-                                mouse_hit = Some((order, entity));
-                            }
-                        }
                         // An opaque interactive node is the one authored leaf
                         // target. Pointer propagation reaches its ancestors;
                         // lower siblings must not independently hover merely
@@ -273,56 +232,50 @@ pub(super) fn alpha_ui_picking(
                 }
             }
             if !picks.is_empty() {
-                if pointer.is_mouse() {
-                    next_capture.over_ui = true;
-                }
                 output.write(PointerHits::new(pointer, picks, camera.order as f32 + 0.5));
             }
         }
     }
+    if let Some((_, wheel)) = mouse_wheel_hit {
+        wheel_targets.write(AuthoredWheelTarget(wheel));
+    }
+}
 
-    next_capture.target = mouse_hit.map(|(_, entity)| entity);
-    if let Some((_, wheel_hit)) = mouse_wheel_hit {
-        next_capture.wheel = wheel_hit;
-    }
-    capture.set_if_neq(next_capture);
-    *pressed_target = if pointer_input.just_pressed {
-        capture.target
-    } else if pointer_input.pressed {
-        previous_pressed_target
-    } else {
-        None
-    }
-    .filter(|entity| {
-        context.visible_and_enabled(*entity)
-            && modal_input
-                .0
-                .is_none_or(|modal| context.is_in_modal(*entity, modal))
+fn project_resolved_pointer_capture(
+    pointers: Query<(&PointerId, &PointerInteraction)>,
+    ui: Query<Has<UiInteractionEnabled>, With<ComputedNode>>,
+    mut wheel_targets: MessageReader<AuthoredWheelTarget>,
+    modal: Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
+    mut capture: ResMut<UiPointerCapture>,
+) {
+    let hovered = pointers
+        .iter()
+        .find(|(id, _)| id.is_mouse())
+        .map(|(_, hits)| hits);
+    let over_ui = modal.0.is_some()
+        || hovered.is_some_and(|hits| hits.iter().any(|(entity, _)| ui.contains(*entity)));
+    let target = hovered.and_then(|hits| {
+        hits.iter().find_map(|(entity, _)| {
+            ui.get(*entity)
+                .is_ok_and(|interactive| interactive)
+                .then_some(*entity)
+        })
     });
-
-    for entity in [
-        previous_hovered,
-        previous_pressed_target,
-        capture.target,
-        *pressed_target,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        let Ok((_, enabled, mut interaction)) = interactions.get_mut(entity) else {
-            continue;
-        };
-        let enabled = enabled.is_none_or(|enabled| enabled.0);
-        let hit = enabled && mouse_hit.is_some_and(|(_, hovered)| hovered == entity);
-        let next = if enabled && *pressed_target == Some(entity) {
-            UiPointerInteraction::Pressed
-        } else if hit {
-            UiPointerInteraction::Hovered
-        } else {
-            UiPointerInteraction::None
-        };
-        interaction.set_if_neq(next);
-    }
+    let wheel = wheel_targets.read().last().map_or_else(
+        || {
+            if over_ui {
+                UiWheelCapture::Blocked
+            } else {
+                UiWheelCapture::World
+            }
+        },
+        |target| target.0,
+    );
+    capture.set_if_neq(UiPointerCapture {
+        over_ui,
+        target,
+        wheel,
+    });
 }
 
 /// Whether `point` lies in the node's rectangle, edges included.
@@ -380,10 +333,16 @@ pub(super) fn initialize(app: &mut App) {
             >,
         ),
     );
-    app.init_resource::<UiPointerCapture>().add_systems(
-        PreUpdate,
-        alpha_ui_picking
-            .in_set(PickingSystems::Backend)
-            .after(UiSystems::Focus),
-    );
+    app.init_resource::<UiPointerCapture>()
+        .add_message::<AuthoredWheelTarget>()
+        .add_systems(
+            PreUpdate,
+            project_resolved_pointer_capture.after(PickingSystems::Hover),
+        )
+        .add_systems(
+            PreUpdate,
+            alpha_ui_picking
+                .in_set(PickingSystems::Backend)
+                .after(UiSystems::Focus),
+        );
 }

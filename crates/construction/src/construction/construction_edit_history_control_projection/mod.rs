@@ -6,7 +6,6 @@ use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditDirection;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
 use openzt2_zoo_state::construction::construction_transaction_types::EditCommitPhase;
@@ -24,7 +23,6 @@ pub(super) fn project_construction_undo_availability(
         &UiDocumentOwner,
         &mut UiInteractionEnabled,
         Option<&mut UiFocusable>,
-        &mut UiPointerInteraction,
     )>,
 ) {
     let undo_available = construction_edit_history_operations::requested_undo_or_redo_transaction(
@@ -36,7 +34,7 @@ pub(super) fn project_construction_undo_availability(
             .iter()
             .all(|progress| progress.phase == EditCommitPhase::Complete);
 
-    for (actions, owner, mut enabled, focusable, mut interaction) in &mut controls {
+    for (actions, owner, mut enabled, focusable) in &mut controls {
         let Some(document) = roots
             .get(owner.0)
             .ok()
@@ -57,9 +55,6 @@ pub(super) fn project_construction_undo_availability(
             if focusable.enabled != undo_available {
                 focusable.enabled = undo_available;
             }
-        }
-        if !undo_available && *interaction != UiPointerInteraction::None {
-            *interaction = UiPointerInteraction::None;
         }
     }
 }

@@ -33,10 +33,6 @@ pub(super) struct PreparedBehaviorActor {
             openzt2_zoo_state::behavior_task_execution_types::MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT
         },
     >,
-    pub(super) move_origin: Option<BehaviorTaskReturnFrame>,
-    pub(super) dock_origin: Option<BehaviorTaskReturnFrame>,
-    pub(super) pursuit_origin: Option<BehaviorTaskReturnFrame>,
     pub(super) job_frame: Option<BehaviorTaskReturnFrame>,
     pub(super) synchronized_origin: Option<BehaviorTaskReturnFrame>,
-    pub(super) transaction_origin: Option<BehaviorTaskReturnFrame>,
 }

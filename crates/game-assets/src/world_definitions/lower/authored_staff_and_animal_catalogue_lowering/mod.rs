@@ -19,7 +19,6 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::catalogue_and_progression::catalogue_definition_types::{
     CatalogueCategory, CatalogueEntry, CatalogueFilterFlags,
 };
@@ -32,6 +31,7 @@ use openzt2_game_data::world_definitions::world_objects::{
     WorldObjectTextureReplacement, WorldObjectTextureReplacementGroup,
     WorldObjectTextureReplacementSet,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -46,8 +46,8 @@ mod tests {
     use crate::world_definitions::world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document;
 
     #[test]
-    fn staff_portrait_uses_authored_head_scene_without_changing_world_body()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_portrait_uses_authored_head_scene_without_changing_world_body(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",
@@ -121,18 +121,16 @@ mod tests {
             assert_eq!(object.preview_offset_cm, [0, 0, 49]);
             assert!((object.preview_scale - 3.954_455).abs() < 0.000_001);
             // Behavior Lua compares the authored binder type case-sensitively.
-            assert!(
-                document
-                    .object_binder_types
-                    .contains(&(object.id, "Worker".into()))
-            );
+            assert!(document
+                .object_binder_types
+                .contains(&(object.id, "Worker".into())));
         }
         Ok(())
     }
 
     #[test]
-    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_state_variable_with_an_empty_value_starts_at_its_range_minimum(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         // The paleontologist authors `Value=""` with a `ValueMin`/`ValueMax` range.
         let sources = [
             (
@@ -197,8 +195,8 @@ mod tests {
     }
 
     #[test]
-    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn staff_role_lowers_each_concrete_look_with_head_and_texture_sets(
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let sources = [
             (
                 "staff.xml",

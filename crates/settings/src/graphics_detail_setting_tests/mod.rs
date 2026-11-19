@@ -1,5 +1,8 @@
 use bevy::prelude::*;
-use openzt2_game_assets::graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings};
+use openzt2_game_assets::{
+    graphics_settings_presets::{GraphicsDetailPreset, GraphicsSettingsPresets},
+    graphics_settings_types::{GraphicsEffectQuality, GraphicsSettings, ThreeLevelGraphicsDetail},
+};
 use openzt2_game_data::ui_document::action::UiTrigger;
 
 use openzt2_interface_state::{
@@ -21,11 +24,27 @@ use super::{
 
 #[test]
 fn every_slider_reproduces_the_source_presets_and_has_a_label_per_level() {
-    for preset in [
-        GraphicsSettings::from_source_highest_detail_preset(),
-        GraphicsSettings::from_source_high_detail_preset(),
-        GraphicsSettings::from_source_medium_detail_preset(),
+    let presets = GraphicsSettingsPresets::from_test_source(
+        br#"<UserSettings><settings>
+        <environmentDetail low="0" medium="1" high="2">
+            <setting><ambientsOn value="false"/><skyboxQuality value="1"/></setting>
+            <setting><ambientsOn value="true"/><skyboxQuality value="2"/></setting>
+            <setting><ambientsOn value="true"/><skyboxQuality value="2"/></setting>
+        </environmentDetail>
+        <viewDistance low="0" medium="1" high="2"/>
+        <waterDetail low="1" medium="2" high="3"/>
+        <shadowDetail low="0" medium="2" high="3"/>
+        <screenDetail low="0" medium="1" high="1"/>
+        <shaderDetail low="0" medium="1" high="2"/>
+    </settings></UserSettings>"#,
+    )
+    .unwrap();
+    for (detail, multisample_count) in [
+        (GraphicsDetailPreset::Highest, 4),
+        (GraphicsDetailPreset::High, 4),
+        (GraphicsDetailPreset::Medium, 1),
     ] {
+        let preset = presets.settings(detail, multisample_count);
         let mut rebuilt = GraphicsSettings {
             ambient_effects: !preset.ambient_effects,
             skybox_quality: 0,
@@ -55,10 +74,14 @@ fn moving_a_slider_changes_only_the_draft() {
         Update,
         copy_changed_graphics_detail_slider_levels_into_settings_draft,
     );
+    let initial_graphics = GraphicsSettings {
+        view_distance: ThreeLevelGraphicsDetail::Medium,
+        ..default()
+    };
     let owner = app
         .world_mut()
         .spawn(OptionsScreenDisplayGraphicsAndOnlineMessageDraft {
-            graphics: GraphicsSettings::from_source_high_detail_preset(),
+            graphics: initial_graphics,
             ..default()
         })
         .id();
@@ -86,7 +109,7 @@ fn moving_a_slider_changes_only_the_draft() {
         GraphicsSettings {
             view_distance:
                 openzt2_game_assets::graphics_settings_types::ThreeLevelGraphicsDetail::High,
-            ..GraphicsSettings::from_source_high_detail_preset()
+            ..initial_graphics
         }
     );
     assert!(draft.dirty_graphics);

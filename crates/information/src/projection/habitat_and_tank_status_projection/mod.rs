@@ -13,10 +13,11 @@ use openzt2_zoo_state::aquatic::aquatic_simulation_types::WaterQuality;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_habitat_and_tank_status_to_visible_information_panels(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     habitat_and_tank_subjects: Query<(
         Option<&HabitatRegion>,
         Option<&HabitatSummary>,
@@ -27,12 +28,15 @@ pub(crate) fn project_selected_habitat_and_tank_status_to_visible_information_pa
     mut authored_integer_values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
     mut authored_boolean_visibility: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
 ) {
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
         let Ok((habitat_region, habitat_summary, tank_geometry, water_quality, tank_capacity)) =
-            habitat_and_tank_subjects.get(information_panel.subject)
+            habitat_and_tank_subjects.get(selection.0)
         else {
             continue;
         };

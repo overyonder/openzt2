@@ -548,6 +548,11 @@ pub(super) fn globe_record(
         move_seconds: value.move_seconds.unwrap_or(0.0),
         scream_threshold: value.scream_threshold.unwrap_or(0.0),
         scream_delay_seconds: value.scream_delay_seconds.unwrap_or(0.0),
+        scream_audio: dependency(
+            super::authored_ui_asset_dependency_resolution::optional_resolved_audio_dependency_path("ui/sound/WorldScreams.wav", input)
+                .ok().flatten(),
+            output,
+        ),
         dot_highlight_rgba: value.dot_highlight_color.map_or([255; 4], |color| {
             [color.red, color.green, color.blue, color.alpha]
         }),

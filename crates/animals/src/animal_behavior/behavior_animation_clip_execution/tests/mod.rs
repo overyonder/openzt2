@@ -2,6 +2,7 @@ use super::*;
 use openzt2_game_data::{
     behavior::{
         action::animation::BehaviorAnimationClipAction,
+        action_record::BehaviorAction,
         document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
     },
     AssetId,
@@ -11,7 +12,7 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase
 #[test]
 fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
     let mut app = App::new();
-    app.init_resource::<Assets<BehaviorDocumentAsset>>()
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion).init_resource::<Assets<BehaviorDocumentAsset>>()
         .insert_resource(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
@@ -66,7 +67,7 @@ fn restarted_clip_ignores_old_outcomes_and_consumes_its_completion_once() {
         next_action_tick: 0,
         object: None,
         interaction_slot: None,
-        stack: Default::default(),
+        depth: 0,
     };
     let actor = app.world_mut().spawn(task.clone()).id();
     let controller = app

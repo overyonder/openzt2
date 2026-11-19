@@ -48,6 +48,7 @@ fn amphibious_animals_cross_a_water_channel_in_both_directions() {
             route.clear();
             let result = plan_route(
                 &graph,
+                None,
                 |_, _| false,
                 |_, _| false,
                 &agent,
@@ -91,9 +92,12 @@ fn ground_endpoint_snapping_rejects_water_but_preserves_dry_approaches() {
     let mut scratch = RouteScratch::default();
     scratch.ensure_capacity(16, 17);
     let mut route = Route::with_capacity(17);
-    let mut plan = |graph: &TerrainDerivedNavigationGraph, destination| {
+    let mut plan = |graph: &TerrainDerivedNavigationGraph,
+                    tank_water: Option<&TankNavigationWater>,
+                    destination| {
         let result = plan_route(
             graph,
+            tank_water,
             |_, _| false,
             |_, _| false,
             &agent,
@@ -111,18 +115,26 @@ fn ground_endpoint_snapping_rejects_water_but_preserves_dry_approaches() {
         result
     };
     assert_eq!(
-        plan(&graph, Vec3::new(1.5, 0.0, -0.5)),
+        plan(&graph, None, Vec3::new(1.5, 0.0, -0.5)),
         Err(NavigationFailure::NoRoute)
     );
     // A dry endpoint beyond a water cell is also unsafe after snapping.
     assert_eq!(
-        plan(&graph, Vec3::new(2.5, 0.0, -0.5)),
+        plan(&graph, None, Vec3::new(2.5, 0.0, -0.5)),
         Err(NavigationFailure::NoRoute)
     );
-    assert!(plan(&graph, Vec3::new(0.75, 0.0, -0.5)).is_ok());
+    assert!(plan(&graph, None, Vec3::new(0.75, 0.0, -0.5)).is_ok());
     graph.navigation_nodes[4].eligibility_flags = NavFlags::default();
     // Preserve existing dry docking offsets outside the eligible node itself.
-    assert!(plan(&graph, Vec3::new(2.5, 0.0, -0.5)).is_ok());
+    assert!(plan(&graph, None, Vec3::new(2.5, 0.0, -0.5)).is_ok());
+    let mut tank_water = TankNavigationWater::new(16);
+    tank_water.replace_cells([(4, 200)]);
+    assert_eq!(
+        plan(&graph, Some(&tank_water), Vec3::new(2.5, 0.0, -0.5)),
+        Err(NavigationFailure::NoRoute)
+    );
+    tank_water.update_cells([(4, 0)]);
+    assert!(plan(&graph, Some(&tank_water), Vec3::new(2.5, 0.0, -0.5)).is_ok());
 }
 
 #[test]
@@ -157,6 +169,7 @@ fn sliced_search_resumes_across_tile_boundaries_and_reuses_dirty_scratch() {
         for slice in 1..=8 {
             let done = advance_route(
                 &graph,
+                None,
                 |_, _| false,
                 |_, _| false,
                 &agent,

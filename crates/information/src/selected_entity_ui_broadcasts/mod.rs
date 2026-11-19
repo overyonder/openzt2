@@ -15,7 +15,7 @@ use openzt2_game_assets::{
     },
 };
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
@@ -31,7 +31,7 @@ pub(super) struct PendingSelectedEntityUiBroadcasts {
 }
 
 pub(super) fn dispatch_selected_entity_ui_broadcasts(
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
     inspectables: Query<&Inspectable>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -42,9 +42,9 @@ pub(super) fn dispatch_selected_entity_ui_broadcasts(
     mut requests: MessageWriter<RequestUiPresentationAction>,
     mut show: MessageWriter<ShowUiRole>,
 ) {
-    if pending.subject != selected.0 {
+    if pending.subject != selected.subject() {
         *pending = PendingSelectedEntityUiBroadcasts {
-            subject: selected.0,
+            subject: selected.subject(),
             ..default()
         };
     }

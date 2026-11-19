@@ -35,7 +35,7 @@ pub(super) struct PreparedParticleEmitter {
     #[dependency]
     pub(super) collision_children: Vec<PreparedCollisionParticleEmitter>,
     #[dependency]
-    pub(super) material: Option<Handle<MaterialAsset>>,
+    pub(super) renderers: Vec<PreparedParticleRenderer>,
     #[dependency]
     pub(super) prototype_mesh: Option<Handle<GltfMesh>>,
     pub(super) clock: ParticleEffectSimulationClock,
@@ -44,6 +44,15 @@ pub(super) struct PreparedParticleEmitter {
     pub(super) birth_rate_curve: Option<ParticleBirthRateCurve>,
     pub(super) manually_driven: bool,
     pub(super) uses_plane: bool,
+}
+
+#[derive(Clone, Debug, VisitAssetDependencies)]
+pub(super) struct PreparedParticleRenderer {
+    #[dependency]
+    pub(super) effect: Handle<EffectAsset>,
+    #[dependency]
+    pub(super) material: Handle<MaterialAsset>,
+    pub(super) sort_by_distance: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -101,6 +110,7 @@ impl ParticleBirthRateCurve {
 #[derive(Clone, Debug, VisitAssetDependencies)]
 pub(super) struct PreparedCollisionParticleEmitter {
     pub(super) emitter: AssetId,
+    pub(super) occurrence: usize,
     #[dependency]
     pub(super) effect: Handle<EffectAsset>,
 }
@@ -109,10 +119,12 @@ pub(crate) fn prepare_particle_effect_document(
     document: ParticleEffectDocument,
     label_prefix: &str,
     native_model: Option<&Gltf>,
+    blend_modes: &BTreeMap<String, bevy_hanabi::AlphaMode>,
     load_context: &mut LoadContext<'_>,
 ) -> ParticleEffectDocumentAsset {
     let roots = collect_root_effect_emitter_ids(&document);
     let mut prepared_emitters = BTreeMap::new();
+    let mut decal_emitter = None;
     match &document {
         ParticleEffectDocument::Effect(effect) => {
             let emitters: BTreeMap<_, _> = effect
@@ -124,8 +136,16 @@ pub(crate) fn prepare_particle_effect_document(
             for (emitter_index, emitter) in effect.emitters.iter().enumerate() {
                 let id = emitter.emitter_id;
                 let label = format!("{label_prefix}/{}", id.to_lowercase_hexadecimal_string());
-                let normal = prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
-                    emitter, None, false,
+                let apply_blend = |effect: EffectAsset, renderer: Option<&openzt2_game_data::particle::authored_particle_system::AuthoredParticleRenderer>| {
+                    let mode = renderer.and_then(|renderer| blend_modes.get(&renderer.material).copied());
+                    effect.with_alpha_mode(mode.unwrap_or_default())
+                };
+                let primary = emitter.renderers.first();
+                let normal = apply_blend(
+                    prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
+                        emitter, primary, None, false,
+                    ),
+                    primary,
                 );
                 let wave_effect = (!emitter.modifiers.iter().any(|modifier| {
                     matches!(modifier, AuthoredParticleSystemModifier::AngularDrag { .. })
@@ -133,29 +153,45 @@ pub(crate) fn prepare_particle_effect_document(
                 .then(|| {
                     load_context.add_labeled_asset(
                         format!("{label}/wave"),
-                        prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
-                            emitter, None, true,
+                        apply_blend(
+                            prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
+                                emitter, primary, None, true,
+                            ),
+                            primary,
                         ),
                     )
                 });
+                if decal_emitter.is_none()
+                    && matches!(emitter.shape, openzt2_game_data::particle::authored_particle_system::AuthoredParticleEmitterShape::Decal)
+                {
+                    decal_emitter = Some((id, wave_effect.is_some()));
+                }
+                let mut occurrences = BTreeMap::<AssetId, usize>::new();
                 let collision_children = emitter
                     .modifiers
                     .iter()
                     .filter_map(create_collision_spawn_initialization)
-                    .enumerate()
-                    .filter_map(|(slot, (child, initialization))| {
+                    .filter_map(|(child, initialization)| {
                         let target = emitters.get(&child)?;
-                        let effect =
+                        let count = occurrences.entry(child).or_default();
+                        let occurrence = *count;
+                        *count += 1;
+                        let renderer = target.renderers.first();
+                        let effect = apply_blend(
                             prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                                 target,
+                                renderer,
                                 Some(initialization),
                                 false,
-                            );
+                            ),
+                            renderer,
+                        );
                         Some(PreparedCollisionParticleEmitter {
                             emitter: child,
+                            occurrence,
                             effect: load_context.add_labeled_asset(
                                 format!(
-                                    "{label}/collision/{slot}/{}",
+                                    "{label}/collision/{}/{occurrence}",
                                     child.to_lowercase_hexadecimal_string(),
                                 ),
                                 effect,
@@ -170,14 +206,37 @@ pub(crate) fn prepare_particle_effect_document(
                             | AuthoredParticleSystemModifier::SpawnOnPlane { .. }
                     )
                 });
+                let effect = load_context.add_labeled_asset(label.clone(), normal);
+                let renderers =
+                    emitter
+                        .renderers
+                        .iter()
+                        .enumerate()
+                        .map(|(ordinal, renderer)| PreparedParticleRenderer {
+                            effect: if ordinal == 0 {
+                                effect.clone()
+                            } else {
+                                load_context.add_labeled_asset(
+                                format!("{label}/renderer/{ordinal}"),
+                                apply_blend(
+                                    prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
+                                        emitter, Some(renderer), None, false,
+                                    ),
+                                    Some(renderer),
+                                ),
+                            )
+                            },
+                            material: load_context.load(renderer.material.clone()),
+                            sort_by_distance: renderer.sort_by_distance,
+                        })
+                        .collect();
                 prepared_emitters.insert(
                     id,
                     PreparedParticleEmitter {
-                        effect: load_context.add_labeled_asset(label, normal),
+                        effect,
                         wave_effect,
                         collision_children,
-                        material: (!emitter.material.is_empty())
-                            .then(|| load_context.load(emitter.material.clone())),
+                        renderers,
                         prototype_mesh: None,
                         clock: emitter.clock,
                         retires_when_empty: emitter_tree_can_retire_when_empty(
@@ -248,7 +307,7 @@ pub(crate) fn prepare_particle_effect_document(
                     ),
                     wave_effect: None,
                     collision_children: Vec::new(),
-                    material: None,
+                    renderers: Vec::new(),
                     prototype_mesh,
                     clock: ParticleEffectSimulationClock::Presentation,
                     retires_when_empty: true,
@@ -268,6 +327,7 @@ pub(crate) fn prepare_particle_effect_document(
     ParticleEffectDocumentAsset {
         particle_document: document,
         roots,
+        decal_emitter,
         prepared_emitters,
     }
 }

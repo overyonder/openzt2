@@ -1,5 +1,5 @@
+use bevy::picking::{events::PointerPress, pointer::PointerButton};
 use bevy::prelude::*;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use super::{
     super::{
@@ -10,16 +10,17 @@ use super::{
 };
 
 pub(crate) fn navigate_to_subject_from_pressed_zoopedia_table_of_contents_row(
-    table_of_contents_rows: Query<
-        (&ZoopediaTableOfContentsRow, &UiPointerInteraction),
-        Changed<UiPointerInteraction>,
-    >,
+    mut presses: MessageReader<PointerPress>,
+    table_of_contents_rows: Query<&ZoopediaTableOfContentsRow>,
     mut zoopedia_pages: Query<(&mut ZoopediaPage, Option<&mut ZoopediaHistory>)>,
 ) {
-    for (table_of_contents_row, interaction) in &table_of_contents_rows {
-        if *interaction != UiPointerInteraction::Pressed {
+    for press in presses
+        .read()
+        .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
+    {
+        let Ok(table_of_contents_row) = table_of_contents_rows.get(press.entity) else {
             continue;
-        }
+        };
         let Ok((mut page, history)) =
             zoopedia_pages.get_mut(table_of_contents_row.zoopedia_page_entity)
         else {
@@ -34,22 +35,26 @@ pub(crate) fn navigate_to_subject_from_pressed_zoopedia_table_of_contents_row(
 }
 
 pub(crate) fn navigate_to_subject_from_pressed_zoopedia_rich_content_link(
+    mut presses: MessageReader<PointerPress>,
     rich_content_links: Query<&ZoopediaRichLink>,
-    pressed_text_blocks: Query<
-        (
-            &UiPointerInteraction,
-            &bevy::ui::RelativeCursorPosition,
-            &bevy::text::ComputedTextBlock,
-            &bevy::text::TextLayoutInfo,
-            &ComputedNode,
-            &UiGlobalTransform,
-        ),
-        Changed<UiPointerInteraction>,
-    >,
+    pressed_text_blocks: Query<(
+        &bevy::ui::RelativeCursorPosition,
+        &bevy::text::ComputedTextBlock,
+        &bevy::text::TextLayoutInfo,
+        &ComputedNode,
+        &UiGlobalTransform,
+    )>,
     mut zoopedia_pages: Query<(&mut ZoopediaPage, Option<&mut ZoopediaHistory>)>,
 ) {
-    for (interaction, cursor, block, layout, node, transform) in &pressed_text_blocks {
-        if *interaction != UiPointerInteraction::Pressed || !cursor.cursor_over() {
+    for press in presses
+        .read()
+        .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
+    {
+        let Ok((cursor, block, layout, node, transform)) = pressed_text_blocks.get(press.entity)
+        else {
+            continue;
+        };
+        if !cursor.cursor_over() {
             continue;
         }
         let Some(cursor) = cursor.normalized else {

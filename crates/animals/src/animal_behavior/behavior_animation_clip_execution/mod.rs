@@ -1,8 +1,6 @@
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
-use openzt2_game_data::behavior::{
-    action::animation::BehaviorAnimationPlaybackSpeed, action_record::BehaviorAction,
-};
+use openzt2_game_data::behavior::action::animation::BehaviorAnimationPlaybackSpeed;
 use openzt2_world_state::animation_graph::{
     animation_graph_playback_state_types::AnimationGraphPlaybackState,
     animation_graph_transition_operations::{
@@ -10,7 +8,11 @@ use openzt2_world_state::animation_graph::{
     },
 };
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorAnimationClip, RunningBehaviorInstruction,
+};
 
+#[cfg(test)]
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -22,8 +24,6 @@ use openzt2_world_state::animation_graph::animation_presentation_relationship_ty
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -40,12 +40,15 @@ pub(super) struct TimedBehaviorAnimationClip {
 
 pub(super) fn start_current_behavior_animation_clip_actions(
     mut commands: Commands,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
     mut behavior_tasks: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorAnimationClip,
+            ),
             Option<&mut super::behavior_random_stream_state::BehaviorRandomStream>,
             Option<&mut openzt2_zoo_state::guests::guest_simulation_types::GuestRng>,
         ),
@@ -59,16 +62,20 @@ pub(super) fn start_current_behavior_animation_clip_actions(
     definitions: Option<Res<WorldDefinitions>>,
     definition_assets: Option<Res<Assets<WorldDefinitionAsset>>>,
 ) {
-    for (actor, mut behavior_task, mut behavior_random, mut guest_random) in &mut behavior_tasks {
+    for (
+        actor,
+        (behavior_task, instruction, running_action),
+        mut behavior_random,
+        mut guest_random,
+    ) in &mut behavior_tasks
+    {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        let Some(BehaviorAction::AnimationClip(animation)) = behavior_document_assets
-            .get(&behavior_task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
-        else {
+        if !instruction.is_current(behavior_task) {
             continue;
-        };
+        }
+        let animation = &running_action.0;
         // A play time repeats the clip until it elapses.
         let play_until_tick = match animation.play_duration_seconds {
             None => None,
@@ -151,16 +158,19 @@ pub(super) fn start_current_behavior_animation_clip_actions(
         commands
             .entity(actor)
             .insert(PendingBehaviorAnimationClipCompletion {
-                execution_id: behavior_task.execution_id,
+                instruction: instruction.id(),
                 request_id: request_id.id,
-                origin: behavior_task.create_return_frame_after_action(behavior_task.action),
-                stack_depth: behavior_task.stack.len(),
+                clip_key: animation.animation_clip_asset_key.clone(),
                 target: behavior_task.target,
-                random_choice: None,
+                repeats: false,
             });
         debug!(?actor, program = ?behavior_task.program, request_id = request_id.id,
             clip = %animation.animation_clip_asset_key, "behavior clip requested");
-        behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+        instruction.resume_at(
+            actor,
+            simulation_clock.tick.saturating_add(1),
+            &mut commands,
+        );
     }
 }
 
@@ -169,29 +179,22 @@ pub(super) fn start_current_behavior_animation_clip_actions(
 pub(super) fn fail_behavior_animation_actions_after_playback_rejection(
     mut commands: Commands,
     mut rejected_animations: MessageReader<AnimationClipPlaybackRequestRejected>,
-    behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
     waiting_actors: Query<(
         &BehaviorTaskExecutionState,
         &PendingBehaviorAnimationClipCompletion,
+        &RunningBehaviorInstruction,
     )>,
 ) {
     for rejected in rejected_animations.read() {
         let actor = rejected.animation_subject_entity;
-        let matches_current_action = waiting_actors
-            .get(actor)
-            .ok()
-            .and_then(|(task, pending)| {
-                if pending.request_id != rejected.request_id
-                    || !pending.still_owns_exact_task_frame(task)
-                {
-                    return None;
-                }
-                behavior_documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, task))
-                    .and_then(|action| pending.clip_key(action))
-            })
-            .is_some_and(|clip| clip == rejected.animation_clip_asset_key);
+        let matches_current_action =
+            waiting_actors
+                .get(actor)
+                .is_ok_and(|(task, pending, instruction)| {
+                    pending.request_id == rejected.request_id
+                        && pending.owns(task, instruction)
+                        && pending.clip_key == rejected.animation_clip_asset_key
+                });
         if matches_current_action {
             debug!(?actor, clip = %rejected.animation_clip_asset_key,
                 request_id = rejected.request_id,
@@ -209,13 +212,13 @@ pub(super) fn fail_behavior_animation_actions_after_playback_rejection(
 pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
     mut commands: Commands,
     mut completed_animations: MessageReader<AnimationCompleted>,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     animation_controllers: Query<&AnimationPresentationOwner>,
     simulation_clock: Res<ZooClock>,
-    mut behavior_tasks: Query<
+    behavior_tasks: Query<
         (
-            &mut BehaviorTaskExecutionState,
+            &BehaviorTaskExecutionState,
             &PendingBehaviorAnimationClipCompletion,
+            &RunningBehaviorInstruction,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -227,20 +230,12 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             continue;
         };
         let actor = animation_owner.gameplay_entity;
-        let Ok((mut behavior_task, pending)) = behavior_tasks.get_mut(actor) else {
+        let Ok((behavior_task, pending, instruction)) = behavior_tasks.get(actor) else {
             continue;
         };
         if completed_animation.explicit_clip_request_id != Some(pending.request_id)
-            || !pending.still_owns_exact_task_frame(&behavior_task)
+            || !pending.owns(behavior_task, instruction)
         {
-            continue;
-        }
-        let action_matches_completed_clip = behavior_document_assets
-            .get(&behavior_task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
-            .and_then(|action| pending.clip_key(action))
-            .is_some();
-        if !action_matches_completed_clip {
             continue;
         }
         debug!(
@@ -248,10 +243,14 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
             request_id = pending.request_id,
             "behavior clip completed"
         );
-        if pending.random_choice.is_some() {
-            behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+        if pending.repeats {
+            instruction.resume_at(
+                actor,
+                simulation_clock.tick.saturating_add(1),
+                &mut commands,
+            );
         } else {
-            advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
+            instruction.complete(actor, simulation_clock.tick, &mut commands);
         }
         commands
             .entity(actor)
@@ -262,7 +261,6 @@ pub(super) fn finish_behavior_animation_clip_actions_after_playback_completion(
 /// Ends a clip action once its authored play time has elapsed.
 pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     mut commands: Commands,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
     asset_server: Res<AssetServer>,
     mut animation_sets: ResMut<Assets<AnimationSetAsset>>,
@@ -276,7 +274,7 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     mut behavior_tasks: Query<(
         Entity,
         &mut TimedBehaviorAnimationClip,
-        Option<&mut BehaviorTaskExecutionState>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&PendingBehaviorAnimationClipCompletion>,
         Has<PendingBehaviorTaskFailure>,
     )>,
@@ -296,9 +294,12 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
     }
     for (actor, mut timed, task, pending, failing) in &mut behavior_tasks {
         let owns_task = !failing
-            && task.as_ref().zip(pending).is_some_and(|(task, pending)| {
-                pending.request_id == timed.request_id && pending.still_owns_exact_task_frame(task)
-            });
+            && task
+                .as_ref()
+                .zip(pending)
+                .is_some_and(|((task, instruction), pending)| {
+                    pending.request_id == timed.request_id && pending.owns(task, instruction)
+                });
         if !owns_task {
             cancellations.write(openzt2_world_state::animation_graph::animation_graph_playback_message_types::CancelAnimationClipPlaybackRequest {
                 animation_subject_entity: actor, request_id: timed.request_id,
@@ -487,13 +488,13 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
             );
             continue;
         }
-        let (Some(mut task), Some(pending)) = (task, pending) else {
+        let (Some((task, instruction)), Some(pending)) = (task, pending) else {
             commands
                 .entity(actor)
                 .remove::<TimedBehaviorAnimationClip>();
             continue;
         };
-        if pending.request_id != timed.request_id || !pending.still_owns_exact_task_frame(&task) {
+        if pending.request_id != timed.request_id || !pending.owns(task, instruction) {
             commands
                 .entity(actor)
                 .remove::<TimedBehaviorAnimationClip>();
@@ -505,19 +506,12 @@ pub(super) fn finish_behavior_animation_clip_actions_after_play_time(
                 .remove::<TimedBehaviorAnimationClip>();
             continue;
         }
-        let current_clip = behavior_document_assets
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-            .and_then(|action| pending.clip_key(action))
-            .is_some();
-        if current_clip {
-            debug!(
-                ?actor,
-                request_id = pending.request_id,
-                "behavior clip play time elapsed"
-            );
-            advance_behavior_task_to_next_action(&mut task, simulation_clock.tick);
-        }
+        debug!(
+            ?actor,
+            request_id = pending.request_id,
+            "behavior clip play time elapsed"
+        );
+        instruction.complete(actor, simulation_clock.tick, &mut commands);
         commands.entity(actor).remove::<(
             TimedBehaviorAnimationClip,
             PendingBehaviorAnimationClipCompletion,

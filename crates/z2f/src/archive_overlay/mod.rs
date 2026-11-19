@@ -9,10 +9,10 @@ use std::{
 use zip::ZipArchive;
 
 use crate::{
-    ArchiveSet, EnabledArchiveOverlayState, REQUIRED_ARCHIVES, ResolvedArchiveEntry,
-    ResolvedAssetChange, ResolvedAssetChangeKind, WinningArchiveEntryLocation,
-    Z2fArchiveEnabledStatus, paths::normalize_asset_path_for_case_insensitive_archive_lookup,
-    positional_archive_reader::PositionalArchiveReader,
+    paths::normalize_asset_path_for_case_insensitive_archive_lookup,
+    positional_archive_reader::PositionalArchiveReader, ArchiveSet, EnabledArchiveOverlayState,
+    ResolvedArchiveEntry, ResolvedAssetChange, ResolvedAssetChangeKind,
+    WinningArchiveEntryLocation, Z2fArchiveEnabledStatus, REQUIRED_ARCHIVES,
 };
 
 impl ArchiveSet {
@@ -83,7 +83,6 @@ impl ArchiveSet {
                 winning_entries_by_normalized_path,
                 unique_basename_aliases,
                 resolved_directories,
-                overlay_revision: 0,
             }),
         })
     }
@@ -103,14 +102,6 @@ impl ArchiveSet {
                 is_enabled,
             })
             .collect()
-    }
-
-    #[must_use]
-    pub fn overlay_revision(&self) -> u64 {
-        self.overlay_state
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .overlay_revision
     }
 
     /// Changes one archive's enabled state and returns paths whose winner changed.
@@ -194,18 +185,16 @@ impl ArchiveSet {
         state.winning_entries_by_normalized_path = winners;
         state.unique_basename_aliases = aliases;
         state.resolved_directories = directories;
-        state.overlay_revision = state.overlay_revision.wrapping_add(1);
         drop(state);
         Ok(changed)
     }
 
-    /// Returns the current overlay revision and its winning source entries.
-    pub fn resolved_winning_entries(&self) -> (u64, Vec<ResolvedArchiveEntry>) {
+    /// Returns the winning source entries in archive and ZIP order.
+    pub fn resolved_winning_entries(&self) -> Vec<ResolvedArchiveEntry> {
         let state = self
             .overlay_state
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let revision = state.overlay_revision;
         let mut entries = state
             .winning_entries_by_normalized_path
             .iter()
@@ -219,7 +208,7 @@ impl ArchiveSet {
         drop(state);
         entries
             .sort_unstable_by_key(|entry| (entry.archive_priority_index, entry.zip_entry_ordinal));
-        (revision, entries)
+        entries
     }
 
     /// Returns metadata for the same winning entry used by source reads.

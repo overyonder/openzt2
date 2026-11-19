@@ -174,7 +174,10 @@ pub(super) fn excavate_changed_tank_floors(
             }
         }
     }
-    let mut affected_chunks: Vec<_> = chunks.iter_many(affected_chunks).collect();
+    let mut affected_chunks: Vec<_> = chunks
+        .iter_many(affected_chunks)
+        .filter_map(Result::ok)
+        .collect();
     affected_chunks.sort_unstable_by_key(|(_, _, id)| id.0);
     let mut deltas = Vec::new();
     for (chunk, edited, id) in affected_chunks {

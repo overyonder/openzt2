@@ -3,9 +3,9 @@
 pub(crate) mod input_execution_types;
 
 mod controller_gameplay_actions;
-mod controller_pointer;
 mod gamepad_input_translation;
 pub mod input_binding_reconfiguration_operations;
+mod shared_pointer;
 use openzt2_interface_state::input::input_types;
 pub(crate) mod keyboard_and_mouse_input_translation;
 
@@ -19,17 +19,17 @@ use crate::input::input_execution_types::GameActionInputRebindingRejection;
 use crate::input::input_execution_types::RebindGameActionInput;
 use input_types::ActiveInputDevice;
 use input_types::GameActionInputBindings;
-use input_types::PrimaryPointerInputState;
 
 pub struct GameInputPlugin;
 
 impl Plugin for GameInputPlugin {
     fn build(&self, application: &mut App) {
         application
-            .register_required_components::<Gamepad, gamepad_input_translation::GamepadNavigationRepeat>()
+            .register_required_components::<Gamepad, gamepad_input_translation::GamepadInputSample>()
+            .insert_resource(bevy::picking::input::PointerInputSettings { is_mouse_enabled: false, ..default() })
+            .init_resource::<keyboard_and_mouse_input_translation::KeyboardMouseSample>()
             .init_resource::<GameActionInputBindings>()
             .init_resource::<DeviceControlAxes>()
-            .init_resource::<PrimaryPointerInputState>()
             .init_resource::<ActiveInputDevice>()
             .init_resource::<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>()
             .init_resource::<openzt2_interface_state::ui::input_frame_capture_types::OverheadModeInputCapture>()
@@ -41,11 +41,12 @@ impl Plugin for GameInputPlugin {
                 (
                     openzt2_ui::active_authored_ui_context::capture_authored_modal_for_input_frame,
                     openzt2_ui::active_authored_ui_context::capture_overhead_mode_for_input_frame,
-                    keyboard_and_mouse_input_translation::translate_keyboard_and_mouse_state_to_game_actions_and_control_axes,
-                    gamepad_input_translation::translate_connected_gamepad_state_to_game_actions_and_control_axes,
-                    controller_pointer::project_controller_pointer,
-                    gamepad_input_translation::clear_control_axes_after_active_gamepad_disconnects,
-                    controller_pointer::finalize_primary_pointer_edges,
+                    (
+                        keyboard_and_mouse_input_translation::sample_keyboard_and_mouse,
+                        gamepad_input_translation::sample_connected_gamepads,
+                    ),
+                    shared_pointer::arbitrate_sampled_input,
+                    shared_pointer::emit_shared_pointer_input,
                 )
                     .chain()
                     .after(bevy::input::InputSystems)

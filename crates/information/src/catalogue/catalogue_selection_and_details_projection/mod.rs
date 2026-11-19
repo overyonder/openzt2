@@ -40,8 +40,8 @@ use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_interface_state::information::catalogue_types::CatalogueDetails;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_interface_state::information::entity_selection_types::SelectionRequest;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 
 use super::super::{
     information_view_types::InformationViewClass,
@@ -53,7 +53,7 @@ use super::super::{
 
 pub(crate) fn dismiss_purchase_information_on_inspection_request(
     mut tool_requests: MessageReader<SelectConstructionTool>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     view_classes: Query<&InformationViewClass>,
     mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
 ) {
@@ -63,7 +63,7 @@ pub(crate) fn dismiss_purchase_information_on_inspection_request(
         .read()
         .last()
         .is_some_and(|request| request.0 == ConstructionTool::Inspect)
-        || selected_entity_uses_building_information_slot(selected_entity.0, &view_classes)
+        || selected_entity_uses_building_information_slot(selected_entity.subject(), &view_classes)
     {
         if selected_catalogue_entry.0.is_some() {
             selected_catalogue_entry.0 = None;
@@ -99,7 +99,7 @@ pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
     mut purchase_choices: MessageReader<PurchaseChoice>,
     mut adoption_placement_requests: MessageReader<BeginAnimalAdoptionPlacement>,
     mut selected_catalogue_entry: ResMut<SelectedCatalogueEntry>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     view_classes: Query<&InformationViewClass>,
     mut selection_requests: MessageWriter<SelectionRequest>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
@@ -129,7 +129,7 @@ pub(crate) fn select_catalogue_entry_and_open_purchase_information_document(
         return;
     };
     selected_catalogue_entry.0 = Some(selected_definition);
-    if selected_entity_uses_building_information_slot(selected_entity.0, &view_classes) {
+    if selected_entity_uses_building_information_slot(selected_entity.subject(), &view_classes) {
         // Purchase and building inspection use the same authored right slot.
         selection_requests.write(SelectionRequest {
             entity: None,

@@ -15,13 +15,14 @@ use bevy::{
 
 use super::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 
+// At most four sources are inflated and translated concurrently.
+pub(super) const MAXIMUM_ACTIVE_DEFINITION_LOADS: usize = 4;
+
 pub(super) fn request_world_definition_handles_without_per_asset_frame_waits(
     server: AssetServer,
     paths: Vec<PathBuf>,
     completed_loads: Arc<AtomicUsize>,
 ) -> Task<Vec<Handle<WorldDefinitionAsset>>> {
-    // At most four sources are inflated and translated concurrently.
-    const MAXIMUM_ACTIVE_DEFINITION_LOADS: usize = 4;
     let paths: Arc<[PathBuf]> = paths.into();
     let next_path_index = Arc::new(AtomicUsize::new(0));
     let workers: [_; MAXIMUM_ACTIVE_DEFINITION_LOADS] = std::array::from_fn(|_| {

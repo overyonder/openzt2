@@ -45,7 +45,6 @@ struct EnabledArchiveOverlayState {
     winning_entries_by_normalized_path: BTreeMap<PathBuf, WinningArchiveEntryLocation>,
     unique_basename_aliases: BTreeMap<PathBuf, WinningArchiveEntryLocation>,
     resolved_directories: BTreeSet<PathBuf>,
-    overlay_revision: u64,
 }
 
 pub struct Z2fArchiveEnabledStatus {

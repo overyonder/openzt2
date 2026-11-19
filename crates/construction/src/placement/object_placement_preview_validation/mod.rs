@@ -1,5 +1,7 @@
 use bevy::prelude::*;
-use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::object_placement_geometry::{
+    ScenePlacementFootprintChanged, ScenePlacementFootprints,
+};
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -18,15 +20,16 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyIndex;
 
+use super::stomped_object_edit_preparation::{
+    object_stomp_prevents_placement_at_cell, StompablePlacedObject,
+};
 use crate::placement::ground_path_placement_stomp::GroundPathPlacementStomp;
-use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
-use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
+use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
+use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
 use openzt2_zoo_state::placement::placement_transaction_types::EvaluateObjectPlacementPreviewRequest;
@@ -41,7 +44,7 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
     terrain_assets: Res<Assets<TerrainAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    footprints: Res<ScenePlacementFootprints>,
+    mut scene_changes: MessageReader<ScenePlacementFootprintChanged>,
     placement: Res<PlacedObjectFootprintOccupancyIndex>,
     topology: Res<TopologyIndex>,
     previews: Query<(
@@ -49,22 +52,31 @@ pub(super) fn request_changed_object_placement_preview_evaluations(
         Ref<ConstructionPreview>,
         Ref<ObjectPlacementPreviewPermissionFacts>,
         Option<Ref<HabitatMember>>,
+        Option<Ref<ObjectPlacementPrefabSource>>,
     )>,
     mut evaluate: MessageWriter<EvaluateObjectPlacementPreviewRequest>,
 ) {
-    let authored_inputs_changed = terrain_changes.read().count() != 0
+    let terrain_changed = terrain_changes.read().count() != 0;
+    let scene_changes = scene_changes
+        .read()
+        .map(|change| change.0)
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    let authored_inputs_changed = terrain_changed
         || terrain_assets.is_changed()
         || definitions.is_changed()
-        || active_definitions.is_changed()
-        || footprints.is_changed();
+        || active_definitions.is_changed();
     let containment_changed = containment
         .read()
-        .any(|change| previews.get(change.affected_entity).is_ok());
-    for (entity, preview, permission, habitat) in &previews {
+        .map(|change| change.affected_entity)
+        .collect::<bevy::platform::collections::HashSet<_>>();
+    for (entity, preview, permission, habitat, prefab) in &previews {
         if !preview.is_changed()
             && !permission.is_changed()
             && habitat.is_none_or(|habitat| !habitat.is_changed())
-            && !containment_changed
+            && !containment_changed.contains(&entity)
+            && prefab.is_none_or(|prefab| {
+                !prefab.is_changed() && !scene_changes.contains(&prefab.0.id())
+            })
             && !placement.is_changed()
             && !topology.is_changed()
             && !authored_inputs_changed
@@ -90,14 +102,17 @@ pub(super) fn evaluate_requested_object_placement_previews(
     footprints: Res<ScenePlacementFootprints>,
     chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     habitats: Query<&HabitatMember>,
-    placed: Query<&PlacedObjectDefinitionReference>,
-    mut previews: Query<(
-        &mut ConstructionPreview,
-        &mut Transform,
-        Option<&ObjectPlacementPreviewPermissionFacts>,
-        Option<&PlacedObjectRelocationSource>,
-        Option<&ObjectPlacementPrefabSource>,
-    )>,
+    placed: Query<StompablePlacedObject>,
+    mut previews: Query<
+        (
+            &mut ConstructionPreview,
+            &mut Transform,
+            Option<&ObjectPlacementPreviewPermissionFacts>,
+            Option<&PlacedObjectRelocationSource>,
+            Option<&ObjectPlacementPrefabSource>,
+        ),
+        Without<IndexedObjectPlacementCells>,
+    >,
 ) {
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
@@ -161,17 +176,14 @@ pub(super) fn evaluate_requested_object_placement_previews(
             terrain,
             |cell| {
                 path_overlaps.prevents_placement(cell)
-                    || placement.entities_occupying_cell(cell).any(|entity| {
-                        Some(entity) != relocation.map(|source| source.0)
-                            && object_placement_stomp_action(
-                                definition,
-                                catalogue,
-                                placed
-                                    .get(entity)
-                                    .ok()
-                                    .map(|placeable| placeable.definition),
-                            ) == PlacementStompAction::Prevent
-                    })
+                    || object_stomp_prevents_placement_at_cell(
+                        cell,
+                        definition,
+                        catalogue,
+                        &placement,
+                        &placed,
+                        |entity| Some(entity) == relocation.map(|source| source.0),
+                    )
             },
             ObjectPlacementAuthoritativeFacts {
                 habitat: habitats

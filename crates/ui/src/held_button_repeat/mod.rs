@@ -1,8 +1,13 @@
 use std::time::Duration;
 
-use bevy::prelude::*;
+use bevy::{
+    picking::{
+        events::PointerState,
+        pointer::{PointerButton, PointerId},
+    },
+    prelude::*,
+};
 use openzt2_game_data::ui_document::action::UiTrigger;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_interface_state::input::input_types::ActionSource;
 
@@ -14,19 +19,19 @@ pub(super) struct UiButtonHold(Option<Timer>);
 
 pub(super) fn repeat_held_buttons(
     time: Res<Time>,
-    mut buttons: Query<(
-        Entity,
-        &UiPointerInteraction,
-        &UiButtonPolicy,
-        &mut UiButtonHold,
-    )>,
+    pointer: Res<PointerState>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    mut buttons: Query<(Entity, &UiButtonPolicy, &mut UiButtonHold)>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    for (entity, interaction, policy, mut hold) in &mut buttons {
+    let pressed = pointer.get(PointerId::Mouse, PointerButton::Primary);
+    for (entity, policy, mut hold) in &mut buttons {
         let delay = Duration::try_from_secs_f32(policy.repeat_delay_seconds)
             .ok()
             .filter(|delay| !delay.is_zero());
-        if *interaction != UiPointerInteraction::Pressed || delay.is_none() {
+        let active = pressed.is_some_and(|state| state.pressing.contains_key(&entity))
+            && context.visible_and_enabled(entity);
+        if !active || delay.is_none() {
             if hold.0.is_some() {
                 hold.0 = None;
             }

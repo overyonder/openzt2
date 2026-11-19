@@ -51,7 +51,10 @@ impl AssetLoader for TerrainSourceAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_terrain", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_terrain", skip_all)
+    )]
     async fn load(
         &self,
         reader: &mut dyn Reader,

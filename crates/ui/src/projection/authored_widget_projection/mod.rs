@@ -2,7 +2,6 @@ use super::authored_node_layout_projection::apply_authored_node_region_to_bevy_n
 use super::authored_text_projection::apply_authored_text_record_to_bevy_text_and_layout;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::scenarios::ObjectiveStatusFilter;
-use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 use openzt2_game_data::ui_document::node::UiNodeDefinition;
 use openzt2_game_data::ui_document::node::UiNodeKind;
@@ -13,15 +12,14 @@ use openzt2_game_data::ui_document::widget_control::UiAxis;
 use openzt2_game_data::ui_document::widget_control::UiTooltipPresentation;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
-use crate::authored_button_attention_pulse_presentation::UiAuthoredButtonAttentionPulse;
 use crate::authored_drag_gesture::{UiAuthoredDragCommand, UiAuthoredDragHandle};
 use crate::authored_globe_presentation_types::UiGlobeBiomeAsset;
 use crate::authored_globe_presentation_types::UiGlobeBiomeModel;
 use crate::authored_globe_presentation_types::UiGlobeDrag;
 use crate::authored_globe_presentation_types::UiGlobePresentation;
 use crate::authored_globe_presentation_types::UiGlobeSceneAssets;
+use crate::authored_globe_presentation_types::{GlobeHoveredMarker, GlobeSpin};
 use crate::authored_grid_layout_projection::apply_authored_grid_record_to_bevy_node_layout;
 use crate::authored_grid_layout_projection::apply_authored_list_scroll_axis_to_bevy_node_overflow;
 use crate::authored_grid_layout_projection::authored_grid_record_owns_child_layout;
@@ -32,7 +30,6 @@ use crate::authored_tooltip_presentation::UiTooltipPolicy;
 use crate::authored_tree_expansion_and_row_indentation::UiAuthoredTreeExpansion;
 use crate::authored_tree_expansion_and_row_indentation::UiAuthoredTreeItem;
 use crate::authored_ui_canvas_scaling_and_clipping::UiPhysicalAspect;
-use crate::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use crate::authored_window_interaction::UiAuthoredWindowInteractionPolicy;
 use crate::held_button_repeat::UiButtonHold;
 use crate::scenario_objective_status_visual_classification::UiScenarioObjectiveStatusVisualClassification;
@@ -40,13 +37,11 @@ use crate::slider::UiSliderAxis;
 use crate::slider::UiSliderPolicy;
 use crate::slider::UiSliderValuePresentation;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::input::input_types::ActionSource;
 use openzt2_interface_state::ui::authored_button_runtime_policy::UiButtonPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTypeListPolicy;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiActionSource;
-use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMaximum;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMinimum;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -64,6 +59,7 @@ pub(super) fn project_widget(
     localization: openzt2_game_assets::localization::loaded_localization_queries::LoadedLocalizationView<
         '_,
     >,
+    viewport: Option<(UiSliderAxis, Entity)>,
 ) {
     let data = document.canonical_ui_document();
     if let Some(visual) = node.scenario_objective_visual.as_ref() {
@@ -140,22 +136,17 @@ pub(super) fn project_widget(
                     }
                 });
             if selectable {
-                commands.entity(entity).insert((
-                    UiSelected(initially_selected),
-                    UiPreviousSelection::from_current_selection(initially_selected),
-                ));
+                commands
+                    .entity(entity)
+                    .insert(UiSelected(initially_selected));
                 // When shipped UI selects more than one member of a toggle set,
                 // the first member wins (the construction panel opens on
                 // fences) and the later members' authored Off actions still
                 // run. Keep that transition when normalizing to one child.
                 if button.initially_selected && !initially_selected {
-                    commands.queue(move |world: &mut World| {
-                        world.write_message(UiNodeActivated {
-                            source: ActionSource::System,
-                            node: entity,
-                            trigger: UiTrigger::Off,
-                        });
-                    });
+                    commands.entity(entity).insert(
+                        crate::authored_ui_change_activation_dispatch::UiInitialDeselection,
+                    );
                 }
             }
             if matches!(node.kind, UiNodeKind::FullscreenButton) {
@@ -187,8 +178,18 @@ pub(super) fn project_widget(
                 },
                 ScrollPosition::default(),
             ));
-            if !matches!(node.kind, UiNodeKind::DropList) {
-                commands.entity(entity).insert(UiPointerInteraction::None);
+            match source {
+                UiWidgetLiveCollectionSource::ZooMessageLatest => {
+                    commands
+                        .entity(entity)
+                        .insert(crate::authored_zoo_message_lists::UiZooMessageList::Latest);
+                }
+                UiWidgetLiveCollectionSource::ZooMessageHistory => {
+                    commands
+                        .entity(entity)
+                        .insert(crate::authored_zoo_message_lists::UiZooMessageList::History);
+                }
+                _ => {}
             }
             // These lists are authored toggle sets: selecting one row
             // deselects the others.
@@ -218,24 +219,62 @@ pub(super) fn project_widget(
                     ChildOf(entity),
                 ))
                 .id();
+            let axis = viewport.map_or_else(
+                || match slider.axis {
+                    UiAxis::X => UiSliderAxis::Horizontal,
+                    UiAxis::Y => UiSliderAxis::Vertical,
+                    UiAxis::Both => UiSliderAxis::Both,
+                },
+                |(axis, _)| axis,
+            );
             commands.entity(entity).insert((
-                UiMinimum(slider.minimum as i64),
-                UiMaximum(slider.maximum as i64),
-                UiValue(slider.initial as i64),
                 UiSliderPolicy {
                     increment: slider.increment,
                     minimum_thumb_size: slider.minimum_thumb_size,
-                    axis: match &slider.axis {
-                        UiAxis::X => UiSliderAxis::Horizontal,
-                        UiAxis::Y => UiSliderAxis::Vertical,
-                        UiAxis::Both => UiSliderAxis::Both,
-                    },
+                    axis,
                 },
                 crate::slider::UiSliderPresentation {
-                    thumb: AssetId(slider.thumb.0),
+                    thumb: slider.thumb,
                     track,
                 },
+                crate::slider::AuthoredSliderGrab::default(),
             ));
+            if let Some((_, viewport)) = viewport {
+                commands
+                    .entity(entity)
+                    .insert(crate::authored_scrollbar::ScrollsViewport(viewport));
+            } else {
+                commands.entity(entity).insert((
+                    UiMinimum(slider.minimum as i64),
+                    UiMaximum(slider.maximum as i64),
+                    UiValue(slider.initial as i64),
+                ));
+                if slider.thumb == AssetId::default()
+                    && slider.thumb_region == node.region
+                    && slider.minimum.abs().max(slider.maximum.abs()) <= 16_777_216.0
+                {
+                    use bevy::ui_widgets::{
+                        Slider, SliderOrientation, SliderRange, SliderStep, SliderValue, TrackClick,
+                    };
+                    let orientation = match axis {
+                        UiSliderAxis::Horizontal => SliderOrientation::Horizontal,
+                        UiSliderAxis::Vertical => SliderOrientation::Vertical,
+                        UiSliderAxis::Both => SliderOrientation::Auto,
+                    };
+                    commands.entity(entity).insert((
+                        Slider {
+                            orientation,
+                            track_click: TrackClick::Snap,
+                        },
+                        SliderRange::new(
+                            slider.minimum.min(slider.maximum),
+                            slider.maximum.max(slider.minimum),
+                        ),
+                        SliderValue(slider.initial),
+                        SliderStep(slider.increment.abs()),
+                    ));
+                }
+            }
             if AssetId(slider.field.0) != AssetId::default() {
                 commands.entity(entity).insert(UiSliderValuePresentation {
                     label: AssetId(slider.field.0),
@@ -321,13 +360,11 @@ pub(super) fn project_widget(
                     source: UiWidgetLiveCollectionSource::Unbound,
                 },
                 ScrollPosition::default(),
-                UiPointerInteraction::None,
                 // Native `ZTUITypeList` derives from `UIToggleSet` and carries
                 // its own selection fact; the authored `UI_ACTIVATE_ON`/`OFF`
                 // list events drive it and the catalogue selection consumer
                 // reads its activation.
                 UiSelected(false),
-                UiPreviousSelection::from_current_selection(false),
             ));
         }
         UiWidgetRecord::AdoptionList { grid, row_document } => {
@@ -345,7 +382,6 @@ pub(super) fn project_widget(
                 },
                 UiAuthoredToggleGroupSelectionPolicy::new(false),
                 ScrollPosition::default(),
-                UiPointerInteraction::None,
             ));
         }
         UiWidgetRecord::FinanceList {
@@ -370,7 +406,6 @@ pub(super) fn project_widget(
                     source: UiWidgetLiveCollectionSource::Unbound,
                 },
                 ScrollPosition::default(),
-                UiPointerInteraction::None,
             ));
         }
         UiWidgetRecord::CatalogueDetails { grid } => {
@@ -392,46 +427,58 @@ pub(super) fn project_widget(
                 commands.entity(entity).insert(UiValue(0));
             }
         }
-        UiWidgetRecord::TimedSequence { events } => {
+        UiWidgetRecord::TimedSequence {
+            events,
+            starts_active,
+        } => {
             use crate::authored_timed_action_sequence::{
-                UiAuthoredTimedActionSequencePlayback, UiTimedActionDue, UiTimedActionOf,
+                UiAuthoredTimedActionSequencePlayback, UiTimedActionDue,
             };
             for (index, event) in events.iter().enumerate() {
                 let proxy = commands
                     .spawn((
                         Name::new("timed UI action"),
                         UiDocumentOwner(document_root),
-                        UiTimedActionOf(entity),
+                        ChildOf(entity),
                         UiTimedActionDue(std::time::Duration::from_millis(u64::from(event.due_ms))),
                     ))
                     .id();
-                super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
-                    commands,
-                    proxy,
-                    UiActionSource::TimedEvent {
-                        node: node_index,
-                        event: index as u32,
-                    },
-                    &event.action,
+                use openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction;
+                match &event.action {
+                    UiTimedEventAction::Ui(action) => {
+                        super::authored_node_action_routing_projection::insert_authored_action_proxy_route(
+                            commands,
+                            proxy,
+                            UiActionSource::TimedEvent { node: node_index, event: index as u32 },
+                            action,
+                        );
+                    }
+                    UiTimedEventAction::ScenarioScript(command) => {
+                        commands.entity(proxy).insert(
+                            crate::authored_timed_action_sequence::TimedScenarioScript(
+                                command.as_str().into(),
+                            ),
+                        );
+                    }
+                }
+            }
+            let mut playback = UiAuthoredTimedActionSequencePlayback::default();
+            playback.set_active_and_restart(*starts_active);
+            commands.entity(entity).insert(playback);
+        }
+        UiWidgetRecord::Tool { tool } => {
+            if *tool != AssetId::default() {
+                commands
+                    .entity(entity)
+                    .insert(crate::authored_tool_and_edit_widget::UiToolCommand(*tool));
+            }
+        }
+        UiWidgetRecord::XmlEdit { document: edit } => {
+            if let Some(asset) = document.nested_ui_document_handle(*edit) {
+                commands.entity(entity).insert(
+                    crate::authored_tool_and_edit_widget::UiEditDocument(asset.clone()),
                 );
             }
-            commands
-                .entity(entity)
-                .insert(UiAuthoredTimedActionSequencePlayback::default());
-        }
-        UiWidgetRecord::Tool { .. } | UiWidgetRecord::XmlEdit { .. } => {}
-        UiWidgetRecord::ButtonPulser {
-            target,
-            hidden_ms,
-            visible_ms,
-        } => {
-            commands
-                .entity(entity)
-                .insert(UiAuthoredButtonAttentionPulse::from_authored_cadence(
-                    AssetId(target.0),
-                    *hidden_ms,
-                    *visible_ms,
-                ));
         }
         UiWidgetRecord::TextEdit {
             text,
@@ -483,7 +530,6 @@ pub(super) fn project_widget(
                         source,
                     },
                     ScrollPosition::default(),
-                    UiPointerInteraction::None,
                 ));
             }
         }
@@ -508,6 +554,7 @@ pub(super) fn project_widget(
                     move_seconds: globe.move_seconds,
                     scream_threshold: globe.scream_threshold,
                     scream_delay_seconds: globe.scream_delay_seconds,
+                    scream_audio: globe.scream_audio,
                     dot_highlight_rgba: globe.dot_highlight_rgba,
                     dot_highlight_cursor: AssetId(globe.dot_highlight_cursor.0),
                 },
@@ -526,7 +573,8 @@ pub(super) fn project_widget(
                         .cloned(),
                 },
                 UiGlobeDrag::default(),
-                UiPointerInteraction::None,
+                GlobeHoveredMarker::default(),
+                GlobeSpin::default(),
                 Pickable::default(),
             ));
             commands
@@ -623,7 +671,6 @@ pub(super) fn project_widget(
                 UiAuthoredTreeItem::from_authored_item_and_initial_depth(AssetId(item.0), 0),
                 UiAuthoredTreeExpansion::from_authored_expansion(*expanded),
                 UiSelected(*selected),
-                UiPreviousSelection::from_current_selection(*selected),
             ));
         }
         UiWidgetRecord::Window {
@@ -641,9 +688,7 @@ pub(super) fn project_widget(
                     *wheel_scroll,
                 ),
             );
-            commands
-                .entity(entity)
-                .insert((ScrollPosition::default(), UiPointerInteraction::None));
+            commands.entity(entity).insert(ScrollPosition::default());
             commands
                 .entity(entity)
                 .entry::<Node>()

@@ -1,8 +1,10 @@
 use super::*;
 use crate::animal_behavior::behavior_container_admission::add_test_container_member;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_data::{
     behavior::{
         action::docking::BehaviorDockAction,
+        action_record::BehaviorAction,
         document::{BehaviorDocument, BehaviorSet},
     },
     AssetId,
@@ -13,7 +15,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::NavigationFailure;
 #[test]
 fn docking_events_respect_request_frame_and_failure_precedence() {
     let mut app = App::new();
-    app.init_resource::<Assets<BehaviorDocumentAsset>>()
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion).init_resource::<Assets<BehaviorDocumentAsset>>()
         .insert_resource(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
@@ -66,15 +68,20 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         next_action_tick: 1,
         object: None,
         interaction_slot: None,
-        stack: Default::default(),
+        depth: 0,
     };
-    let pending = PendingBehaviorDockingCompletion {
-        target,
-        origin: task.create_return_frame_after_action(0),
-        stack_depth: 0,
-        request_id: 2,
+    let actor = app.world_mut().spawn(task.clone()).id();
+    let bind_completion = |world: &mut World| {
+        let instruction = world.get::<RunningBehaviorInstruction>(actor).unwrap().id();
+        world
+            .entity_mut(actor)
+            .insert(PendingBehaviorDockingCompletion {
+                instruction,
+                target,
+                request_id: 2,
+            });
     };
-    let actor = app.world_mut().spawn((task.clone(), pending.clone())).id();
+    bind_completion(app.world_mut());
     add_test_container_member(app.world_mut(), target, actor, 0);
     app.world_mut().write_message(NavigationFailed {
         entity: actor,
@@ -129,9 +136,8 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         .get::<DockedAtInteractionContainer>(actor)
         .is_none());
 
-    app.world_mut()
-        .entity_mut(actor)
-        .insert((task.clone(), pending.clone()));
+    app.world_mut().entity_mut(actor).insert(task.clone());
+    bind_completion(app.world_mut());
     app.world_mut()
         .get_mut::<BehaviorTaskExecutionState>(actor)
         .unwrap()
@@ -150,7 +156,8 @@ fn docking_events_respect_request_frame_and_failure_precedence() {
         0
     );
 
-    app.world_mut().entity_mut(actor).insert((task, pending));
+    app.world_mut().entity_mut(actor).insert(task);
+    bind_completion(app.world_mut());
     app.world_mut().write_message(NavigationFailed {
         entity: actor,
         request_id: 2,

@@ -1,5 +1,7 @@
 use avian3d::prelude::{Collider, ShapeCastConfig, SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::{
     animal_lifecycle::types::AnimalVariant,
     behavior_task_execution_types::BehaviorEvasionSteering,
@@ -19,6 +21,7 @@ use super::{
 /// route exactly as they consume direct pursuit.
 pub(super) fn project_behavior_evasion_steering(
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    water: Query<&TankNavigationWater, With<WorldRoot>>,
     surfaces: DrySurfaceEligibility,
     animal_policy: AnimalNavigationPolicy,
     fences: FenceNavigationPolicy,
@@ -36,6 +39,7 @@ pub(super) fn project_behavior_evasion_steering(
         &mut Route,
     )>,
 ) {
+    let tank_water = water.single().ok();
     let Some(graph) = graph else {
         return;
     };
@@ -61,6 +65,7 @@ pub(super) fn project_behavior_evasion_steering(
                 || evasion.avoid_land && medium != Some(false))
                 && straight_line_sweep_admits_agent(
                     graph.terrain_derived_navigation_graph(),
+                    tank_water,
                     &agent,
                     mode,
                     slope,

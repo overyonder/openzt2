@@ -1,8 +1,7 @@
 //! Lowers authored PSYS renderer nodes and resolves their material asset paths.
 
 use openzt2_game_data::particle::authored_particle_system::{
-    AuthoredParticleRendererKind as ParticleRendererKind,
-    AuthoredParticleSystemModifier as EffectModifier,
+    AuthoredParticleRenderer, AuthoredParticleRendererKind as ParticleRendererKind,
 };
 
 use super::{
@@ -23,7 +22,7 @@ use crate::source_document::ordered_source_document_types::OrderedSourceDocument
 pub(super) fn lower_particle_system_renderer_node(
     particle_system_asset_path: &str,
     renderer_node: &OrderedSourceDocumentNode,
-) -> Result<(String, EffectModifier), ParticleSystemSourceConversionError> {
+) -> Result<AuthoredParticleRenderer, ParticleSystemSourceConversionError> {
     let renderer_kind = match read_required_particle_system_attribute_u32(renderer_node, "type")? {
         2 => ParticleRendererKind::Billboard,
         3 => ParticleRendererKind::VelocityAligned,
@@ -49,26 +48,24 @@ pub(super) fn lower_particle_system_renderer_node(
         .replace('\\', "/");
     let material_asset_path =
         resolve_particle_system_material_asset_path(&authored_material_reference);
-    Ok((
-        material_asset_path,
-        EffectModifier::Renderer {
-            kind: renderer_kind,
-            width: read_particle_system_parameter_f32_or_default(renderer_node, "width", 1.0)?,
-            height: read_particle_system_parameter_f32_or_default(renderer_node, "height", 1.0)?,
-            columns: read_particle_system_parameter_u16_or_default(renderer_node, "numtilesu", 1)?,
-            rows: read_particle_system_parameter_u16_or_default(renderer_node, "numtilesv", 1)?,
-            sort_by_distance: read_particle_system_parameter_bool_or_default(
-                renderer_node,
-                "sortbydistance",
-                false,
-            )?,
-            minimum_height: read_particle_system_parameter_f32_or_default(
-                renderer_node,
-                "minheight",
-                0.0,
-            )?,
-        },
-    ))
+    Ok(AuthoredParticleRenderer {
+        material: material_asset_path,
+        kind: renderer_kind,
+        width: read_particle_system_parameter_f32_or_default(renderer_node, "width", 1.0)?,
+        height: read_particle_system_parameter_f32_or_default(renderer_node, "height", 1.0)?,
+        columns: read_particle_system_parameter_u16_or_default(renderer_node, "numtilesu", 1)?,
+        rows: read_particle_system_parameter_u16_or_default(renderer_node, "numtilesv", 1)?,
+        sort_by_distance: read_particle_system_parameter_bool_or_default(
+            renderer_node,
+            "sortbydistance",
+            false,
+        )?,
+        minimum_height: read_particle_system_parameter_f32_or_default(
+            renderer_node,
+            "minheight",
+            0.0,
+        )?,
+    })
 }
 
 fn resolve_particle_system_material_asset_path(authored_material_reference: &str) -> String {

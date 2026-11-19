@@ -13,7 +13,6 @@ mod information_view_types;
 pub mod overview;
 mod projection;
 mod selected_entity_ui_broadcasts;
-mod selection;
 mod zoopedia;
 
 use bevy::prelude::*;
@@ -21,13 +20,6 @@ use information_view_types::InformationViewFilters;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
 use openzt2_interface_state::information::catalogue_types::SelectedCareAnimal;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
-use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
-use openzt2_interface_state::information::entity_selection_types::SelectionRequest;
-use selection::{
-    apply_selection_requests, bind_info_panel_subject, clear_removed_selection,
-    reconcile_selected_entity_information,
-};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::GameSet;
@@ -36,8 +28,7 @@ pub struct InformationPlugin;
 
 impl Plugin for InformationPlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<SelectedEntity>()
-            .init_resource::<projection::information_list_row_identity_projection::InformationRowStructure>()
+        app.init_resource::<projection::information_list_row_identity_projection::InformationRowStructure>()
             .add_observer(projection::information_list_row_identity_projection::invalidate_row_structure)
             .init_resource::<projection::entity_editor_data_root_projection::InspectableMembership>()
             .add_observer(projection::entity_editor_data_root_projection::inspectable_added)
@@ -45,9 +36,13 @@ impl Plugin for InformationPlugin {
             .init_resource::<SelectedCatalogueEntry>()
             .init_resource::<SelectedCareAnimal>()
             .init_resource::<InformationViewFilters>()
-            .add_message::<SelectionRequest>()
-            .add_message::<SelectionChanged>()
             .add_message::<PurchaseChoice>()
+            .add_systems(
+                Update,
+                catalogue::animal_care_subject_projection::retain_selected_animal_for_care_catalogue
+                    .in_set(GameSet::Ui)
+                    .before(openzt2_interface_state::ui::UiSet::Projection),
+            )
             .add_systems(OnExit(GamePhase::InGame), catalogue::animal_care_subject_projection::clear_care_animal)
             .add_message::<openzt2_interface_state::information::overview::overview_types::ExportOverviewMap>()
             .add_systems(
@@ -64,8 +59,6 @@ impl Plugin for InformationPlugin {
                     zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_table_of_contents_row,
                     zoopedia::zoopedia_navigation_activation::navigate_to_subject_from_pressed_zoopedia_rich_content_link,
                     catalogue::catalogue_selection_and_details_projection::select_catalogue_entry_and_open_purchase_information_document,
-                    apply_selection_requests,
-                    catalogue::animal_care_subject_projection::retain_selected_animal_for_care_catalogue,
                 )
                     .chain()
                     .in_set(GameSet::Intent),
@@ -76,8 +69,6 @@ impl Plugin for InformationPlugin {
                     (
                         information_view_class_hydration::hydrate_information_view_classes_from_canonical_world_definitions,
                         information_view_filter_operations::project_information_view_filters_to_world_entities_and_authored_controls,
-                        clear_removed_selection,
-                        bind_info_panel_subject,
                         catalogue::animal_care_subject_projection::project_care_animal_name_and_icon,
                     )
                         .chain(),
@@ -129,7 +120,6 @@ impl Plugin for InformationPlugin {
                     projection::selected_animal_need_list_projection::project_selected_animal_needs_to_authored_list_rows,
                     projection::animal_need_and_health_projection::project_live_animal_needs_to_visible_information_panels,
                     projection::animal_need_and_health_projection::project_live_animal_health_to_visible_information_panels,
-                    reconcile_selected_entity_information,
                     selected_entity_ui_broadcasts::dispatch_selected_entity_ui_broadcasts
                         .before(openzt2_interface_state::ui::UiSet::Behavior),
                 )

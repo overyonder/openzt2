@@ -42,7 +42,6 @@ pub struct AnimationPlaybackPlugin;
 
 impl Plugin for AnimationPlaybackPlugin {
     fn build(&self, application: &mut App) {
-        crate::model_render::model_projection_changes::register(application);
         application
             .register_required_components_with::<AnimationPlaybackController, AuthoredAnimationEventCursor>(|| {
                 AuthoredAnimationEventCursor {
@@ -53,7 +52,7 @@ impl Plugin for AnimationPlaybackPlugin {
             .add_systems(PostUpdate,
                 animation_water_effect_binding::update_animation_water_effect_planes
                     .after(bevy::app::AnimationSystems)
-                    .before(openzt2_game_assets::effect::particle_plane_binding::upload_particle_effect_planes))
+                    .before(openzt2_game_assets::effect::particle_plane_binding::ParticlePlaneSources))
             .add_systems(PostUpdate,
                 (sampled_animation_joint_pose_blending::blend_sampled_animation_joint_poses,
                 crate::animation_playback::locomotion_root_motion::remove_consumed_root_trajectory).chain()

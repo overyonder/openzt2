@@ -468,7 +468,7 @@ fn restored_waste_rebuilds_one_job_and_authored_cleanup_survives_a_second_save()
             next_action_tick: 0,
             object: None,
             interaction_slot: None,
-            stack: Default::default(),
+            depth: 0,
         },
     ));
     destination.update();

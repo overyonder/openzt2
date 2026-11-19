@@ -13,7 +13,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabClothingTextures;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabMaterialOverrides;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 
@@ -23,10 +23,10 @@ pub(super) fn finish_clothing_delivery(
     server: Res<AssetServer>,
     images: Res<Assets<Image>>,
     materials: Res<Assets<MaterialAsset>>,
-    mut actors: Query<(
+    actors: Query<(
         Entity,
         &PendingClothingDelivery,
-        Option<&mut BehaviorTaskExecutionState>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Has<PendingBehaviorTaskFailure>,
     )>,
     children: Query<&Children>,
@@ -37,8 +37,10 @@ pub(super) fn finish_clothing_delivery(
     )>,
     entities: Query<()>,
 ) {
-    for (actor, delivery, task, failed) in &mut actors {
-        let Some(mut task) = task.filter(|task| !failed && delivery.owns(task)) else {
+    for (actor, delivery, task, failed) in &actors {
+        let Some((_, instruction)) =
+            task.filter(|(task, instruction)| !failed && delivery.owns(task, instruction))
+        else {
             commands.entity(actor).remove::<PendingClothingDelivery>();
             continue;
         };
@@ -160,7 +162,7 @@ pub(super) fn finish_clothing_delivery(
                 commands.entity(root).insert(clothing);
             }
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
         commands.entity(actor).remove::<PendingClothingDelivery>();
     }
 }

@@ -2,7 +2,7 @@ use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HabitatFenceSegment {
     pub fence_entity: Entity,
     pub first_topology_node: IVec2,
@@ -54,13 +54,17 @@ pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
     expanded: &[HabitatFenceSegment],
     changed_topology_bounds: IRect,
 ) -> Vec<DerivedHabitatRegion> {
-    if expanded.is_empty() {
-        return Vec::new();
-    }
-    let relevant = collect_connected_fence_segments_intersecting_changed_bounds(
-        expanded,
-        changed_topology_bounds,
-    );
+    let relevant: Vec<_> = connected_cardinal_fence_components(expanded)
+        .into_iter()
+        .filter(|component| component.touches(changed_topology_bounds))
+        .flat_map(|component| component.segments)
+        .collect();
+    derive_enclosed_habitats(&relevant)
+}
+
+pub(super) fn derive_enclosed_habitats(
+    relevant: &[HabitatFenceSegment],
+) -> Vec<DerivedHabitatRegion> {
     if relevant.is_empty() {
         return Vec::new();
     }
@@ -68,7 +72,7 @@ pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
     let mut min = IVec2::splat(i32::MAX);
     let mut max = IVec2::splat(i32::MIN);
     let mut blocked = HashMap::with_capacity(relevant.len() * 2);
-    for segment in &relevant {
+    for segment in relevant {
         min = min
             .min(segment.first_topology_node)
             .min(segment.second_topology_node);
@@ -143,7 +147,7 @@ pub(super) fn derive_enclosed_habitats_from_cardinal_boundaries(
         let cell_set: HashSet<_> = cells.iter().copied().collect();
         let mut boundary_edges = Vec::new();
         let mut breached = false;
-        for segment in &relevant {
+        for segment in relevant {
             let Some((left, right)) = find_topology_cells_separated_by_fence_segment(
                 segment.first_topology_node,
                 segment.second_topology_node,
@@ -215,10 +219,23 @@ pub(super) fn expand_authored_fence_segments_into_cardinal_habitat_grid_boundari
     result
 }
 
-fn collect_connected_fence_segments_intersecting_changed_bounds(
+pub(super) struct CardinalFenceComponent {
+    pub(super) segments: Vec<HabitatFenceSegment>,
+    pub(super) bounds: IRect,
+}
+
+impl CardinalFenceComponent {
+    pub(super) fn touches(&self, bounds: IRect) -> bool {
+        self.segments.iter().any(|edge| {
+            inclusive_topology_bounds_contain_point(bounds, edge.first_topology_node)
+                || inclusive_topology_bounds_contain_point(bounds, edge.second_topology_node)
+        })
+    }
+}
+
+pub(super) fn connected_cardinal_fence_components(
     segments: &[HabitatFenceSegment],
-    changed: IRect,
-) -> Vec<HabitatFenceSegment> {
+) -> Vec<CardinalFenceComponent> {
     let mut by_node: HashMap<IVec2, Vec<usize>> = HashMap::new();
     for (index, segment) in segments.iter().enumerate() {
         by_node
@@ -239,12 +256,17 @@ fn collect_connected_fence_segments_intersecting_changed_bounds(
         visited[first] = true;
         let mut component = vec![first];
         let mut cursor = 0;
-        let mut relevant = false;
+        let mut bounds = IRect::from_corners(
+            segments[first].first_topology_node,
+            segments[first].second_topology_node,
+        );
         while let Some(&edge_index) = component.get(cursor) {
             cursor += 1;
             let edge = segments[edge_index];
-            relevant |= inclusive_topology_bounds_contain_point(changed, edge.first_topology_node)
-                || inclusive_topology_bounds_contain_point(changed, edge.second_topology_node);
+            bounds = bounds.union(IRect::from_corners(
+                edge.first_topology_node,
+                edge.second_topology_node,
+            ));
             for topology_node in [edge.first_topology_node, edge.second_topology_node] {
                 if let Some(connected_fence_segment_indexes) = by_node.get(&topology_node) {
                     for &neighbor in connected_fence_segment_indexes {
@@ -256,9 +278,10 @@ fn collect_connected_fence_segments_intersecting_changed_bounds(
                 }
             }
         }
-        if relevant {
-            result.extend(component.into_iter().map(|index| segments[index]));
-        }
+        result.push(CardinalFenceComponent {
+            segments: component.into_iter().map(|index| segments[index]).collect(),
+            bounds,
+        });
     }
     result
 }

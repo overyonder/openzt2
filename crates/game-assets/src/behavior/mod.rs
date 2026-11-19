@@ -13,7 +13,7 @@ use behavior_asset_loading::BehaviorDocumentAssetLoader;
 use behavior_asset_types::{BehaviorDocumentAsset, LoadedBehaviorDocumentCollection};
 use behavior_document_indexing::{
     rebuild_behavior_declaration_indexes_after_asset_change,
-    refresh_behavior_documents_after_archive_revision_change,
+    refresh_behavior_documents_after_archive_change,
 };
 
 pub struct BehaviorDocumentAssetPlugin;
@@ -27,7 +27,7 @@ impl Plugin for BehaviorDocumentAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    refresh_behavior_documents_after_archive_revision_change,
+                    refresh_behavior_documents_after_archive_change,
                     rebuild_behavior_declaration_indexes_after_asset_change,
                 )
                     .chain()

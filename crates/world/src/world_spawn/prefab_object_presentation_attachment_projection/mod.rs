@@ -105,7 +105,7 @@ pub(super) fn project_pending_physical_presentation_children(
                 continue;
             }
             if let Some(active) = active {
-                commands.entity(active.0).try_despawn();
+                commands.entity(active.entity()).try_despawn();
             }
             let mut child = commands.spawn((
                 Transform::IDENTITY,
@@ -122,7 +122,7 @@ pub(super) fn project_pending_physical_presentation_children(
                 child.insert(PhysicalChildPlayback::new(state_index));
             }
         } else if let Some(active) = active {
-            commands.entity(active.0).try_despawn();
+            commands.entity(active.entity()).try_despawn();
         }
         commands
             .entity(controller)

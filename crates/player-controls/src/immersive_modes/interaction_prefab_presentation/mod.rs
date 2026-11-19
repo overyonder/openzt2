@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use avian3d::prelude::RigidBody;
 use bevy::{gltf::Gltf, prelude::*};
 
@@ -18,16 +20,38 @@ pub(super) struct ProjectedImmersivePrefab(Handle<ScenePrefabAsset>);
 pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
     prefab_policies: Query<(
         Entity,
-        &InteractionPrefab,
+        Ref<InteractionPrefab>,
         Option<&InteractionPrefabVisuals>,
     )>,
     scene_prefab_assets: Res<Assets<ScenePrefabAsset>>,
     gltf_assets: Res<Assets<Gltf>>,
-    world_roots: Query<Entity, With<WorldRoot>>,
+    world_roots: Query<(Entity, Ref<WorldRoot>)>,
+    mut prefabs: MessageReader<AssetEvent<ScenePrefabAsset>>,
+    mut models: MessageReader<AssetEvent<Gltf>>,
     existing_prefab_visuals: Query<&ProjectedImmersivePrefab>,
     mut commands: Commands,
 ) {
+    let ready_prefabs = prefabs
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .collect::<HashSet<_>>();
+    let models_changed = models.read().count() != 0;
+    let Ok((world_root_entity, world_root)) = world_roots.single() else {
+        return;
+    };
     for (controller_entity, interaction_prefab, existing) in &prefab_policies {
+        if !interaction_prefab.is_changed()
+            && !world_root.is_added()
+            && !models_changed
+            && !ready_prefabs.contains(&interaction_prefab.handle.id())
+        {
+            continue;
+        }
         if existing
             .into_iter()
             .flat_map(|visuals| visuals.iter())
@@ -46,9 +70,6 @@ pub(super) fn create_world_prefab_visual_when_immersive_mode_prefab_is_ready(
         {
             continue;
         }
-        let Ok(world_root_entity) = world_roots.single() else {
-            continue;
-        };
         for entity in existing.into_iter().flat_map(|visuals| visuals.iter()) {
             commands.entity(entity).despawn();
         }

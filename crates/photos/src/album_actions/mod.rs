@@ -17,7 +17,7 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types::PhotoControl;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::ExitImmersiveMode;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::ModeExitReason;
-use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCamera;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -128,7 +128,7 @@ pub(super) fn route_photo_ui_actions(
     mut captures: MessageWriter<CapturePhotoRequest>,
     mut immersive_mode_exits: MessageWriter<ExitImmersiveMode>,
     mut exports: MessageWriter<ExportPhotoAlbum>,
-    active_photo_modes: Query<(Entity, &ActiveImmersiveMode), With<PhotoControl>>,
+    active_photo_modes: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
     mut commands: Commands,
 ) {
     for activation in activations.read() {
@@ -154,7 +154,7 @@ pub(super) fn route_photo_ui_actions(
                 UiPhotoAction::CapturePhotoFromActivePhotoModeCamera => {
                     if let Ok((_, active_photo_mode)) = active_photo_modes.single() {
                         captures.write(CapturePhotoRequest {
-                            camera: active_photo_mode.camera,
+                            camera: active_photo_mode.0,
                         });
                     }
                 }

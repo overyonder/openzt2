@@ -10,6 +10,23 @@ pub enum BehaviorAction {
         function: String,
         parameters: Vec<String>,
     },
+    DockTraversal {
+        subject_node: String,
+        target_path: String,
+        clip: Option<String>,
+    },
+    AnimateTraversal {
+        subject_node: String,
+        target_path: String,
+        exit: bool,
+    },
+    MorphEntity {
+        recipient: BehaviorMorphRecipient,
+        definition: crate::AssetId,
+        name_it: bool,
+        fade: bool,
+        period: std::time::Duration,
+    },
     AnimationClip(action::animation::BehaviorAnimationClipAction),
     AttachObject(action::attach_object::BehaviorAttachObjectAction),
     DetachObject(action::attach_object::BehaviorDetachObjectAction),
@@ -100,4 +117,11 @@ pub enum BehaviorAction {
     Wander(action::wander::BehaviorWanderAction),
     SendSelfTokens(Vec<action::token::BehaviorSelfTokenDelivery>),
     SendSubjectTrigger(crate::AssetId),
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+pub enum BehaviorMorphRecipient {
+    Subject,
+    Target,
+    NamedChild(crate::AssetId),
 }

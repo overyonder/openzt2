@@ -3,16 +3,15 @@ use std::time::Duration;
 use bevy::{prelude::*, time::Stopwatch};
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_interface_state::{
-    input::input_types::ActionSource, ui::authored_ui_activation_contracts::UiNodeActivated,
+    input::input_types::ActionSource,
+    ui::{
+        authored_ui_activation_contracts::{RunAuthoredTimedScenarioScript, UiNodeActivated},
+        authored_ui_node_projection_components::UiDocumentOwner,
+    },
 };
 
 #[derive(Component)]
-#[relationship(relationship_target = UiTimedActions)]
-pub(super) struct UiTimedActionOf(pub(super) Entity);
-
-#[derive(Component)]
-#[relationship_target(relationship = UiTimedActionOf, linked_spawn)]
-pub(super) struct UiTimedActions(Vec<Entity>);
+pub(super) struct TimedScenarioScript(pub(super) std::sync::Arc<str>);
 
 #[derive(Component)]
 pub(super) struct UiTimedActionDue(pub(super) Duration);
@@ -34,8 +33,13 @@ impl UiAuthoredTimedActionSequencePlayback {
 
 pub(super) fn advance_authored_timed_action_sequences_and_activate_due_proxies(
     time: Res<Time<Real>>,
-    mut sequences: Query<(&UiTimedActions, &mut UiAuthoredTimedActionSequencePlayback)>,
-    deadlines: Query<&UiTimedActionDue>,
+    mut sequences: Query<(&Children, &mut UiAuthoredTimedActionSequencePlayback)>,
+    deadlines: Query<(
+        &UiTimedActionDue,
+        &UiDocumentOwner,
+        Option<&TimedScenarioScript>,
+    )>,
+    mut scripts: MessageWriter<RunAuthoredTimedScenarioScript>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
     for (actions, mut playback) in &mut sequences {
@@ -46,21 +50,31 @@ pub(super) fn advance_authored_timed_action_sequences_and_activate_due_proxies(
             continue;
         };
         clock.elapsed.tick(time.delta());
-        for node in actions.iter().skip(clock.emitted) {
-            let Ok(deadline) = deadlines.get(node) else {
-                break;
-            };
+        let mut complete = true;
+        let ordered = actions.iter().filter_map(|node| {
+            let (deadline, owner, script) = deadlines.get(node).ok()?;
+            Some((node, deadline, owner, script))
+        });
+        for (node, deadline, owner, script) in ordered.skip(clock.emitted) {
             if deadline.0 > clock.elapsed.elapsed() {
+                complete = false;
                 break;
             }
-            activated.write(UiNodeActivated {
-                source: ActionSource::System,
-                node,
-                trigger: UiTrigger::Press,
-            });
+            if let Some(script) = script {
+                scripts.write(RunAuthoredTimedScenarioScript {
+                    document_root: owner.0,
+                    command: script.0.clone(),
+                });
+            } else {
+                activated.write(UiNodeActivated {
+                    source: ActionSource::System,
+                    node,
+                    trigger: UiTrigger::Press,
+                });
+            }
             clock.emitted += 1;
         }
-        if clock.emitted == actions.len() {
+        if complete {
             playback.0 = None;
         }
     }

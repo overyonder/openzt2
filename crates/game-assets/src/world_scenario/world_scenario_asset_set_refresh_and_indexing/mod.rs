@@ -10,7 +10,9 @@ use bevy::{
     prelude::*,
 };
 
-use crate::asset_source::{ArchiveCatalogue, AssetArchives};
+use crate::asset_source::{
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, AssetArchives,
+};
 
 use super::{
     world_scenario_asset_set_state_and_borrowing_queries::{
@@ -20,6 +22,12 @@ use super::{
 };
 
 pub(crate) fn scenario_catalogue_path(path: &Path) -> bool {
+    if !path
+        .extension()
+        .is_some_and(|extension| extension == "xml" || extension == "zt2")
+    {
+        return false;
+    }
     let path = path
         .to_string_lossy()
         .replace('\\', "/")
@@ -51,9 +59,10 @@ pub(super) fn refresh_world_scenario_catalogue_sources(
     }
     let handles = sources
         .iter()
-        .map(|entry| server.load(entry.normalized_asset_path.clone()))
+        .map(|entry| server.load(archive_entry_asset_path(entry)))
         .collect::<Vec<_>>();
     if !scenarios.discovered || scenarios.handles != handles {
+        scenarios.source_ids = handles.iter().map(Handle::id).collect();
         scenarios.handles = handles;
         scenarios.discovery_changed = true;
         scenarios.discovered = true;
@@ -68,32 +77,45 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
     mut events: MessageReader<AssetEvent<WorldScenarioDocumentAsset>>,
     mut failures: MessageReader<AssetLoadFailedEvent<WorldScenarioDocumentAsset>>,
 ) {
-    let mut changed = scenarios.discovery_changed;
-    let is_relevant = |id| {
-        scenarios.published_dependencies.contains(&id)
-            || scenarios.handles.iter().any(|handle| handle.id() == id)
-    };
-    let mut failed = scenarios.failed.clone();
+    let is_relevant =
+        |id| scenarios.published_dependencies.contains(&id) || scenarios.source_ids.contains(&id);
+    let mut touched = BTreeSet::new();
+    let mut loaded = BTreeSet::new();
+    let mut removed = BTreeSet::new();
+    let mut failures_in_batch = BTreeSet::new();
     for event in events.read() {
-        let (id, available) = match *event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } => (id, true),
-            AssetEvent::Removed { id } => (id, false),
-            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
-        };
-        if is_relevant(id) {
-            changed = true;
-            if available {
-                failed.remove(&id);
+        match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } if is_relevant(id) => {
+                touched.insert(id);
+                loaded.insert(id);
             }
+            AssetEvent::Removed { id } if is_relevant(id) => {
+                touched.insert(id);
+                removed.insert(id);
+            }
+            _ => {}
         }
     }
     for failure in failures.read() {
         if is_relevant(failure.id) {
-            changed |= failed.insert(failure.id);
+            failures_in_batch.insert(failure.id);
         }
     }
-    if !changed {
+    if !scenarios.discovery_changed && touched.is_empty() && failures_in_batch.is_empty() {
         return;
+    }
+    let mut failed = std::mem::take(&mut scenarios.failed);
+    let mut pending = std::mem::take(&mut scenarios.pending);
+    for id in &touched {
+        pending.remove(id);
+    }
+    for id in &loaded {
+        failed.remove(id);
+    }
+    failed.extend(failures_in_batch.iter().copied());
+    failed.extend(removed.difference(&loaded).copied());
+    for id in &failures_in_batch {
+        pending.remove(id);
     }
     let mut published_dependencies = BTreeSet::new();
     let mut maps = BTreeMap::new();
@@ -108,12 +130,7 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
     let mut textures = BTreeMap::new();
     let mut start_paths = BTreeMap::new();
     for handle in &scenarios.handles {
-        if failed.contains(&handle.id())
-            || matches!(
-                server.get_load_state(handle.id()),
-                Some(LoadState::Failed(_))
-            )
-        {
+        if failed.contains(&handle.id()) {
             continue;
         }
         let Some(asset) = assets.get(handle) else {
@@ -146,12 +163,7 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
         asset.campaign_scenarios.iter().for_each(|scenario| {
             let dependency = scenario.handle.id();
             published_dependencies.insert(dependency);
-            if failed.contains(&dependency)
-                || matches!(
-                    server.get_load_state(dependency),
-                    Some(LoadState::Failed(_))
-                )
-            {
+            if failed.contains(&dependency) {
                 return;
             }
             if let Some(record) = assets
@@ -220,24 +232,22 @@ pub fn index_loaded_world_scenario_assets_by_identifier(
         .map(Handle::id)
         .chain(published_dependencies.iter().copied())
         .collect::<BTreeSet<_>>();
-    let pending = required
-        .iter()
-        .copied()
-        .filter(|id| {
-            !assets.contains(*id)
-                && !failed.contains(id)
-                && !matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))
-        })
-        .collect();
+    pending.retain(|id| required.contains(id));
     failed.retain(|id| required.contains(id));
-    failed.extend(
-        required
-            .iter()
-            .copied()
-            .filter(|id| matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))),
-    );
+    for id in required.difference(&scenarios.required_ids).copied() {
+        match server.get_load_state(id) {
+            Some(LoadState::Failed(_)) => {
+                failed.insert(id);
+            }
+            _ if !failed.contains(&id) && !assets.contains(id) => {
+                pending.insert(id);
+            }
+            _ => {}
+        }
+    }
     scenarios.pending = pending;
     scenarios.failed = failed;
+    scenarios.required_ids = required;
     scenarios.published_dependencies = published_dependencies;
 }
 
@@ -246,11 +256,11 @@ mod tests {
     use super::*;
     use crate::world_scenario::world_scenario_document_asset_and_dependency_handles::DemandLoadedAssetHandle;
     use openzt2_game_data::{
-        AssetId,
         world_scenario::{
             ScenarioCampaignRecord, ScenarioDefinitionRecord, ScenarioRecordFlags,
             WorldScenarioDocument,
         },
+        AssetId,
     };
 
     #[test]
@@ -293,20 +303,16 @@ mod tests {
         let scenarios = app.world().resource::<WorldScenarios>();
         // The campaign label remains browsable while its independently loaded
         // scenario is pending. Full-catalogue consumers cannot publish yet.
-        assert!(
-            scenarios
-                .get(assets)
-                .unwrap()
-                .campaign(campaign_id)
-                .is_some()
-        );
-        assert!(
-            scenarios
-                .get(assets)
-                .unwrap()
-                .scenario(authored_key)
-                .is_none()
-        );
+        assert!(scenarios
+            .get(assets)
+            .unwrap()
+            .campaign(campaign_id)
+            .is_some());
+        assert!(scenarios
+            .get(assets)
+            .unwrap()
+            .scenario(authored_key)
+            .is_none());
         assert!(!scenarios.catalogue_documents_are_loaded(assets));
         app.world_mut()
             .resource_mut::<Assets<WorldScenarioDocumentAsset>>()

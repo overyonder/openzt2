@@ -32,13 +32,11 @@ impl LoadedBehaviorDocumentCollection {
         &'a self,
         behavior_document_assets: &'a Assets<BehaviorDocumentAsset>,
     ) -> Option<BehaviorDeclarationIndexView<'a>> {
-        (self.indexed_archive_revision.is_some()
-            && self.indexed_archive_revision == self.archive_revision)
-            .then_some(BehaviorDeclarationIndexView {
-                behavior_sets_by_identifier: &self.behavior_sets_by_identifier,
-                behavior_tasks_by_unique_identifier: &self.behavior_tasks_by_unique_identifier,
-                behavior_document_assets,
-            })
+        self.index_ready.then_some(BehaviorDeclarationIndexView {
+            behavior_sets_by_identifier: &self.behavior_sets_by_identifier,
+            behavior_tasks_by_unique_identifier: &self.behavior_tasks_by_unique_identifier,
+            behavior_document_assets,
+        })
     }
 }
 

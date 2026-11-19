@@ -2,35 +2,23 @@
 //! inside a gift shop, then shows it again where it went in.
 
 use bevy::prelude::*;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorInstructionId, RunBehaviorHide, RunningBehaviorInstruction,
+};
 
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 
 #[derive(Component)]
 struct HiddenForBehavior {
-    execution_id: u64,
-    origin: BehaviorTaskReturnFrame,
-    depth: usize,
+    instruction: BehaviorInstructionId,
     until_tick: u64,
-}
-
-impl HiddenForBehavior {
-    fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        task.execution_id == self.execution_id
-            && task.stack.len() == self.depth
-            && task.is_at_or_nested_under(&self.origin, self.depth)
-    }
 }
 
 pub(super) fn register_hide_execution(application: &mut App) {
@@ -52,12 +40,13 @@ fn show_actors_whose_hiding_ended(
     mut hidden: Query<(
         Entity,
         &HiddenForBehavior,
-        Option<&BehaviorTaskExecutionState>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&mut Visibility>,
     )>,
 ) {
     for (actor, hiding, task, visibility) in &mut hidden {
-        if task.is_none_or(|task| !hiding.owns(task)) {
+        if task.is_none_or(|(task, step)| hiding.instruction != step.id() || !step.is_current(task))
+        {
             commands.entity(actor).remove::<HiddenForBehavior>();
             set_hiding_visibility(actor, visibility, Visibility::Inherited, &mut commands);
         }
@@ -67,13 +56,16 @@ fn show_actors_whose_hiding_ended(
 fn hide_actors_for_current_hide_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorHide,
+            ),
             Option<&HiddenForBehavior>,
             Option<&mut GuestRng>,
             Option<&mut BehaviorRandomStream>,
@@ -85,21 +77,27 @@ fn hide_actors_for_current_hide_actions(
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, mut task, hiding, guest_random, behavior_random, visibility) in &mut actors {
+    for (
+        actor,
+        (task, instruction, running_action),
+        hiding,
+        guest_random,
+        behavior_random,
+        visibility,
+    ) in &mut actors
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(&BehaviorAction::Hide { minimum, maximum }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
-        if let Some(hiding) = hiding.filter(|hiding| hiding.owns(&task)) {
+        }
+        let &RunBehaviorHide { minimum, maximum } = running_action;
+        if let Some(hiding) = hiding.filter(|hiding| hiding.instruction == instruction.id()) {
             if clock.tick >= hiding.until_tick {
                 commands.entity(actor).remove::<HiddenForBehavior>();
                 set_hiding_visibility(actor, visibility, Visibility::Inherited, &mut commands);
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                instruction.complete(actor, clock.tick, &mut commands);
             }
             continue;
         }
@@ -123,13 +121,11 @@ fn hide_actors_for_current_hide_actions(
             .tick
             .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX));
         commands.entity(actor).insert(HiddenForBehavior {
-            execution_id: task.execution_id,
-            origin: task.create_return_frame_after_action(task.action),
-            depth: task.stack.len(),
+            instruction: instruction.id(),
             until_tick,
         });
         set_hiding_visibility(actor, visibility, Visibility::Hidden, &mut commands);
-        task.next_action_tick = until_tick;
+        instruction.resume_at(actor, until_tick, &mut commands);
     }
 }
 

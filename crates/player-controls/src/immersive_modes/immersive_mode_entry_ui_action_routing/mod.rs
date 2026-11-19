@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::immersive_mode::UiImmersiveModeKind;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
@@ -17,7 +17,7 @@ pub(super) fn route_authored_immersive_mode_entry_actions_from_activated_ui_node
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_nodes: Query<(&UiImmersiveModeActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     active_modes: Query<(Entity, &ActiveImmersiveMode, Has<FirstPersonTraining>)>,
     animals: Query<
         (),
@@ -45,7 +45,7 @@ pub(super) fn route_authored_immersive_mode_entry_actions_from_activated_ui_node
             }
             if action_record.mode == UiImmersiveModeKind::AnimalTraining {
                 if let (Ok((controller, mode, _)), Some(subject)) =
-                    (active_modes.single(), selected_entity.0)
+                    (active_modes.single(), selected_entity.subject())
                 {
                     if matches!(
                         mode.mode,
@@ -80,7 +80,7 @@ pub(super) fn route_authored_immersive_mode_entry_actions_from_activated_ui_node
             immersive_mode_entry_requests.write(EnterImmersiveMode {
                 mode: immersive_mode,
                 controller: activation.node,
-                subject: selected_entity.0,
+                subject: selected_entity.subject(),
             });
         }
     }

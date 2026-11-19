@@ -133,7 +133,7 @@ pub(super) fn construct_selector_projection(
     definitions: WorldDefinitionsView<'_>,
     topology: &TopologyGrid,
     fences: &SelectorFences,
-) -> Option<(Box<[Option<[u8; 4]>]>, Box<[[Box<[[Vec2; 2]]>; 8]]>)> {
+) -> Option<super::SelectorProjection> {
     let grid = asset.canonical_terrain_grid();
     let spacing = grid.units.cell_size_metres * 4.0;
     if !spacing.is_finite() || spacing <= 0.0 {
@@ -226,45 +226,62 @@ pub(super) fn construct_selector_projection(
     }
     let width = (grid.width - 1) / 4;
     let height = (grid.height - 1) / 4;
-    let mut probes = Vec::with_capacity((width * height) as usize);
-    let codes = (0..width * height)
-        .map(|index| {
-            let origin = IVec2::new((index % width) as i32, (index / width) as i32);
-            let corners = [
-                origin,
-                origin + IVec2::X,
-                origin + IVec2::ONE,
-                origin + IVec2::Y,
-            ];
-            let edges = [(3, 2), (1, 2), (0, 1), (0, 3), (0, 2), (1, 3)];
-            let directional_edges = [
-                (3, 2),
-                (0, 2),
-                (1, 2),
-                (1, 3),
-                (0, 1),
-                (0, 2),
-                (0, 3),
-                (1, 3),
-            ];
-            probes.push(std::array::from_fn(|direction| {
-                let (first, second) = directional_edges[direction];
-                assignments
-                    .get(&edge_key(corners[first], corners[second]))
-                    .map_or_else(Box::default, |(_, _, segments)| {
-                        segments.clone().into_boxed_slice()
-                    })
-            }));
-            let mut codes = [0; 4];
-            for (direction, (first, second)) in edges.into_iter().enumerate() {
-                if let Some((_, shape, _)) =
-                    assignments.get(&edge_key(corners[first], corners[second]))
+    let empty_probes = || std::array::from_fn(|_| Box::<[[Vec2; 2]]>::default());
+    let mut probes: Vec<_> = (0..width * height).map(|_| empty_probes()).collect();
+    let mut codes = vec![Some([0; 4]); (width * height) as usize];
+    let mut touched = bevy::platform::collections::HashSet::default();
+    for &((ax, az), (bx, bz)) in assignments.keys() {
+        let minimum = IVec2::new(ax.min(bx), az.min(bz));
+        for y in -1..=0 {
+            for x in -1..=0 {
+                let tile = minimum + IVec2::new(x, y);
+                if tile.min_element() >= 0 && tile.as_uvec2().cmplt(UVec2::new(width, height)).all()
                 {
-                    apply_shape(&mut codes, direction, *shape);
+                    touched.insert(tile.as_uvec2());
                 }
             }
-            Some(codes)
-        })
-        .collect();
-    Some((codes, probes.into_boxed_slice()))
+        }
+    }
+    for &tile in &touched {
+        let index = (tile.y * width + tile.x) as usize;
+        let origin = tile.as_ivec2();
+        let corners = [
+            origin,
+            origin + IVec2::X,
+            origin + IVec2::ONE,
+            origin + IVec2::Y,
+        ];
+        let edges = [(3, 2), (1, 2), (0, 1), (0, 3), (0, 2), (1, 3)];
+        let directional_edges = [
+            (3, 2),
+            (0, 2),
+            (1, 2),
+            (1, 3),
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 3),
+        ];
+        probes[index] = std::array::from_fn(|direction| {
+            let (first, second) = directional_edges[direction];
+            assignments
+                .get(&edge_key(corners[first], corners[second]))
+                .map_or_else(Box::default, |(_, _, segments)| {
+                    segments.clone().into_boxed_slice()
+                })
+        });
+        let mut tile_codes = [0; 4];
+        for (direction, (first, second)) in edges.into_iter().enumerate() {
+            if let Some((_, shape, _)) = assignments.get(&edge_key(corners[first], corners[second]))
+            {
+                apply_shape(&mut tile_codes, direction, *shape);
+            }
+        }
+        codes[index] = Some(tile_codes);
+    }
+    Some(super::SelectorProjection {
+        codes: codes.into(),
+        probes: probes.into(),
+        touched,
+    })
 }

@@ -1,5 +1,4 @@
 use super::*;
-use arrayvec::ArrayVec;
 use openzt2_game_data::behavior::{
     action::spawn::BehaviorSpawnPosePolicy,
     document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
@@ -102,6 +101,7 @@ fn install_species(app: &mut App, document: &SpeciesDocument) {
 #[test]
 fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
     let mut app = App::new();
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
     app.init_resource::<Assets<SpeciesAsset>>()
         .init_resource::<SpeciesAssets>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
@@ -192,7 +192,7 @@ fn birth_action_spawns_one_young_variant_with_mother_and_mate() {
                 repetitions: 0,
                 next_action_tick: 0,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             },
         ))
         .id();

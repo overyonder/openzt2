@@ -43,7 +43,12 @@ pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_sub
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
     lists: Query<(Entity, &UiListPolicy, &UiDocumentOwner)>,
-    rows: Query<(Entity, &UiListRow, Option<&InformationEntitySource>)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        &ChildOf,
+        Option<&InformationEntitySource>,
+    )>,
     buildings: Query<
         Entity,
         (
@@ -103,8 +108,8 @@ pub(super) fn request_authored_finance_report_list_row_counts_and_bind_world_sub
             continue;
         };
         row_subjects.sort_unstable_by_key(|entity| entity.to_bits());
-        for (row_entity, row, current_source) in &rows {
-            if row.list != list_entity {
+        for (row_entity, row, parent, current_source) in &rows {
+            if parent.parent() != list_entity {
                 continue;
             }
             if let Some(subject) = row_subjects.get(usize::from(row.index)).copied() {
@@ -230,14 +235,12 @@ fn find_ui_list_rows_in_ancestors<'a>(
     let mut output = Vec::with_capacity(2);
     let mut candidate = descendant;
     for _ in 0..64 {
-        if let Ok(row) = rows.get(candidate) {
-            if let Ok(policy) = lists.get(row.list) {
-                output.push((row, policy.source));
-            }
-        }
         let Ok(parent) = parents.get(candidate) else {
             break;
         };
+        if let (Ok(row), Ok(policy)) = (rows.get(candidate), lists.get(parent.parent())) {
+            output.push((row, policy.source));
+        }
         candidate = parent.parent();
     }
     output
@@ -284,7 +287,7 @@ pub(super) fn project_monthly_finance_values_into_authored_table_rows(
     localizations: Res<Assets<LocalizationAsset>>,
     lists: Query<(&UiTablePolicy, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    rows: Query<(Entity, Ref<UiListRow>)>,
+    rows: Query<(Entity, Ref<UiListRow>, Ref<ChildOf>)>,
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
 ) {
@@ -293,11 +296,15 @@ pub(super) fn project_monthly_finance_values_into_authored_table_rows(
     else {
         return;
     };
-    for (row_entity, row) in &rows {
-        let Ok((policy, owner)) = lists.get(row.list) else {
+    for (row_entity, row, parent) in &rows {
+        let Ok((policy, owner)) = lists.get(parent.parent()) else {
             continue;
         };
-        if !row.is_added() && !row.is_changed() && !history.is_changed() && !localization_changed {
+        if !row.is_changed()
+            && !parent.is_changed()
+            && !history.is_changed()
+            && !localization_changed
+        {
             continue;
         }
         let Ok(root) = roots.get(owner.0) else {

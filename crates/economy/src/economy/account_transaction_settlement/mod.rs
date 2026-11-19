@@ -6,16 +6,19 @@ use openzt2_zoo_state::economy::general_economy_types::{
     GeneralEconomyLedger, GeneralEconomyTransaction,
 };
 
+use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    complete_behavior_refill, RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
+};
+
 use super::{
     account_transaction_types::{
         Account, TransactionCompleted, TransactionRejected, TransactionRejection,
         TransactionRequest, TransactionSettled,
     },
-    behavior_transaction_state::{
-        BehaviorTransactionPayment, KeeperRefillPayment, PendingBehaviorTransaction,
-    },
+    behavior_transaction_state::BehaviorTransactionPayment,
     facility_economy_types::Wallet,
-    keeper_refill_settlement::KeeperRefillSettlement,
+    keeper_refill_settlement::{KeeperRefillSettlement, StagedBehaviorRefill},
     money_types::Money,
     zoo_cash_types::{UnlimitedZooCash, ZooCash},
 };
@@ -111,15 +114,20 @@ pub(super) fn settle_requested_account_transactions(
     transaction_operations: Query<(
         Option<&TransactionSettled>,
         Option<&BehaviorTransactionPayment>,
-        Option<&KeeperRefillPayment>,
+        Option<&StagedBehaviorRefill>,
         Option<&GeneralEconomyTransaction>,
     )>,
-    mut behavior_tasks: Query<
-        (&mut BehaviorTaskExecutionState, &PendingBehaviorTransaction),
+    behavior_tasks: Query<
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunningBehaviorEconomyTransaction,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
     mut operations_settled_this_tick: Local<HashSet<Entity>>,
     mut keeper_refills: KeeperRefillSettlement,
+    clock: Option<Res<ZooClock>>,
 ) {
     operations_settled_this_tick.clear();
     if let (Some(ledger), Some(calendar)) = (general_ledger.as_deref_mut(), calendar.as_deref()) {
@@ -146,14 +154,15 @@ pub(super) fn settle_requested_account_transactions(
             // still owns the request. Act -> Economy may cross a failure/restart.
             // Other producers retain their existing settlement contracts.
             if let Ok((_, Some(owner), _, _)) = transaction_operations.get(request.operation) {
-                let valid = behavior_tasks
-                    .get(owner.actor)
-                    .is_ok_and(|(task, pending)| {
-                        pending.payment == Some(request.operation)
-                            && pending.facility == owner.facility
-                            && pending.transaction == owner.transaction
-                            && pending.owns(task)
-                    });
+                let valid =
+                    behavior_tasks
+                        .get(owner.actor)
+                        .is_ok_and(|(task, instruction, pending)| {
+                            pending.payment == Some(request.operation)
+                                && pending.facility == owner.facility
+                                && pending.transaction == owner.transaction
+                                && pending.owns(task, instruction)
+                        });
                 if !valid {
                     return Err(TransactionRejection::Cancelled);
                 }
@@ -199,12 +208,20 @@ pub(super) fn settle_requested_account_transactions(
             if let Ok((_, Some(owner), Some(refill), _)) =
                 transaction_operations.get(request.operation)
             {
-                let (mut task, _) = behavior_tasks
-                    .get_mut(owner.actor)
+                let (task, instruction, _) = behavior_tasks
+                    .get(owner.actor)
                     .map_err(|_| TransactionRejection::Cancelled)?;
+                let tick = clock.as_ref().ok_or(TransactionRejection::Cancelled)?.tick;
                 keeper_refills
-                    .commit(owner.actor, &mut task, refill)
+                    .commit(owner.actor, task, refill)
                     .ok_or(TransactionRejection::Cancelled)?;
+                complete_behavior_refill(
+                    owner.actor,
+                    instruction.id(),
+                    tick,
+                    refill.continuation,
+                    &mut commands,
+                );
             }
 
             if let Some(delta) = general_cash_change {

@@ -197,12 +197,12 @@ fn present_routed_water_wake_samples<const HIGH: bool>(
         let admitted = admissions.entry(sample.surface).or_insert_with(|| {
             let mut count = WaterWakeRegionAdmissions::default();
             if let Ok(children) = region_children.get(sample.surface) {
-                for (emission, children) in emissions.iter_many(children.iter()) {
+                for (emission, children) in emissions.iter_many(children.iter()).flatten() {
                     if emission.proximity_seconds_remaining > 0.0 {
                         count.nearby_origins.push(emission.source_position);
                     }
                     if let Some(children) = children {
-                        for particle in particles.iter_many(children.iter()) {
+                        for particle in particles.iter_many(children.iter()).flatten() {
                             count.particle_count = count
                                 .particle_count
                                 .saturating_add(particle.sampled_live_count().unwrap_or(1));

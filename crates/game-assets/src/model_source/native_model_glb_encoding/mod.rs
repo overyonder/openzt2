@@ -21,8 +21,11 @@ use super::{
     model::{MeshSource, ModelSource, SubmeshSource, VertexSource},
 };
 
-pub(super) fn encode_models_as_glb(models: Vec<ModelSource>) -> Result<Vec<u8>, ConversionError> {
-    NativeModelGltfWriter::default().write(models)
+pub(super) fn encode_models_as_glb(
+    models: Vec<ModelSource>,
+    has_default_scene: bool,
+) -> Result<Vec<u8>, ConversionError> {
+    NativeModelGltfWriter::default().write(models, has_default_scene)
 }
 
 #[derive(Default)]
@@ -33,7 +36,11 @@ struct NativeModelGltfWriter {
 }
 
 impl NativeModelGltfWriter {
-    fn write(mut self, models: Vec<ModelSource>) -> Result<Vec<u8>, ConversionError> {
+    fn write(
+        mut self,
+        models: Vec<ModelSource>,
+        has_default_scene: bool,
+    ) -> Result<Vec<u8>, ConversionError> {
         let model_roots = models
             .into_iter()
             .map(|model| {
@@ -55,7 +62,7 @@ impl NativeModelGltfWriter {
         }
         // Particle-only NIFs own their presentation through the particle
         // subassets. They have no mesh scene to select in the glTF carrier.
-        self.root.scene = (!self.root.scenes.is_empty()).then(|| Index::new(0));
+        self.root.scene = has_default_scene.then(|| Index::new(0));
         self.binary_buffer.finish(self.root)
     }
 

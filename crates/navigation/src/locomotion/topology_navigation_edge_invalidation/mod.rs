@@ -179,7 +179,7 @@ fn collect_crossed_navigation_edges(
                 continue;
             };
             let source = Vec2::new(source[0] as f32, source[2] as f32) * 0.01;
-            for edge in graph.iterate_outgoing_navigation_graph_edges(from) {
+            for edge in graph.iterate_outgoing_navigation_graph_edges(from, None) {
                 let to = edge.destination_node;
                 let Some(destination) =
                     graph.calculate_navigation_node_world_position_centimetres(to)

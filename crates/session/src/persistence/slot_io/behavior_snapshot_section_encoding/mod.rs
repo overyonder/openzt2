@@ -98,10 +98,34 @@ pub(super) fn validate_behavior_actor_snapshots(
     let mut executions = BTreeSet::new();
     let mut request_owners = BTreeMap::new();
     for (index, record) in records.iter().enumerate() {
+        let key = record.sort_key();
+        if matches!(key.0, 0 | u64::MAX) || index > 0 && records[index - 1].sort_key() >= key {
+            return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+        }
+        if let Some(record) = record.retry_record() {
+            if record.retry_delays.is_empty()
+                || record
+                    .retry_delays
+                    .windows(2)
+                    .any(|pair| pair[0].target >= pair[1].target)
+                || record.retry_delays.iter().any(|retry| {
+                    retry.failures == 0
+                        || !valid_reference(&retry.target)
+                        || retry.target
+                            == BehaviorSnapshotEntityReference::Persistent(
+                                record.persistent_identifier,
+                            )
+                })
+            {
+                return Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection);
+            }
+            continue;
+        }
+        let Some(record) = record.task_record() else {
+            continue;
+        };
         let task = &record.task;
-        if matches!(record.persistent_identifier, 0 | u64::MAX)
-            || index > 0 && records[index - 1].persistent_identifier >= record.persistent_identifier
-            || matches!(task.execution_id, 0 | u64::MAX)
+        if matches!(task.execution_id, 0 | u64::MAX)
             || !executions.insert(task.execution_id)
             || !valid_frame(&task.current)
             || task.stack.iter().any(|frame| !valid_frame(frame))
@@ -178,7 +202,15 @@ pub(super) fn validate_behavior_actor_snapshots(
                 || !valid_frame(&pending.origin)
                 || !matches_frame(&pending.origin, &task.current)
                 || !valid_reference(&pending.facility)
-                || task.target.as_ref() != Some(&pending.facility)
+                || task.target.as_ref().map_or_else(
+                    || {
+                        pending.facility
+                            != BehaviorSnapshotEntityReference::Persistent(
+                                record.persistent_identifier,
+                            )
+                    },
+                    |target| *target != pending.facility,
+                )
                 || pending
                     .cost_override
                     .is_some_and(|amount| !f32::from_bits(amount).is_finite())

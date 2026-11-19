@@ -3,10 +3,12 @@ use bevy::{
     prelude::*,
 };
 
-use crate::asset_source::{ArchiveCatalogue, AssetArchives};
-use std::{path::Path, sync::Arc};
+use crate::asset_source::{
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveCatalogue, AssetArchives,
+};
+use std::{collections::BTreeSet, path::Path, sync::Arc};
 
-use super::species_asset_types::{SpeciesAsset, SpeciesAssets, VariantHandle};
+use super::species_asset_types::{SpeciesAsset, SpeciesAssets};
 
 pub(crate) fn is_species_catalogue_source(path: &Path) -> bool {
     path.starts_with("entities/units/animals/ai")
@@ -17,7 +19,6 @@ pub(crate) fn is_species_catalogue_source(path: &Path) -> bool {
 
 pub(super) fn discover_species_catalogue_sources(
     archives: Res<AssetArchives>,
-    server: Res<AssetServer>,
     mut index: ResMut<SpeciesAssets>,
     mut previous: Local<Option<Arc<[z2f::ResolvedArchiveEntry]>>>,
 ) {
@@ -31,24 +32,13 @@ pub(super) fn discover_species_catalogue_sources(
     {
         return;
     }
-    let current_paths = sources.iter().map(|entry| &entry.normalized_asset_path);
-    let same_paths = previous.as_ref().is_some_and(|previous| {
-        previous
-            .iter()
-            .map(|entry| &entry.normalized_asset_path)
-            .eq(current_paths)
-    });
-    if !same_paths {
-        index.pending_paths = sources
-            .iter()
-            .map(|entry| entry.normalized_asset_path.clone())
-            .collect();
-        index.handles.clear();
-        index.loaded_handles.clear();
-        request_species_batch(&server, &mut index);
-        index.discovered = true;
-        index.dirty = true;
-    }
+    index.pending_paths = sources.iter().map(archive_entry_asset_path).collect();
+    index.handles.clear();
+    index.source_ids.clear();
+    index.pending.clear();
+    index.failed.clear();
+    index.discovered = true;
+    index.source_set_changed = true;
     *previous = Some(sources);
 }
 
@@ -59,105 +49,83 @@ pub(super) fn index_loaded_species_assets_by_species_and_variant_identifier(
     mut events: MessageReader<AssetEvent<SpeciesAsset>>,
     mut index: ResMut<SpeciesAssets>,
 ) {
-    let affected = |id| index.handles.iter().any(|handle| handle.id() == id);
-    let mut changed = false;
+    let affected = |id| index.source_ids.contains(&id);
+    let mut settled = BTreeSet::new();
+    let mut failed = BTreeSet::new();
     for event in events.read() {
         match *event {
             AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
-                changed |= affected(id);
+                if affected(id) {
+                    settled.insert(id);
+                }
             }
             AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => {}
         }
     }
     for failure in failures.read() {
-        changed |= affected(failure.id);
+        if affected(failure.id) {
+            failed.insert(failure.id);
+        }
     }
-    if index.dirty {
-        if !species_batch_finished(&server, &index) {
-            return;
+    let changed = !settled.is_empty() || !failed.is_empty();
+    if changed {
+        for id in settled {
+            index.pending.remove(&id);
+            index.failed.remove(&id);
         }
-        if !index.pending_paths.is_empty() {
-            request_species_batch(&server, &mut index);
-            return;
+        for id in failed {
+            index.pending.remove(&id);
+            index.failed.insert(id);
         }
-    } else if !changed {
+    } else if !index.source_set_changed || !index.pending.is_empty() {
         return;
     }
-    let loaded_handles = index
+    if index.source_set_changed {
+        while index.pending.is_empty() && !index.pending_paths.is_empty() {
+            request_species_batch(&server, &assets, &mut index);
+        }
+        if !index.pending.is_empty() {
+            return;
+        }
+    }
+    let documents = index
         .handles
         .iter()
-        .filter(|handle| {
-            assets.contains(handle.id())
-                && !matches!(
-                    server.get_load_state(handle.id()),
-                    Some(LoadState::Failed(_))
-                )
+        .filter(|handle| !index.failed.contains(&handle.id()))
+        .filter_map(|handle| {
+            let asset = assets.get(handle)?;
+            Some((
+                handle.clone(),
+                &asset.document,
+                asset.animation_sets.as_ref(),
+            ))
         })
-        .cloned()
         .collect::<Vec<_>>();
-    let by_species = loaded_handles
-        .iter()
-        .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
-        .flat_map(|(handle, asset)| {
-            asset
-                .document
-                .species
-                .iter()
-                .map(move |species| (species.id, handle.clone()))
-        })
-        .collect();
-    let by_variant = loaded_handles
-        .iter()
-        .filter_map(|handle| assets.get(handle).map(|asset| (handle, asset)))
-        .flat_map(|(handle, asset)| {
-            asset
-                .document
-                .variants
-                .iter()
-                .enumerate()
-                .map(move |(index, binding)| {
-                    (
-                        binding.variant.id,
-                        VariantHandle {
-                            species: binding.species,
-                            document: handle.clone(),
-                            index,
-                        },
-                    )
-                })
-        })
-        .collect();
-    index.by_species = by_species;
-    index.by_variant = by_variant;
-    index.rebuild_variant_indexes(loaded_handles.iter().filter_map(|handle| {
-        let asset = assets.get(handle)?;
-        Some((handle, &asset.document, asset.animation_sets.as_ref()))
-    }));
-    index.loaded_handles = loaded_handles;
-    index.dirty = false;
+    index.index_loaded_documents(&documents);
+    index.source_set_changed = false;
 }
 
-const SPECIES_BATCH: usize = 4;
-
-fn species_batch_finished(server: &AssetServer, species: &SpeciesAssets) -> bool {
-    species
-        .handles
-        .iter()
-        .rev()
-        .take(SPECIES_BATCH)
-        .all(|handle| {
-            matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
-            )
-        })
-}
-
-fn request_species_batch(server: &AssetServer, species: &mut SpeciesAssets) {
-    species.handles.extend(
-        species
-            .pending_paths
-            .drain(..species.pending_paths.len().min(SPECIES_BATCH))
-            .map(|path| server.load::<SpeciesAsset>(path)),
-    );
+fn request_species_batch(
+    server: &AssetServer,
+    assets: &Assets<SpeciesAsset>,
+    species: &mut SpeciesAssets,
+) {
+    const SPECIES_BATCH: usize = 4;
+    for path in species
+        .pending_paths
+        .drain(..species.pending_paths.len().min(SPECIES_BATCH))
+    {
+        let handle = server.load::<SpeciesAsset>(path);
+        match server.get_load_state(handle.id()) {
+            Some(LoadState::Failed(_)) => {
+                species.failed.insert(handle.id());
+            }
+            Some(LoadState::Loaded) if assets.contains(handle.id()) => {}
+            _ => {
+                species.pending.insert(handle.id());
+            }
+        }
+        species.source_ids.insert(handle.id());
+        species.handles.push(handle);
+    }
 }

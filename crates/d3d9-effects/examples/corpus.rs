@@ -95,7 +95,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let archive_overlay = ArchiveSet::open(enabled_archive_paths)?;
     let resolved_d3d9_effect_entries = archive_overlay
         .resolved_winning_entries()
-        .1
         .into_iter()
         .filter(|entry| {
             entry

@@ -6,9 +6,10 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::EquippedInteractionTool;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveMode;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{ImmersiveCamera, ImmersiveSubject};
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMember;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 
 use super::{
     fossil_collection_and_assembly_types::{CollectedFossilPiece, CollectedFossilPieceInventory},
@@ -29,19 +30,19 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
     mut commands: Commands,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    controllers: Query<(Entity, &ActiveImmersiveMode)>,
+    mut controllers: Query<(
+        Entity,
+        &ActiveImmersiveMode,
+        &ImmersiveCamera,
+        Option<&ImmersiveSubject>,
+        Option<&mut ActiveFossilSonarArtifactTracking>,
+    )>,
     cameras: Query<
         &GlobalTransform,
         With<openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera>,
     >,
-    artifacts: Query<
-        (
-            Entity,
-            &GlobalTransform,
-            Option<&InteractionContainerMember>,
-        ),
-        With<ActiveFossilSearchMarker>,
-    >,
+    artifacts: Query<(Entity, &GlobalTransform), With<ActiveFossilSearchMarker>>,
+    memberships: InteractionContainerMemberships,
 ) {
     let Some(policy) = active_definitions
         .get(&definitions)
@@ -49,16 +50,17 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
     else {
         return;
     };
-    for (controller, active) in &controllers {
+    for (controller, active, camera, subject, tracking) in &mut controllers {
         if active.mode != ImmersiveMode::FossilSearch {
             continue;
         }
-        let Ok(camera) = cameras.get(active.camera) else {
+        let Ok(camera) = cameras.get(camera.0) else {
             continue;
         };
-        let retained = artifacts.iter().find_map(|(entity, _, membership)| {
-            let holder = membership?.container;
-            (holder == controller || Some(holder) == active.subject).then_some(entity)
+        let retained = artifacts.iter().find_map(|(entity, _)| {
+            let (holder, _) = memberships.container_for_member(entity)?;
+            (holder == controller || subject.is_some_and(|subject| subject.0 == holder))
+                .then_some(entity)
         });
         let result = select_highest_scoring_fossil_sonar_candidate(
             camera.translation(),
@@ -69,16 +71,20 @@ pub(super) fn update_active_fossil_search_sonar_tracking(
             f32::from(policy.minimum_sonar_view_dot),
             artifacts
                 .iter()
-                .map(|(entity, transform, _)| (entity, transform.translation())),
+                .map(|(entity, transform)| (entity, transform.translation())),
         );
-        commands.entity(controller).insert(result.map_or_else(
-            ActiveFossilSonarArtifactTracking::default,
-            |candidate| ActiveFossilSonarArtifactTracking {
+        let result = result.map_or_else(ActiveFossilSonarArtifactTracking::default, |candidate| {
+            ActiveFossilSonarArtifactTracking {
                 selected_artifact: Some(candidate.entity),
                 distance_squared: candidate.distance_squared,
                 sonar_strength: candidate.score,
-            },
-        ));
+            }
+        });
+        if let Some(mut tracking) = tracking {
+            tracking.set_if_neq(result);
+        } else {
+            commands.entity(controller).insert(result);
+        }
     }
 }
 
@@ -96,7 +102,7 @@ pub(super) fn activate_all_fossil_site_markers_when_requested(
 
 pub(super) fn discover_weighted_fossil_piece_at_requested_site(
     mut requests: MessageReader<DiscoverFossilAtSiteRequest>,
-    mode: Query<(Entity, &ActiveImmersiveMode)>,
+    mode: Query<(Entity, &ActiveImmersiveMode, &ImmersiveCamera)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut collection: ResMut<CollectedFossilPieceInventory>,
@@ -115,7 +121,7 @@ pub(super) fn discover_weighted_fossil_piece_at_requested_site(
     )>,
     mut commands: Commands,
 ) {
-    let Ok((controller, mode)) = mode.single() else {
+    let Ok((controller, mode, immersive_camera)) = mode.single() else {
         return;
     };
     if mode.mode != ImmersiveMode::FossilSearch {
@@ -124,9 +130,10 @@ pub(super) fn discover_weighted_fossil_piece_at_requested_site(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    let (Some(placement_policy), Ok(camera)) =
-        (definitions.fossil_placement(), cameras.get(mode.camera))
-    else {
+    let (Some(placement_policy), Ok(camera)) = (
+        definitions.fossil_placement(),
+        cameras.get(immersive_camera.0),
+    ) else {
         return;
     };
 

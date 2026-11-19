@@ -1,3 +1,4 @@
+use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
@@ -5,11 +6,10 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::economy::UiEconomyAction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 
 use super::facility_economy_types::{
     CurrentSellQuote, FacilityPriceIndex, MaintenanceScheduleIndex,
@@ -23,7 +23,7 @@ pub(super) fn route_selected_facility_economy_ui_actions(
     documents: Res<Assets<UiDocumentAsset>>,
     action_nodes: Query<(&UiEconomyActions, &UiDocumentOwner)>,
     document_roots: Query<&UiDocumentRoot>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     objects: Query<&DefinitionId>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -39,7 +39,7 @@ pub(super) fn route_selected_facility_economy_ui_actions(
         let Some(document) = documents.get(&document_root.document) else {
             continue;
         };
-        let Some(selected_entity) = selected_entity.0 else {
+        let Some(selected_entity) = selected_entity.subject() else {
             continue;
         };
         for action_record in action_source.authored_action_records(document) {
@@ -95,29 +95,23 @@ pub(super) fn route_selected_facility_economy_ui_actions(
 /// every authored option action. No copied schedule-row model is retained.
 pub(super) fn project_selected_facility_maintenance_schedule_options(
     documents: Res<Assets<UiDocumentAsset>>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
+    mut selection_changes: MessageReader<SelectionChanged>,
     maintenance_schedules: Query<Ref<MaintenanceScheduleIndex>>,
     document_roots: Query<&UiDocumentRoot>,
-    mut action_nodes: Query<(
-        &UiEconomyActions,
-        &UiDocumentOwner,
-        &mut UiSelected,
-        &mut UiPreviousSelection,
-    )>,
+    mut action_nodes: Query<(&UiEconomyActions, &UiDocumentOwner, &mut UiSelected)>,
 ) {
-    let Some(selected_entity_value) = selected_entity.0 else {
+    let selection_changed = selection_changes.read().count() != 0;
+    let Some(selected_entity_value) = selected_entity.subject() else {
         return;
     };
     let Ok(maintenance_schedule) = maintenance_schedules.get(selected_entity_value) else {
         return;
     };
-    if !selected_entity.is_changed()
-        && !maintenance_schedule.is_changed()
-        && !documents.is_changed()
-    {
+    if !selection_changed && !maintenance_schedule.is_changed() && !documents.is_changed() {
         return;
     }
-    for (action_source, document_owner, mut selected, mut previous_selection) in &mut action_nodes {
+    for (action_source, document_owner, mut selected) in &mut action_nodes {
         let Ok(document_root) = document_roots.get(document_owner.0) else {
             continue;
         };
@@ -137,8 +131,6 @@ pub(super) fn project_selected_facility_maintenance_schedule_options(
                 });
         if selected.0 != option_matches_selected_schedule {
             selected.0 = option_matches_selected_schedule;
-            previous_selection
-                .synchronize_with_non_authored_selection_change(option_matches_selected_schedule);
         }
     }
 }

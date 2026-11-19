@@ -166,7 +166,7 @@ mod tests {
         );
         assert_ne!(timeline.flags.0 & UiNodeFlags::VISIBLE.0, 0);
         assert_ne!(timeline.flags.0 & UiNodeFlags::ENABLED.0, 0);
-        let UiWidgetRecord::TimedSequence { events } = &timeline.widget else {
+        let UiWidgetRecord::TimedSequence { events, .. } = &timeline.widget else {
             return Err("credits did not retain its timed action sequence".into());
         };
         assert_eq!(
@@ -174,9 +174,9 @@ mod tests {
             [0, 0, 2000, 3000, 3500]
         );
         let action = |index: usize| match &events[index].action {
-            openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record) => {
-                &record.action
-            }
+            openzt2_game_data::ui_document::timed_presentation::UiTimedEventAction::Ui(
+                openzt2_game_data::ui_document::action::UiActionRecord::Presentation(record),
+            ) => &record.action,
             _ => panic!("expected presentation action"),
         };
         assert!(matches!(action(0),

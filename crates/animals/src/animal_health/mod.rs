@@ -30,7 +30,9 @@ pub struct AnimalHealthPlugin;
 
 impl Plugin for AnimalHealthPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<TreatmentRequest>()
+        app.add_observer(animal_activity_immobilization_execution::stop_activity_when_frozen)
+            .add_observer(animal_activity_immobilization_execution::cancel_tasks_started_for_inactive_animals)
+            .add_message::<TreatmentRequest>()
             .add_message::<TranquilizeRequest>()
             .add_message::<CaptureAnimalRequest>()
             .add_message::<AimTranquilizer>()
@@ -82,8 +84,6 @@ impl Plugin for AnimalHealthPlugin {
                 (
                     animal_activity_immobilization_execution::
                         apply_animal_freeze_and_thaw_requests,
-                    animal_activity_immobilization_execution::
-                        remove_new_activity_state_from_frozen_animals,
                     veterinary_treatment_execution::
                         validate_veterinary_treatment_requests_and_begin_treatment,
                     disease_progression_execution::

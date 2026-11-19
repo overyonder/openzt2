@@ -1,7 +1,11 @@
-use bevy::prelude::*;
-use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_game_data::ui_document::action::information::InformationSettingAction;
-use openzt2_game_data::ui_document::action::information::UiInformationAction;
+use bevy::{
+    input_focus::{
+        tab_navigation::{NavAction, TabGroup, TabNavigation},
+        FocusCause, FocusGained, FocusLost, InputFocus, InputFocusVisible,
+    },
+    picking::pointer::{PointerButton, PointerInput},
+    prelude::*,
+};
 use openzt2_game_data::ui_document::action::UiTrigger;
 
 use openzt2_interface_state::input::input_types::ActionRequest;
@@ -12,11 +16,9 @@ use openzt2_interface_state::input::input_types::GameAction;
 use super::{
     active_authored_ui_context::ActiveAuthoredUiContext,
     authored_button_runtime_policy::UiButtonPolicy,
-    authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding,
     authored_text_edit_bevy_adaptation::UiTextEditPolicy,
-    authored_ui_action_projection_components::UiInformationActions,
-    authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable},
-    authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
+    authored_ui_focus_state::UiFocusable,
+    authored_ui_node_projection_components::UiDocumentOwner,
     slider::{UiSliderAxis, UiSliderPolicy},
 };
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -24,54 +26,183 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiSubmitTarget;
 
+#[derive(Component, Default)]
+pub(super) struct UiFocusMemory {
+    pub(super) remembered: Option<Entity>,
+    pub(super) default: Option<Entity>,
+}
+
+#[derive(Component, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct AuthoredHoverPresentation(pub(super) bool);
+
+pub(super) fn update_active_authored_focus(
+    context: ActiveAuthoredUiContext,
+    memory: Query<&UiFocusMemory>,
+    controls: Query<(), With<UiFocusable>>,
+    input: Res<ActiveInputDevice>,
+    mut visibility: ResMut<InputFocusVisible>,
+    mut focus: ResMut<InputFocus>,
+) {
+    let highlight = matches!(input.source, ActionSource::Controller(_));
+    if visibility.0 != highlight {
+        visibility.0 = highlight;
+    }
+    let current = focus.get();
+    let modal = context.top_modal();
+    let scope = context.active_scope();
+    if current.is_some_and(|node| {
+        !controls.contains(node)
+            || scope.is_some_and(|scope| context.eligible_in_scope(node, scope, modal))
+    }) {
+        return;
+    }
+    let next = scope.and_then(|scope| {
+        memory
+            .get(scope)
+            .ok()?
+            .remembered
+            .filter(|next| context.eligible_in_scope(*next, scope, modal))
+    });
+    if let Some(next) = next {
+        focus.set(next, FocusCause::Navigated);
+    } else if current.is_some() {
+        focus.clear();
+    }
+}
+
+pub(super) fn release_edit_focus_when_pressing_elsewhere(
+    mut input: MessageReader<PointerInput>,
+    capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
+    context: ActiveAuthoredUiContext,
+    edits: Query<&UiDocumentOwner, With<bevy::text::EditableText>>,
+    mut memory: Query<&mut UiFocusMemory>,
+    mut focus: ResMut<InputFocus>,
+) {
+    let pressed = input.read().any(|event| {
+        event.pointer_id.is_mouse() && event.button_just_pressed(PointerButton::Primary)
+    });
+    if !pressed {
+        return;
+    }
+    let Some(current) = focus.get() else { return };
+    let Ok(owner) = edits.get(current) else {
+        return;
+    };
+    if capture.target == Some(current) {
+        return;
+    }
+    if let Ok(mut scope) = memory.get_mut(context.document_scope(owner.0)) {
+        if scope.remembered == Some(current) {
+            scope.remembered = None;
+        }
+    }
+    focus.clear();
+}
+
+pub(super) fn authored_focus_entered(
+    event: On<FocusGained>,
+    controls: Query<&UiDocumentOwner, With<UiFocusable>>,
+    context: ActiveAuthoredUiContext,
+    mut memory: Query<&mut UiFocusMemory>,
+    mut activated: MessageWriter<UiNodeActivated>,
+) {
+    let node = event.event_target();
+    if let Ok(owner) = controls.get(node) {
+        if let Ok(mut memory) = memory.get_mut(context.document_scope(owner.0)) {
+            memory.remembered = Some(node);
+        }
+        activated.write(UiNodeActivated {
+            node,
+            source: ActionSource::System,
+            trigger: UiTrigger::Focus,
+        });
+    }
+}
+
+pub(super) fn authored_focus_left(
+    event: On<FocusLost>,
+    controls: Query<(), With<UiFocusable>>,
+    mut activated: MessageWriter<UiNodeActivated>,
+) {
+    let node = event.event_target();
+    if controls.contains(node) {
+        activated.write(UiNodeActivated {
+            node,
+            source: ActionSource::System,
+            trigger: UiTrigger::Blur,
+        });
+    }
+}
+
 pub(super) fn navigate_authored_ui_focus_from_actions(
     mut actions: MessageReader<ActionRequest>,
     focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
     sliders: Query<&UiSliderPolicy>,
     text_edits: Query<(), With<UiTextEditPolicy>>,
-    mut scopes: Query<(Entity, &mut UiFocusScope)>,
+    memory: Query<&UiFocusMemory>,
+    mut focus: ResMut<InputFocus>,
+    navigation: TabNavigation,
+    groups: Query<&TabGroup>,
     context: ActiveAuthoredUiContext,
 ) {
-    let active_root = context.active_scope();
-    let active_modal = context.top_modal();
+    let active = context.active_scope();
+    let modal = context.top_modal();
     for request in actions.read() {
         let direction = match request.action {
             GameAction::NavigateUp | GameAction::NavigateLeft => -1,
             GameAction::NavigateDown | GameAction::NavigateRight => 1,
             _ => continue,
         };
-        for (root, mut scope) in &mut scopes {
-            if Some(root) != active_root {
-                continue;
+        let Some(root) = active else { continue };
+        let current = focus
+            .get()
+            .filter(|node| context.eligible_in_scope(*node, root, modal));
+        let handled = current.is_some_and(|focused| {
+            (text_edits.contains(focused) && request.source == ActionSource::KeyboardMouse)
+                || sliders.get(focused).is_ok_and(|slider| {
+                    matches!(
+                        (slider.axis, request.action),
+                        (
+                            UiSliderAxis::Horizontal | UiSliderAxis::Both,
+                            GameAction::NavigateLeft | GameAction::NavigateRight
+                        ) | (
+                            UiSliderAxis::Vertical | UiSliderAxis::Both,
+                            GameAction::NavigateUp | GameAction::NavigateDown
+                        )
+                    )
+                })
+        });
+        if handled {
+            continue;
+        }
+        let remembered = memory
+            .get(root)
+            .ok()
+            .and_then(|memory| memory.remembered.or(memory.default));
+        let from = current.or(remembered);
+        let action = if direction == 1 {
+            NavAction::Next
+        } else {
+            NavAction::Previous
+        };
+        let group = groups.get(root).ok().map(|group| (root, group));
+        let next = navigation
+            .navigate_internal(from, action, group)
+            .ok()
+            .filter(|node| context.eligible_in_scope(*node, root, modal))
+            .or_else(|| {
+                next_focusable_node_in_projected_document(
+                    root,
+                    from,
+                    direction,
+                    &focusables,
+                    &context,
+                )
+            });
+        if let Some(next) = next {
+            if focus.get() != Some(next) {
+                focus.set(next, FocusCause::Navigated);
             }
-            let handled_by_focused_control = scope
-                .focused
-                .filter(|focused| context.eligible_in_scope(*focused, root, active_modal))
-                .is_some_and(|focused| {
-                    (text_edits.contains(focused) && request.source == ActionSource::KeyboardMouse)
-                        || sliders.get(focused).is_ok_and(|slider| {
-                            matches!(
-                                (slider.axis, request.action),
-                                (
-                                    UiSliderAxis::Horizontal | UiSliderAxis::Both,
-                                    GameAction::NavigateLeft | GameAction::NavigateRight
-                                ) | (
-                                    UiSliderAxis::Vertical | UiSliderAxis::Both,
-                                    GameAction::NavigateUp | GameAction::NavigateDown
-                                )
-                            )
-                        })
-                });
-            if handled_by_focused_control {
-                continue;
-            }
-            scope.focused = next_focusable_node_in_projected_document(
-                root,
-                scope.focused.or(scope.default),
-                direction,
-                &focusables,
-                &context,
-            );
         }
     }
 }
@@ -135,12 +266,12 @@ pub(super) fn choose_wrapped_authored_ui_focus_candidate<T: Ord + Copy>(
     nearest.or(wrap).map(|(_, entity)| entity)
 }
 
-pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
+pub(super) fn activate_focused_authored_ui_node_from_confirm(
     mut actions: MessageReader<ActionRequest>,
-    scopes: Query<(Entity, &UiFocusScope)>,
+    memory: Query<&UiFocusMemory>,
+    focus: Res<InputFocus>,
     focusables: Query<(Entity, &UiFocusable, &InheritedVisibility, &UiDocumentOwner)>,
     context: ActiveAuthoredUiContext,
-    cancel_bindings: Query<(&UiAuthoredHotkeyKeyboardActivationBinding, &UiDocumentOwner)>,
     nodes: Query<(
         &UiFocusable,
         &UiDocumentOwner,
@@ -148,91 +279,25 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
         Option<&UiSubmitTarget>,
         Option<&UiButtonPolicy>,
     )>,
-    documents: Res<Assets<UiDocumentAsset>>,
-    roots: Query<&UiDocumentRoot>,
-    setting_actions: Query<(Entity, &UiDocumentOwner, &UiInformationActions)>,
     mut activated: MessageWriter<UiNodeActivated>,
 ) {
-    let active_root = context.active_scope();
     let active_modal = context.top_modal();
+    let active_root = context.active_scope_with_modal(active_modal);
     for request in actions.read() {
-        if !matches!(request.action, GameAction::Confirm | GameAction::Cancel) {
+        if request.action != GameAction::Confirm {
             continue;
         }
-        if request.action == GameAction::Cancel
-            && matches!(request.source, ActionSource::Controller(_))
+        let Some(root) = active_root else { continue };
         {
-            continue;
-        }
-        for (root, scope) in &scopes {
-            if Some(root) != active_root {
-                continue;
-            }
-            if request.action == GameAction::Cancel {
-                let mut has_authored_cancel = false;
-                for (binding, owner) in &cancel_bindings {
-                    if context.document_scope(owner.0) != root
-                        || !binding.is_cancel_activation()
-                        || !context.hotkey_receiver_is_eligible(
-                            owner.0,
-                            binding.receiver_index(),
-                            Some(root),
-                            active_modal,
-                        )
-                    {
-                        continue;
-                    }
-                    has_authored_cancel = true;
-                    // Single-receiver cancellation activates this binding.
-                }
-                if has_authored_cancel {
-                    continue;
-                }
-                // Settings has no authored Escape binding. Its semantic Back
-                // action is the cancellation path; Apply also contains Back,
-                // so never select an activation which commits settings first.
-                if let Some((node, _, _)) = setting_actions.iter().find(|(node, owner, actions)| {
-                    if !context.eligible_in_scope(*node, root, active_modal) {
-                        return false;
-                    }
-                    let Some(document) = roots
-                        .get(owner.0)
+            let Some(node) = focus
+                .get()
+                .filter(|node| context.eligible_in_scope(*node, root, active_modal))
+                .or_else(|| {
+                    memory
+                        .get(root)
                         .ok()
-                        .and_then(|root| documents.get(&root.document))
-                    else {
-                        return false;
-                    };
-                    let back = actions.authored_action_records(document).any(|record| {
-                        record.trigger == UiTrigger::Press
-                            && matches!(
-                                record.action,
-                                UiInformationAction::ApplySetting {
-                                    setting: InformationSettingAction::Back
-                                }
-                            )
-                    });
-                    let accepts = actions.authored_action_records(document).any(|record| {
-                        record.trigger == UiTrigger::Press
-                            && matches!(
-                                record.action,
-                                UiInformationAction::ApplySetting {
-                                    setting: InformationSettingAction::Accept
-                                }
-                            )
-                    });
-                    back && !accepts
-                }) {
-                    activated.write(UiNodeActivated {
-                        node,
-                        source: request.source,
-                        trigger: UiTrigger::Press,
-                    });
-                    continue;
-                }
-            }
-            let Some(node) = scope
-                .focused
-                .or(scope.default)
+                        .and_then(|memory| memory.remembered.or(memory.default))
+                })
                 .filter(|node| {
                     nodes
                         .get(*node)
@@ -255,16 +320,13 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
                 activated.write(UiNodeActivated {
                     node,
                     source: request.source,
-                    trigger: match request.action {
-                        GameAction::Cancel => UiTrigger::Cancel,
-                        GameAction::Confirm if submit.is_some() => UiTrigger::Submit,
-                        GameAction::Confirm => UiTrigger::Press,
-                        _ => unreachable!(),
+                    trigger: if submit.is_some() {
+                        UiTrigger::Submit
+                    } else {
+                        UiTrigger::Press
                     },
                 });
-                if request.action == GameAction::Confirm
-                    && button.is_some_and(|policy| !policy.selectable)
-                {
+                if button.is_some_and(|policy| !policy.selectable) {
                     activated.write(UiNodeActivated {
                         node,
                         source: request.source,
@@ -277,48 +339,6 @@ pub(super) fn activate_focused_authored_ui_node_from_confirm_or_cancel(
                     });
                 }
             }
-        }
-    }
-}
-
-#[derive(Component)]
-pub(super) struct AuthoredHoverPresentation;
-
-pub(super) fn present_controller_authored_ui_focus(
-    active_input: Res<ActiveInputDevice>,
-    context: ActiveAuthoredUiContext,
-    scopes: Query<(Entity, Ref<UiFocusScope>)>,
-    mut nodes: Query<(&UiDocumentOwner, &mut UiFocusPresentation), With<UiFocusable>>,
-    authored_hover: Query<Entity, With<AuthoredHoverPresentation>>,
-    mut highlighted: Local<Vec<Entity>>,
-) {
-    if !active_input.is_changed() && !scopes.iter().any(|(_, scope)| scope.is_changed()) {
-        return;
-    }
-    let controller_focus = matches!(active_input.source, ActionSource::Controller(_));
-    for entity in highlighted.drain(..).chain(authored_hover.iter()) {
-        if let Ok((owner, mut focused)) = nodes.get_mut(entity) {
-            let scope = scopes.get(context.document_scope(owner.0));
-            if focused.0
-                && scope.is_ok_and(|(_, scope)| !controller_focus || scope.focused != Some(entity))
-            {
-                focused.0 = false;
-            }
-        }
-    }
-    if controller_focus {
-        for (root, scope) in &scopes {
-            let Some(entity) = scope.focused else {
-                continue;
-            };
-            let Ok((owner, mut focused)) = nodes.get_mut(entity) else {
-                continue;
-            };
-            if context.document_scope(owner.0) != root {
-                continue;
-            }
-            focused.set_if_neq(UiFocusPresentation(true));
-            highlighted.push(entity);
         }
     }
 }

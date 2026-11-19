@@ -16,7 +16,9 @@ use openzt2_world_state::animation_playback::animation_playback_controller_types
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::animal_health::types::{Dead, Frozen, Tranquilized};
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorAttachObject, RunningBehaviorInstruction, SelectedBehaviorSet,
+};
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
@@ -55,7 +57,7 @@ fn discard_cancelled_food_prop_attachments(
     actors: Query<(
         Entity,
         &HeldFoodPropAttachment,
-        Option<&BehaviorTaskExecutionState>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Has<PendingBehaviorTaskFailure>,
         Has<Dead>,
         Has<Frozen>,
@@ -71,7 +73,7 @@ fn discard_cancelled_food_prop_attachments(
             && !frozen
             && !tranquilized
             && !crated
-            && task.is_some_and(|task| pending.origin.owns(task))
+            && task.is_some_and(|(task, step)| pending.origin.owns(task, step))
             && pending
                 .origin
                 .target
@@ -83,7 +85,7 @@ fn discard_cancelled_food_prop_attachments(
             commands.entity(item).despawn();
         }
         commands.entity(actor).remove::<HeldFoodPropAttachment>();
-        if task.is_some_and(|task| pending.origin.owns(task)) {
+        if task.is_some_and(|(task, step)| pending.origin.owns(task, step)) {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }
@@ -112,16 +114,16 @@ pub(super) fn finish_food_prop_admission(
     actor: Entity,
     item: Entity,
     admission: FoodPropAdmission,
-    tasks: &mut Query<&mut BehaviorTaskExecutionState>,
+    tasks: &Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     playback: &mut MessageWriter<AnimationClipPlaybackRequest>,
     commands: &mut Commands,
 ) {
-    let Ok(mut task) = tasks.get_mut(actor) else {
+    let Ok((task, instruction)) = tasks.get(actor) else {
         commands.entity(item).try_despawn();
         return;
     };
     let completed = admission.animation.is_none();
-    let mut origin = PendingObjectAttachment::waiting_for_attachment(&task, None);
+    let mut origin = PendingObjectAttachment::waiting_for_attachment(task, instruction, None);
     origin.joint = admission.subject_joint;
     if let Some(animation_clip_asset_key) = admission.animation {
         origin.request_id = Some(
@@ -143,7 +145,7 @@ pub(super) fn finish_food_prop_admission(
         detached: false,
         completed,
     });
-    task.next_action_tick = admission.tick.saturating_add(1);
+    instruction.resume_at(actor, admission.tick.saturating_add(1), commands);
 }
 
 fn execute_food_prop_attachments(
@@ -153,10 +155,14 @@ fn execute_food_prop_attachments(
     animal_types: AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorAttachObject,
+            ),
             &DefinitionId,
             &WorldMember,
             Option<&HeldFoodPropAttachment>,
@@ -181,13 +187,27 @@ fn execute_food_prop_attachments(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, mut task, actor_definition, world, pending, species, staff, guest) in &mut actors {
+    for (
+        actor,
+        (task, instruction, running_action),
+        actor_definition,
+        world,
+        pending,
+        species,
+        staff,
+        guest,
+    ) in &actors
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::AttachObject(action)) = assets.documents.get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-            .filter(|action| matches!(action, BehaviorAction::AttachObject(action) if action.attaches_target_held_prop())) else { continue };
+        if !instruction.is_current(&task) {
+            continue;
+        }
+        let action = &running_action.0;
+        if !action.attaches_target_held_prop() {
+            continue;
+        }
         if let Some(pending) =
             pending.filter(|pending| pending.origin.request_id.is_some() || pending.completed)
         {
@@ -227,6 +247,7 @@ fn execute_food_prop_attachments(
                     &definitions,
                     &objects,
                     &transforms,
+                    assets.world_releases.as_deref(),
                     &mut commands,
                 ) {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -238,20 +259,20 @@ fn execute_food_prop_attachments(
             }
             commands.entity(actor).remove::<HeldFoodPropAttachment>();
             if let Some((set, (document, declaration))) = continuation {
-                let frame = task.create_return_frame_after_action(task.action.saturating_add(1));
-                if !task.push_return_frame(frame) {
-                    mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-                    continue;
-                }
-                task.program = set;
-                task.document = document;
-                task.declaration = declaration;
-                task.phase = BehaviorTaskExecutionPhase::Set;
-                task.action = 0;
-                task.repetitions = 0;
-                task.next_action_tick = clock.tick.saturating_add(1);
+                instruction.enter_set(
+                    actor,
+                    SelectedBehaviorSet {
+                        program: set,
+                        document,
+                        declaration,
+                        tick: clock.tick,
+                        repeat: None,
+                        target: None,
+                    },
+                    &mut commands,
+                );
             } else {
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                instruction.complete(actor, clock.tick, &mut commands);
             }
             continue;
         }
@@ -272,7 +293,7 @@ fn execute_food_prop_attachments(
             continue;
         };
         let mut state = HeldFoodPropAttachment {
-            origin: PendingObjectAttachment::waiting_for_attachment(&task, None),
+            origin: PendingObjectAttachment::waiting_for_attachment(task, instruction, None),
             item: None,
             attached: source.held_prop.is_none(),
             detached: false,
@@ -370,7 +391,7 @@ fn execute_food_prop_attachments(
                 world.root,
                 admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
                     actor,
-                    instruction: BehaviorAdmissionInstruction::new(actor, &task),
+                    instruction: BehaviorAdmissionInstruction::new(actor, &task, instruction),
                     attachment,
                     visibility: Visibility::Inherited,
                     modifier,
@@ -403,7 +424,7 @@ fn execute_food_prop_attachments(
             );
         }
         commands.entity(actor).insert(state);
-        task.next_action_tick = clock.tick.saturating_add(1);
+        instruction.resume_at(actor, clock.tick.saturating_add(1), &mut commands);
     }
 }
 
@@ -414,17 +435,23 @@ fn receive_food_prop_animation_events(
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
     mut actors: Query<
-        (&BehaviorTaskExecutionState, &mut HeldFoodPropAttachment),
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &mut HeldFoodPropAttachment,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
     mut props: Query<&mut ContainedObject>,
 ) {
     let mut failed = bevy::platform::collections::HashSet::new();
     for rejection in rejected.read() {
-        let Ok((task, pending)) = actors.get(rejection.animation_subject_entity) else {
+        let Ok((task, step, pending)) = actors.get(rejection.animation_subject_entity) else {
             continue;
         };
-        if pending.origin.request_id == Some(rejection.request_id) && pending.origin.owns(task) {
+        if pending.origin.request_id == Some(rejection.request_id)
+            && pending.origin.owns(task, step)
+        {
             failed.insert(rejection.request_id);
             mark_behavior_task_for_failure_and_stop_navigation(
                 rejection.animation_subject_entity,
@@ -436,7 +463,7 @@ fn receive_food_prop_animation_events(
         let Ok((owner, playback)) = owners.get(event.controller) else {
             continue;
         };
-        let Ok((task, mut pending)) = actors.get_mut(owner.gameplay_entity) else {
+        let Ok((task, step, mut pending)) = actors.get_mut(owner.gameplay_entity) else {
             continue;
         };
         if pending.origin.request_id.is_none()
@@ -444,7 +471,7 @@ fn receive_food_prop_animation_events(
             || event.request_id != playback.explicit_clip_request_id
             || event.request_id != pending.origin.request_id
             || event.request_id.is_some_and(|id| failed.contains(&id))
-            || !pending.origin.owns(task)
+            || !pending.origin.owns(task, step)
         {
             continue;
         }
@@ -468,7 +495,7 @@ fn receive_food_prop_animation_events(
         let Ok((owner, playback)) = owners.get(event.animation_playback_controller_entity) else {
             continue;
         };
-        let Ok((task, mut pending)) = actors.get_mut(owner.gameplay_entity) else {
+        let Ok((task, step, mut pending)) = actors.get_mut(owner.gameplay_entity) else {
             continue;
         };
         if pending.origin.request_id.is_some()
@@ -477,7 +504,7 @@ fn receive_food_prop_animation_events(
             && !event
                 .explicit_clip_request_id
                 .is_some_and(|id| failed.contains(&id))
-            && pending.origin.owns(task)
+            && pending.origin.owns(task, step)
         {
             pending.completed = true;
         }

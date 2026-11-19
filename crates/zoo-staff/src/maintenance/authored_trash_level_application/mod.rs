@@ -1,4 +1,7 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorFactModifications, RunningBehaviorInstruction,
+};
 
 use openzt2_zoo_state::maintenance::maintenance_types::{
     AdjustFacilityContainedWaste, FacilityContainedWaste, IncrementalZooCleanlinessTotals,
@@ -6,38 +9,34 @@ use openzt2_zoo_state::maintenance::maintenance_types::{
 
 pub(super) fn request_authored_trash_level_changes(
     mut commands: Commands,
-    assets: Res<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
     clock: Res<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>,
     price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
     containers: Query<&FacilityContainedWaste>,
-    jobs: Query<&openzt2_zoo_state::staff::staff_job_types::StaffJob>,
-    mut actors: Query<(Entity, &mut openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState,
+    mut actors: Query<(
+        Entity,
+        (&openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction, &RunBehaviorFactModifications),
         Option<&mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream>,
         Option<&mut openzt2_zoo_state::guests::guest_simulation_types::GuestRng>,
-        Option<&openzt2_zoo_state::staff::staff_job_types::CurrentJob>),
-        Without<openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure>>,
+    ), (
+        Without<openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure>,
+        Without<openzt2_zoo_state::animal_lifecycle::types::Animal>,
+        Without<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+    )>,
     mut changes: MessageWriter<AdjustFacilityContainedWaste>,
 ) {
-    use openzt2_game_data::behavior::{
-        action::modification::{BehaviorFact, BehaviorFactModificationOperation},
-        action_record::BehaviorAction,
+    use openzt2_game_data::behavior::action::modification::{
+        BehaviorFact, BehaviorFactModificationOperation,
     };
-    use openzt2_zoo_state::{
-        animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity,
-        behavior_task_execution_types::{
-            advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        },
-    };
-    for (actor, mut task, mut random, mut guest_random, current_job) in &mut actors {
+    use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
+    for (actor, (task, instruction, running_action), mut random, mut guest_random) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::FactModifications(modifications)) = assets
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let modifications = &running_action.0;
         if modifications.is_empty()
             || modifications
                 .iter()
@@ -45,12 +44,6 @@ pub(super) fn request_authored_trash_level_changes(
         {
             continue;
         }
-        let job_kind = current_job
-            .and_then(|current| jobs.get(current.job).ok())
-            .map(|job| job.kind);
-        if modifications.iter().any(|modification| {
-            openzt2_zoo_state::staff::staff_job_completion_rules::behavior_fact_modification_is_owned_by_terminal_maintenance_system(modification, job_kind)
-        }) { continue; }
         if !modifications.iter().all(|modification| {
             resolve_behavior_entity_role_to_live_entity(
                 modification.affected_entity_role,
@@ -93,7 +86,7 @@ pub(super) fn request_authored_trash_level_changes(
                 delta_q16,
             });
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }
 

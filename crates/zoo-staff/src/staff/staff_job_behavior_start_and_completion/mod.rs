@@ -1,5 +1,3 @@
-use arrayvec::ArrayVec;
-
 #[cfg(test)]
 mod tests;
 use bevy::{platform::collections::HashSet, prelude::*};
@@ -113,7 +111,7 @@ pub(crate) fn start_unstarted_authored_behavior_tasks_for_claimed_staff_jobs(
                 next_action_tick: 0,
                 object: None,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             })
             .remove::<Destination>();
     }
@@ -129,7 +127,10 @@ pub(super) fn release_staff_assignment_after_authored_behavior_failure_finishes(
             &StaffJobBehaviorTask,
             Option<&mut UnsuccessfulStaffJobCandidates>,
         ),
-        Without<AppliedHabitatWasteCleanup>,
+        (
+            Without<AppliedHabitatWasteCleanup>,
+            Without<openzt2_zoo_state::behavior_task_execution_types::AppliedBehaviorLitterKill>,
+        ),
     >,
 ) {
     for failed_behavior_task in failed_behavior_tasks.read() {
@@ -183,6 +184,12 @@ pub(crate) fn settle_staff_jobs_after_authored_behavior_finishes(
         if claim.staff != finished_behavior_task.actor
             || behavior_task.execution_id != Some(finished_behavior_task.execution_id)
         {
+            continue;
+        }
+        if matches!(
+            job.kind,
+            StaffJobKind::MaintainTank | StaffJobKind::EmptyBin | StaffJobKind::SweepLitter
+        ) {
             continue;
         }
         if (job.kind == StaffJobKind::Treat

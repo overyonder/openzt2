@@ -11,14 +11,19 @@ use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivat
 
 /// The opener toggles the drop-list display. Choosing the display or a row closes it.
 pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
-    mut activations: MessageReader<UiNodeActivated>,
+    mut activations: ParamSet<(
+        MessageReader<UiNodeActivated>,
+        MessageWriter<UiNodeActivated>,
+    )>,
     activated_nodes: Query<(&UiNodeId, &UiDocumentOwner)>,
     rows: Query<&UiListRow>,
     parents: Query<&ChildOf>,
     policies: Query<(Entity, &UiNodeId, &UiDocumentOwner, &UiListPolicy)>,
-    mut nodes: Query<(&UiNodeId, &UiDocumentOwner, &mut Visibility)>,
+    targets: super::authored_ui_target_lookup::AuthoredUiTargetLookup,
+    mut nodes: Query<&mut Visibility>,
 ) {
-    for activation in activations.read() {
+    let mut transitions = Vec::new();
+    for activation in activations.p0().read() {
         if activation.trigger != UiTrigger::Press {
             continue;
         }
@@ -43,10 +48,13 @@ pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
                 continue;
             }
 
-            let Some(mut visibility) = nodes.iter_mut().find_map(|(id, node_owner, visibility)| {
-                ((node_owner, id.id) == (list_owner, policy.drop_list_display_node))
-                    .then_some(visibility)
-            }) else {
+            let Some(target) = targets
+                .candidates(list_owner.0, policy.drop_list_display_node)
+                .next()
+            else {
+                continue;
+            };
+            let Ok(mut visibility) = nodes.get_mut(target) else {
                 continue;
             };
             let next = if toggle && *visibility == Visibility::Hidden {
@@ -54,11 +62,17 @@ pub(super) fn toggle_or_close_authored_drop_list_displays_from_activations(
             } else {
                 Visibility::Hidden
             };
-            if *visibility != next {
-                *visibility = next;
-            }
+            transitions.extend(
+                super::authored_ui_change_activation_dispatch::set_authored_visibility(
+                    target,
+                    &mut visibility,
+                    next,
+                    true,
+                ),
+            );
         }
     }
+    let _ = activations.p1().write_batch(transitions);
 }
 
 #[cfg(test)]

@@ -15,9 +15,11 @@ use super::{
 
 impl Material for EffectPassMaterial {
     fn alpha_mode(&self) -> AlphaMode {
-        // All passes need stable authored ordering in Bevy's sorted phase.
-        // specialize() still installs the exact D3D9 blend and depth states.
-        AlphaMode::Blend
+        if self.pipeline_specialization_key.independent_opaque {
+            AlphaMode::Opaque
+        } else {
+            AlphaMode::Blend
+        }
     }
     fn enable_prepass() -> bool {
         false
@@ -62,6 +64,9 @@ impl Material for EffectPassMaterial {
         if let Some(depth) = descriptor.depth_stencil.as_mut() {
             depth.depth_write_enabled = Some(key.bind_group_data.depth_write_enabled);
             depth.depth_compare = Some(key.bind_group_data.depth_compare);
+            if depth.format.has_stencil_aspect() {
+                depth.stencil = key.bind_group_data.stencil;
+            }
         }
         Ok(())
     }

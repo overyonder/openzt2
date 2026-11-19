@@ -1,4 +1,6 @@
 //! Direct steering at a live entity: a one-point route on its current position.
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use avian3d::prelude::LinearVelocity;
 use bevy::prelude::*;
@@ -26,6 +28,7 @@ pub(super) fn accept_entity_pursuit_requests(
     mut commands: Commands,
     mut pursuit_requests: MessageReader<PursueEntity>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    water: Query<&TankNavigationWater, With<WorldRoot>>,
     pursuers: Query<(
         &NavAgent,
         Option<&LocomotionMode>,
@@ -40,6 +43,7 @@ pub(super) fn accept_entity_pursuit_requests(
     mut route_requests: MessageWriter<NavigateTo>,
     mut navigation_failures: MessageWriter<NavigationFailed>,
 ) {
+    let tank_water = water.single().ok();
     for request in pursuit_requests.read() {
         let Ok((target_transform, target_mode)) = targets.get(request.target) else {
             navigation_failures.write(NavigationFailed {
@@ -72,6 +76,7 @@ pub(super) fn accept_entity_pursuit_requests(
             let from = transform.translation();
             straight_line_sweep_admits_agent(
                 graph.terrain_derived_navigation_graph(),
+                tank_water,
                 &agent,
                 mode.copied().unwrap_or_default(),
                 maximum_ground_slope_radians,

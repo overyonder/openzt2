@@ -32,7 +32,10 @@ impl AssetLoader for AnimationClipSourceAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_animation_clip", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_animation_clip", skip_all)
+    )]
     async fn load(
         &self,
         animation_clip_source_reader: &mut dyn Reader,

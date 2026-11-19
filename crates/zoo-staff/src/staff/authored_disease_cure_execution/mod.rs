@@ -1,16 +1,13 @@
 use bevy::{platform::collections::HashSet, prelude::*};
-use openzt2_game_data::{
-    behavior::action_record::BehaviorAction, world_definitions::staff_management::StaffJobKind,
-    AssetId,
+use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorCureDisease, RunningBehaviorInstruction,
 };
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
@@ -29,10 +26,15 @@ use openzt2_zoo_state::animal_health::types::Vitality;
 /// approach and animation. It does not prescribe a vitality or need adjustment.
 pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,
-    mut staff: Query<
-        (Entity, Option<&CurrentJob>, &mut BehaviorTaskExecutionState),
+    staff: Query<
+        (
+            Entity,
+            Option<&CurrentJob>,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorCureDisease,
+        ),
         (With<Staff>, Without<PendingBehaviorTaskFailure>),
     >,
     jobs: Query<(&StaffJob, &JobClaim, &StaffJobBehaviorTask)>,
@@ -42,15 +44,8 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
 ) {
     cancelled_jobs.clear();
     cancelled_jobs.extend(cancellations.read().map(|request| request.job));
-    for (actor, current, mut task) in &mut staff {
-        if task.next_action_tick > clock.tick
-            || !matches!(
-                documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, &task)),
-                Some(BehaviorAction::CureDisease)
-            )
-        {
+    for (actor, current, task, instruction, _) in &staff {
+        if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }
         let target = current
@@ -72,6 +67,6 @@ pub(crate) fn apply_authored_disease_cures_for_live_staff_claims(
             continue;
         };
         commands.entity(target).remove::<(Disease, Treatment)>();
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

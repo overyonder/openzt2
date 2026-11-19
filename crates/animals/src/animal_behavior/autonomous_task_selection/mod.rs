@@ -24,14 +24,13 @@ use openzt2_zoo_state::animal_health::types::Frozen;
 use openzt2_zoo_state::animal_health::types::Tranquilized;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
-use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
-use arrayvec::ArrayVec;
 use bevy::prelude::*;
 use candidate_facts::{
     AnimalCandidateFacts, AnimalCandidateFactsItem, animal_subject_type_can_match,
@@ -64,7 +63,7 @@ pub(super) fn select_idle_animal_tasks(
     species_index: Res<SpeciesAssets>,
     clock: Res<ZooClock>,
     mut execution_sequence: ResMut<BehaviorTaskExecutionSequence>,
-    target_retry_delays: Query<&BehaviorTargetRetryDelays>,
+    target_retry_delays: BehaviorTargetRejections,
     mut animals: Query<
         (
             Entity,
@@ -217,6 +216,7 @@ pub(super) fn select_idle_animal_tasks(
                                     token_owners.get(animal).ok().into_iter().flatten().copied(),
                                 )
                             })
+                            .flatten()
                             .filter_map(|(entity, token)| {
                                 (clock.tick >= token.available_at && clock.tick < token.expires_at)
                                     .then_some(Some((entity, token)))
@@ -278,6 +278,7 @@ pub(super) fn select_idle_animal_tasks(
             let held_tokens = || {
                 tokens
                     .iter_many(token_owners.get(animal).ok().into_iter().flatten().copied())
+                    .flatten()
                     .filter(|(_, token)| {
                         clock.tick >= token.available_at && clock.tick < token.expires_at
                     })
@@ -560,9 +561,7 @@ pub(super) fn select_idle_animal_tasks(
                             }
                             BehaviorCandidateRole::Object => false,
                         },
-                    ) || target_retry_delays
-                        .get(animal)
-                        .is_ok_and(|delays| delays.rejects(fence))
+                    ) || target_retry_delays.rejects(animal, fence)
                     {
                         debug!(?animal, task = %task.name, ?fence, strength = definition.strength,
                             electric, "animal fence task refused the fence");
@@ -681,10 +680,7 @@ pub(super) fn select_idle_animal_tasks(
                     continue;
                 }
                 let distance = facts.transform.translation().distance(target_position);
-                if target_retry_delays
-                    .get(animal)
-                    .is_ok_and(|delays| delays.rejects(target.entity))
-                {
+                if target_retry_delays.rejects(animal, target.entity) {
                     continue;
                 }
                 if !distance.is_finite() {
@@ -798,7 +794,7 @@ pub(super) fn select_idle_animal_tasks(
             next_action_tick: clock.tick,
             object,
             interaction_slot: None,
-            stack: ArrayVec::new(),
+            depth: 0,
         });
         match delay_ticks {
             Some(delay_ticks) => started.insert(RunningDelayedAnimalTask {

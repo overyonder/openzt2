@@ -17,7 +17,7 @@ use bevy::{
 };
 
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types::PhotoControl;
-use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveCamera;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
@@ -58,7 +58,7 @@ pub(super) fn begin_requested_album_photo_captures(
     >,
     photo_cameras: Query<(), With<PhotoMode>>,
     camera_components: Query<(), With<Camera>>,
-    active_photo_mode_controllers: Query<(Entity, &ActiveImmersiveMode), With<PhotoControl>>,
+    active_photo_mode_controllers: Query<(Entity, &ImmersiveCamera), With<PhotoControl>>,
     photo_mode_document_presentation_owners: Query<&AuthoredPhotoModeDocumentPresentationOwner>,
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     mut ui_document_roots: Query<(Entity, &UiDocumentRoot, &ChildOf, &mut Visibility)>,
@@ -103,7 +103,7 @@ pub(super) fn begin_requested_album_photo_captures(
         let (target, transform, view) = transform;
         let hidden_photo_mode_presentation = active_photo_mode_controllers
             .iter()
-            .find(|(_, active_mode)| active_mode.camera == request.camera)
+            .find(|(_, camera)| camera.0 == request.camera)
             .and_then(|(controller, _)| {
                 ui_document_roots
                     .iter_mut()

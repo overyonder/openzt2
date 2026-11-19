@@ -55,10 +55,9 @@ pub(in crate::ui_document) fn collect_referenced_ui_template_source_paths(
 
 pub(in crate::ui_document) fn build_ui_template_declaration_source_path_index(
     asset_archives: &AssetArchives,
+    resolved_paths: &[std::path::PathBuf],
 ) -> BTreeMap<String, String> {
-    let candidate_ui_template_source_paths = asset_archives
-        .resolved_paths()
-        .1
+    let candidate_ui_template_source_paths = resolved_paths
         .iter()
         .map(|source_path| {
             z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(source_path)

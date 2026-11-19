@@ -1,5 +1,6 @@
 use avian3d::prelude::{ColliderAabb, RigidBodyColliders, SpatialQuery, SpatialQueryFilter};
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames;
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -49,6 +50,7 @@ use super::photo_capture_types::{
 
 #[derive(SystemParam)]
 pub(super) struct PhotographableSemanticFactQueries<'w, 's> {
+    continuations: BehaviorContinuationFrames<'w, 's>,
     animations: Query<
         'w,
         's,
@@ -289,7 +291,9 @@ pub(super) fn collect_visible_photo_subjects_and_semantic_evidence_for_pending_c
                     .get(entity)
                     .is_ok_and(|fact| fact.is_contained),
                 task: capture_photo_subject_task_evidence(
+                    entity,
                     behavior_task,
+                    &semantic_queries.continuations,
                     &behavior_document_assets,
                     &semantic_queries.entity_kinds,
                 ),
@@ -355,7 +359,9 @@ fn resolve_photo_subject_contained_entity_kind(
 
 /// Resolves the current task and target while their live definitions are available.
 fn capture_photo_subject_task_evidence<'w, 's>(
+    actor: Entity,
     behavior_task: Option<&BehaviorTaskExecutionState>,
+    continuations: &BehaviorContinuationFrames,
     behavior_document_assets: &Assets<BehaviorDocumentAsset>,
     entity_kinds: &Query<
         'w,
@@ -373,7 +379,9 @@ fn capture_photo_subject_task_evidence<'w, 's>(
     };
     // Resolve the nearest non-Set frame, as reservation_tag does. A missing
     // declaration must not fall through to an older task.
-    let Some(selected_task) = select_nearest_non_set_behavior_task_frame(behavior_task) else {
+    let Some(selected_task) =
+        select_nearest_non_set_behavior_task_frame(actor, behavior_task, continuations)
+    else {
         // A standalone behavior set has no enclosing task name.
         return PhotoSubjectTaskEvidence::UnresolvedAtCapture;
     };
@@ -401,18 +409,19 @@ struct SelectedBehaviorTaskFrame<'a> {
     target: Option<Entity>,
 }
 
-fn select_nearest_non_set_behavior_task_frame(
-    behavior_task: &BehaviorTaskExecutionState,
-) -> Option<SelectedBehaviorTaskFrame<'_>> {
+fn select_nearest_non_set_behavior_task_frame<'a>(
+    actor: Entity,
+    behavior_task: &'a BehaviorTaskExecutionState,
+    continuations: &'a BehaviorContinuationFrames,
+) -> Option<SelectedBehaviorTaskFrame<'a>> {
     std::iter::once((
         &behavior_task.document,
         behavior_task.declaration,
         behavior_task.phase,
     ))
     .chain(
-        behavior_task
-            .stack
-            .iter()
+        continuations
+            .frames(actor)
             .rev()
             .map(|frame| (&frame.document, frame.declaration, frame.phase)),
     )

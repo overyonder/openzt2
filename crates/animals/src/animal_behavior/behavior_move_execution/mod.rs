@@ -1,14 +1,15 @@
 use bevy::prelude::*;
-use openzt2_game_data::{
-    behavior::action_record::BehaviorAction, world_definitions::staff_management::StaffRoleKind,
+use openzt2_game_data::world_definitions::staff_management::StaffRoleKind;
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
+    travel_target, BehaviorPlacementTravelSite,
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorMove, RunningBehaviorInstruction,
 };
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -43,21 +44,29 @@ pub(super) struct KeeperLandApproach<'w, 's> {
         Option<&'static HabitatMember>,
         With<openzt2_zoo_state::animal_lifecycle::types::Animal>,
     >,
+    water: Query<
+        'w,
+        's,
+        &'static openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater,
+    >,
     worlds: Query<'w, 's, &'static WorldMember>,
     candidates: Local<'s, Vec<Vec3>>,
 }
 
 pub(super) fn start_current_supported_behavior_move_actions(
     mut commands: Commands,
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
     simulation_clock: Res<ZooClock>,
     mut navigation_request_sequence: ResMut<NavigationRequestSequence>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    mut behavior_tasks: Query<
+    behavior_tasks: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorMove,
+            ),
             Option<&StaffRole>,
             Option<&NavAgent>,
         ),
@@ -67,6 +76,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
         ),
     >,
     entity_global_transforms: Query<&GlobalTransform>,
+    travel_sites: Query<&BehaviorPlacementTravelSite>,
     children: Query<&Children>,
     authored_attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
     mut navigation_requests: MessageWriter<NavigateTo>,
@@ -75,16 +85,16 @@ pub(super) fn start_current_supported_behavior_move_actions(
     water_targets: Query<&openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget>,
     waters: super::natural_water_targets::NaturalWaterTargets,
 ) {
-    for (actor, mut behavior_task, staff_role, navigation_agent) in &mut behavior_tasks {
+    for (actor, (behavior_task, instruction, running_action), staff_role, navigation_agent) in
+        &behavior_tasks
+    {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        let Some(BehaviorAction::Move(move_action)) = behavior_document_assets
-            .get(&behavior_task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
-        else {
+        if !instruction.is_current(&behavior_task) {
             continue;
-        };
+        }
+        let move_action = &running_action.0;
         if !move_start_has_navigation_agent(navigation_agent) {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -100,7 +110,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        let Some(target) = behavior_task.target() else {
+        let Some(target) = travel_target(behavior_task, travel_sites.get(actor).ok()) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
@@ -154,6 +164,11 @@ pub(super) fn start_current_supported_behavior_move_actions(
             let Some(graph) = approach.graph.as_ref() else {
                 continue;
             };
+            let tank_water = approach
+                .worlds
+                .get(actor)
+                .ok()
+                .and_then(|member| approach.water.get(member.root).ok());
             let navigation = graph.terrain_derived_navigation_graph();
             let size = f32::from(navigation.terrain_cell_size_centimetres) * 0.01;
             let target_node = (destination.x >= 0.0 && destination.z <= 0.0 && size > 0.0)
@@ -164,7 +179,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
                     ]
                 })
                 .and_then(|cell| navigation.calculate_navigation_node_for_terrain_cell(cell))
-                .and_then(|index| navigation.find_navigation_node(index));
+                .and_then(|index| navigation.effective_navigation_node(index, tank_water));
             let Some(target_node) = target_node else {
                 continue;
             };
@@ -193,6 +208,7 @@ pub(super) fn start_current_supported_behavior_move_actions(
                     continue;
                 };
                 graph.collect_dry_ground_candidates(
+                    tank_water,
                     region,
                     *approach.grid,
                     agent,
@@ -223,11 +239,14 @@ pub(super) fn start_current_supported_behavior_move_actions(
         commands
             .entity(actor)
             .insert(PendingBehaviorMoveCompletion {
-                origin: behavior_task.create_return_frame_after_action(behavior_task.action),
-                stack_depth: behavior_task.stack.len(),
+                instruction: instruction.id(),
                 request_id,
             });
-        behavior_task.next_action_tick = simulation_clock.tick.saturating_add(1);
+        instruction.resume_at(
+            actor,
+            simulation_clock.tick.saturating_add(1),
+            &mut commands,
+        );
     }
 }
 
@@ -264,23 +283,25 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
         &openzt2_zoo_state::locomotion::locomotion_types::AnimalTerrainWaterContact,
         &openzt2_zoo_state::locomotion::locomotion_types::LocomotionMode,
     )>,
-    mut behavior_tasks: Query<
+    behavior_tasks: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
             &PendingBehaviorMoveCompletion,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
     for arrival in arrivals.read() {
-        let Ok((actor, mut behavior_task, pending_move)) = behavior_tasks.get_mut(arrival.entity)
+        let Ok((actor, behavior_task, instruction, pending_move)) =
+            behavior_tasks.get(arrival.entity)
         else {
             continue;
         };
         if arrival.target.is_some()
             || arrival.request_id != pending_move.request_id
-            || !pending_move.still_owns_exact_task_frame(&behavior_task)
+            || !pending_move.owns(behavior_task, instruction)
         {
             continue;
         }
@@ -302,7 +323,7 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
                 }
             }
         }
-        advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
+        instruction.complete(actor, simulation_clock.tick, &mut commands);
         commands
             .entity(actor)
             .remove::<PendingBehaviorMoveCompletion>();
@@ -312,16 +333,19 @@ pub(super) fn finish_behavior_move_actions_after_matching_arrival(
 pub(super) fn fail_behavior_move_actions_after_navigation_failure(
     mut commands: Commands,
     mut failures: MessageReader<NavigationFailed>,
-    waiting_tasks: Query<(&BehaviorTaskExecutionState, &PendingBehaviorMoveCompletion)>,
+    waiting_tasks: Query<(
+        &BehaviorTaskExecutionState,
+        &RunningBehaviorInstruction,
+        &PendingBehaviorMoveCompletion,
+    )>,
 ) {
     for failure in failures.read() {
         let waiting_for_move =
             waiting_tasks
                 .get(failure.entity)
                 .ok()
-                .is_some_and(|(task, pending)| {
-                    failure.request_id == pending.request_id
-                        && pending.still_owns_exact_task_frame(task)
+                .is_some_and(|(task, instruction, pending)| {
+                    failure.request_id == pending.request_id && pending.owns(task, instruction)
                 });
         if waiting_for_move {
             mark_behavior_task_for_failure_and_stop_navigation(failure.entity, &mut commands);
@@ -356,14 +380,53 @@ fn staff_mode_has_authored_locomotion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
     use openzt2_zoo_state::locomotion::locomotion_types::NavFlags;
 
-    fn test_move_task() -> BehaviorTaskExecutionState {
+    fn test_move_task(app: &mut App) -> BehaviorTaskExecutionState {
+        use openzt2_game_data::{
+            behavior::{
+                action::movement::BehaviorMoveAction,
+                document::{BehaviorDocument, BehaviorTask, BehaviorTaskActionPhase},
+            },
+            AssetId,
+        };
+        let program = AssetId::from_key("test:move");
+        app.init_resource::<Assets<BehaviorDocumentAsset>>()
+            .add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
+        let document = app
+            .world_mut()
+            .resource_mut::<Assets<BehaviorDocumentAsset>>()
+            .add(BehaviorDocumentAsset::from_test_document(
+                BehaviorDocument::Tasks(vec![BehaviorTask {
+                    id: program,
+                    name: "move".into(),
+                    priority: None,
+                    task_delay_seconds: None,
+                    reservation_tag: None,
+                    sensor_tag: None,
+                    subjects: Vec::new(),
+                    targets: Vec::new(),
+                    objects: Vec::new(),
+                    candidate_eligibility_requirements: Vec::new(),
+                    scores: Vec::new(),
+                    execution: BehaviorTaskActionPhase::Supported(vec![BehaviorAction::Move(
+                        BehaviorMoveAction {
+                            locomotion_speed: None,
+                            target_node_name: None,
+                            move_radius_cm: 200,
+                        },
+                    )]),
+                    completion: BehaviorTaskActionPhase::Supported(Vec::new()),
+                    failure: BehaviorTaskActionPhase::Supported(Vec::new()),
+                }]),
+            ));
         BehaviorTaskExecutionState {
             execution_id: 1,
-            program: openzt2_game_data::AssetId::from_key("test:move"),
+            program,
             target: None,
-            document: Handle::default(),
+            document,
             declaration: 0,
             phase: openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase::Execution,
             action: 0,
@@ -371,8 +434,18 @@ mod tests {
             next_action_tick: 1,
             object: None,
             interaction_slot: None,
-            stack: Default::default(),
+            depth: 0,
         }
+    }
+
+    fn bind_move_completion(world: &mut World, actor: Entity) {
+        let instruction = world.get::<RunningBehaviorInstruction>(actor).unwrap().id();
+        world
+            .entity_mut(actor)
+            .insert(PendingBehaviorMoveCompletion {
+                instruction,
+                request_id: 1,
+            });
     }
 
     #[test]
@@ -386,17 +459,11 @@ mod tests {
         })
         .add_message::<Arrived>()
         .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
-        let task = test_move_task();
-        let origin = task.create_return_frame_after_action(task.action);
+        let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
                 task,
-                PendingBehaviorMoveCompletion {
-                    origin,
-                    stack_depth: 0,
-                    request_id: 1,
-                },
                 NavAgent {
                     radius_m: 0.5,
                     max_speed_mps: 1.0,
@@ -406,6 +473,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
+        bind_move_completion(app.world_mut(), actor);
         app.world_mut().write_message(Arrived {
             entity: actor,
             request_id: 1,
@@ -449,19 +517,13 @@ mod tests {
         })
         .add_message::<Arrived>()
         .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
-        let mut task = test_move_task();
+        let mut task = test_move_task(&mut app);
         let parent = task.create_return_frame_after_action(7);
-        assert!(task.push_return_frame(parent));
-        let origin = task.create_return_frame_after_action(task.action);
+        task.depth = 1;
         let actor = app
             .world_mut()
             .spawn((
                 task,
-                PendingBehaviorMoveCompletion {
-                    origin,
-                    stack_depth: 1,
-                    request_id: 1,
-                },
                 NavAgent {
                     radius_m: 0.5,
                     max_speed_mps: 1.0,
@@ -471,6 +533,15 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
+        app.world_mut().spawn((
+            openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationOf(
+                actor,
+            ),
+            openzt2_zoo_state::behavior_task_execution_types::continuations::SuspendedBehaviorFrame(
+                parent,
+            ),
+        ));
+        bind_move_completion(app.world_mut(), actor);
         app.world_mut().write_message(Arrived {
             entity: actor,
             request_id: 1,
@@ -482,7 +553,7 @@ mod tests {
             .get::<BehaviorTaskExecutionState>(actor)
             .unwrap();
         assert_eq!(task.action, 1);
-        assert_eq!(task.stack.len(), 1);
+        assert_eq!(task.depth, 1);
     }
 
     #[test]
@@ -496,17 +567,11 @@ mod tests {
         })
         .add_message::<Arrived>()
         .add_systems(Update, finish_behavior_move_actions_after_matching_arrival);
-        let task = test_move_task();
-        let origin = task.create_return_frame_after_action(task.action);
+        let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
                 task,
-                PendingBehaviorMoveCompletion {
-                    origin,
-                    stack_depth: 0,
-                    request_id: 1,
-                },
                 NavAgent {
                     radius_m: 0.5,
                     max_speed_mps: 1.0,
@@ -516,6 +581,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
+        bind_move_completion(app.world_mut(), actor);
         app.world_mut()
             .get_mut::<BehaviorTaskExecutionState>(actor)
             .unwrap()
@@ -542,19 +608,9 @@ mod tests {
         failure_app
             .add_message::<NavigationFailed>()
             .add_systems(Update, fail_behavior_move_actions_after_navigation_failure);
-        let failure_task = test_move_task();
-        let failure_origin = failure_task.create_return_frame_after_action(failure_task.action);
-        let failure_actor = failure_app
-            .world_mut()
-            .spawn((
-                failure_task,
-                PendingBehaviorMoveCompletion {
-                    origin: failure_origin,
-                    stack_depth: 0,
-                    request_id: 1,
-                },
-            ))
-            .id();
+        let failure_task = test_move_task(&mut failure_app);
+        let failure_actor = failure_app.world_mut().spawn((failure_task,)).id();
+        bind_move_completion(failure_app.world_mut(), failure_actor);
         failure_app.world_mut().write_message(NavigationFailed {
             entity: failure_actor,
             request_id: 1,
@@ -598,17 +654,11 @@ mod tests {
             )
                 .chain(),
         );
-        let task = test_move_task();
-        let origin = task.create_return_frame_after_action(task.action);
+        let task = test_move_task(&mut app);
         let actor = app
             .world_mut()
             .spawn((
                 task,
-                PendingBehaviorMoveCompletion {
-                    origin,
-                    stack_depth: 0,
-                    request_id: 1,
-                },
                 NavAgent {
                     radius_m: 0.5,
                     max_speed_mps: 1.0,
@@ -618,6 +668,7 @@ mod tests {
                 GlobalTransform::IDENTITY,
             ))
             .id();
+        bind_move_completion(app.world_mut(), actor);
         app.world_mut().write_message(NavigationFailed {
             entity: actor,
             request_id: 1,

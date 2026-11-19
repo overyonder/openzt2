@@ -4,7 +4,6 @@ mod target_index;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestNeedTriggers;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestTaskCooldowns;
 
-use arrayvec::ArrayVec;
 use bevy::{platform::collections::HashMap, prelude::*};
 use openzt2_game_data::{
     behavior::eligibility::BehaviorCandidateRole,
@@ -16,7 +15,7 @@ use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentC
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
-use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWaste;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::candidate_requirements_are_satisfied;
 use openzt2_zoo_state::animal_behavior::behavior_candidate_selection::score_supported_behavior_task;
@@ -58,6 +57,7 @@ pub(super) struct GuestSubjectTaskIndex {
 }
 
 pub(super) fn select_idle_guest_tasks(
+    target_retry_delays: BehaviorTargetRejections,
     (documents, assets, mut subject_tasks): (
         Res<LoadedBehaviorDocumentCollection>,
         Res<Assets<BehaviorDocumentAsset>>,
@@ -80,7 +80,6 @@ pub(super) fn select_idle_guest_tasks(
             &GlobalTransform,
             &WorldMember,
             Option<&mut GuestTaskCooldowns>,
-            Option<&BehaviorTargetRetryDelays>,
         ),
         (
             With<Guest>,
@@ -180,7 +179,6 @@ pub(super) fn select_idle_guest_tasks(
         transform,
         world,
         mut cooldowns,
-        target_retry_delays,
     ) in &mut guests
     {
         if let Some(cooldowns) = cooldowns.as_deref_mut() {
@@ -294,7 +292,7 @@ pub(super) fn select_idle_guest_tasks(
                  elevated_path: Option<bool>,
                  target_trash_level: Option<u16>,
                  target_position: Vec3| {
-                    if target_retry_delays.is_some_and(|delays| delays.rejects(target)) {
+                    if target_retry_delays.rejects(guest, target) {
                         return;
                     }
                     let is_path = elevated_path.is_some();
@@ -528,7 +526,7 @@ pub(super) fn select_idle_guest_tasks(
             next_action_tick: clock.tick,
             object,
             interaction_slot: None,
-            stack: ArrayVec::new(),
+            depth: 0,
         });
     }
 }

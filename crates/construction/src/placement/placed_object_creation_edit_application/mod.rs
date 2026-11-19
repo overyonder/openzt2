@@ -130,6 +130,9 @@ pub(super) fn apply_prepared_placed_object_creation_edit(
                 origin,
                 eighth_turns: turns,
             },
+            openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells(
+                edit.cells.clone(),
+            ),
             HabitatLocatable,
         ));
         if let Some(entrance) = authored_entrances.first() {

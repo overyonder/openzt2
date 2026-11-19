@@ -1,11 +1,11 @@
 use super::super::behavior_snapshot_types::{
-    BehaviorActorSnapshot, BehaviorFrameSnapshot, BehaviorSnapshotEntityReference,
+    BehaviorFrameSnapshot, BehaviorSnapshotEntityReference, BehaviorTaskActorSnapshot,
 };
 use crate::persistence::persistence_failure_types::WorldSnapshotPersistenceFailure;
 use bevy::{asset::LoadState, prelude::*};
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    BehaviorTaskExecutionPhase, BehaviorTaskExecutionState, BehaviorTaskReturnFrame,
+    BehaviorTaskExecutionPhase, BehaviorTaskReturnFrame,
 };
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -75,7 +75,7 @@ pub(super) fn resolve_behavior_frame(
 }
 
 pub(super) fn actor_references(
-    record: &BehaviorActorSnapshot,
+    record: &BehaviorTaskActorSnapshot,
 ) -> impl Iterator<Item = &BehaviorSnapshotEntityReference> {
     record.task.target.iter().chain(&record.task.object)
         .chain(record.membership.iter().map(|membership| &membership.container))
@@ -109,7 +109,7 @@ fn required_reference(
 }
 
 pub(super) fn validate_behavior_snapshot_references(
-    records: &[BehaviorActorSnapshot],
+    records: &[&BehaviorTaskActorSnapshot],
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
 ) -> Result<(), WorldSnapshotPersistenceFailure> {
     for record in records {
@@ -150,7 +150,7 @@ pub(super) fn validate_behavior_snapshot_references(
 }
 
 pub(super) fn prepare_behavior_snapshot_documents(
-    records: &[BehaviorActorSnapshot],
+    records: &[&BehaviorTaskActorSnapshot],
     documents: &Assets<BehaviorDocumentAsset>,
     server: &AssetServer,
     retained: &mut Vec<Handle<BehaviorDocumentAsset>>,
@@ -278,22 +278,8 @@ fn resolve_behavior_frame_action<'a>(
     let source = documents
         .get(&frame.document)
         .ok_or(WorldSnapshotPersistenceFailure::UnknownAssetIdentifier)?;
-    let probe = BehaviorTaskExecutionState {
-        execution_id: 0,
-        program: frame.program,
-        document: frame.document,
-        declaration: frame.declaration,
-        phase: frame.phase,
-        action: frame.action,
-        repetitions: frame.repetitions,
-        target: None,
-        object: None,
-        next_action_tick: 0,
-        interaction_slot: None,
-        stack: Default::default(),
-    };
-    openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action(
-        source, &probe,
-    )
-    .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
+    frame
+        .phase
+        .authored_action(source, frame.declaration, frame.action)
+        .ok_or(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
 }

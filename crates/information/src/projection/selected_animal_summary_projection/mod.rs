@@ -26,12 +26,13 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisib
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 
 use super::text_replacement_operations::replace_projected_ui_text_if_changed;
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_entity_information_section_visibility(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     subjects: Query<(&Inspectable, Has<WorldEntityIsCrated>, Has<Animal>)>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -40,10 +41,13 @@ pub(crate) fn project_selected_entity_information_section_visibility(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
-    for (information_panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (information_panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         let selected_section =
             subjects
-                .get(information_panel.subject)
+                .get(selection.0)
                 .ok()
                 .and_then(|(subject, crated, animal)| {
                     if crated {
@@ -81,7 +85,7 @@ pub(crate) fn project_selected_entity_information_section_visibility(
 }
 
 pub(crate) fn project_selected_animal_identity_health_and_action_summary(
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
@@ -110,7 +114,7 @@ pub(crate) fn project_selected_animal_identity_health_and_action_summary(
 ) {
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    let Some(selected_subject) = selected_entity.0 else {
+    let Some(selected_subject) = selected_entity.subject() else {
         return;
     };
     let Ok((inspectable, name, disease, treatment, tranquilized, escaped, rampaging, dead)) =

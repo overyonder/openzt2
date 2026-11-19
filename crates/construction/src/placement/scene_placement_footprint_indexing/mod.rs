@@ -1,12 +1,15 @@
 use bevy::{platform::collections::HashSet, prelude::*};
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
-use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::object_placement_geometry::{
+    ScenePlacementFootprintChanged, ScenePlacementFootprints,
+};
 
 pub(super) fn index_scene_placement_footprints(
     mut events: MessageReader<AssetEvent<ScenePrefabAsset>>,
     scenes: Res<Assets<ScenePrefabAsset>>,
     mut footprints: ResMut<ScenePlacementFootprints>,
+    mut changes: MessageWriter<ScenePlacementFootprintChanged>,
 ) {
     let changed = events
         .read()
@@ -28,6 +31,7 @@ pub(super) fn index_scene_placement_footprints(
             .update_scene_bounds(id, bounds)
         {
             footprints.set_changed();
+            changes.write(ScenePlacementFootprintChanged(id));
         }
     }
 }

@@ -12,14 +12,13 @@ use openzt2_game_data::behavior::action::queue::BehaviorQueueWaitAction;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::{
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorWaitInteractionQueue, RunningBehaviorInstruction, SelectedBehaviorSet,
+};
 
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
@@ -33,7 +32,11 @@ pub(super) struct QueueWaitActors<'w, 's> {
         's,
         (
             Entity,
-            &'static mut BehaviorTaskExecutionState,
+            (
+                &'static BehaviorTaskExecutionState,
+                &'static RunningBehaviorInstruction,
+                &'static RunBehaviorWaitInteractionQueue,
+            ),
             Option<&'static ActiveQueueWait>,
         ),
         Without<PendingBehaviorTaskFailure>,
@@ -61,7 +64,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
-    mut actors: QueueWaitActors,
+    actors: QueueWaitActors,
     memberships: InteractionContainerMemberships,
 ) {
     let Some(definitions) = sources.definitions.get(&sources.definition_assets) else {
@@ -74,17 +77,14 @@ pub(super) fn start_or_repeat_authored_queue_wait(
     {
         return;
     }
-    for (actor, mut task, _) in &mut actors.tasks {
+    for (actor, (task, instruction, running), _) in &actors.tasks {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::WaitInteractionQueue(action)) = sources
-            .behaviors
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let action = &running.0;
         let Some(target) = task.target() else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -98,15 +98,13 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let tag = action
-            .container
-            .or_else(|| task.reservation_tag(&sources.behaviors));
+        let tag = action.container.or_else(|| instruction.reservation_tag());
         if memberships
             .actor_slot(target, actor)
             .and_then(|index| object.interaction_slots.get(index))
             .is_some_and(|slot| !slot.is_queue && tag.is_none_or(|tag| slot.reservation_tag == tag))
         {
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
             continue;
         }
         let Some((queue_index, queue)) = object
@@ -132,7 +130,7 @@ pub(super) fn start_or_repeat_authored_queue_wait(
             despawn_on_refusal: false,
             queue_service_slots: service_slots,
         };
-        let instruction = BehaviorAdmissionInstruction::new(actor, &task);
+        let instruction = BehaviorAdmissionInstruction::new(actor, task, instruction);
         let action = action.clone();
         commands.queue(move |world: &mut World| {
             if instruction.is_current(world) {
@@ -168,7 +166,7 @@ pub(super) fn apply_queue_wait_admission(
     let actor = admitted.actor;
     let target = admitted.target;
     let action = &admitted.action;
-    let Ok((_, mut task, active_wait)) = actors.tasks.get_mut(actor) else {
+    let Ok((_, (task, instruction, _), active_wait)) = actors.tasks.get(actor) else {
         return;
     };
     let InteractionContainerAdmissionOutcome::Granted {
@@ -180,9 +178,9 @@ pub(super) fn apply_queue_wait_admission(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    task.interaction_slot = Some(queue_index);
+    instruction.bind_interaction_slot(actor, queue_index, &mut commands);
     if queue_service_available {
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
         commands.entity(actor).remove::<ActiveQueueWait>();
         return;
     }
@@ -245,7 +243,7 @@ pub(super) fn apply_queue_wait_admission(
         commands.entity(actor).insert(ActiveQueueWait {
             execution_id: task.execution_id,
             origin: origin.clone(),
-            stack_depth: task.stack.len(),
+            stack_depth: task.depth,
             target,
             queue_slot: queue_index,
             deadline_tick: clock
@@ -253,16 +251,16 @@ pub(super) fn apply_queue_wait_admission(
                 .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),
         });
     }
-    if !task.push_return_frame(origin) {
-        commands.entity(actor).remove::<ActiveQueueWait>();
-        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        return;
-    }
-    task.program = waiting_set;
-    task.document = document;
-    task.declaration = declaration;
-    task.phase = BehaviorTaskExecutionPhase::Set;
-    task.action = 0;
-    task.repetitions = 0;
-    task.next_action_tick = clock.tick.saturating_add(1);
+    instruction.enter_set(
+        actor,
+        SelectedBehaviorSet {
+            program: waiting_set,
+            document,
+            declaration,
+            tick: clock.tick,
+            repeat: Some(task.repetitions),
+            target: None,
+        },
+        &mut commands,
+    );
 }

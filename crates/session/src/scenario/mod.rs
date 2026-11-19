@@ -29,7 +29,6 @@ mod scenario_rule_visibility;
 mod scenario_selection_ui_action_routing;
 mod scenario_ui_modification_presentation;
 mod scenario_ui_types;
-mod zoo_message_bar_presentation;
 
 use challenge_offer_types::{
     CreateScenarioChallengeOfferFromLuaSourcePathRequest, RespondToScenarioChallengeRequest,
@@ -61,12 +60,6 @@ impl Plugin for ScenarioPlugin {
         app.init_non_send::<scenario_lua_types::ScenarioLuaVirtualMachineContexts>()
             .init_resource::<openzt2_zoo_state::progression::profile_scenario_variables::ProfileScenarioVariables>()
             .init_resource::<openzt2_interface_state::information::zoo_message_types::ZooMessages>()
-            .add_systems(
-                Update,
-                zoo_message_bar_presentation::present_zoo_messages_in_authored_message_bar
-                    .in_set(GameSet::Presentation)
-                    .run_if(in_state(GamePhase::InGame)),
-            )
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::SetProfileScenarioVariable>()
             .add_message::<openzt2_zoo_state::progression::profile_scenario_variables::PersistProfileScenarioVariables>()
             .add_systems(Update, profile_scenario_variable_application::apply_profile_scenario_variable_changes.in_set(GameSet::Intent))

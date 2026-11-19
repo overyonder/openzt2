@@ -1,3 +1,4 @@
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestSpeciesViewCounts;
 use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use bevy::prelude::*;
@@ -9,7 +10,7 @@ use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::guests::guest_simulation_types::{Guest, GuestArchetype, GuestFavouriteAnimal, GuestReactionApplied};
 
-use openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress;
 
 pub(super) fn initialize_guest_species_view_counts(
     species_assets: Res<Assets<SpeciesAsset>>,
@@ -45,8 +46,8 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
         &GlobalTransform,
         &mut GuestSpeciesViewCounts,
         &mut GuestSurveyExperience,
-        Option<&BehaviorTaskExecutionState>,
-        Option<&mut ActiveGuestAnimalViewingMeter>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
+        Option<&mut BehaviorViewingProgress>,
     )>,
     animals: Query<(&SpeciesHandle, &GlobalTransform)>,
 ) {
@@ -126,8 +127,8 @@ pub(super) fn apply_accepted_view_events_to_view_meters(
             1.0
         };
         let score = row.view_score * preferred * discount * distance_factor;
-        if let (Some(task), Some(mut meter)) = (task, meter) {
-            if meter.owns(task) {
+        if let (Some((task, instruction)), Some(mut meter)) = (task, meter) {
+            if meter.instruction == instruction.id() && instruction.is_current(task) {
                 meter.apply_view_score(score);
             }
         }

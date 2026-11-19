@@ -6,5 +6,11 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
 pub struct UiTimedEventRecord {
     pub due_ms: u32,
-    pub action: UiActionRecord,
+    pub action: UiTimedEventAction,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq)]
+pub enum UiTimedEventAction {
+    Ui(UiActionRecord),
+    ScenarioScript(String),
 }

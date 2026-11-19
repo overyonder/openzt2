@@ -25,12 +25,14 @@ fn representative_display_settings() -> DisplaySettings {
 }
 
 fn representative_graphics_settings() -> GraphicsSettings {
-    GraphicsSettings::from_source_highest_detail_preset()
+    GraphicsSettings::default()
 }
 
 fn settings_test_application() -> App {
     let mut app = App::new();
     app.init_resource::<Assets<UiDocumentAsset>>()
+        .init_resource::<Assets<openzt2_game_assets::graphics_settings_presets::GraphicsSettingsPresets>>()
+        .init_resource::<openzt2_game_assets::graphics_settings_presets::GraphicsSettingsPresetSource>()
         .init_resource::<Assets<openzt2_game_assets::localization::localization_asset_types::LocalizationAsset>>()
         .init_resource::<openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex>()
         .init_resource::<bevy::light::DirectionalLightShadowMap>()
@@ -82,7 +84,8 @@ fn accepted_values_map_to_actual_bevy_components() {
     };
     let proposed_graphics = GraphicsSettings {
         multisample_count: 4,
-        ..GraphicsSettings::from_source_medium_detail_preset()
+        shadow_detail: openzt2_game_assets::graphics_settings_types::ShadowDetail::Off,
+        ..default()
     };
     app.world_mut()
         .write_message(ReplaceDisplaySettingsRequest(proposed_display));
@@ -113,9 +116,7 @@ fn accepted_values_map_to_actual_bevy_components() {
     assert_eq!(app.world().get::<Msaa>(camera), Some(&Msaa::Sample4));
 
     app.world_mut()
-        .write_message(ReplaceGraphicsSettingsRequest(
-            GraphicsSettings::from_source_highest_detail_preset(),
-        ));
+        .write_message(ReplaceGraphicsSettingsRequest(GraphicsSettings::default()));
     app.update();
     assert!(
         app.world()

@@ -2,15 +2,18 @@ use super::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     world_definition_source_document_lowering::lower_resolved_world_definition_source_document_closure_to_canonical_document,
 };
-use crate::asset_source::AssetArchives;
+use crate::asset_source::{
+    archive_entry_asset_path::{archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
+    AssetArchives,
+};
 use crate::source_document::{
     blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
 };
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
-use std::{io, path::Path};
+use std::{io, path::Path, sync::Arc};
 
 pub mod authored_binder_reference_resolution;
 pub mod presentation_dependencies;
@@ -20,14 +23,12 @@ pub mod source_reference_discovery;
 #[derive(TypePath)]
 pub(super) struct WorldDefinitionAssetLoader {
     archives: AssetArchives,
-    binder_source_paths: authored_binder_reference_resolution::AuthoredBinderSourcePathIndex,
 }
 
 impl FromWorld for WorldDefinitionAssetLoader {
     fn from_world(world: &mut World) -> Self {
         Self {
             archives: world.resource::<AssetArchives>().clone(),
-            binder_source_paths: Default::default(),
         }
     }
 }
@@ -47,19 +48,22 @@ impl AssetLoader for WorldDefinitionAssetLoader {
         _: &(),
         context: &mut LoadContext<'_>,
     ) -> Result<Self::Asset, Self::Error> {
+        let binder_sources = self.archives.authored_binder_sources();
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let path = context.path().path().to_string_lossy().replace('\\', "/");
+        let physical_path = archive_entry_asset_source_path(context.path().path())
+            .map_or_else(|| context.path().path().to_owned(), |(path, _, _)| path);
+        let path = physical_path.to_string_lossy().replace('\\', "/");
         let authored_type_registry_source_order = self
             .archives
             .first_enabled_archive_entry_order(Path::new(&path))
             .unwrap_or([u64::MAX; 2]);
         let primary = parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        let (documents, binder_source_index_revision) =
+        let (documents, uses_binder_sources) =
             source_documents::load_world_definition_source_documents(
                 &self.archives,
-                &self.binder_source_paths,
+                &binder_sources,
                 context,
                 &path,
                 primary,
@@ -95,19 +99,27 @@ impl AssetLoader for WorldDefinitionAssetLoader {
                 &actor_manifest_resolution_index,
                 &resolved_models,
             )?;
-        if binder_source_index_revision
-            .is_some_and(|revision| revision != self.archives.binder_source_version())
-        {
-            return Err(io::Error::other(
-                "archive revision changed while loading authored binder dependencies",
-            ));
+        if uses_binder_sources {
+            if !Arc::ptr_eq(&binder_sources, &self.archives.authored_binder_sources()) {
+                return Err(io::Error::other(
+                    "authored binder sources changed while loading",
+                ));
+            }
+            asset.authored_binder_sources = Some(binder_sources);
         }
-        asset.authored_binder_source_index_revision = binder_source_index_revision;
         Ok(asset)
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml", "dl", "maxml", "zt2", "trk", "old"]
+        &[
+            "xml",
+            "dl",
+            "maxml",
+            "zt2",
+            "trk",
+            "old",
+            ARCHIVE_ENTRY_ASSET_EXTENSION,
+        ]
     }
 }
 

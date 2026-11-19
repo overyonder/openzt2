@@ -1,14 +1,5 @@
 use bevy::prelude::*;
 
-/// State of the topmost control under the mouse after authored alpha hit testing.
-#[derive(Component, Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum UiPointerInteraction {
-    #[default]
-    None,
-    Hovered,
-    Pressed,
-}
-
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum UiWheelCapture {
     #[default]

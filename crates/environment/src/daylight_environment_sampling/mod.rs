@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::environment::{
-    EnvironmentDefinition, EnvironmentFogQuality, EnvironmentLightKind, EnvironmentLightSample,
-    EnvironmentLightTarget, EnvironmentVisualFlags, EnvironmentVisualKind,
+    EnvironmentDefinition, EnvironmentFogQuality, EnvironmentFogSample, EnvironmentLightKind,
+    EnvironmentLightSample, EnvironmentLightTarget, EnvironmentVisualFlags, EnvironmentVisualKind,
 };
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
@@ -14,7 +14,7 @@ use super::{
     weather_types::{Weather, WeatherTransition},
 };
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub(super) struct EnvironmentVisualSampleProjection {
     pub(super) active: bool,
     pub(super) color: Color,
@@ -38,82 +38,109 @@ pub(super) struct SampledEnvironmentFog<'a> {
     pub(super) interpolation_fraction: f32,
 }
 
-pub(super) fn calculate_environment_visual_sample_projection(
-    definition: &EnvironmentDefinition,
-    sample_index: usize,
-    fraction: f32,
-) -> EnvironmentVisualSampleProjection {
-    let rows = definition.visual_samples.as_slice();
-    let Some(current) = rows.get(sample_index) else {
-        return EnvironmentVisualSampleProjection {
-            active: false,
-            color: Color::WHITE,
-            scale: 1.0,
-        };
-    };
-    let group = rows.iter().enumerate().filter(|(_, sample)| {
-        environment_visual_kind_rank(&sample.kind) == environment_visual_kind_rank(&current.kind)
-            && sample.layer == current.layer
-            && sample.order == current.order
-    });
-    let count = group.clone().count();
-    let Some(curve) = select_cyclic_daylight_curve_sample(fraction, count, |index| {
-        group
-            .clone()
-            .nth(index)
-            .map(|(_, sample)| encode_daylight_fraction_as_u16(sample.day_fraction))
-            .unwrap_or(0)
-    }) else {
-        return EnvironmentVisualSampleProjection {
-            active: false,
-            color: Color::WHITE,
-            scale: 1.0,
-        };
-    };
-    let selected = if current
-        .flags
-        .contains_all(EnvironmentVisualFlags::INTERPOLATE_VERTEX_COLORS)
-    {
-        0
-    } else if curve.interpolation_fraction < 0.5 {
-        curve.left_keyframe_index
-    } else {
-        curve.right_keyframe_index
-    };
-    let active = group
-        .clone()
-        .nth(selected)
-        .is_some_and(|(index, _)| index == sample_index);
-    let endpoints = group
-        .clone()
-        .nth(curve.left_keyframe_index)
-        .zip(group.clone().nth(curve.right_keyframe_index));
-    let (color, scale) = endpoints.map_or((Color::WHITE, 1.0), |(left, right)| {
-        let left = left.1;
-        let right = right.1;
-        let t = if current
-            .flags
-            .contains_all(EnvironmentVisualFlags::SMOOTH_UPDATE)
-        {
-            curve.interpolation_fraction
-        } else if curve.interpolation_fraction < 0.5 {
-            0.0
-        } else {
-            1.0
-        };
-        (
-            Color::srgb(
-                interpolate_unsigned_normalized_u16(left.color_unorm[0], right.color_unorm[0], t),
-                interpolate_unsigned_normalized_u16(left.color_unorm[1], right.color_unorm[1], t),
-                interpolate_unsigned_normalized_u16(left.color_unorm[2], right.color_unorm[2], t),
-            ),
-            interpolate_f32(left.scale, right.scale, t),
-        )
-    });
-    EnvironmentVisualSampleProjection {
-        active,
-        color,
-        scale,
+#[derive(Component)]
+pub(super) struct EnvironmentVisualCurves {
+    groups: Vec<Vec<(usize, u16)>>,
+}
+
+#[derive(Component, PartialEq)]
+pub(super) struct EnvironmentVisualProjections(pub(super) Box<[EnvironmentVisualSampleProjection]>);
+
+impl EnvironmentVisualCurves {
+    pub(super) fn from_definition(definition: &EnvironmentDefinition) -> Self {
+        let mut groups = std::collections::BTreeMap::new();
+        for (index, row) in definition.visual_samples.iter().enumerate() {
+            groups
+                .entry((
+                    environment_visual_kind_rank(&row.kind),
+                    row.layer,
+                    row.order,
+                ))
+                .or_insert_with(Vec::new)
+                .push((index, encode_daylight_fraction_as_u16(row.day_fraction)));
+        }
+        Self {
+            groups: groups.into_values().collect(),
+        }
+    }
+
+    pub(super) fn sample(
+        &self,
+        definition: &EnvironmentDefinition,
+        fraction: f32,
+    ) -> EnvironmentVisualProjections {
+        let rows = &definition.visual_samples;
+        let mut projections = vec![
+            EnvironmentVisualSampleProjection {
+                active: false,
+                color: Color::WHITE,
+                scale: 1.0
+            };
+            rows.len()
+        ];
+        for group in &self.groups {
+            let Some(curve) =
+                select_cyclic_daylight_curve_sample(fraction, group.len(), |index| group[index].1)
+            else {
+                continue;
+            };
+            let stepped = if curve.interpolation_fraction < 0.5 {
+                0.0
+            } else {
+                1.0
+            };
+            let selected = if stepped == 0.0 {
+                curve.left_keyframe_index
+            } else {
+                curve.right_keyframe_index
+            };
+            let left = &rows[group[curve.left_keyframe_index].0];
+            let right = &rows[group[curve.right_keyframe_index].0];
+            let sample = |t| {
+                (
+                    Color::srgb(
+                        interpolate_unsigned_normalized_u16(
+                            left.color_unorm[0],
+                            right.color_unorm[0],
+                            t,
+                        ),
+                        interpolate_unsigned_normalized_u16(
+                            left.color_unorm[1],
+                            right.color_unorm[1],
+                            t,
+                        ),
+                        interpolate_unsigned_normalized_u16(
+                            left.color_unorm[2],
+                            right.color_unorm[2],
+                            t,
+                        ),
+                    ),
+                    interpolate_f32(left.scale, right.scale, t),
+                )
+            };
+            let smooth = sample(curve.interpolation_fraction);
+            let stepped = sample(stepped);
+            for (keyframe, &(index, _)) in group.iter().enumerate() {
+                let flags = rows[index].flags;
+                let selected =
+                    if flags.contains_all(EnvironmentVisualFlags::INTERPOLATE_VERTEX_COLORS) {
+                        0
+                    } else {
+                        selected
+                    };
+                let (color, scale) = if flags.contains_all(EnvironmentVisualFlags::SMOOTH_UPDATE) {
+                    smooth
+                } else {
+                    stepped
+                };
+                projections[index] = EnvironmentVisualSampleProjection {
+                    active: keyframe == selected,
+                    color,
+                    scale,
+                };
+            }
+        }
+        EnvironmentVisualProjections(projections.into_boxed_slice())
     }
 }
 
@@ -137,21 +164,148 @@ pub(super) fn interpolate_wrapped_angle_radians(left: f32, right: f32, t: f32) -
     left + delta * t
 }
 
-pub(super) fn sample_environment_directional_light_at_daylight_fraction<'a>(
-    catalogue: WorldDefinitionsView<'a>,
-    definition: &'a EnvironmentDefinition,
-    target: EnvironmentLightTarget,
-    kind_rank: u8,
-    child_index: Option<u16>,
-    fraction: f32,
-) -> Option<SampledEnvironmentDirectionalLight<'a>> {
-    let rows =
-        iterate_environment_and_referenced_light_samples(catalogue, definition).filter(|row| {
-            row.target == target
-                && environment_light_kind_rank(&row.kind) == kind_rank
-                && child_index.is_none_or(|child_index| row.child_index == child_index)
+/// Environment-local light and fog programs with inherited rows expanded
+/// in authored order. Lighting and fog sample these programs independently.
+#[derive(Component)]
+pub(super) struct EnvironmentLightCurves {
+    lights: [[Vec<EnvironmentLightSample>; 4]; 4],
+    first_object: Option<(u8, u16)>,
+    own_water_direction: Vec<EnvironmentLightSample>,
+    fog: [Vec<EnvironmentFogSample>; 3],
+}
+
+impl EnvironmentLightCurves {
+    pub(super) fn new(
+        catalogue: WorldDefinitionsView<'_>,
+        definition: &EnvironmentDefinition,
+    ) -> Self {
+        let mut curves = Self {
+            lights: std::array::from_fn(|_| std::array::from_fn(|_| Vec::new())),
+            first_object: None,
+            own_water_direction: Vec::new(),
+            fog: std::array::from_fn(|_| Vec::new()),
+        };
+        for row in iterate_environment_and_referenced_light_samples(catalogue, definition) {
+            let kind = environment_light_kind_rank(&row.kind);
+            if row.target == EnvironmentLightTarget::Object
+                && kind != 0
+                && curves.first_object.is_none()
+            {
+                curves.first_object = Some((kind, row.child_index));
+            }
+            curves.lights[light_target_index(row.target)][kind as usize].push(*row);
+        }
+        let own_water_direction = definition.light_samples.iter().find(|row| {
+            row.target == EnvironmentLightTarget::Water && row.kind != EnvironmentLightKind::Ambient
         });
-    sample_directional_light_curve(rows, fraction)
+        if let Some(first) = own_water_direction {
+            curves
+                .own_water_direction
+                .extend(definition.light_samples.iter().copied().filter(|row| {
+                    row.target == first.target
+                        && row.kind == first.kind
+                        && row.child_index == first.child_index
+                }));
+        }
+        for row in iterate_environment_and_inherited_family_fog_samples(catalogue, definition) {
+            curves.fog[environment_fog_quality_rank(&row.quality) as usize].push(*row);
+        }
+        curves
+    }
+
+    pub(super) fn directional(
+        &self,
+        target: EnvironmentLightTarget,
+        kind: u8,
+        child: Option<u16>,
+        fraction: f32,
+    ) -> Option<SampledEnvironmentDirectionalLight<'_>> {
+        let rows = self.lights[light_target_index(target)].get(kind as usize)?;
+        sample_directional_light_curve(
+            rows.iter()
+                .filter(|row| child.is_none_or(|child| row.child_index == child)),
+            fraction,
+        )
+    }
+
+    pub(super) fn first_object_light_weighted_rgb(&self, fraction: f32) -> Option<Vec3> {
+        let Some((kind, child)) = self.first_object else {
+            return Some(Vec3::ZERO);
+        };
+        let sample =
+            self.directional(EnvironmentLightTarget::Object, kind, Some(child), fraction)?;
+        let diffuse = Vec3::from_array(sample.left_keyframe.diffuse).lerp(
+            Vec3::from_array(sample.right_keyframe.diffuse),
+            sample.interpolation_fraction,
+        );
+        let intensity = interpolate_f32(
+            sample.left_keyframe.intensity,
+            sample.right_keyframe.intensity,
+            sample.interpolation_fraction,
+        );
+        Some(diffuse * intensity)
+    }
+
+    pub(super) fn water_direction(&self, fraction: f32) -> Option<Vec3> {
+        if self.own_water_direction.is_empty() {
+            return Some(Vec3::NEG_Y);
+        }
+        let sample = sample_directional_light_curve(self.own_water_direction.iter(), fraction)?;
+        Some(
+            Vec3::from_array(sample.left_keyframe.direction)
+                .lerp(
+                    Vec3::from_array(sample.right_keyframe.direction),
+                    sample.interpolation_fraction,
+                )
+                .normalize_or_zero(),
+        )
+    }
+
+    pub(super) fn ambient(&self, target: EnvironmentLightTarget, fraction: f32) -> Vec3 {
+        self.lights[light_target_index(target)]
+            .iter()
+            .fold(Vec3::ZERO, |ambient, rows| {
+                let Some(sample) =
+                    select_cyclic_daylight_curve_sample(fraction, rows.len(), |index| {
+                        encode_daylight_fraction_as_u16(rows[index].day_fraction)
+                    })
+                else {
+                    return ambient;
+                };
+                let left = rows[sample.left_keyframe_index];
+                let right = rows[sample.right_keyframe_index];
+                ambient
+                    + Vec3::from_array(std::array::from_fn(|channel| {
+                        interpolate_f32(
+                            left.ambient[channel],
+                            right.ambient[channel],
+                            sample.interpolation_fraction,
+                        )
+                    }))
+            })
+    }
+
+    pub(super) fn fog(&self, fraction: f32) -> Option<SampledEnvironmentFog<'_>> {
+        self.fog.iter().rev().find_map(|rows| {
+            let sample = select_cyclic_daylight_curve_sample(fraction, rows.len(), |index| {
+                encode_daylight_fraction_as_u16(rows[index].day_fraction)
+            })?;
+            Some(SampledEnvironmentFog {
+                left_keyframe: &rows[sample.left_keyframe_index],
+                right_keyframe: &rows[sample.right_keyframe_index],
+                interpolation_fraction: sample.interpolation_fraction,
+            })
+        })
+    }
+}
+
+fn light_target_index(target: EnvironmentLightTarget) -> usize {
+    match target {
+        EnvironmentLightTarget::Terrain => 0,
+        EnvironmentLightTarget::Object => 1,
+        EnvironmentLightTarget::Water => 2,
+        EnvironmentLightTarget::Cloud => 3,
+    }
 }
 
 pub(super) fn sample_directional_light_curve<'a>(
@@ -216,52 +370,6 @@ pub(super) fn collect_authored_environment_light_kind_ranks(
     (ranks, count)
 }
 
-pub(super) fn sample_environment_ambient_light_at_daylight_fraction(
-    catalogue: WorldDefinitionsView<'_>,
-    definition: &EnvironmentDefinition,
-    target: EnvironmentLightTarget,
-    fraction: f32,
-) -> Vec3 {
-    (0..4).fold(Vec3::ZERO, |ambient, kind| {
-        let rows = iterate_environment_and_referenced_light_samples(catalogue, definition)
-            .filter(|row| row.target == target && environment_light_kind_rank(&row.kind) == kind);
-        let count = rows.clone().count();
-        let Some(sample) = select_cyclic_daylight_curve_sample(fraction, count, |index| {
-            rows.clone()
-                .nth(index)
-                .map(|row| encode_daylight_fraction_as_u16(row.day_fraction))
-                .unwrap_or(0)
-        }) else {
-            return ambient;
-        };
-        let Some((left, right)) = rows
-            .clone()
-            .nth(sample.left_keyframe_index)
-            .zip(rows.clone().nth(sample.right_keyframe_index))
-        else {
-            return ambient;
-        };
-        ambient
-            + Vec3::new(
-                interpolate_f32(
-                    left.ambient[0],
-                    right.ambient[0],
-                    sample.interpolation_fraction,
-                ),
-                interpolate_f32(
-                    left.ambient[1],
-                    right.ambient[1],
-                    sample.interpolation_fraction,
-                ),
-                interpolate_f32(
-                    left.ambient[2],
-                    right.ambient[2],
-                    sample.interpolation_fraction,
-                ),
-            )
-    })
-}
-
 #[inline]
 fn environment_light_kind_rank(kind: &EnvironmentLightKind) -> u8 {
     match kind {
@@ -270,56 +378,6 @@ fn environment_light_kind_rank(kind: &EnvironmentLightKind) -> u8 {
         EnvironmentLightKind::Side => 2,
         EnvironmentLightKind::Back => 3,
     }
-}
-
-pub(super) fn sample_environment_fog_at_daylight_fraction<'a>(
-    catalogue: WorldDefinitionsView<'a>,
-    definition: &'a EnvironmentDefinition,
-    fraction: f32,
-) -> Option<SampledEnvironmentFog<'a>> {
-    fn sample_environment_fog_for_authored_quality<'a>(
-        catalogue: WorldDefinitionsView<'a>,
-        definition: &'a EnvironmentDefinition,
-        fraction: f32,
-        quality: u8,
-    ) -> Option<SampledEnvironmentFog<'a>> {
-        let rows = iterate_environment_and_inherited_family_fog_samples(catalogue, definition)
-            .filter(|row| environment_fog_quality_rank(&row.quality) == quality);
-        let count = rows.clone().count();
-        let sample = select_cyclic_daylight_curve_sample(fraction, count, |index| {
-            rows.clone()
-                .nth(index)
-                .map(|row| encode_daylight_fraction_as_u16(row.day_fraction))
-                .unwrap_or(0)
-        })?;
-        Some(SampledEnvironmentFog {
-            left_keyframe: rows.clone().nth(sample.left_keyframe_index)?,
-            right_keyframe: rows.clone().nth(sample.right_keyframe_index)?,
-            interpolation_fraction: sample.interpolation_fraction,
-        })
-    }
-    sample_environment_fog_for_authored_quality(
-        catalogue,
-        definition,
-        fraction,
-        environment_fog_quality_rank(&EnvironmentFogQuality::High),
-    )
-    .or_else(|| {
-        sample_environment_fog_for_authored_quality(
-            catalogue,
-            definition,
-            fraction,
-            environment_fog_quality_rank(&EnvironmentFogQuality::Medium),
-        )
-    })
-    .or_else(|| {
-        sample_environment_fog_for_authored_quality(
-            catalogue,
-            definition,
-            fraction,
-            environment_fog_quality_rank(&EnvironmentFogQuality::Low),
-        )
-    })
 }
 
 pub(super) fn iterate_environment_and_referenced_light_samples<'a>(

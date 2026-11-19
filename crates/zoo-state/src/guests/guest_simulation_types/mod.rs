@@ -7,7 +7,6 @@ use openzt2_game_data::world_definitions::GUEST_MEMORY_CAPACITY;
 use openzt2_game_data::AssetId;
 
 use crate::animal_welfare::types::NeedTriggerState;
-use crate::behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame};
 use openzt2_world_state::simulation_time::deterministic_random_stream::DeterministicRng;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdError;
 
@@ -319,26 +318,6 @@ pub struct GuestNeedTriggers {
 pub struct GuestFoodPurchaseCounts {
     pub favorite_q16: i32,
     pub nonfavorite_q16: i32,
-}
-
-#[derive(Component)]
-pub struct ActiveGuestAnimalViewingMeter {
-    pub execution_id: u64,
-    pub origin: BehaviorTaskReturnFrame,
-    pub stack_depth: usize,
-    pub remaining: f32,
-    pub maximum: f32,
-}
-
-impl ActiveGuestAnimalViewingMeter {
-    pub fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        self.execution_id == task.execution_id
-            && task.is_at_or_nested_under(&self.origin, self.stack_depth)
-    }
-
-    pub fn apply_view_score(&mut self, score: f32) {
-        self.remaining = (self.remaining + score).min(self.maximum);
-    }
 }
 
 /// Authored `TaskDelayMin`/`TaskDelayMax`: once a task ends, it stays

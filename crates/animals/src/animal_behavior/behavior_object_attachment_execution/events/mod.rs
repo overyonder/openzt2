@@ -5,6 +5,7 @@ use openzt2_world_state::animation_graph::animation_presentation_relationship_ty
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationCompleted;
 use openzt2_world_state::animation_playback::animation_event_message_types::AnimationObjectCommand;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 
 #[derive(Event)]
@@ -24,17 +25,21 @@ pub(super) fn receive_object_animation_commands(
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
     mut completed: MessageReader<AnimationCompleted>,
     pending: Query<
-        (&BehaviorTaskExecutionState, &PendingObjectAttachment),
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &PendingObjectAttachment,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
     let mut failed = bevy::platform::collections::HashSet::new();
     for rejection in rejected.read() {
         failed.insert(rejection.request_id);
-        let Ok((task, state)) = pending.get(rejection.animation_subject_entity) else {
+        let Ok((task, step, state)) = pending.get(rejection.animation_subject_entity) else {
             continue;
         };
-        if state.request_id == Some(rejection.request_id) && state.owns(task) {
+        if state.request_id == Some(rejection.request_id) && state.owns(task, step) {
             debug!(actor = ?rejection.animation_subject_entity,
                 clip = %rejection.animation_clip_asset_key,
                 "object attachment clip was refused: no animated presentation has it");
@@ -76,7 +81,10 @@ struct AttachmentAnimationQueries<'w, 's> {
         's,
         (
             Option<&'static BehaviorTaskExecutionState>,
-            Option<&'static PendingBehaviorAnimationClipCompletion>,
+            Option<(
+                &'static PendingBehaviorAnimationClipCompletion,
+                &'static RunningBehaviorInstruction,
+            )>,
             Has<PendingBehaviorTaskFailure>,
         ),
     >,
@@ -85,6 +93,7 @@ struct AttachmentAnimationQueries<'w, 's> {
         's,
         (
             &'static BehaviorTaskExecutionState,
+            &'static RunningBehaviorInstruction,
             &'static mut PendingObjectAttachment,
         ),
         Without<PendingBehaviorTaskFailure>,
@@ -108,6 +117,7 @@ fn apply_object_animation_command(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
+    world_releases: Option<Res<BehaviorWorldReleaseSupport>>,
     queries: AttachmentAnimationQueries,
 ) {
     let AttachmentAnimationQueries {
@@ -132,12 +142,12 @@ fn apply_object_animation_command(
     match &event.action {
         AuthoredAnimationTextAction::AttachPendingObject
         | AuthoredAnimationTextAction::AttachNamedObject { .. } => {
-            let Ok((task, mut state)) = pending.get_mut(actor) else {
+            let Ok((task, step, mut state)) = pending.get_mut(actor) else {
                 return;
             };
             if state.request_id.is_some()
                 && event.request_id == state.request_id
-                && state.owns(task)
+                && state.owns(task, step)
             {
                 state.joint = Some(event.joint);
             }
@@ -154,19 +164,19 @@ fn apply_object_animation_command(
             // the same authored task at an identical action index.
             let owns_current_action = event.request_id.is_none()
                 || task.is_some_and(|task| {
-                    animation.is_some_and(|animation| {
+                    animation.is_some_and(|(animation, instruction)| {
                         event.request_id == Some(animation.request_id)
-                            && animation.still_owns_exact_task_frame(task)
-                    }) || pending.get(actor).is_ok_and(|(_, pending)| {
+                            && animation.owns(task, instruction)
+                    }) || pending.get(actor).is_ok_and(|(_, step, pending)| {
                         pending.request_id.is_some()
                             && event.request_id == pending.request_id
-                            && pending.owns(task)
+                            && pending.owns(task, step)
                     })
                 });
-            if let Ok((task, mut pending)) = pending.get_mut(actor) {
+            if let Ok((task, step, mut pending)) = pending.get_mut(actor) {
                 if pending.request_id.is_some()
                     && event.request_id == pending.request_id
-                    && pending.owns(task)
+                    && pending.owns(task, step)
                     && pending.joint.is_some()
                 {
                     pending.detach_after_attachment = true;
@@ -204,6 +214,7 @@ fn apply_object_animation_command(
                     &objects,
                     &transforms,
                     &memberships,
+                    world_releases.as_deref(),
                     &mut commands,
                 ) {
                     warn!(
@@ -223,7 +234,11 @@ fn confirm_object_attachment_animation_completion(
     mut commands: Commands,
     owners: Query<(&AnimationPresentationOwner, &AnimationPlaybackController)>,
     pending: Query<
-        (&BehaviorTaskExecutionState, &PendingObjectAttachment),
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &PendingObjectAttachment,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
@@ -231,12 +246,12 @@ fn confirm_object_attachment_animation_completion(
     let Ok((owner, playback)) = owners.get(event.animation_playback_controller_entity) else {
         return;
     };
-    let Ok((task, state)) = pending.get(owner.gameplay_entity) else {
+    let Ok((task, step, state)) = pending.get(owner.gameplay_entity) else {
         return;
     };
     if state.request_id.is_some()
         && event.explicit_clip_request_id == state.request_id
-        && state.owns(task)
+        && state.owns(task, step)
         && state.joint.is_none()
     {
         warn!(actor = ?owner.gameplay_entity, clip = %playback.animation_clip_asset_key,

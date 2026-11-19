@@ -1,4 +1,4 @@
-use bevy::{asset::AssetChanged, prelude::*};
+use bevy::{asset::asset_changed::AssetChanged, prelude::*};
 
 use super::authored_ui_visual_types::UiSourceRect;
 

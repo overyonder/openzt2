@@ -12,7 +12,7 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditCommitP
 use openzt2_zoo_state::construction::construction_transaction_types::EditTransaction;
 use openzt2_zoo_state::construction::construction_transaction_types::TransactionState;
 use openzt2_zoo_state::economy::money_types::Money;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -36,7 +36,7 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
     documents: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     action_nodes: Query<(&UiShowActions, &UiDocumentOwner)>,
     document_roots: Query<(&UiDocumentRoot, Option<&ChildOf>)>,
     stages: Query<Option<&WorldMember>, With<ShowStage>>,
@@ -60,7 +60,9 @@ pub(super) fn route_authored_show_platform_upgrade_actions_into_selection_edits_
             continue;
         };
         let controller = parent.map_or(document_owner.0, ChildOf::parent);
-        let selected_stage = selected_entity.0.filter(|entity| stages.contains(*entity));
+        let selected_stage = selected_entity
+            .subject()
+            .filter(|entity| stages.contains(*entity));
 
         for authored_action in authored_actions.authored_action_records(document) {
             if activation.trigger != authored_action.trigger {

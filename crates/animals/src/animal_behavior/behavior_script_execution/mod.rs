@@ -15,12 +15,13 @@ use openzt2_game_assets::{
         lua_script_asset_loading::LuaScriptAsset,
     },
 };
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationOperation;
 use openzt2_world_state::world_spawn::physical_presentation_state::PhysicalPresentationRequest;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorScript, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use std::{
@@ -71,7 +72,14 @@ pub(super) fn execute_authored_behavior_script_actions(
     clock: Res<ZooClock>,
     clothing: ClothingScriptContext,
     mut actors: Query<
-        (Entity, &mut BehaviorTaskExecutionState),
+        (
+            Entity,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorScript,
+            ),
+        ),
         (
             Without<PendingBehaviorTaskFailure>,
             Without<PendingClothingDelivery>,
@@ -81,22 +89,22 @@ pub(super) fn execute_authored_behavior_script_actions(
     mut world: BehaviorScriptWorldAccess,
 ) {
     let mut structural_edits = BehaviorScriptStructuralEdits::default();
-    for (actor, mut task) in &mut actors {
+    for (actor, (task, instruction, running_action)) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
         let Some(document) = documents.get(&task.document) else {
             continue;
         };
-        let Some(BehaviorAction::Script {
+        if !instruction.is_current(task) {
+            continue;
+        }
+        let RunBehaviorScript {
             context,
             file,
             function,
             parameters,
-        }) = find_current_behavior_task_action(document, &task)
-        else {
-            continue;
-        };
+        } = running_action;
         let Some((path, handle)) = document.script_dependency(file) else {
             super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
@@ -173,16 +181,33 @@ pub(super) fn execute_authored_behavior_script_actions(
                                 scope.create_function(|_, _: Table| Ok(mlua::Value::Nil))?,
                             )?;
                         }
-                        // `justgavebirth.lua` reports an endangered birth.
-                        // Births already raise `AnimalBorn`; the
-                        // endangered-birth message and mother name are not shown.
                         "ZTWorldMgr" => {
-                            for method in ["ZT_SET_BIRTH_MOTHER_NAME", "ZT_NOTIFY_OF_BIRTH"] {
-                                manager.set(
-                                    method,
-                                    scope.create_function(|_, _: mlua::MultiValue| Ok(()))?,
-                                )?;
-                            }
+                            manager.set(
+                                "ZT_SET_BIRTH_MOTHER_NAME",
+                                scope.create_function(move |_, arguments: mlua::MultiValue| {
+                                    effects.borrow_mut().push(
+                                        BehaviorScriptEffect::BirthMotherName(birth_notice_text(
+                                            arguments,
+                                        )),
+                                    );
+                                    Ok(())
+                                })?,
+                            )?;
+                            manager.set(
+                                "ZT_NOTIFY_OF_BIRTH",
+                                scope.create_function(move |_, arguments: mlua::MultiValue| {
+                                    use openzt2_game_data::species::Sex;
+                                    let sex = match birth_notice_text(arguments).as_deref() {
+                                        Some("male") => Some(Sex::Male),
+                                        Some("female") => Some(Sex::Female),
+                                        _ => None,
+                                    };
+                                    effects
+                                        .borrow_mut()
+                                        .push(BehaviorScriptEffect::NotifyBirth(sex));
+                                    Ok(())
+                                })?,
+                            )?;
                         }
                         "ZTEconomyMgr" => manager.set(
                             "ZT_GENERIC_TRANSACTION",
@@ -567,9 +592,9 @@ pub(super) fn execute_authored_behavior_script_actions(
             Ok(Some(result)) if result != "error" && result != "failure" => {
                 let textures = textures.into_inner();
                 if textures.is_empty() {
-                    advance_behavior_task_to_next_action(&mut task, clock.tick);
+                    instruction.complete(actor, clock.tick, &mut commands);
                 } else {
-                    match clothing.prepare(&task, textures) {
+                    match clothing.prepare(task, instruction, textures) {
                         Ok(delivery) => {
                             commands.entity(actor).insert(delivery);
                         }
@@ -591,4 +616,20 @@ pub(super) fn execute_authored_behavior_script_actions(
             }
         }
     }
+}
+
+pub(super) use world_access::BehaviorBirthNoticeContext;
+
+fn birth_notice_text(arguments: mlua::MultiValue) -> Option<String> {
+    arguments
+        .into_iter()
+        .skip(1)
+        .find_map(|argument| match argument {
+            mlua::Value::String(value) => value.to_str().ok().map(|text| text.to_string()),
+            mlua::Value::Table(value) => value
+                .get::<String>("string")
+                .ok()
+                .or_else(|| value.get::<String>("value").ok()),
+            _ => None,
+        })
 }

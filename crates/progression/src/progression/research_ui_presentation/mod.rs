@@ -7,7 +7,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiResearchActions;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMaximum;
 use openzt2_interface_state::ui::authored_ui_integer_range_components::UiMinimum;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
@@ -36,14 +35,7 @@ pub(super) fn project_selected_catalogue_research_panels(
     roots: Query<(&SelectedWorldIdentity, Option<&ScenarioContentAvailability>), With<WorldRoot>>,
     projects: Query<&ResearchProject>,
     payments: Query<&PendingResearchProjectPayment>,
-    mut buttons: Query<
-        (
-            &mut UiSelected,
-            &mut UiPreviousSelection,
-            &mut UiInteractionEnabled,
-        ),
-        With<UiResearchActions>,
-    >,
+    mut buttons: Query<(&mut UiSelected, &mut UiInteractionEnabled), With<UiResearchActions>>,
     mut panels: Query<(&UiVisibleBinding, &mut Visibility)>,
 ) {
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -84,10 +76,9 @@ pub(super) fn project_selected_catalogue_research_panels(
                 .iter()
                 .any(|payment| payment.definition == definition)
     });
-    for (mut selected, mut previous, mut enabled) in &mut buttons {
+    for (mut selected, mut enabled) in &mut buttons {
         // Rejected payments and catalogue changes must release the sticky toggle.
         selected.set_if_neq(UiSelected(started));
-        previous.set_if_neq(UiPreviousSelection::from_current_selection(started));
         enabled.set_if_neq(UiInteractionEnabled(research_required && !started));
     }
     for (binding, mut visibility) in &mut panels {

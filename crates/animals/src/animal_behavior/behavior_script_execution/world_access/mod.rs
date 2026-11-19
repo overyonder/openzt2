@@ -34,6 +34,13 @@ pub(super) enum BehaviorScriptEffect {
     Income(f64),
     Mate(Entity, Option<Entity>),
     Disease(Entity, DiseaseAttribute),
+    BirthMotherName(Option<String>),
+    NotifyBirth(Option<openzt2_game_data::species::Sex>),
+}
+
+#[derive(Resource, Default)]
+pub(in crate::animal_behavior) struct BehaviorBirthNoticeContext {
+    mother_name: Option<String>,
 }
 
 /// Structural changes only, visible to later scripts before Commands apply.
@@ -80,6 +87,7 @@ pub(super) enum DiseaseAttribute {
 
 #[derive(SystemParam)]
 pub(in crate::animal_behavior) struct BehaviorScriptWorldAccess<'w, 's> {
+    birth_notice: ResMut<'w, BehaviorBirthNoticeContext>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     objects: Query<
@@ -191,6 +199,7 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                     .flatten()
                     .copied(),
             )
+            .flatten()
             .any(|token| token.name == name && self.clock.tick < token.expires_at)
     }
 
@@ -305,6 +314,18 @@ impl BehaviorScriptWorldAccess<'_, '_> {
                         entity,
                         attribute,
                         &mut pending.diseases,
+                    );
+                }
+                BehaviorScriptEffect::BirthMotherName(name) => {
+                    self.birth_notice.mother_name = name;
+                }
+                BehaviorScriptEffect::NotifyBirth(sex) => {
+                    commands.write_message(
+                        openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice {
+                            subject: actor,
+                            mother_name: self.birth_notice.mother_name.clone(),
+                            sex,
+                        },
                     );
                 }
                 BehaviorScriptEffect::Income(income) => {

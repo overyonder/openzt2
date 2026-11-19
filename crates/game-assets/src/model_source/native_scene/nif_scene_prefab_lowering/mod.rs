@@ -14,15 +14,17 @@ use crate::source_coordinate_conversion::convert_source_z_up_vector_to_bevy_y_up
 
 use super::super::{
     native_geometry::{
-        native_geometry_identity::netimmerse_geometry_virtual_path,
         native_geometry_identity::NativeMaterialReference,
+        native_geometry_identity::{
+            netimmerse_geometry_skin_variant_path, netimmerse_geometry_virtual_path,
+        },
         nif_material_lowering::inherited_netimmerse_property_references,
         source_transform_conversion::convert_source_transform_to_bevy_components,
     },
     native_model_source_lowering::{
         native_model_material_labelled_asset_path, native_model_particle_effect_labelled_asset_path,
     },
-    netimmerse_bone_level_of_detail_selection::NetImmerseSelectedBoneLevelOfDetail,
+    netimmerse_bone_level_of_detail_selection::NetImmerseBoneLod,
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
     },
@@ -41,7 +43,7 @@ type Result<T> = std::result::Result<T, NativeSceneLoweringError>;
 
 pub(in super::super) fn lower_netimmerse_scene_prefab(
     document: &NetImmerseNifDocument,
-    selected_bone_level_of_detail: &NetImmerseSelectedBoneLevelOfDetail,
+    bone_lod: &NetImmerseBoneLod,
     source: &str,
     animation_manifest: Option<&str>,
     footprint_collision_hull: Option<Vec<[f32; 3]>>,
@@ -50,21 +52,14 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
     let mut builder = ScenePrefabDocumentAssembler::new(&model_path);
     let mut visiting = BTreeSet::new();
     for root in &document.footer.root_block_references {
-        visit_netimmerse_scene_block(
-            document,
-            selected_bone_level_of_detail,
-            *root,
-            None,
-            &mut visiting,
-            &mut builder,
-        )?;
+        visit_netimmerse_scene_block(document, bone_lod, *root, None, &mut visiting, &mut builder)?;
     }
     if builder.is_empty() {
         for block in document.blocks() {
             if block.payload.av_object().is_some() {
                 visit_netimmerse_scene_block(
                     document,
-                    selected_bone_level_of_detail,
+                    bone_lod,
                     block.index as i32,
                     None,
                     &mut visiting,
@@ -86,7 +81,7 @@ pub(in super::super) fn lower_netimmerse_scene_prefab(
 
 fn visit_netimmerse_scene_block(
     document: &NetImmerseNifDocument,
-    selected_bone_level_of_detail: &NetImmerseSelectedBoneLevelOfDetail,
+    bone_lod: &NetImmerseBoneLod,
     block_ref: i32,
     parent: Option<u32>,
     visiting: &mut BTreeSet<i32>,
@@ -136,6 +131,12 @@ fn visit_netimmerse_scene_block(
         rotation_xyzw = constant_rotation_xyzw.unwrap_or(rotation_xyzw);
         scale = constant_uniform_scale.map_or(scale, |value| [value; 3]);
     }
+    let node_lod = bone_lod.nodes.get(&block_ref);
+    let shape_lod = bone_lod.shapes.get(&block_ref);
+    let visible = node_lod.map_or_else(
+        || shape_lod.is_some() || object.flags & 1 == 0,
+        |node| node.initial == node.ordinal,
+    );
     let parent_key = parent.map(|parent| builder.entity_key(parent).to_owned());
     let entity = builder.entity_with_distinct_stable_and_authored_attachment_keys(
         &netimmerse_scene_entity_key(block_ref),
@@ -146,8 +147,7 @@ fn visit_netimmerse_scene_block(
             rotation_xyzw,
             scale,
         },
-        selected_bone_level_of_detail
-            .selected_or_authored_scene_block_visibility(block_ref, object.flags & 1 == 0),
+        visible,
     )?;
     builder.remember_netimmerse_entity(block_ref, entity);
     let geometry = match &block.payload {
@@ -155,95 +155,79 @@ fn visit_netimmerse_scene_block(
         NetImmerseNifBlockPayload::NiTriStrips(strips) => Some(&strips.geometry),
         _ => None,
     };
-    if let Some(data) = geometry.and_then(|geometry| document.block(geometry.data_ref)) {
-        let bound = match &data.payload {
+    let local_bound = geometry
+        .and_then(|geometry| document.block(geometry.data_ref))
+        .and_then(|data| match &data.payload {
             NetImmerseNifBlockPayload::NiTriShapeData(data) => Some(&data.geometry),
             NetImmerseNifBlockPayload::NiTriStripsData(data) => Some(&data.geometry),
             _ => None,
-        };
-        if let Some(bound) = bound {
-            builder.local_render_bound(
-                entity,
+        })
+        .map(|bound| {
+            (
                 convert_source_z_up_vector_to_bevy_y_up_coordinates(bound.center),
                 bound.radius,
-            );
-        }
-    }
-    if let Some(instance) = geometry
-        .and_then(|geometry| document.block(geometry.skin_instance_ref))
-        .and_then(|block| match &block.payload {
-            NetImmerseNifBlockPayload::NiSkinInstance(instance) => Some(instance),
-            _ => None,
-        })
-    {
-        let data = document
-            .block(instance.data_ref)
-            .and_then(|block| match &block.payload {
-                NetImmerseNifBlockPayload::NiSkinData(data) => Some(data),
-                _ => None,
-            })
-            .ok_or_else(|| {
-                NativeSceneLoweringError::new(
-                    &document.source_path,
-                    "skin bound references missing skin data",
-                )
-            })?;
-        if data.bones.len() != instance.bone_refs.len() {
-            return Err(NativeSceneLoweringError::new(
-                &document.source_path,
-                "skin bound bone counts differ",
-            ));
-        }
-        let joint_name = |reference| {
-            document
-                .block(reference)
-                .and_then(|block| block.payload.av_object())
-                .map(|object| object.object.name.clone())
-                .ok_or_else(|| {
-                    NativeSceneLoweringError::new(
-                        &document.source_path,
-                        "skin bound references a missing joint",
-                    )
-                })
-        };
-        builder.skin_render_bound(entity, openzt2_game_data::scene_prefab::PrefabSkinRenderBound {
-            skeleton_root: joint_name(instance.skeleton_root_ref)?,
-            skin_transform: super::super::native_geometry::source_transform_conversion::convert_netimmerse_transform_to_gltf_matrix(&data.skin_transform),
-            bones: instance.bone_refs.iter().zip(&data.bones).map(|(reference, bone)| {
-                Ok(openzt2_game_data::scene_prefab::PrefabSkinBoneRenderBound {
-                    joint: joint_name(*reference)?,
-                    sphere: openzt2_game_data::scene_prefab::PrefabBoundingSphere {
-                        center: convert_source_z_up_vector_to_bevy_y_up_coordinates(bone.bounding_sphere.center),
-                        radius: bone.bounding_sphere.radius,
-                    },
-                })
-            }).collect::<Result<Vec<_>>>()?,
+            )
         });
+    if let Some((centre, radius)) = local_bound {
+        builder.local_render_bound(entity, centre, radius);
     }
-    if selected_bone_level_of_detail.scene_block_is_visible(block_ref)
-        && matches!(
-            &block.payload,
-            NetImmerseNifBlockPayload::NiTriShape(_) | NetImmerseNifBlockPayload::NiTriStrips(_)
-        )
-    {
-        builder.renderable(
-            entity,
-            netimmerse_geometry_virtual_path(document, block.index),
-        );
-        let material = AssetId::from_key(
-            &NativeMaterialReference::NetImmerseGeometry {
-                document: &document.source_path,
-                block: block.index,
+    if shape_lod.is_none() {
+        if let Some(geometry) = geometry {
+            if let Some(bound) = netimmerse_skin_render_bound(document, geometry.skin_instance_ref)?
+            {
+                builder.skin_render_bound(entity, bound);
             }
-            .asset_key(),
-        );
-        builder.material_override_from(
-            material,
-            native_model_material_labelled_asset_path(&document.source_path, block.index),
-        );
-        if let Some(name) = netimmerse_geometry_material_name(document, block.index, &block.payload)
-        {
-            builder.renderable_material_name(name);
+        }
+    }
+    if let Some(node) = node_lod {
+        let group = bone_lod_controller_row(builder, node.controller, entity)?;
+        add_bone_lod_membership(builder, entity, group, node.ordinal, node.initial);
+    }
+    if geometry.is_some() {
+        if let Some(shape) = shape_lod {
+            let parent_key = builder.entity_key(entity).to_owned();
+            let group = bone_lod_controller_row(builder, shape.controller, entity)?;
+            for (&ordinal, &skin) in &shape.skins {
+                let variant = builder.entity(
+                    &format!("{parent_key}_bone_lod_{ordinal}"),
+                    Some(&parent_key),
+                    PrefabTransform {
+                        translation_m: [0.0; 3],
+                        rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+                        scale: [1.0; 3],
+                    },
+                    ordinal == shape.initial,
+                )?;
+                let path = if ordinal == shape.initial {
+                    netimmerse_geometry_virtual_path(document, block.index)
+                } else {
+                    netimmerse_geometry_skin_variant_path(document, block.index, ordinal)
+                };
+                add_netimmerse_renderable(
+                    builder,
+                    document,
+                    &block.payload,
+                    block.index,
+                    variant,
+                    path,
+                );
+                if let Some((centre, radius)) = local_bound {
+                    builder.local_render_bound(variant, centre, radius);
+                }
+                if let Some(bound) = netimmerse_skin_render_bound(document, skin)? {
+                    builder.skin_render_bound(variant, bound);
+                }
+                add_bone_lod_membership(builder, variant, group, ordinal, shape.initial);
+            }
+        } else {
+            add_netimmerse_renderable(
+                builder,
+                document,
+                &block.payload,
+                block.index,
+                entity,
+                netimmerse_geometry_virtual_path(document, block.index),
+            );
         }
     }
     match &block.payload {
@@ -360,14 +344,7 @@ fn visit_netimmerse_scene_block(
     }
     let (children, effects) = block.payload.child_and_effect_refs();
     for child in children.iter().chain(effects) {
-        visit_netimmerse_scene_block(
-            document,
-            selected_bone_level_of_detail,
-            *child,
-            Some(entity),
-            visiting,
-            builder,
-        )?;
+        visit_netimmerse_scene_block(document, bone_lod, *child, Some(entity), visiting, builder)?;
     }
     visiting.remove(&block_ref);
     Ok(())
@@ -401,4 +378,131 @@ fn netimmerse_geometry_material_name<'a>(
             _ => None,
         })
         .filter(|name| !name.is_empty())
+}
+
+fn netimmerse_skin_render_bound(
+    document: &NetImmerseNifDocument,
+    skin_index: i32,
+) -> Result<Option<openzt2_game_data::scene_prefab::PrefabSkinRenderBound>> {
+    if let Some(instance) = document
+        .block(skin_index)
+        .and_then(|block| match &block.payload {
+            NetImmerseNifBlockPayload::NiSkinInstance(instance) => Some(instance),
+            _ => None,
+        })
+    {
+        let data = document
+            .block(instance.data_ref)
+            .and_then(|block| match &block.payload {
+                NetImmerseNifBlockPayload::NiSkinData(data) => Some(data),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                NativeSceneLoweringError::new(
+                    &document.source_path,
+                    "skin bound references missing skin data",
+                )
+            })?;
+        if data.bones.len() != instance.bone_refs.len() {
+            return Err(NativeSceneLoweringError::new(
+                &document.source_path,
+                "skin bound bone counts differ",
+            ));
+        }
+        let joint_name = |reference| {
+            document
+                .block(reference)
+                .and_then(|block| block.payload.av_object())
+                .map(|object| object.object.name.clone())
+                .ok_or_else(|| {
+                    NativeSceneLoweringError::new(
+                        &document.source_path,
+                        "skin bound references a missing joint",
+                    )
+                })
+        };
+        Ok(Some(openzt2_game_data::scene_prefab::PrefabSkinRenderBound {
+            skeleton_root: joint_name(instance.skeleton_root_ref)?,
+            skin_transform: super::super::native_geometry::source_transform_conversion::convert_netimmerse_transform_to_gltf_matrix(&data.skin_transform),
+            bones: instance.bone_refs.iter().zip(&data.bones).map(|(reference, bone)| {
+                Ok(openzt2_game_data::scene_prefab::PrefabSkinBoneRenderBound {
+                    joint: joint_name(*reference)?,
+                    sphere: openzt2_game_data::scene_prefab::PrefabBoundingSphere {
+                        center: convert_source_z_up_vector_to_bevy_y_up_coordinates(bone.bounding_sphere.center),
+                        radius: bone.bounding_sphere.radius,
+                    },
+                })
+            }).collect::<Result<Vec<_>>>()?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+fn bone_lod_controller_row(
+    builder: &mut ScenePrefabDocumentAssembler,
+    controller: u32,
+    anchor: u32,
+) -> Result<u32> {
+    let key = format!("nif_bone_lod_controller_{controller}");
+    if let Some(entity) = builder.entity_index(&key) {
+        return Ok(entity);
+    }
+    let parent = builder.entity_key(anchor).to_owned();
+    builder.entity(
+        &key,
+        Some(&parent),
+        PrefabTransform {
+            translation_m: [0.0; 3],
+            rotation_xyzw: [0.0, 0.0, 0.0, 1.0],
+            scale: [1.0; 3],
+        },
+        true,
+    )
+}
+
+fn add_bone_lod_membership(
+    builder: &mut ScenePrefabDocumentAssembler,
+    entity: u32,
+    group: u32,
+    ordinal: u16,
+    initial: u16,
+) {
+    builder.lod(
+        entity,
+        openzt2_game_data::scene_prefab::PrefabLod {
+            group_entity: group,
+            ordinal,
+            center_m: [0.0; 3],
+            near_m: 0.0,
+            far_m: 0.0,
+            active_without_range: ordinal == initial,
+            initial_render_tier: Some(initial),
+        },
+    );
+}
+
+fn add_netimmerse_renderable(
+    builder: &mut ScenePrefabDocumentAssembler,
+    document: &NetImmerseNifDocument,
+    payload: &NetImmerseNifBlockPayload,
+    block: u32,
+    entity: u32,
+    scene_path: String,
+) {
+    builder.renderable(entity, scene_path);
+    let material = AssetId::from_key(
+        &NativeMaterialReference::NetImmerseGeometry {
+            document: &document.source_path,
+            block,
+        }
+        .asset_key(),
+    );
+    builder.material_override_from(
+        material,
+        native_model_material_labelled_asset_path(&document.source_path, block),
+    );
+    if let Some(name) = netimmerse_geometry_material_name(document, block, payload) {
+        builder.renderable_material_name(name);
+    }
 }

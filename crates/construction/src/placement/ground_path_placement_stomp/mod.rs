@@ -53,13 +53,7 @@ impl<'w, 's> GroundPathPlacementStomp<'w, 's> {
     ) -> GroundPathFootprintOverlaps<'a, 'w, 's> {
         let spacing = self.grid.spacing_m;
         let search_reach = (definition.stomp.grid_snap && spacing.is_finite() && spacing > 0.0)
-            .then(|| {
-                catalogue
-                    .paths()
-                    .filter(|path| !path.elevated)
-                    .map(|path| f32::from(path.width_cm) * 0.005)
-                    .fold(0.0, f32::max)
-            });
+            .then(|| f32::from(catalogue.maximum_ground_path_width_cm()) * 0.005);
         GroundPathFootprintOverlaps {
             paths: self,
             definition,

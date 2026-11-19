@@ -9,9 +9,9 @@ use super::camera_runtime_state_types::CameraDefinition;
 use super::camera_runtime_state_types::CameraMode;
 use super::camera_runtime_state_types::OverheadRig;
 use super::camera_runtime_state_types::ZooCamera;
+use super::systems::camera_mode_transitions::apply_camera_return;
 use super::systems::camera_mode_transitions::apply_free_camera_pose;
 use super::systems::camera_mode_transitions::begin_camera_transition;
-use super::systems::camera_mode_transitions::restore_camera_return_state;
 use crate::camera::camera_execution_types::CameraReturnState;
 
 fn overhead_camera_rig_for_mode_transition_tests() -> OverheadRig {
@@ -81,10 +81,7 @@ fn immersive_mode_captures_once_and_restore_is_exact() {
         .add_message::<SetCameraMode>()
         .add_message::<RestoreCameraMode>()
         .add_systems(Update, begin_camera_transition)
-        .add_systems(
-            Update,
-            restore_camera_return_state.after(begin_camera_transition),
-        );
+        .add_systems(Update, apply_camera_return.after(begin_camera_transition));
     let document = WorldDefinitionDocument {
         cameras: vec![CameraTuningDefinition {
             id: camera_definition_identifier_with_repeated_byte(2),

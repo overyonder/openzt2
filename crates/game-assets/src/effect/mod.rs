@@ -20,6 +20,7 @@ pub mod explicit_particle_emission;
 pub mod hanabi_custom_particle_modifiers;
 pub mod legacy_nif_hanabi_effect_preparation;
 pub mod particle_plane_binding;
+pub mod particle_renderer_materials;
 pub mod particle_system_emitter_graph_validation;
 pub mod particle_system_emitter_lowering;
 pub mod particle_system_modifier_lowering;
@@ -48,8 +49,20 @@ use effect_instance_spawning_and_preparation::{
 pub struct ParticleEffectDocumentAsset {
     pub particle_document: ParticleDocument,
     roots: Vec<AssetId>,
+    decal_emitter: Option<(AssetId, bool)>,
     #[dependency]
     prepared_emitters: BTreeMap<AssetId, prepared_effect_emitters::PreparedParticleEmitter>,
+}
+
+impl ParticleEffectDocumentAsset {
+    pub fn root_emitter_ids(&self) -> &[AssetId] {
+        &self.roots
+    }
+
+    /// The first decal emitter in authored order and whether it has a wave shader.
+    pub fn decal_emitter(&self) -> Option<(AssetId, bool)> {
+        self.decal_emitter
+    }
 }
 
 #[derive(Component, Clone, Debug)]
@@ -104,17 +117,25 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             .add_systems(
                 Update,
                 (
-                    enqueue_requested_effect_instances_for_preparation,
-                    explicit_particle_emission::prepare_explicit_particle_emitters,
+                    (
+                        enqueue_requested_effect_instances_for_preparation,
+                        explicit_particle_emission::prepare_explicit_particle_emitters,
+                    )
+                        .before(reconcile_loaded_particle_effect_instances),
                     reconcile_loaded_particle_effect_instances,
                     effect_instance_runtime_systems::stop_requested_particle_effect_children
+                        .after(reconcile_loaded_particle_effect_instances)
                         .run_if(
                             bevy::ecs::schedule::common_conditions::on_message::<
                                 StopParticleEffectsAttachedToEntity,
                             >,
                         ),
-                )
-                    .chain(),
+                ),
+            )
+            .add_systems(
+                Update,
+                particle_renderer_materials::project_particle_renderer_materials
+                    .after(reconcile_loaded_particle_effect_instances),
             )
             .add_systems(
                 PostUpdate,
@@ -123,9 +144,14 @@ impl Plugin for ParticleEffectAssetAndRuntimePlugin {
             )
             .add_systems(
                 PostUpdate,
+                effect_instance_runtime_systems::publish_ready_particle_effect_graphs
+                    .after(bevy_hanabi::EffectSystems::CompileEffects),
+            )
+            .add_systems(
+                PostUpdate,
                 activate_authored_particle_spawners_for_emission_window
                     .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
-                    .after(bevy_hanabi::EffectSystems::CompileEffects)
+                    .after(effect_instance_runtime_systems::publish_ready_particle_effect_graphs)
                     .before(bevy_hanabi::EffectSystems::TickSpawners),
             )
             .add_systems(

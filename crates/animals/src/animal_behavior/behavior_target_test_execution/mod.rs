@@ -1,8 +1,9 @@
 //! Canonical behavior target-test execution and authored branch entry.
 
 use bevy::prelude::*;
-use openzt2_game_data::behavior::{
-    action::target_test::BehaviorTargetTestKind, action_record::BehaviorAction,
+use openzt2_game_data::behavior::action::target_test::BehaviorTargetTestKind;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorTargetTest, RunningBehaviorInstruction, SelectedBehaviorSet,
 };
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -17,9 +18,6 @@ use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
@@ -29,9 +27,13 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    mut tasks: Query<(
+    tasks: Query<(
         Entity,
-        &mut BehaviorTaskExecutionState,
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorTargetTest,
+        ),
         Option<&GlobalTransform>,
         Option<&SpeciesHandle>,
         Option<&StaffRole>,
@@ -51,17 +53,14 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
     let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    for (entity, mut task, origin, species, staff, guest) in &mut tasks {
+    for (entity, (task, instruction, running_action), origin, species, staff, guest) in &tasks {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::TargetTest(action)) = assets
-            .get(&task.document)
-            .and_then(|asset| find_current_behavior_task_action(asset, &task))
-            .cloned()
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let action = running_action.0.clone();
         let maximum_distance_squared = (action.target_radius_cm as f32 * 0.01).powi(2);
         let matches = |candidate: Option<&DefinitionId>, fence: Option<&FenceEdge>| {
             let definition = match action.target_test_kind {
@@ -107,7 +106,6 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
                     })
                     .map(|(candidate, ..)| candidate)
             });
-        task.target = selected;
         let branch = if selected.is_some() {
             action.success_behavior_set_asset_id
         } else {
@@ -115,8 +113,9 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
         };
         let Some(program) = branch else {
             if selected.is_some() {
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                instruction.complete_with_target(entity, selected, clock.tick, &mut commands);
             } else {
+                instruction.retarget(entity, None, &mut commands);
                 mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
             }
             continue;
@@ -131,21 +130,22 @@ pub(super) fn find_target_and_enter_success_or_failure_behavior_set(
                 animal_types.borrow_for(entity),
             ),
         ) else {
+            instruction.retarget(entity, selected, &mut commands);
             mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
             continue;
         };
-        let frame = task.create_return_frame_after_action(task.action.saturating_add(1));
-        if !task.push_return_frame(frame) {
-            mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
-            continue;
-        }
-        task.program = program;
-        task.document = document;
-        task.declaration = declaration;
-        task.phase = BehaviorTaskExecutionPhase::Set;
-        task.action = 0;
-        task.repetitions = 0;
-        task.next_action_tick = clock.tick.saturating_add(1);
+        instruction.enter_set(
+            entity,
+            SelectedBehaviorSet {
+                program,
+                document,
+                declaration,
+                tick: clock.tick,
+                repeat: None,
+                target: Some(selected),
+            },
+            &mut commands,
+        );
     }
 }
 

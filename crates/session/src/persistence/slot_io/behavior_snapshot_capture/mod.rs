@@ -1,7 +1,10 @@
-use bevy::ecs::system::SystemParam;
+use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
 use bevy::prelude::*;
 use openzt2_zoo_state::{
     animal_behavior::behavior_natural_water_target_types::NaturalWaterTargetKind,
+    animal_behavior::behavior_synchronized_set_types::{
+        SynchronizedBehaviorOperation, SynchronizedBehaviorPartner,
+    },
     animal_behavior::interaction_container_membership::InteractionContainerMemberships,
     behavior_task_execution_types::{BehaviorTaskExecutionState, BehaviorTaskReturnFrame},
     locomotion::locomotion_types::{Route, Velocity},
@@ -9,12 +12,32 @@ use openzt2_zoo_state::{
 
 #[derive(SystemParam)]
 pub(in crate::persistence) struct BehaviorSnapshotCapture<'w, 's> {
+    rejections:
+        openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections<
+            'w,
+            's,
+        >,
+    continuations:
+        openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames<
+            'w,
+            's,
+        >,
     entities: BehaviorSnapshotEntities<'w, 's>,
     arrivals: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::Arrived>>,
     failures: Res<'w, Messages<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>>,
     memberships: InteractionContainerMemberships<'w, 's>,
-    documents: Res<'w, Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
-    finished: Res<'w, Messages<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished>>,
+    synchronizations: Query<
+        'w,
+        's,
+        (
+            &'static SynchronizedBehaviorOperation,
+            &'static SynchronizedBehaviorPartner,
+        ),
+    >,
+    documents:
+        Res<'w, Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>,
+    finished:
+        Res<'w, Messages<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished>>,
     failed: Res<'w, Messages<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed>>,
 }
 
@@ -22,8 +45,13 @@ impl BehaviorSnapshotCapture<'_, '_> {
     pub(super) fn capture(
         &self,
     ) -> Result<Vec<BehaviorActorSnapshot>, WorldSnapshotPersistenceFailure> {
-        let mut records =
-            capture_behavior_actor_snapshots(&self.entities, &self.documents, &self.memberships)?;
+        let mut records = capture_behavior_actor_snapshots(
+            &self.entities,
+            &self.documents,
+            &self.memberships,
+            &self.synchronizations,
+            &self.continuations,
+        )?;
         let mut arrivals = self.arrivals.get_cursor();
         let mut failures = self.failures.get_cursor();
         let arrivals = arrivals.read(&self.arrivals).copied().collect::<Vec<_>>();
@@ -38,6 +66,9 @@ impl BehaviorSnapshotCapture<'_, '_> {
             .filter_map(|entity| entity.persistent_id.map(|id| (id.0, entity.entity)))
             .collect::<std::collections::BTreeMap<_, _>>();
         for record in &mut records {
+            let BehaviorActorSnapshot::Task(record) = record else {
+                continue;
+            };
             let actor = *identities
                 .get(&record.persistent_identifier)
                 .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
@@ -88,26 +119,57 @@ impl BehaviorSnapshotCapture<'_, '_> {
                 nav.pending_results = pending_results;
             }
             if let Some(synchronized) = record.synchronized.as_mut() {
-                let owner = self
+                let partner = self
                     .entities
                     .get(actor)
                     .ok()
                     .and_then(|actor| actor.synchronized_behavior_owner)
+                    .and_then(|owner| owner.iter().next())
+                    .and_then(|operation| self.synchronizations.get(operation).ok())
+                    .map(|(_, partner)| partner.0)
                     .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
                 if finished.iter().any(|event| {
-                    event.actor == owner.target
-                        && event.execution_id == synchronized.target_execution_id
+                    event.actor == partner && event.execution_id == synchronized.target_execution_id
                 }) {
                     synchronized.target_outcome = Some(true);
                 }
                 if failed.iter().any(|event| {
-                    event.actor == owner.target
-                        && event.execution_id == synchronized.target_execution_id
+                    event.actor == partner && event.execution_id == synchronized.target_execution_id
                 }) {
                     synchronized.target_outcome = Some(false);
                 }
             }
         }
+        for actor in self.entities.iter().filter(|actor| !actor.guest) {
+            let Some(id) = actor.persistent_id else {
+                continue;
+            };
+            let mut retry_delays = self
+                .rejections
+                .snapshot(actor.entity)
+                .filter_map(|(target, failures, remaining_updates)| {
+                    // Only persist timers for targets restored with this zoo.
+                    let target = self.entities.get(target).ok()?;
+                    if target.guest {
+                        return None;
+                    }
+                    Some(BehaviorTargetRetrySnapshot {
+                        target: capture_behavior_entity_reference(target.entity, &self.entities)
+                            .ok()?,
+                        failures,
+                        remaining_updates,
+                    })
+                })
+                .collect::<Vec<_>>();
+            if !retry_delays.is_empty() {
+                retry_delays.sort_unstable_by(|a, b| a.target.cmp(&b.target));
+                records.push(BehaviorActorSnapshot::Retry(BehaviorActorRetrySnapshot {
+                    persistent_identifier: id.0,
+                    retry_delays,
+                }));
+            }
+        }
+        records.sort_unstable_by_key(BehaviorActorSnapshot::sort_key);
         super::behavior_snapshot_section_encoding::validate_behavior_actor_snapshots(&records)?;
         Ok(records)
     }
@@ -118,10 +180,12 @@ use super::{
         capture_behavior_entity_reference, BehaviorSnapshotEntities, BehaviorSnapshotEntity,
     },
     behavior_snapshot_types::{
-        BehaviorActorSnapshot, BehaviorDockingSnapshot, BehaviorFrameSnapshot,
-        BehaviorNaturalWaterTargetSnapshot, BehaviorNavigationCompletionSnapshot,
-        BehaviorOwnedNavigationSnapshot, BehaviorPursuitSnapshot, BehaviorStaffJobSnapshot,
-        BehaviorSynchronizedSnapshot, BehaviorTaskScoreSnapshot, BehaviorTaskSnapshot,
+        BehaviorActorRetrySnapshot, BehaviorActorSnapshot, BehaviorDockingSnapshot,
+        BehaviorFrameSnapshot, BehaviorNaturalWaterTargetSnapshot,
+        BehaviorNavigationCompletionSnapshot, BehaviorOwnedNavigationSnapshot,
+        BehaviorPursuitSnapshot, BehaviorStaffJobSnapshot, BehaviorSynchronizedSnapshot,
+        BehaviorTargetRetrySnapshot, BehaviorTaskActorSnapshot, BehaviorTaskScoreSnapshot,
+        BehaviorTaskSnapshot,
     },
 };
 
@@ -171,6 +235,8 @@ fn capture_behavior_actor_snapshots(
     entities: &BehaviorSnapshotEntities,
     documents: &Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
     memberships: &InteractionContainerMemberships,
+    synchronizations: &Query<(&SynchronizedBehaviorOperation, &SynchronizedBehaviorPartner)>,
+    continuations: &openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
 ) -> Result<Vec<BehaviorActorSnapshot>, WorldSnapshotPersistenceFailure> {
     let mut records = Vec::new();
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
@@ -205,9 +271,8 @@ fn capture_behavior_actor_snapshots(
             object: task.object.map(reference).transpose()?,
             next_action_tick: task.next_action_tick,
             interaction_slot: task.interaction_slot,
-            stack: task
-                .stack
-                .iter()
+            stack: continuations
+                .frames(actor.entity)
                 .map(|frame| capture_behavior_frame(frame, documents))
                 .collect::<Result<_, _>>()?,
             score,
@@ -262,19 +327,19 @@ fn capture_behavior_actor_snapshots(
                 })
             })
             .transpose()?;
-        records.push(BehaviorActorSnapshot {
+        records.push(BehaviorActorSnapshot::Task(BehaviorTaskActorSnapshot {
             persistent_identifier: id.0, task: task_snapshot, navigation, water_target, staff_job,
             transaction: actor.pending_behavior_transaction.map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
                 if pending.payment.is_some() {
                     return Err(WorldSnapshotPersistenceFailure::SnapshotTransactionInFlight);
                 }
-                if !pending.owns(task) {
+                if !actor.instruction.is_some_and(|instruction| pending.owns(task, instruction)) {
                     return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
                 }
                 Ok(super::behavior_snapshot_types::BehaviorTransactionSnapshot {
-                    execution_id: pending.execution_id,
-                    stack_depth: pending.stack_depth,
-                    origin: capture_behavior_frame(&pending.origin, documents)?,
+                    execution_id: task.execution_id,
+                    stack_depth: task.depth,
+                    origin: capture_behavior_frame(&task.create_return_frame_after_action(task.action), documents)?,
                     facility: reference(pending.facility)?,
                     transaction: pending.transaction,
                     cost_override: pending.cost_override.map(f32::to_bits),
@@ -295,15 +360,16 @@ fn capture_behavior_actor_snapshots(
             random: actor.behavior_random_stream.map(|random| random.0.to_raw()),
             synchronized: actor.synchronized_behavior_owner
                 .map(|owner| -> Result<_, WorldSnapshotPersistenceFailure> {
+                    let (state, partner) = owner.iter().next().and_then(|operation| synchronizations.get(operation).ok())
+                        .ok_or(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference)?;
                     Ok(BehaviorSynchronizedSnapshot {
-                        execution_id: owner.execution_id, target_execution_id: owner.target_execution_id,
-                        target: reference(owner.target)?, origin: capture_behavior_frame(&owner.origin, documents)?,
-                        depth: owner.depth, target_outcome: owner.target_outcome,
+                        execution_id: state.execution_id, target_execution_id: state.target_execution_id,
+                        target: reference(partner.0)?, origin: capture_behavior_frame(&state.origin, documents)?,
+                        depth: state.depth, target_outcome: state.target_outcome,
                     })
                 }).transpose()?,
-        });
+        }));
     }
-    records.sort_unstable_by_key(|actor| actor.persistent_identifier);
     Ok(records)
 }
 
@@ -319,11 +385,18 @@ fn capture_owned_navigation(
     let reference = |entity| capture_behavior_entity_reference(entity, entities);
     let move_completion = actor
         .pending_behavior_move_completion
-        .filter(|pending| pending.still_owns_exact_task_frame(task))
+        .filter(|pending| {
+            actor
+                .instruction
+                .is_some_and(|instruction| pending.owns(task, instruction))
+        })
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorNavigationCompletionSnapshot {
-                origin: capture_behavior_frame(&pending.origin, documents)?,
-                stack_depth: pending.stack_depth,
+                origin: capture_behavior_frame(
+                    &task.create_return_frame_after_action(task.action),
+                    documents,
+                )?,
+                stack_depth: task.depth,
                 request_id: pending.request_id,
                 target: None,
             })
@@ -331,11 +404,18 @@ fn capture_owned_navigation(
         .transpose()?;
     let docking_completion = actor
         .pending_behavior_docking_completion
-        .filter(|pending| pending.still_owns_exact_task_frame(task))
+        .filter(|pending| {
+            actor
+                .instruction
+                .is_some_and(|instruction| pending.owns(task, instruction, task.target))
+        })
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorNavigationCompletionSnapshot {
-                origin: capture_behavior_frame(&pending.origin, documents)?,
-                stack_depth: pending.stack_depth,
+                origin: capture_behavior_frame(
+                    &task.create_return_frame_after_action(task.action),
+                    documents,
+                )?,
+                stack_depth: task.depth,
                 request_id: pending.request_id,
                 target: Some(reference(pending.target)?),
             })
@@ -343,12 +423,19 @@ fn capture_owned_navigation(
         .transpose()?;
     let pursuit = actor
         .pending_behavior_pursuit
-        .filter(|pending| pending.still_owns_exact_task_frame(task))
+        .filter(|pending| {
+            actor
+                .instruction
+                .is_some_and(|instruction| pending.owns(task, instruction))
+        })
         .map(|pending| -> Result<_, WorldSnapshotPersistenceFailure> {
             Ok(BehaviorPursuitSnapshot {
-                execution_id: pending.execution_id,
-                origin: capture_behavior_frame(&pending.origin, documents)?,
-                stack_depth: pending.stack_depth,
+                execution_id: task.execution_id,
+                origin: capture_behavior_frame(
+                    &task.create_return_frame_after_action(task.action),
+                    documents,
+                )?,
+                stack_depth: task.depth,
                 poll_remaining_seconds: pending.poll_remaining_seconds,
                 leg: pending.leg,
             })

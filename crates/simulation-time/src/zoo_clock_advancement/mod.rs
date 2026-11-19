@@ -2,6 +2,7 @@ use bevy::prelude::*;
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
+use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 use super::{
     simulation_clock_types::{ZooCalendar, ZooClock, ZooDayAdvanced, ZooYearAdvanced},
@@ -13,6 +14,7 @@ pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
     active_definitions: Res<WorldDefinitions>,
     mut zoo_clock: ResMut<ZooClock>,
     mut zoo_calendar: ResMut<ZooCalendar>,
+    mut advanced_ticks: MessageWriter<ZooTickAdvanced>,
     mut advanced_days: MessageWriter<ZooDayAdvanced>,
     mut advanced_years: MessageWriter<ZooYearAdvanced>,
 ) {
@@ -23,6 +25,7 @@ pub(crate) fn advance_authoritative_zoo_clock_and_calendar(
     if !advance_zoo_clock_by_one_tick(&mut zoo_clock, definitions.timing().ticks_per_day) {
         return;
     }
+    advanced_ticks.write(ZooTickAdvanced(zoo_clock.tick));
     if zoo_clock.absolute_day == previous_absolute_day {
         return;
     }

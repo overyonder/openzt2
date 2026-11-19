@@ -1,14 +1,30 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, ui_widgets::ScrollIntoView};
 
-use super::authored_ui_focus_state::UiFocusScope;
 use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_selection_state::UiSelected;
+use bevy::input_focus::InputFocus;
 
 /// Scrolls the nearest ancestor to reveal the focused or selected node after layout.
 pub(super) fn scroll_nearest_ancestor_to_reveal_focused_or_selected_node(
-    scopes: Query<Ref<UiFocusScope>, Changed<UiFocusScope>>,
-    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
+    focus: Res<InputFocus>,
     selected: Query<(Entity, &UiSelected), Changed<UiSelected>>,
+    mut commands: Commands,
+) {
+    for (entity, selected) in &selected {
+        if selected.0 {
+            commands.trigger(ScrollIntoView { entity });
+        }
+    }
+    if focus.is_changed() {
+        if let Some(entity) = focus.get() {
+            commands.trigger(ScrollIntoView { entity });
+        }
+    }
+}
+
+pub(super) fn reveal_in_nearest_authored_scroll_area(
+    mut event: On<ScrollIntoView>,
+    context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     parents: Query<&ChildOf>,
     nodes: Query<(
         &ComputedNode,
@@ -24,35 +40,15 @@ pub(super) fn scroll_nearest_ancestor_to_reveal_focused_or_selected_node(
         &mut ScrollPosition,
     )>,
 ) {
-    for (entity, selected) in &selected {
-        if selected.0 {
-            scroll_nearest_ancestor_to_reveal_node(
-                entity,
-                &parents,
-                &nodes,
-                &mut scrolls,
-                &context,
-            );
-        }
-    }
-    // Focus is the narrower user intent when a domain presenter changes
-    // selection and focus in the same frame, so apply it last.
-    for scope in &scopes {
-        // A newly projected document only starts at its default focus. List
-        // rows are documents of their own, so following them would scroll
-        // the list to its last row.
-        if scope.is_added() {
-            continue;
-        }
-        if let Some(focused) = scope.focused {
-            scroll_nearest_ancestor_to_reveal_node(
-                focused,
-                &parents,
-                &nodes,
-                &mut scrolls,
-                &context,
-            );
-        }
+    if nodes.contains(event.entity) {
+        event.propagate(false);
+        scroll_nearest_ancestor_to_reveal_node(
+            event.entity,
+            &parents,
+            &nodes,
+            &mut scrolls,
+            &context,
+        );
     }
 }
 
@@ -150,7 +146,10 @@ fn scroll_nearest_ancestor_to_reveal_node(
             ) * viewport_node.inverse_scale_factor();
             let maximum = (viewport_node.content_size() - viewport_node.size()).max(Vec2::ZERO)
                 * viewport_node.inverse_scale_factor();
-            position.0 = (position.0 + correction).clamp(Vec2::ZERO, maximum);
+            let next = (position.0 + correction).clamp(Vec2::ZERO, maximum);
+            if position.0 != next {
+                position.0 = next;
+            }
             return;
         }
         if ancestor == context.document_scope(target_owner.0) {

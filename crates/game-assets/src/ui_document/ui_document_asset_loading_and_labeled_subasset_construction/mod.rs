@@ -51,7 +51,7 @@ impl AssetLoader for UiDocumentAssetLoader {
             .replace('\\', "/");
         let template_declaration_paths = self
             .template_declaration_path_index_cache
-            .template_declaration_paths_for_current_archive_revision(&self.asset_archives);
+            .template_declaration_paths_for_resolved_archive_paths(&self.asset_archives);
         let lowered_ui_assets = super::source::lower(
             &primary_source_path,
             &primary_source_bytes,

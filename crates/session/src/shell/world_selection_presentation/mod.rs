@@ -3,7 +3,6 @@ use openzt2_game_data::ui_document::{
     action::shell_navigation::UiShellAction, node_property_binding::*,
 };
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borrowing_queries::WorldScenarios;
@@ -15,7 +14,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_globe_presentation_types::UiGlobeBiomeModel;
 use openzt2_ui::authored_globe_presentation_types::UiGlobeMarkerVisual;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
@@ -32,16 +30,11 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<(&UiDocumentRoot, &ChildOf)>,
     mut action_nodes: Query<
-        (
-            &UiShellActions,
-            &UiDocumentOwner,
-            &mut UiSelected,
-            Option<&mut UiPreviousSelection>,
-        ),
+        (&UiShellActions, &UiDocumentOwner, &mut UiSelected),
         Without<WorldChoiceView>,
     >,
 ) {
-    for (actions, document_owner, mut selected, previous) in &mut action_nodes {
+    for (actions, document_owner, mut selected) in &mut action_nodes {
         let Some((document, filter)) =
             roots.get(document_owner.0).ok().and_then(|(root, owner)| {
                 documents
@@ -80,9 +73,6 @@ pub(super) fn project_selected_world_catalogue_filter_into_authored_location_tog
                 selected.0 = matches_selected_filter;
             }
             // Reflecting shell state must not replay the toggle's authored on/off actions.
-            if let Some(mut previous) = previous {
-                previous.synchronize_with_non_authored_selection_change(matches_selected_filter);
-            }
         }
     }
 }
@@ -418,11 +408,6 @@ pub(super) fn project_selected_world_facts_into_authored_map_selection_controls(
             if let Ok(mut focusable) = presentation.focusable.get_mut(entity) {
                 if focusable.enabled != enabled {
                     focusable.enabled = enabled;
-                }
-            }
-            if !enabled {
-                if let Ok(mut interaction) = presentation.interactions.get_mut(entity) {
-                    *interaction = UiPointerInteraction::None;
                 }
             }
         }

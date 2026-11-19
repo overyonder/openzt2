@@ -13,11 +13,11 @@ use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentat
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabPresentationHydrated;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabShadowPolicy;
 
+use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabAuthoredRotationCycle;
 use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
-use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
 use openzt2_world_state::world_spawn::prefab_transform_conversion::transform_from_authored;
 
 /// Spawn a prefab for isolated render scenes, such as the shell globe.
@@ -175,16 +175,7 @@ pub fn spawn_prefab_render_tree(
     }
     for (entity, row) in document.entities.iter().enumerate() {
         for lod in &row.lods {
-            commands
-                .entity(entities[entity])
-                .insert(PrefabModelLevelOfDetailVisibilityRange {
-                    group: entities[lod.group_entity as usize],
-                    ordinal: lod.ordinal,
-                    center_m: Vec3::from_array(lod.center_m),
-                    near_m: lod.near_m,
-                    far_m: lod.far_m,
-                    active_without_range: lod.active_without_range,
-                });
+            bind_prefab_lod(commands, &entities, entities[entity], lod);
         }
     }
     (root, renderables, lights)

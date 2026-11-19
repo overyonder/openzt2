@@ -36,17 +36,27 @@ fn named_transaction_continuation_survives_section_round_trip() {
         },
     )
     .unwrap();
-    let pending = records[0].transaction.as_ref().unwrap();
+    let pending = records[0]
+        .task_record()
+        .unwrap()
+        .transaction
+        .as_ref()
+        .unwrap();
     assert_eq!(pending.transaction, AssetId::from_key("remove_user"));
     assert_eq!(pending.cost_override, Some(25.0_f32.to_bits()));
-    assert_eq!(pending.origin.action, records[0].task.current.action);
+    assert_eq!(
+        pending.origin.action,
+        records[0].task_record().unwrap().task.current.action
+    );
     assert_eq!(
         pending.facility,
         BehaviorSnapshotEntityReference::Persistent(2)
     );
     let mut detached = records;
-    detached[0].transaction.as_mut().unwrap().facility =
-        BehaviorSnapshotEntityReference::Persistent(4);
+    let BehaviorActorSnapshot::Task(record) = &mut detached[0] else {
+        panic!("expected task record");
+    };
+    record.transaction.as_mut().unwrap().facility = BehaviorSnapshotEntityReference::Persistent(4);
     assert_eq!(
         validate_behavior_actor_snapshots(&detached),
         Err(WorldSnapshotPersistenceFailure::CorruptSnapshotSection)
@@ -58,6 +68,6 @@ fn earlier_behavior_records_without_transaction_remain_readable() {
     let mut value = serde_json::to_value(transaction_record()).unwrap();
     value.as_object_mut().unwrap().remove("transaction");
     let record: BehaviorActorSnapshot = serde_json::from_value(value).unwrap();
-    assert!(record.transaction.is_none());
+    assert!(record.task_record().unwrap().transaction.is_none());
     validate_behavior_actor_snapshots(&[record]).unwrap();
 }

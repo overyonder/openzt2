@@ -12,7 +12,7 @@ use openzt2_game_data::particle::authored_particle_system::{
 use super::{
     effect_runtime_types::{
         ControlledEffectEmissionState, EffectRetirementReadback, ParticleEffectDocumentInstance,
-        PendingEffectInstance,
+        ParticleEffectGraphReady, PendingEffectInstance,
     },
     explicit_particle_emission::ParticleEffectPointEmitter,
     LiveParticleEffectInstance, ParticleEffectDocumentAsset, StopParticleEffectsAttachedToEntity,
@@ -95,6 +95,50 @@ pub(super) fn select_effect_simulation_delta_time_from_authored_clock(
     }
 }
 
+pub(super) fn publish_ready_particle_effect_graphs(
+    mut commands: Commands,
+    roots: Query<
+        Entity,
+        (
+            With<LiveParticleEffectInstance>,
+            Without<EffectParent>,
+            Without<ParticleEffectGraphReady>,
+        ),
+    >,
+    emitters: Query<(&CompiledParticleEffect, Option<&Children>)>,
+    collision_parents: Query<&EffectParent>,
+    mut pending: Local<Vec<Entity>>,
+) {
+    for root in &roots {
+        pending.clear();
+        pending.push(root);
+        let mut ready = true;
+        while let Some(entity) = pending.pop() {
+            let Ok((compiled, children)) = emitters.get(entity) else {
+                ready = false;
+                break;
+            };
+            if !compiled.is_ready() {
+                ready = false;
+                break;
+            }
+            pending.extend(
+                children
+                    .into_iter()
+                    .flat_map(|children| children.iter())
+                    .filter(|&child| {
+                        collision_parents
+                            .get(child)
+                            .is_ok_and(|parent| parent.entity == entity)
+                    }),
+            );
+        }
+        if ready {
+            commands.entity(root).insert(ParticleEffectGraphReady);
+        }
+    }
+}
+
 pub(super) fn activate_authored_particle_spawners_for_emission_window(
     documents: Res<Assets<ParticleEffectDocumentAsset>>,
     mut emitters: Query<(
@@ -105,13 +149,17 @@ pub(super) fn activate_authored_particle_spawners_for_emission_window(
         &InheritedVisibility,
         &mut EffectSpawner,
         Has<EffectParent>,
+        Has<ParticleEffectGraphReady>,
         Has<ParticleEffectPointEmitter>,
     )>,
 ) {
-    for (live, timing, delta, compiled, visibility, mut spawner, collision, explicit) in
+    for (live, timing, delta, compiled, visibility, mut spawner, collision, ready, explicit) in
         &mut emitters
     {
-        if !compiled.is_ready() || (!explicit && !visibility.get()) {
+        if !ready || !compiled.is_ready() || (!explicit && !visibility.get()) {
+            if spawner.active {
+                spawner.active = false;
+            }
             continue;
         }
         let Some(prepared) = documents
@@ -122,7 +170,8 @@ pub(super) fn activate_authored_particle_spawners_for_emission_window(
             continue;
         };
         let next_elapsed = timing.elapsed_seconds + delta.0;
-        let active = !collision
+        let active = ready
+            && !collision
             && !explicit
             && !prepared.manually_driven
             && prepared
@@ -147,15 +196,26 @@ pub(super) fn apply_authored_particle_emission_and_close_finished_spawners(
             &InheritedVisibility,
             &mut EffectSpawner,
             Has<EffectParent>,
+            Has<ParticleEffectGraphReady>,
             Has<EffectRetirementReadback>,
         ),
         Without<ParticleEffectPointEmitter>,
     >,
 ) {
-    for (entity, live, mut timing, delta, compiled, visibility, mut spawner, collision, draining) in
-        &mut emitters
+    for (
+        entity,
+        live,
+        mut timing,
+        delta,
+        compiled,
+        visibility,
+        mut spawner,
+        collision,
+        ready,
+        draining,
+    ) in &mut emitters
     {
-        if !compiled.is_ready() || !visibility.get() || collision || draining {
+        if !ready || !compiled.is_ready() || !visibility.get() || collision || draining {
             spawner.spawn_count = 0;
             continue;
         }

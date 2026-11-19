@@ -1,6 +1,7 @@
+use bevy::picking::hover::DirectlyHovered;
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::widget_live_collection::UiWidgetLiveCollectionSource;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
+use openzt2_ui::authored_pointer_events::LastAuthoredPrimaryPress;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -9,17 +10,13 @@ use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borr
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusPresentation;
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_ui::authored_toggle_selection_transitions::UiAuthoredToggleGroupSelectionPolicy;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_ui::authored_ui_layout_participation::UiAuthoredLayoutDisplay;
-use openzt2_ui::authored_ui_pointer_activation::UiPreviousPointerInteraction;
-use openzt2_ui::authored_ui_pointer_activation::UiPreviousPointerPressTimeSeconds;
 use openzt2_ui::projection::authored_document_projection::authored_first_toggle_list_row_index;
 use openzt2_ui::projection::authored_document_projection::insert_authored_text_prototype;
 
@@ -36,32 +33,28 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
     active_catalogue: Res<WorldScenarios>,
     catalogues: Res<Assets<WorldScenarioDocumentAsset>>,
     documents: Res<Assets<UiDocumentAsset>>,
-    mut lists: Query<
+    lists: Query<
         (Entity, Ref<UiListPolicy>, &UiDocumentOwner),
         With<UiAuthoredToggleGroupSelectionPolicy>,
     >,
-    roots: Query<&UiDocumentRoot>,
-    world_choices: Query<(Entity, Ref<WorldChoice>, &GlobeMarker)>,
-    mut rows: Query<(
-        &UiListRow,
-        Option<&WorldChoiceView>,
-        &mut UiSelected,
-        &mut UiPreviousSelection,
-    )>,
+    roots: Query<(&UiDocumentRoot, &ChildOf)>,
+    world_choices: Query<(Ref<WorldChoice>, &GlobeMarker)>,
+    mut removed_choices: RemovedComponents<WorldChoice>,
+    mut rows: Query<(&UiListRow, Option<&WorldChoiceView>, &mut UiSelected)>,
     children: Query<&Children>,
     mut texts: Query<&mut Text>,
     selection: Res<ShellSelection>,
     active: Option<Res<LocalizationPrecedenceIndex>>,
     localizations: Res<Assets<LocalizationAsset>>,
 ) {
-    if !active_catalogue.is_changed()
+    let choice_removed = removed_choices.read().count() != 0;
+    if !choice_removed
+        && !active_catalogue.is_changed()
         && !catalogues.is_changed()
         && !documents.is_changed()
         && !localizations.is_changed()
         && !active.as_ref().is_some_and(|active| active.is_changed())
-        && world_choices
-            .iter()
-            .all(|(_, choice, _)| !choice.is_changed())
+        && world_choices.iter().all(|(choice, _)| !choice.is_changed())
         && lists.iter().all(|(_, policy, _)| !policy.is_changed())
     {
         return;
@@ -75,13 +68,12 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
     let Some(catalogue) = active_catalogue.get(&catalogues) else {
         return;
     };
-    for (entity, policy, owner) in &mut lists {
+    for (entity, policy, owner) in &lists {
         if policy.source == UiWidgetLiveCollectionSource::WorldChoices {
-            let Some(document) = roots
-                .get(owner.0)
-                .ok()
-                .and_then(|root| documents.get(&root.document))
-            else {
+            let Ok((root, screen)) = roots.get(owner.0) else {
+                continue;
+            };
+            let Some(document) = documents.get(&root.document) else {
                 continue;
             };
             let Some(prototype_index) = authored_first_toggle_list_row_index(
@@ -90,10 +82,15 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
             ) else {
                 continue;
             };
-            let mut choices = world_choices
-                .iter()
-                .filter(|(_, choice, _)| Some(choice.mode) == selection.mode)
-                .filter_map(|(source, choice, _)| {
+            let mut choices = children
+                .get(screen.parent())
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .filter_map(|source| {
+                    let (choice, _) = world_choices.get(source).ok()?;
+                    if Some(choice.mode) != selection.mode {
+                        return None;
+                    }
                     catalogue.map(choice.map).map(|map| {
                         let name_key = openzt2_game_data::AssetId(map.name_key.0);
                         let label = localization
@@ -124,16 +121,15 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
             for ((index, (source, label, _)), row_entity) in
                 choices.into_iter().enumerate().zip(row_entities)
             {
-                if let Some((row_entity, (_, current, mut selected, mut previous))) =
+                if let Some((row_entity, (_, current, mut selected))) =
                     row_entity.and_then(|entity| rows.get_mut(entity).ok().map(|row| (entity, row)))
                 {
                     if current.is_none_or(|current| current.0 != source) {
-                        let next = world_choices.get(source).is_ok_and(|(_, choice, _)| {
-                            selection.scenario == Some(choice.scenario)
-                        });
+                        let next = world_choices
+                            .get(source)
+                            .is_ok_and(|(choice, _)| selection.scenario == Some(choice.scenario));
                         commands.entity(row_entity).insert(WorldChoiceView(source));
                         selected.set_if_neq(UiSelected(next));
-                        previous.synchronize_with_non_authored_selection_change(next);
                     }
                     replace_text_in_list_row_and_descendants(
                         row_entity, label, &children, &mut texts,
@@ -144,20 +140,20 @@ pub(super) fn project_launchable_world_choices_into_authored_list_rows(
                     .spawn((
                         Name::new(format!("map choice {index}")),
                         bevy::ui_widgets::Button,
-                        UiPointerInteraction::None,
                         UiFocusable {
                             order: index as u32,
                             enabled: true,
                         },
-                        UiFocusPresentation::default(),
-                        UiInteractionEnabled(true),
-                        UiPreviousPointerInteraction::from_current_interaction(
-                            UiPointerInteraction::None,
+                        bevy::input_focus::tab_navigation::TabIndex(
+                            i32::try_from(index).unwrap_or(i32::MAX),
                         ),
-                        UiPreviousPointerPressTimeSeconds::default(),
+                        UiInteractionEnabled(true),
+                        DirectlyHovered::default(),
+                        LastAuthoredPrimaryPress::default(),
                         (
-                            UiSelected(false),
-                            UiPreviousSelection::from_current_selection(false),
+                            UiSelected(world_choices.get(source).is_ok_and(|(choice, _)| {
+                                selection.scenario == Some(choice.scenario)
+                            })),
                             UiAuthoredLayoutDisplay::from_authored_display(Display::Flex),
                             Visibility::Inherited,
                             Pickable::default(),

@@ -1,6 +1,8 @@
 use std::{
+    cell::RefCell,
+    collections::BTreeMap,
     fmt,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, Weak},
 };
 
 use crate::{
@@ -9,10 +11,11 @@ use crate::{
     native_abi::{
         openzt2_effect_evaluate_transform, openzt2_effect_open_parameter_scratch,
         openzt2_effect_parameter_count, openzt2_effect_parameter_layout,
-        openzt2_effect_transform_dependency_count, openzt2_effect_transform_dependency_index,
-        openzt2_effect_transform_output_layout, openzt2_effect_transform_preshader,
-        openzt2_preshader_counts, openzt2_preshader_instruction, openzt2_preshader_literal,
-        openzt2_preshader_register, openzt2_preshader_symbol,
+        openzt2_effect_reset_parameter_scratch, openzt2_effect_transform_dependency_count,
+        openzt2_effect_transform_dependency_index, openzt2_effect_transform_output_layout,
+        openzt2_effect_transform_preshader, openzt2_preshader_counts,
+        openzt2_preshader_instruction, openzt2_preshader_literal, openzt2_preshader_register,
+        openzt2_preshader_symbol,
     },
 };
 
@@ -111,8 +114,8 @@ impl RetainedD3d9TransformExpression {
     }
 
     /// Evaluates using the load-time defaults plus these semantic/name assignments.
-    /// Each call owns fresh parameter and input/output register storage. The returned
-    /// components keep the native FX layout and the initial command's tail padding.
+    /// Each worker reuses private scratch initialized from the program defaults.
+    /// The returned components keep the native FX layout and tail padding.
     /// No source compilation, shader translation or shader binding occurs here.
     ///
     /// # Errors
@@ -131,32 +134,49 @@ impl RetainedD3d9TransformExpression {
             .allocation
             .read()
             .map_err(|_| poisoned_allocation())?;
-        let scratch_pointer =
-            unsafe { openzt2_effect_open_parameter_scratch(allocation.0.native_effect_pointer) };
-        if scratch_pointer.is_null() {
-            return Err(D3d9EffectProcessingError::CompiledEffectEvaluationFailed(
-                "could not allocate fixed-transform parameter scratch".to_owned(),
-            ));
-        }
-        // Drop scratch before the guard: its metadata borrows the retained allocation.
-        let scratch = MojoShaderEffectAllocationOwner {
-            native_effect_pointer: scratch_pointer,
-        };
-        apply_d3d9_effect_parameter_assignments_to_mojoshader_effect(
-            scratch.native_effect_pointer,
-            parameter_assignments,
-        )?;
         let mut output = [0.0; 16];
-        let result = unsafe {
-            openzt2_effect_evaluate_transform(
-                allocation.0.native_effect_pointer,
-                scratch.native_effect_pointer,
-                self.technique_index,
-                self.pass_index,
-                self.state_index,
-                output.as_mut_ptr(),
-            )
-        };
+        let result = TRANSFORM_SCRATCH.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let program = allocation.0.native_effect_pointer;
+            let program_id = Arc::as_ptr(&self.program.allocation);
+            let parameters = if let Some(scratch) = cache.get(&program_id) {
+                let parameters = scratch.parameters.native_effect_pointer;
+                unsafe { openzt2_effect_reset_parameter_scratch(parameters) };
+                parameters
+            } else {
+                cache.retain(|_, scratch| scratch.program.strong_count() != 0);
+                let parameters = unsafe { openzt2_effect_open_parameter_scratch(program) };
+                if parameters.is_null() {
+                    return Err(D3d9EffectProcessingError::CompiledEffectEvaluationFailed(
+                        "could not allocate fixed-transform parameter scratch".to_owned(),
+                    ));
+                }
+                cache.insert(
+                    program_id,
+                    TransformScratch {
+                        parameters: MojoShaderEffectAllocationOwner {
+                            native_effect_pointer: parameters,
+                        },
+                        program: Arc::downgrade(&self.program.allocation),
+                    },
+                );
+                parameters
+            };
+            apply_d3d9_effect_parameter_assignments_to_mojoshader_effect(
+                parameters,
+                parameter_assignments,
+            )?;
+            Ok(unsafe {
+                openzt2_effect_evaluate_transform(
+                    program,
+                    parameters,
+                    self.technique_index,
+                    self.pass_index,
+                    self.state_index,
+                    output.as_mut_ptr(),
+                )
+            })
+        })?;
         if result != 1 {
             let reason = match result {
                 -1 => "could not allocate fixed-transform evaluation scratch",
@@ -172,6 +192,19 @@ impl RetainedD3d9TransformExpression {
     }
 }
 
+thread_local! {
+    static TRANSFORM_SCRATCH: RefCell<BTreeMap<
+        *const RwLock<RetainedMojoShaderEffectAllocation>, TransformScratch,
+    >> = const { RefCell::new(BTreeMap::new()) };
+}
+
+struct TransformScratch {
+    parameters: MojoShaderEffectAllocationOwner,
+    // Scratch is only evaluated under a live program guard. Dropping scratch
+    // frees its private buffers without dereferencing borrowed effect metadata.
+    program: Weak<RwLock<RetainedMojoShaderEffectAllocation>>,
+}
+
 struct RetainedMojoShaderEffectAllocation(MojoShaderEffectAllocationOwner);
 
 // SAFETY: shader.c uses owned malloc allocations and CPU-only MojoShader parse data,
@@ -179,8 +212,8 @@ struct RetainedMojoShaderEffectAllocation(MojoShaderEffectAllocationOwner);
 // refer only to the same owned allocation. Moving it changes no native addresses.
 // Native state initialization holds the exclusive write guard. Read guards
 // permit only evaluation, which reads the program and changes private parameter
-// and register scratch. Scratch borrows metadata and drops before the read
-// guard. The last Arc uniquely owns final destruction.
+// and register scratch. Cache entries are tied to the allocation by a Weak.
+// The last Arc uniquely owns final destruction.
 #[allow(
     unsafe_code,
     clippy::non_send_fields_in_send_ty,

@@ -5,8 +5,8 @@ use std::{
 };
 
 use crate::{
-    ArchiveReadEntry, ArchiveSet, archive_overlay::winning_archive_entry_for_path,
-    paths::normalize_asset_path_for_case_insensitive_archive_lookup,
+    archive_overlay::winning_archive_entry_for_path,
+    paths::normalize_asset_path_for_case_insensitive_archive_lookup, ArchiveReadEntry, ArchiveSet,
 };
 
 impl ArchiveSet {
@@ -64,6 +64,23 @@ impl ArchiveSet {
         Some(ArchiveReadEntry {
             archive_priority_index: winner.archive_priority_index,
             zip_entry_ordinal: winner.zip_entry_index,
+        })
+    }
+
+    pub fn locate_archive_entry(
+        &self,
+        path: &Path,
+        archive_priority_index: usize,
+        zip_entry_ordinal: usize,
+    ) -> Option<ArchiveReadEntry> {
+        let path = normalize_asset_path_for_case_insensitive_archive_lookup(path);
+        let entry = self
+            .archive_entries_by_normalized_path
+            .get(archive_priority_index)?
+            .get(&path)?;
+        (entry.zip_entry_index == zip_entry_ordinal).then_some(ArchiveReadEntry {
+            archive_priority_index,
+            zip_entry_ordinal,
         })
     }
 

@@ -153,10 +153,7 @@ pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
     choices: Query<(Entity, Ref<DisplayResolutionChoice>)>,
     children: Query<&Children>,
     parents: Query<&ChildOf>,
-    mut selected: Query<(
-        &mut UiSelected,
-        Option<&mut openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection>,
-    )>,
+    mut selected: Query<&mut UiSelected>,
 ) {
     for (row, choice) in &choices {
         let Some(draft) = parents
@@ -170,11 +167,8 @@ pub(super) fn project_drafted_display_resolution_selection_into_authored_rows(
         }
         let next = draft.display.width == choice.0.width && draft.display.height == choice.0.height;
         for entity in std::iter::once(row).chain(children.iter_descendants(row)) {
-            if let Ok((mut selected, previous)) = selected.get_mut(entity) {
+            if let Ok(mut selected) = selected.get_mut(entity) {
                 selected.set_if_neq(UiSelected(next));
-                if let Some(mut previous) = previous {
-                    previous.synchronize_with_non_authored_selection_change(next);
-                }
             }
         }
     }

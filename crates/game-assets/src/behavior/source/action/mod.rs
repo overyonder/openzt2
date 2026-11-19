@@ -41,6 +41,10 @@ pub mod watch_show_action_lowering;
 pub(super) fn lower_one_behavior_action_source_node(
     behavior_action_source_node: &DataNode,
 ) -> io::Result<BehaviorAction> {
+    if let Some(action) = lower_traversal_or_morph(behavior_action_source_node)? {
+        return Ok(action);
+    }
+
     if let Some(action) =
         subject_trigger_action_lowering::lower_subject_trigger(behavior_action_source_node)?
     {
@@ -232,40 +236,62 @@ pub(super) fn lower_one_behavior_action_source_node(
     {
         return Ok(lowered_behavior_action);
     }
-    if behavior_action_source_node.name == "ZTBehMorph" {
-        // The fade and its period only change how the swap looks.
-        if behavior_action_source_node
-            .attributes
-            .iter()
-            .any(|attribute| {
-                !matches!(
-                    attribute.name(),
-                    "morphEntity" | "morphTargetEntityType" | "morphFade" | "morphPeriod"
-                )
-            })
-            || source_value_reading::read_optional_trimmed_string_attribute(
-                behavior_action_source_node,
-                "morphEntity",
-            )
-            .as_deref()
-                != Some("target")
-        {
-            return Err(invalid_behavior_source_data(
-                "ZTBehMorph has unmapped authored policy",
-            ));
-        }
-        let attribute = source_value_reading::read_optional_trimmed_string_attribute(
-            behavior_action_source_node,
-            "morphTargetEntityType",
-        )
-        .ok_or_else(|| invalid_behavior_source_data("ZTBehMorph has no morphTargetEntityType"))?;
-        return Ok(BehaviorAction::MorphTarget(
-            openzt2_game_data::AssetId::from_key(&attribute.to_ascii_lowercase()),
-        ));
-    }
-
     Err(invalid_behavior_source_data(format!(
         "unmapped behavior action {}",
         behavior_action_source_node.name
     )))
+}
+
+fn lower_traversal_or_morph(node: &DataNode) -> io::Result<Option<BehaviorAction>> {
+    use openzt2_game_data::behavior::action_record::BehaviorMorphRecipient;
+    use source_value_reading::{
+        read_boolean_attribute_or_false, read_optional_float_attribute,
+        read_optional_trimmed_string_attribute,
+    };
+    let required = |attribute| {
+        read_optional_trimmed_string_attribute(node, attribute).ok_or_else(|| {
+            invalid_behavior_source_data(format!("{} requires {attribute}", node.name))
+        })
+    };
+    match node.name.as_str() {
+        "BFBehDockTAP" => Ok(Some(BehaviorAction::DockTraversal {
+            subject_node: required("subjectNode")?,
+            target_path: required("targetTAP")?,
+            clip: read_optional_trimmed_string_attribute(node, "targetAnim"),
+        })),
+        "BFBehAnimateTAP" => Ok(Some(BehaviorAction::AnimateTraversal {
+            subject_node: required("subjectNode")?,
+            target_path: required("targetTAP")?,
+            exit: read_boolean_attribute_or_false(node, "exitTap")?
+                || read_boolean_attribute_or_false(node, "exitTAP")?,
+        })),
+        "ZTBehMorph" => {
+            let recipient = match required("morphEntity")?.to_ascii_lowercase().as_str() {
+                "subject" => BehaviorMorphRecipient::Subject,
+                "target" => BehaviorMorphRecipient::Target,
+                name => {
+                    BehaviorMorphRecipient::NamedChild(openzt2_game_data::AssetId::from_key(name))
+                }
+            };
+            let definition = openzt2_game_data::AssetId::from_key(
+                &required("morphTargetEntityType")?.to_ascii_lowercase(),
+            );
+            if matches!(recipient, BehaviorMorphRecipient::Target)
+                && definition == openzt2_game_data::AssetId::from_key("s_broken")
+            {
+                return Ok(Some(BehaviorAction::MorphTarget(definition)));
+            }
+            let seconds = read_optional_float_attribute(node, "morphPeriod")?.unwrap_or_default();
+            let period = std::time::Duration::try_from_secs_f32(seconds)
+                .map_err(|_| invalid_behavior_source_data("invalid morphPeriod"))?;
+            Ok(Some(BehaviorAction::MorphEntity {
+                recipient,
+                definition,
+                name_it: read_boolean_attribute_or_false(node, "NameIt")?,
+                fade: read_boolean_attribute_or_false(node, "morphFade")?,
+                period,
+            }))
+        }
+        _ => Ok(None),
+    }
 }

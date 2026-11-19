@@ -19,7 +19,10 @@ impl AssetLoader for AnimationSetSourceAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_animation_set", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_animation_set", skip_all)
+    )]
     async fn load(
         &self,
         animation_set_source_reader: &mut dyn Reader,

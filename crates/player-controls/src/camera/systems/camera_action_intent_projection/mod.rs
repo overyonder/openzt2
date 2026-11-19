@@ -1,9 +1,9 @@
 use bevy::prelude::*;
 
 use crate::input::input_execution_types::DeviceControlAxes;
+use bevy::input::mouse::AccumulatedMouseScroll;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::GameAction;
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool;
 
 use super::super::camera_runtime_state_types::CameraMode;
@@ -16,7 +16,7 @@ use crate::camera::camera_execution_types::CameraIntent;
 pub(crate) fn project_camera_actions_into_camera_intent(
     mut actions: MessageReader<ActionRequest>,
     axes: Res<DeviceControlAxes>,
-    pointer: Res<PrimaryPointerInputState>,
+    scroll: Res<AccumulatedMouseScroll>,
     tool: Res<ConstructionTool>,
     placement_policy: Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>,
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
@@ -67,7 +67,7 @@ pub(crate) fn project_camera_actions_into_camera_intent(
             if capture.wheel
                 == openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture::World
             {
-                queue_wheel_zoom(&mut intent.wheel_zoom, pointer.wheel_y);
+                queue_wheel_zoom(&mut intent.wheel_zoom, scroll.delta.y);
             }
         } else {
             intent.pan_directions = [0.0; 4];

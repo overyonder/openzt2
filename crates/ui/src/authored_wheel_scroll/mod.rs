@@ -1,5 +1,6 @@
 use bevy::{
     input::mouse::{MouseScrollUnit, MouseWheel},
+    picking::events::PointerScroll,
     prelude::*,
 };
 
@@ -10,7 +11,7 @@ use openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture;
 
 /// Picking resolves one wheel receiver independently of click hover.
 pub fn scroll_captured_authored_list_or_window_from_mouse_wheel(
-    mut wheel: MessageReader<MouseWheel>,
+    (mut pointer_scroll, mut wheel): (MessageReader<PointerScroll>, MessageReader<MouseWheel>),
     capture: Res<UiPointerCapture>,
     mut panels: Query<(&mut ScrollPosition, &ComputedNode, &Node)>,
     mut diagnostic: Option<ResMut<AuthoredWheelScrollDiagnosticState>>,
@@ -18,7 +19,7 @@ pub fn scroll_captured_authored_list_or_window_from_mouse_wheel(
     let record_input = diagnostic.is_some();
     let mut event_count = 0usize;
     let mut first_event = None;
-    let delta = wheel.read().fold(0.0, |total, event| {
+    let raw_delta = wheel.read().fold(0.0, |total, event| {
         if record_input {
             event_count += 1;
             if first_event.is_none() {
@@ -33,6 +34,23 @@ pub fn scroll_captured_authored_list_or_window_from_mouse_wheel(
                     1.0
                 }
     });
+    let mut targeted = false;
+    let pointer_delta = pointer_scroll
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && Some(event.entity) == capture.target)
+        .map(|event| {
+            targeted = true;
+            -event.y
+                * if event.unit == MouseScrollUnit::Line {
+                    28.0
+                } else {
+                    1.0
+                }
+        })
+        .sum::<f32>();
+    // A rectangular list can consume wheel input while none of its empty
+    // cells participates in alpha picking.
+    let delta = if targeted { pointer_delta } else { raw_delta };
     let mut record = |applied, outcome| {
         if let Some(diagnostic) = diagnostic.as_deref_mut() {
             diagnostic.record_consumption(AuthoredWheelScrollConsumption {

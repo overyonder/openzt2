@@ -1,9 +1,9 @@
 use super::*;
-use arrayvec::ArrayVec;
 use openzt2_game_data::{
     behavior::document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
     AssetId,
 };
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 
 #[derive(Component)]
 struct SelectionAttempts {
@@ -13,16 +13,17 @@ struct SelectionAttempts {
 
 fn record_guest_selection_attempts(
     clock: Res<ZooClock>,
+    rejections: BehaviorTargetRejections,
     mut actors: Query<
-        (&BehaviorTargetRetryDelays, &mut SelectionAttempts),
+        (Entity, &mut SelectionAttempts),
         (
             With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
             Without<BehaviorTaskExecutionState>,
         ),
     >,
 ) {
-    for (delays, mut attempts) in &mut actors {
-        if !delays.rejects(attempts.target) {
+    for (actor, mut attempts) in &mut actors {
+        if !rejections.rejects(actor, attempts.target) {
             attempts.accepted_updates.push(clock.tick);
         }
     }
@@ -30,16 +31,17 @@ fn record_guest_selection_attempts(
 
 fn record_staff_selection_attempts(
     clock: Res<ZooClock>,
+    rejections: BehaviorTargetRejections,
     mut actors: Query<
-        (&BehaviorTargetRetryDelays, &mut SelectionAttempts),
+        (Entity, &mut SelectionAttempts),
         (
             With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
             Without<BehaviorTaskExecutionState>,
         ),
     >,
 ) {
-    for (delays, mut attempts) in &mut actors {
-        if !delays.rejects(attempts.target) {
+    for (actor, mut attempts) in &mut actors {
+        if !rejections.rejects(actor, attempts.target) {
             attempts.accepted_updates.push(clock.tick);
         }
     }
@@ -109,11 +111,8 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
         .spawn(DefinitionId(AssetId::from_key("service")))
         .id();
     let rejected = || {
-        let mut delays = BehaviorTargetRetryDelays::default();
-        delays.record_failure(target, policy);
         (
             WorldMember { root },
-            delays,
             SelectionAttempts {
                 target,
                 accepted_updates: Vec::new(),
@@ -122,6 +121,9 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
     };
     let guest = app.world_mut().spawn((Guest, rejected())).id();
     let staff = app.world_mut().spawn((Staff, rejected())).id();
+    for actor in [guest, staff] {
+        update_behavior_target_retry(app.world_mut(), actor, target, Some(policy));
+    }
     let document = app
         .world_mut()
         .resource_mut::<Assets<BehaviorDocumentAsset>>()
@@ -150,7 +152,7 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
                 repetitions: 0,
                 next_action_tick: 0,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             },
         ))
         .id();
@@ -219,7 +221,7 @@ fn check_guest_and_staff_selection_window(interval: u32, cap: u32) {
                     repetitions: 0,
                     next_action_tick: 0,
                     interaction_slot: None,
-                    stack: ArrayVec::new(),
+                    depth: 0,
                 },
             ));
         }
@@ -297,12 +299,21 @@ fn unsupported_nested_set_fails_instead_of_returning_success_to_its_parent() {
         next_action_tick: 0,
         object: None,
         interaction_slot: None,
-        stack: ArrayVec::new(),
+        depth: 0,
     };
-    task.stack.push(task.create_return_frame_after_action(0));
+    let return_frame = task.create_return_frame_after_action(0);
+    task.depth = 1;
     task.program = program;
     task.declaration = 0;
     let actor = app.world_mut().spawn(task).id();
+    app.world_mut().spawn((
+        openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationOf(
+            actor,
+        ),
+        openzt2_zoo_state::behavior_task_execution_types::continuations::SuspendedBehaviorFrame(
+            return_frame,
+        ),
+    ));
     for tick in 1..=3 {
         app.world_mut().resource_mut::<ZooClock>().tick = tick;
         app.update();

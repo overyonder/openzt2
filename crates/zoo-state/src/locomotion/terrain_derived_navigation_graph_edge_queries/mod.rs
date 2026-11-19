@@ -1,37 +1,67 @@
+use crate::aquatic::tank_navigation_water::TankNavigationWater;
 use crate::locomotion::locomotion_types::NavFlags;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdge;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphEdgeFlags;
+use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphNode;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphTraversalKind;
 
 impl TerrainDerivedNavigationGraph {
-    pub fn iterate_outgoing_navigation_graph_edges(
-        &self,
+    pub fn iterate_outgoing_navigation_graph_edges<'a>(
+        &'a self,
         source_navigation_node: u32,
-    ) -> impl Iterator<Item = TerrainDerivedNavigationGraphEdge> + '_ {
+        tank_water: Option<&'a TankNavigationWater>,
+    ) -> impl Iterator<Item = TerrainDerivedNavigationGraphEdge> + 'a {
+        let source = self.effective_navigation_node(source_navigation_node, tank_water);
+        let tank_covers_source = tank_water
+            .and_then(|water| water.depth_centimetres(source_navigation_node))
+            .is_some();
         self.terrain_neighbors
             .get(source_navigation_node as usize)
             .into_iter()
             .flatten()
             .copied()
             .filter(|&next| next != u32::MAX)
-            .filter_map(move |next| self.derive_navigation_graph_edge(source_navigation_node, next))
+            .filter_map(move |next| {
+                self.derive_navigation_graph_edge(source_navigation_node, source?, next, tank_water)
+            })
             .chain(
                 self.path_surface_edges
                     .get(&source_navigation_node)
                     .into_iter()
                     .flatten()
-                    .copied(),
+                    .copied()
+                    .map(move |edge| {
+                        if tank_covers_source
+                            || tank_water
+                                .and_then(|water| water.depth_centimetres(edge.destination_node))
+                                .is_some()
+                        {
+                            if let Some(effective) = source.and_then(|source| {
+                                self.derive_navigation_graph_edge(
+                                    source_navigation_node,
+                                    source,
+                                    edge.destination_node,
+                                    tank_water,
+                                )
+                            }) {
+                                return effective;
+                            }
+                        }
+                        edge
+                    }),
             )
     }
 
     pub(super) fn derive_navigation_graph_edge(
         &self,
         source_navigation_node: u32,
+        source_node: TerrainDerivedNavigationGraphNode,
         destination_navigation_node: u32,
+        tank_water: Option<&TankNavigationWater>,
     ) -> Option<TerrainDerivedNavigationGraphEdge> {
-        let source_node = self.find_navigation_node(source_navigation_node)?;
-        let destination_node = self.find_navigation_node(destination_navigation_node)?;
+        let destination_node =
+            self.effective_navigation_node(destination_navigation_node, tank_water)?;
         let traverses_water = source_node.eligibility_flags.contains(NavFlags::WATER);
         let crosses_shore =
             traverses_water != destination_node.eligibility_flags.contains(NavFlags::WATER);

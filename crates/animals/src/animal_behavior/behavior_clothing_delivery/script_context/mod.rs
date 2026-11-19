@@ -10,7 +10,9 @@ use openzt2_game_assets::{
         },
     },
 };
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_zoo_state::behavior_task_execution_types::{
+    running_actions::RunningBehaviorInstruction, BehaviorTaskExecutionState,
+};
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 
 #[derive(SystemParam)]
@@ -40,6 +42,7 @@ impl ClothingScriptContext<'_, '_> {
     pub(crate) fn prepare(
         &self,
         task: &BehaviorTaskExecutionState,
+        instruction: &RunningBehaviorInstruction,
         textures: Vec<ClothingScriptTexture>,
     ) -> mlua::Result<PendingClothingDelivery> {
         let textures = textures
@@ -69,9 +72,7 @@ impl ClothingScriptContext<'_, '_> {
             })
             .collect::<mlua::Result<Vec<_>>>()?;
         Ok(PendingClothingDelivery {
-            execution_id: task.execution_id,
-            origin: task.create_return_frame_after_action(task.action),
-            stack_depth: task.stack.len(),
+            instruction: instruction.id(),
             target: task.target(),
             textures,
         })

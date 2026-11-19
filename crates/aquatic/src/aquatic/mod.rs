@@ -46,7 +46,10 @@ pub struct AquaticPlugin;
 
 impl Plugin for AquaticPlugin {
     fn build(&self, app: &mut App) {
-        app.add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
+        app.init_resource::<tank_height_bounds::TankPathClearance>()
+            .add_observer(tank_height_bounds::record_path_clearance)
+            .add_observer(tank_height_bounds::discard_path_clearance)
+            .add_message::<aquatic_simulation_types::AddAquaticWaterDirt>()
             .add_message::<CommitTankGeometryEdit>()
             .add_message::<TankGeometryEditAcknowledged>()
             .add_message::<TankGeometryEditPrepared>()
@@ -112,8 +115,6 @@ impl Plugin for AquaticPlugin {
                         project_changed_tank_facts_into_live_aquatic_animal_suitability
                             .after(tank_fact_hydration::initialize_legacy_tank_water_limits),
                     ).chain(),
-                    project_changed_tank_depth_into_show_eligibility
-                        .after(tank_fact_hydration::initialize_legacy_tank_water_limits),
                 )
                     .in_set(FixedGameSet::Think),
             )
@@ -126,6 +127,13 @@ impl Plugin for AquaticPlugin {
                     aquatic_home_invalidation::notify_terminal_aquatic_animal_departures,
                 )
                     .chain()
+                    .in_set(FixedGameSet::Cleanup)
+                    .after(openzt2_zoo_state::habitat::habitat_types::HabitatTopologyPublication),
+            )
+            .add_systems(
+                FixedUpdate,
+                project_changed_tank_depth_into_show_eligibility
+                    .after(project_changed_habitat_and_terrain_geometry_into_tanks)
                     .in_set(FixedGameSet::Cleanup),
             )
             .add_systems(

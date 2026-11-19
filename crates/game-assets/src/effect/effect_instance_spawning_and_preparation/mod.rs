@@ -9,15 +9,14 @@ use bevy::ecs::system::SystemParam;
 use bevy::gltf::GltfMesh;
 use bevy::prelude::*;
 use bevy_hanabi::{
-    EffectAsset, EffectDeltaTime, EffectMaterial, EffectMesh, EffectParent, EffectSpawner,
-    ParticleEffect,
+    EffectAsset, EffectDeltaTime, EffectMesh, EffectParent, EffectSpawner, ParticleEffect,
 };
 use openzt2_game_data::AssetId;
 
 use super::{
     effect_runtime_types::{
         ControlledEffectEmissionState, EffectRetirementReadback, ParticleEffectDocumentInstance,
-        PendingEffectInstance,
+        ParticleEffectGraphReady, PendingEffectInstance,
     },
     explicit_particle_emission::ParticleEffectPointEmitter,
     particle_plane_binding::UsesParticleEffectPlane,
@@ -102,13 +101,12 @@ fn spawn_pending_effect_instance(
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) enum AuthoredParticleChild {
     Root(AssetId),
-    Collision { slot: usize, emitter: AssetId },
+    Collision { emitter: AssetId, occurrence: usize },
 }
 
 #[derive(SystemParam)]
 pub(super) struct PreparedParticleInstanceProjection<'w, 's> {
     commands: Commands<'w, 's>,
-    materials: Res<'w, Assets<MaterialAsset>>,
     prototype_meshes: Res<'w, Assets<GltfMesh>>,
     effects: Res<'w, Assets<EffectAsset>>,
     children: Query<'w, 's, &'static Children>,
@@ -121,7 +119,6 @@ pub(super) struct PreparedParticleInstanceProjection<'w, 's> {
             &'static mut ParticleEffect,
             Option<&'static mut EffectSpawner>,
             Has<EffectRetirementReadback>,
-            Option<&'static mut EffectMaterial>,
             Option<&'static mut EffectMesh>,
             Has<UsesParticleEffectPlane>,
             Has<ParticleEffectPointEmitter>,
@@ -301,12 +298,14 @@ impl PreparedParticleInstanceProjection<'_, '_> {
             return false;
         }
         let mut previous = self.projected_children(entity);
+        let mut ordered = Vec::with_capacity(document.roots.len());
         for &id in &document.roots {
             let Some(emitter) = document.prepared_emitters.get(&id) else {
                 continue;
             };
             let role = AuthoredParticleChild::Root(id);
             let child = self.take_or_spawn_child(entity, None, role, &mut previous);
+            ordered.push(child);
             self.project_emitter(
                 child,
                 source,
@@ -314,11 +313,10 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                 id,
                 emitter,
                 &emitter.effect,
-                false,
                 manual_count,
             );
         }
-        self.retire_replaced_children(previous);
+        self.reconcile_child_order(entity, ordered, previous);
         true
     }
 
@@ -346,16 +344,7 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         } else {
             &emitter.effect
         };
-        self.project_emitter(
-            entity,
-            source,
-            document,
-            id,
-            emitter,
-            effect,
-            wave,
-            manual_count,
-        );
+        self.project_emitter(entity, source, document, id, emitter, effect, manual_count);
         true
     }
 
@@ -367,19 +356,20 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         id: AssetId,
         emitter: &PreparedParticleEmitter,
         effect: &Handle<EffectAsset>,
-        wave: bool,
         manual_count: u32,
     ) {
         let mut previous = self.projected_children(entity);
-        for (slot, collision) in emitter.collision_children.iter().enumerate() {
+        let mut ordered = Vec::with_capacity(emitter.collision_children.len());
+        for collision in &emitter.collision_children {
             let Some(child_emitter) = document.prepared_emitters.get(&collision.emitter) else {
                 continue;
             };
             let role = AuthoredParticleChild::Collision {
-                slot,
                 emitter: collision.emitter,
+                occurrence: collision.occurrence,
             };
             let child = self.take_or_spawn_child(entity, Some(entity), role, &mut previous);
+            ordered.push(child);
             self.project_emitter(
                 child,
                 source,
@@ -387,26 +377,11 @@ impl PreparedParticleInstanceProjection<'_, '_> {
                 collision.emitter,
                 child_emitter,
                 &collision.effect,
-                false,
                 0,
             );
         }
-        self.retire_replaced_children(previous);
+        self.reconcile_child_order(entity, ordered, previous);
 
-        let material_images = emitter
-            .material
-            .as_ref()
-            .and_then(|handle| self.materials.get(handle))
-            .and_then(|material| {
-                if wave {
-                    Some(vec![
-                        material.bound_texture_asset("Texture0")?.clone(),
-                        material.bound_texture_asset("Texture1")?.clone(),
-                    ])
-                } else {
-                    Some(vec![material.first_bound_texture_asset()?.clone()])
-                }
-            });
         let prototype = emitter
             .prototype_mesh
             .as_ref()
@@ -414,17 +389,11 @@ impl PreparedParticleInstanceProjection<'_, '_> {
             .and_then(|mesh| mesh.primitives.first())
             .map(|primitive| EffectMesh(primitive.mesh.clone()));
         let mut target = self.commands.entity(entity);
-        if let Ok((
-            mut live,
-            mut particle,
-            spawner,
-            draining,
-            material,
-            mesh,
-            uses_plane,
-            explicit,
-        )) = self.live.get_mut(entity)
+        target.remove::<ParticleEffectGraphReady>();
+        if let Ok((mut live, mut particle, spawner, draining, mesh, uses_plane, explicit)) =
+            self.live.get_mut(entity)
         {
+            // Force a refresh of the draw configuration when the winning document changes.
             live.simulation_clock = emitter.clock;
             particle.handle = effect.clone();
             if let (Some(mut spawner), Some(effect)) = (spawner, self.effects.get(effect)) {
@@ -439,20 +408,6 @@ impl PreparedParticleInstanceProjection<'_, '_> {
             }
             if draining && !explicit {
                 target.remove::<(EffectRetirementReadback, bevy_hanabi::ParticleAliveCount)>();
-            }
-            match (material_images, material) {
-                (Some(images), Some(mut material)) => {
-                    if images != material.images {
-                        material.images = images;
-                    }
-                }
-                (Some(images), None) => {
-                    target.insert(EffectMaterial { images });
-                }
-                (None, Some(_)) => {
-                    target.remove::<EffectMaterial>();
-                }
-                (None, None) => {}
             }
             if !explicit {
                 match (prototype, mesh) {
@@ -489,9 +444,6 @@ impl PreparedParticleInstanceProjection<'_, '_> {
             if emitter.uses_plane {
                 target.insert(UsesParticleEffectPlane);
             }
-            if let Some(images) = material_images {
-                target.insert(EffectMaterial { images });
-            }
             if let Some(prototype) = prototype {
                 target.insert(prototype);
             }
@@ -527,9 +479,28 @@ impl PreparedParticleInstanceProjection<'_, '_> {
         child.id()
     }
 
-    fn retire_replaced_children(&mut self, obsolete: Vec<(Entity, AuthoredParticleChild)>) {
+    fn reconcile_child_order(
+        &mut self,
+        parent: Entity,
+        mut ordered: Vec<Entity>,
+        obsolete: Vec<(Entity, AuthoredParticleChild)>,
+    ) {
         for (child, _) in obsolete {
             self.commands.entity(child).try_despawn();
+        }
+        let current = self.children.get(parent).ok();
+        ordered.extend(
+            current
+                .into_iter()
+                .flat_map(|children| children.iter())
+                .filter(|&child| !self.child_roles.contains(child)),
+        );
+        if !current
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .eq(ordered.iter().copied())
+        {
+            self.commands.entity(parent).replace_children(&ordered);
         }
     }
 }

@@ -1,11 +1,11 @@
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::GameAction;
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_zoo_state::habitat::habitat_membership_and_containment::locate_habitat_at_world_position;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
@@ -19,7 +19,7 @@ use super::{
 /// Assigns the selected worker to the habitat clicked in the world.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
-    pointer_input: Res<PrimaryPointerInputState>,
+    mut pointer_inputs: MessageReader<PointerInput>,
     pointer_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     modal_input: Res<
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
@@ -29,10 +29,14 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     habitat_index: Res<HabitatIndex>,
     topology_grid: Res<TopologyGrid>,
     assignment_modes: Query<(), (With<UiDocumentRoot>, With<StaffAssignmentMode>)>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     mut staff_assignments: Query<&mut StaffAssignment, With<Staff>>,
 ) {
-    if !pointer_input.just_pressed
+    let primary_just_pressed = pointer_inputs.read().any(|input| {
+        input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
+    });
+    pointer_inputs.clear();
+    if !primary_just_pressed
         || pointer_capture.over_ui
         || modal_input.0.is_some()
         || assignment_modes.is_empty()
@@ -42,7 +46,7 @@ pub(crate) fn assign_selected_staff_to_habitat_under_world_pointer(
     let Some(world_pointer_ray) = world_pointer_ray.0 else {
         return;
     };
-    let Some(selected_worker) = selected_entity.0 else {
+    let Some(selected_worker) = selected_entity.subject() else {
         return;
     };
     let Ok(mut staff_assignment) = staff_assignments.get_mut(selected_worker) else {

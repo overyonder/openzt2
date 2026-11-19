@@ -10,7 +10,6 @@ use openzt2_game_assets::world_scenario::world_scenario_asset_set_state_and_borr
 use openzt2_game_assets::world_scenario::world_scenario_document_asset_and_dependency_handles::WorldScenarioDocumentAsset;
 use openzt2_interface_state::persistence::profile_types::ProfileIndex;
 use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
-use openzt2_interface_state::ui::ui_document_lifecycle_contracts::ShowUiRole;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 use openzt2_world_state::world_spawn::world_load_request_acceptance::BeginWorldLoad;
 

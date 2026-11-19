@@ -29,13 +29,13 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use openzt2_world_state::animation_graph::model_animation_asset_binding_types::PendingModelAnimationAssets;
 
+use crate::model_render::prefab_render_lod_tier_projection::bind_prefab_lod;
 use crate::world_spawn::prefab_effect_trigger_hydration::spawn_prefab_effect_triggers;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
 use openzt2_world_state::world_spawn::prefab_authored_billboard_orientation_mode::PrefabAuthoredBillboardOrientationMode;
 use openzt2_world_state::world_spawn::prefab_authored_rotation_cycle_advancement::PrefabAuthoredRotationCycle;
 use openzt2_world_state::world_spawn::prefab_authored_transform_animation_advancement::PrefabAuthoredTransformAnimation;
-use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::PrefabModelLevelOfDetailVisibilityRange;
 use openzt2_world_state::world_spawn::prefab_object_presentation_attachment_projection::PrefabObjectPresentationAttachmentProjection;
 use openzt2_world_state::world_spawn::prefab_presentation_types::PrefabLocalRenderBound;
 use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
@@ -202,16 +202,7 @@ pub fn hydrate_loaded_scene_prefab_into_world_instance_root(
             );
         }
         for lod in &row.lods {
-            commands
-                .entity(entities[entity])
-                .insert(PrefabModelLevelOfDetailVisibilityRange {
-                    group: entities[lod.group_entity as usize],
-                    ordinal: lod.ordinal,
-                    center_m: bevy::math::Vec3::from_array(lod.center_m),
-                    near_m: lod.near_m,
-                    far_m: lod.far_m,
-                    active_without_range: lod.active_without_range,
-                });
+            bind_prefab_lod(commands, &entities, entities[entity], lod);
         }
     }
 

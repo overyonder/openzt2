@@ -67,14 +67,25 @@ pub(super) fn advance_ui_animations(
         Option<&mut TextColor>,
         Option<&NotifyOnUiAnimationComplete>,
         Option<&UiAnimationOrigin>,
+        Has<super::authored_ui_node_projection_components::UiNodeId>,
     )>,
     mut visual_images: Query<&mut ImageNode, With<UiVisualLayer>>,
     mut visual_backgrounds: Query<&mut BackgroundColor, (With<UiVisualLayer>, Without<ImageNode>)>,
     mut completed: MessageWriter<UiAnimationCompleted>,
+    mut activated: MessageWriter<UiNodeActivated>,
 ) {
     let delta_ms = time.delta_secs() * 1000.0;
-    for (entity, mut animation, mut node, mut visibility, children, text_color, notify, origin) in
-        &mut nodes
+    for (
+        entity,
+        mut animation,
+        mut node,
+        mut visibility,
+        children,
+        text_color,
+        notify,
+        origin,
+        authored,
+    ) in &mut nodes
     {
         if !animation.running {
             continue;
@@ -133,7 +144,13 @@ pub(super) fn advance_ui_animations(
         if animation.elapsed_ms == 0.0 || animation.elapsed_ms == animation.duration_ms {
             animation.running = false;
             if !animation.forward {
-                *visibility = Visibility::Hidden;
+                super::authored_ui_change_activation_dispatch::apply_visibility_transition(
+                    entity,
+                    &mut visibility,
+                    Visibility::Hidden,
+                    authored,
+                    &mut activated,
+                );
             }
             if notify.is_some() {
                 completed.write(UiAnimationCompleted { entity });
@@ -201,6 +218,7 @@ mod tests {
         application
             .init_resource::<Time<Real>>()
             .add_message::<UiAnimationCompleted>()
+            .add_message::<UiNodeActivated>()
             .add_systems(Update, advance_ui_animations);
         let child = application.world_mut().spawn_empty().id();
         let entity = application

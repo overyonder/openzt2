@@ -9,13 +9,19 @@ use bevy::{
         schedule::Core3d,
         Core3dSystems,
     },
+    mesh::VertexBufferLayout,
     prelude::*,
     render::{
         extract_component::{ExtractComponent, ExtractComponentPlugin},
+        render_resource::{
+            CachedRenderPipelineId, PipelineCache, RenderPipelineDescriptor,
+            SpecializedRenderPipeline, SpecializedRenderPipelines, VertexState,
+        },
         renderer::{RenderContext, RenderDevice, RenderQueue, ViewQuery},
         view::ViewDepthStencilTexture,
         Render, RenderApp, RenderSystems,
     },
+    shader::Shader,
 };
 
 /// Camera-owned draw input and asynchronous result, shared only across extraction.
@@ -53,9 +59,25 @@ pub(in crate::terrain) struct WaterRayOcclusionPlugin;
 impl Plugin for WaterRayOcclusionPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(ExtractComponentPlugin::<WaterRayViewOcclusion>::default());
-        let Some(render) = app.get_sub_app_mut(RenderApp) else {
+        if app.get_sub_app(RenderApp).is_none() {
             return;
-        };
+        }
+        app.world_mut()
+            .resource_mut::<Assets<Shader>>()
+            .insert(
+                WATER_RAY_OCCLUSION_SHADER.id(),
+                Shader::from_wgsl(
+                    include_str!("occlusion.wgsl"),
+                    "embedded://openzt2/water-ray-occlusion.wgsl",
+                ),
+            )
+            .expect("water ray occlusion shader uses a UUID handle");
+        let render = app.sub_app_mut(RenderApp);
+        render.init_resource::<SpecializedRenderPipelines<WaterRayOcclusionPipeline>>();
+        render.add_systems(
+            Render,
+            prepare_water_ray_view_queries.in_set(RenderSystems::PrepareResources),
+        );
         render.add_systems(
             Core3d,
             query_water_ray_occlusion
@@ -70,14 +92,81 @@ impl Plugin for WaterRayOcclusionPlugin {
     }
 }
 
+const WATER_RAY_OCCLUSION_SHADER: Handle<Shader> =
+    bevy::asset::uuid_handle!("216ec9aa-518c-4b5f-8b0d-c228c2f91449");
+
+struct WaterRayOcclusionPipeline;
+
+impl SpecializedRenderPipeline for WaterRayOcclusionPipeline {
+    type Key = (wgpu::TextureFormat, u32);
+
+    fn specialize(&self, (format, samples): Self::Key) -> RenderPipelineDescriptor {
+        RenderPipelineDescriptor {
+            label: Some("water ray occlusion".into()),
+            vertex: VertexState {
+                shader: WATER_RAY_OCCLUSION_SHADER,
+                entry_point: Some("vertex".into()),
+                buffers: vec![VertexBufferLayout::from_vertex_formats(
+                    wgpu::VertexStepMode::Vertex,
+                    [wgpu::VertexFormat::Float32x4],
+                )],
+                ..default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
+                stencil: default(),
+                bias: default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: samples,
+                ..default()
+            },
+            ..default()
+        }
+    }
+}
+
+#[derive(Component, PartialEq, Eq)]
+struct WaterRayViewPipeline(CachedRenderPipelineId);
+
+fn prepare_water_ray_view_queries(
+    mut commands: Commands,
+    pipeline_cache: Res<PipelineCache>,
+    mut pipelines: ResMut<SpecializedRenderPipelines<WaterRayOcclusionPipeline>>,
+    mut views: Query<
+        (
+            Entity,
+            &ViewDepthStencilTexture,
+            Option<&mut WaterRayViewPipeline>,
+            Has<WaterRayGpuQuery>,
+        ),
+        With<WaterRayViewOcclusion>,
+    >,
+) {
+    for (entity, depth, pipeline, prepared) in &mut views {
+        let next = WaterRayViewPipeline(pipelines.specialize(
+            &pipeline_cache,
+            &WaterRayOcclusionPipeline,
+            (depth.texture().format(), depth.texture().sample_count()),
+        ));
+        if let Some(mut current) = pipeline {
+            current.set_if_neq(next);
+        } else {
+            commands.entity(entity).insert(next);
+        }
+        if !prepared {
+            commands.entity(entity).insert(WaterRayGpuQuery::default());
+        }
+    }
+}
+
 struct ViewQueryBuffers {
     vertices: wgpu::Buffer,
     query: wgpu::QuerySet,
     resolve: wgpu::Buffer,
     readback: wgpu::Buffer,
-    pipeline: wgpu::RenderPipeline,
-    format: wgpu::TextureFormat,
-    samples: u32,
     issued: AtomicBool,
     pending: Arc<AtomicBool>,
     result: Arc<Mutex<Option<f32>>>,
@@ -89,18 +178,17 @@ struct WaterRayGpuQuery(Mutex<Option<ViewQueryBuffers>>);
 
 fn query_water_ray_occlusion(
     view: ViewQuery<(
-        Entity,
         &WaterRayViewOcclusion,
         &ViewDepthStencilTexture,
-        Option<&WaterRayGpuQuery>,
+        &WaterRayGpuQuery,
+        &WaterRayViewPipeline,
     )>,
-    mut commands: Commands,
     mut context: RenderContext,
+    pipeline_cache: Res<PipelineCache>,
     queue: Res<RenderQueue>,
 ) {
-    let (entity, request, depth, gpu) = view.into_inner();
-    let Some(gpu) = gpu else {
-        commands.entity(entity).insert(WaterRayGpuQuery::default());
+    let (request, depth, gpu, pipeline) = view.into_inner();
+    let Some(pipeline) = pipeline_cache.get_render_pipeline(pipeline.0) else {
         return;
     };
     let mut state = gpu
@@ -108,7 +196,6 @@ fn query_water_ray_occlusion(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let samples = depth.texture().sample_count();
-    let format = depth.texture().format();
     if state
         .as_ref()
         .is_some_and(|state| state.pending.load(Ordering::Acquire))
@@ -122,17 +209,11 @@ fn query_water_ray_occlusion(
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(0.0);
         return;
     }
-    if state.as_ref().is_none_or(|state| {
-        state.samples != samples
-            || state.format != format
-            || !Arc::ptr_eq(&state.result, &request.result)
-    }) {
-        *state = Some(create_view_query(
-            context.render_device(),
-            format,
-            samples,
-            request,
-        ));
+    if state
+        .as_ref()
+        .is_none_or(|state| !Arc::ptr_eq(&state.result, &request.result))
+    {
+        *state = Some(create_view_query(context.render_device(), request));
     }
     let Some(state) = state.as_ref() else {
         return;
@@ -151,7 +232,7 @@ fn query_water_ray_occlusion(
                 timestamp_writes: None,
                 multiview_mask: None,
             });
-        pass.set_pipeline(&state.pipeline);
+        pass.set_pipeline(pipeline);
         pass.set_vertex_buffer(0, state.vertices.slice(..));
         pass.begin_occlusion_query(0);
         pass.draw(0..6, 0..1);
@@ -172,54 +253,8 @@ fn query_water_ray_occlusion(
     state.issued.store(true, Ordering::Release);
 }
 
-use wgpu::util::DeviceExt;
-
-fn create_view_query(
-    device: &RenderDevice,
-    format: wgpu::TextureFormat,
-    samples: u32,
-    request: &WaterRayViewOcclusion,
-) -> ViewQueryBuffers {
+fn create_view_query(device: &RenderDevice, request: &WaterRayViewOcclusion) -> ViewQueryBuffers {
     let device = device.wgpu_device();
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("water ray occlusion"), source: wgpu::ShaderSource::Wgsl("@vertex fn vertex(@location(0) position: vec4<f32>) -> @builtin(position) vec4<f32> { return position; }".into()),
-    });
-    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("water ray occlusion"),
-        layout: None,
-        vertex: wgpu::VertexState {
-            module: &shader,
-            entry_point: Some("vertex"),
-            compilation_options: default(),
-            buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 16,
-                step_mode: wgpu::VertexStepMode::Vertex,
-                attributes: &[wgpu::VertexAttribute {
-                    format: wgpu::VertexFormat::Float32x4,
-                    offset: 0,
-                    shader_location: 0,
-                }],
-            })],
-        },
-        primitive: wgpu::PrimitiveState {
-            cull_mode: None,
-            ..default()
-        },
-        depth_stencil: Some(wgpu::DepthStencilState {
-            format,
-            depth_write_enabled: Some(false),
-            depth_compare: Some(wgpu::CompareFunction::GreaterEqual),
-            stencil: default(),
-            bias: default(),
-        }),
-        multisample: wgpu::MultisampleState {
-            count: samples,
-            ..default()
-        },
-        fragment: None,
-        multiview_mask: None,
-        cache: None,
-    });
     ViewQueryBuffers {
         vertices: device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("water ray occlusion vertices"),
@@ -244,9 +279,6 @@ fn create_view_query(
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         }),
-        pipeline,
-        format,
-        samples,
         issued: AtomicBool::new(false),
         pending: Arc::default(),
         result: request.result.clone(),
@@ -299,6 +331,8 @@ fn remove_inactive_view_queries(
     queries: Query<Entity, (With<WaterRayGpuQuery>, Without<WaterRayViewOcclusion>)>,
 ) {
     for entity in &queries {
-        commands.entity(entity).remove::<WaterRayGpuQuery>();
+        commands
+            .entity(entity)
+            .remove::<(WaterRayGpuQuery, WaterRayViewPipeline)>();
     }
 }

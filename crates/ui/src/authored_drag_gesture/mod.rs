@@ -2,6 +2,7 @@ use bevy::{
     ecs::relationship::RelationshipTarget,
     picking::{events::PointerDrag, pointer::PointerButton},
     prelude::*,
+    ui::UiGlobalTransform,
 };
 use openzt2_game_data::ui_document::widget_control::UiDragOperation;
 
@@ -26,7 +27,7 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
     handles: Query<(&UiAuthoredDragHandle, &ChildOf, &Children)>,
     drag_commands: Query<&UiAuthoredDragCommand>,
     parents: Query<&ChildOf>,
-    layout: Query<&ComputedNode>,
+    layout: Query<(&ComputedNode, &UiGlobalTransform)>,
     mut receivers: Query<(&mut Node, Option<&mut ScrollPosition>)>,
     ui_scale: Res<UiScale>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
@@ -63,14 +64,29 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
         let Ok((mut node, mut scroll)) = receivers.get_mut(receiver) else {
             continue;
         };
-        let containing_size = handle
-            .bounded
-            .then(|| {
-                let container = parents.get(receiver).ok()?;
-                let layout = layout.get(container.parent()).ok()?;
-                Some(layout.size() * layout.inverse_scale_factor())
-            })
-            .flatten();
+        let geometry = layout.get(receiver).ok().map(|(computed, transform)| {
+            let inverse_scale = computed.inverse_scale_factor();
+            let extent = computed.size() * inverse_scale;
+            let containing = parents
+                .get(receiver)
+                .ok()
+                .and_then(|parent| layout.get(parent.parent()).ok());
+            let (position, containing_size) =
+                containing.map_or((Vec2::ZERO, None), |(container, parent)| {
+                    let local = parent
+                        .affine()
+                        .inverse()
+                        .transform_point2(transform.affine().translation);
+                    let container_extent = container.size() * inverse_scale;
+                    (
+                        local * inverse_scale + (container_extent - extent) * 0.5,
+                        Some(container_extent),
+                    )
+                });
+            (extent, position, containing_size)
+        });
+        let (extent, origin, containing_size) = geometry.unwrap_or_default();
+        let containing_size = containing_size.filter(|_| handle.bounded);
         for command in commands
             .into_iter()
             .flat_map(|children| children.iter())
@@ -88,18 +104,20 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
             }
             match command.operation {
                 UiDragOperation::Move => {
-                    let width = node.width;
-                    let height = node.height;
+                    let width = pixel_or(node.width, extent.x);
+                    let height = pixel_or(node.height, extent.y);
                     move_axis(
                         &mut node.left,
                         width,
                         delta.x,
+                        origin.x,
                         containing_size.map(|size| size.x),
                     );
                     move_axis(
                         &mut node.top,
                         height,
                         delta.y,
+                        origin.y,
                         containing_size.map(|size| size.y),
                     );
                 }
@@ -107,12 +125,14 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
                     resize_axis(
                         &mut node.width,
                         delta.x,
+                        extent.x,
                         handle.minimum_size.x,
                         handle.maximum_size.x,
                     );
                     resize_axis(
                         &mut node.height,
                         delta.y,
+                        extent.y,
                         handle.minimum_size.y,
                         handle.maximum_size.y,
                     );
@@ -128,29 +148,31 @@ pub(super) fn apply_authored_drag_gestures_to_bevy_layout_or_scroll_position(
     }
 }
 
-fn move_axis(offset: &mut Val, size: Val, delta: f32, containing_size: Option<f32>) {
-    if delta == 0.0 {
-        return;
-    }
-    if let Val::Px(offset) = offset {
-        *offset += delta;
-        if let (Some(limit), Val::Px(size)) = (containing_size, size) {
-            *offset = offset.clamp(0.0, (limit - size).max(0.0));
-        }
+fn pixel_or(value: Val, computed: f32) -> f32 {
+    if let Val::Px(value) = value {
+        value
+    } else {
+        computed
     }
 }
 
-fn resize_axis(size: &mut Val, delta: f32, minimum: i32, maximum: i32) {
+fn move_axis(offset: &mut Val, size: f32, delta: f32, computed: f32, containing_size: Option<f32>) {
     if delta == 0.0 {
         return;
     }
-    if let Val::Px(size) = size {
-        let minimum = minimum.max(0) as f32;
-        let maximum = if maximum > 0 {
-            (maximum as f32).max(minimum)
-        } else {
-            f32::INFINITY
-        };
-        *size = (*size + delta).clamp(minimum, maximum);
+    let moved = pixel_or(*offset, computed) + delta;
+    *offset = px(containing_size.map_or(moved, |limit| moved.clamp(0.0, (limit - size).max(0.0))));
+}
+
+fn resize_axis(size: &mut Val, delta: f32, computed: f32, minimum: i32, maximum: i32) {
+    if delta == 0.0 {
+        return;
     }
+    let minimum = minimum.max(0) as f32;
+    let maximum = if maximum > 0 {
+        (maximum as f32).max(minimum)
+    } else {
+        f32::INFINITY
+    };
+    *size = px((pixel_or(*size, computed) + delta).clamp(minimum, maximum));
 }

@@ -1,4 +1,5 @@
 pub mod aquatic_simulation_types;
 pub mod aquatic_suitability_and_placement_calculations;
 pub mod tank_geometry_edit_types;
+pub mod tank_navigation_water;
 pub mod tank_wall_ground_sampling;

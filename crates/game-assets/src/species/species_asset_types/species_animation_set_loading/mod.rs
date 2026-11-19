@@ -10,11 +10,20 @@ impl SpeciesView<'_> {
         variant: &SpeciesVariant,
     ) -> Option<Handle<AnimationSetAsset>> {
         let id = variant.model_animation_set;
-        let asset = self.assets.get(self.animation_set_owners.get(&id)?)?;
-        let index = asset
-            .animation_sets
-            .binary_search_by_key(&id, |dependency| dependency.id)
-            .ok()?;
-        Some(server.load(asset.animation_sets[index].path.to_string()))
+        let path_at = |location: super::SpeciesDocumentRow| {
+            let asset = self
+                .assets
+                .get(self.index.loaded_handles.get(location.document)?)?;
+            let dependency = asset.animation_sets.get(location.index)?;
+            (dependency.id == id).then_some(&*dependency.path)
+        };
+        let path = self
+            .index
+            .by_variant
+            .get(&variant.id)
+            .and_then(|location| location.animation_set)
+            .and_then(path_at)
+            .or_else(|| path_at(*self.index.animation_set_owners.get(&id)?))?;
+        Some(server.load(path.to_owned()))
     }
 }

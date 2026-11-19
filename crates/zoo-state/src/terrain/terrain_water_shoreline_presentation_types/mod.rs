@@ -2,12 +2,19 @@ use bevy::prelude::*;
 use openzt2_game_data::terrain::TerrainWaterShoreConfiguration;
 
 /// One shoreline draw, parented to the terrain chunk that owns its mesh.
-#[derive(Component, Debug)]
+#[derive(Component, Debug, PartialEq)]
 pub struct TerrainWaterShorelineSurface {
-    pub material_owner: Entity,
     pub biome_index: u8,
     pub surface_plane_height: f32,
 }
+
+#[derive(Component)]
+#[relationship(relationship_target = TerrainShorelineDraws)]
+pub struct TerrainShorelineRegion(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TerrainShorelineRegion, linked_spawn)]
+pub struct TerrainShorelineDraws(Vec<Entity>);
 
 /// Animated texture coordinates for one shoreline material instance.
 #[derive(Component, Debug)]

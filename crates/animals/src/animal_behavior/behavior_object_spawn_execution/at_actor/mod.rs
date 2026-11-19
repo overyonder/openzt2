@@ -1,4 +1,7 @@
 use super::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSpawnObjectAtActor, RunningBehaviorInstruction,
+};
 #[cfg(test)]
 mod tests;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
@@ -8,7 +11,6 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 /// such as the `TrashGround` a guest drops, once its model has loaded.
 pub(super) fn spawn_behavior_objects_at_actor(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -19,7 +21,11 @@ pub(super) fn spawn_behavior_objects_at_actor(
     mut actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorSpawnObjectAtActor,
+            ),
             &WorldMember,
             Option<&mut BehaviorRandomStream>,
             Option<&mut GuestRng>,
@@ -31,16 +37,16 @@ pub(super) fn spawn_behavior_objects_at_actor(
     let Some(view) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, mut task, world, animal_random, guest_random, pending) in &mut actors {
+    for (actor, (task, instruction, running_action), world, animal_random, guest_random, pending) in
+        &mut actors
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::SpawnObjectAtActor { entity, pose }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let RunBehaviorSpawnObjectAtActor { entity, pose } = running_action;
         let Some(object) = view.find_object(*entity) else {
             if definitions.is_complete() {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -135,6 +141,6 @@ pub(super) fn spawn_behavior_objects_at_actor(
         if pending.is_some() {
             commands.entity(actor).remove::<PendingAtActorSpawnPrefab>();
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

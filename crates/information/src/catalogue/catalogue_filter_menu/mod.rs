@@ -52,7 +52,7 @@ pub(crate) fn populate_catalogue_filter_menu(
         &InheritedVisibility,
     )>,
     parents: Query<&ChildOf>,
-    existing_rows: Query<(Entity, &UiListRow)>,
+    existing_rows: Query<(Entity, &ChildOf), With<UiListRow>>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -166,8 +166,8 @@ pub(crate) fn populate_catalogue_filter_menu(
                     }
                 }
             }
-            for (entity, row) in &existing_rows {
-                if row.list == drop_entity {
+            for (entity, parent) in &existing_rows {
+                if parent.parent() == drop_entity {
                     commands.entity(entity).despawn();
                 }
             }
@@ -183,10 +183,7 @@ pub(crate) fn populate_catalogue_filter_menu(
                 false,
             );
             commands.entity(all).insert((
-                UiListRow {
-                    list: drop_entity,
-                    index: 0,
-                },
+                UiListRow { index: 0 },
                 CatalogueFilterChoice {
                     type_list,
                     drop_list: drop_entity,
@@ -207,10 +204,7 @@ pub(crate) fn populate_catalogue_filter_menu(
                     None,
                     false,
                 );
-                commands.entity(divider).insert(UiListRow {
-                    list: drop_entity,
-                    index,
-                });
+                commands.entity(divider).insert(UiListRow { index });
                 index = index.saturating_add(1);
                 for value in values.keys() {
                     let row = project_document(
@@ -225,10 +219,7 @@ pub(crate) fn populate_catalogue_filter_menu(
                         false,
                     );
                     commands.entity(row).insert((
-                        UiListRow {
-                            list: drop_entity,
-                            index,
-                        },
+                        UiListRow { index },
                         CatalogueFilterChoice {
                             type_list,
                             drop_list: drop_entity,

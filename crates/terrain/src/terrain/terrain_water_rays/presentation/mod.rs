@@ -55,9 +55,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
-    for (_, _, _, _, mut visibility, _, _) in &mut effects {
-        visibility.set_if_neq(Visibility::Hidden);
-    }
+    let mut rays_projected = false;
     let active_camera = (|| {
         if effects.is_empty() {
             return None;
@@ -119,7 +117,7 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
             // The renderer consumes an extracted copy; the mailbox retains only
             // the last completed GPU result across main/render worlds.
             let visible = query.visible_fraction().unwrap_or(0.0);
-            apply_ray_contributions(
+            rays_projected = apply_ray_contributions(
                 light,
                 sun,
                 position,
@@ -160,6 +158,11 @@ pub(in crate::terrain) fn update_terrain_water_ray_presentation(
         }
         Some(camera_entity)
     })();
+    if !rays_projected {
+        for (_, _, _, _, mut visibility, _, _) in &mut effects {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
     for (entity, _, _, _, request) in &cameras {
         if request.is_some() && Some(entity) != active_camera {
             commands.entity(entity).remove::<WaterRayViewOcclusion>();
@@ -275,28 +278,29 @@ fn apply_ray_contributions(
     buffers: &mut Assets<ShaderBuffer>,
     meshes: &mut Assets<Mesh>,
     delta: f32,
-) {
+) -> bool {
     let Some(horizontal) = light.object_light_horizontal_vector() else {
-        return;
+        return false;
     };
     if sun.y == 0.0 || view.underwater_status() != Some(true) {
-        return;
+        return false;
     }
     let Some(owner) = view.camera_region() else {
-        return;
+        return false;
     };
     let Some(height) = sources.get(owner).and_then(|source| {
         assets
             .get(source.terrain())
             .and_then(|asset| source.surface_height(asset))
     }) else {
-        return;
+        return false;
     };
     for (_, parent, effect, mut animation, mut visibility, mut mesh_poses, children) in
         effects.iter_mut()
     {
         animation.advance_intensity(visible, delta);
         if parent.parent() != owner {
+            visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
         let lower_cos = f64::from_bits(0x3ff7bc89e0000000).cos() as f32;
@@ -328,7 +332,10 @@ fn apply_ray_contributions(
         let mut valid = true;
         let mut children_passes =
             passes.iter_many_mut(children.into_iter().flat_map(|children| children.iter()));
-        while let Some((pass, mesh, material, transform)) = children_passes.fetch_next() {
+        while let Some(item) = children_passes.fetch_next() {
+            let Ok((pass, mesh, material, transform)) = item else {
+                continue;
+            };
             let contribution = if pass.disk {
                 disk
             } else if effect.secondary_strip {
@@ -368,10 +375,13 @@ fn apply_ray_contributions(
                 .map_unchanged(|pose| &mut pose.translation)
                 .set_if_neq(if pass.disk { hit } else { camera });
         }
-        if valid && (strip > 0.0 || disk > 0.0) {
-            *visibility = Visibility::Inherited;
-        }
+        visibility.set_if_neq(if valid && (strip > 0.0 || disk > 0.0) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
+    true
 }
 
 fn transform_ray_mesh(mut mesh: Mesh, matrix: Mat4) -> Mesh {

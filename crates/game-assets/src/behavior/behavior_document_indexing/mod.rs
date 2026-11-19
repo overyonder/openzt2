@@ -8,27 +8,35 @@ use openzt2_game_data::{behavior::document::BehaviorDocument, AssetId};
 use super::behavior_asset_types::{
     BehaviorDeclarationLocation, BehaviorDocumentAsset, LoadedBehaviorDocumentCollection,
 };
-use crate::asset_source::AssetArchives;
+use crate::asset_source::{ArchiveOverlayChanged, AssetArchives};
 
-pub(super) fn refresh_behavior_documents_after_archive_revision_change(
+pub(super) fn refresh_behavior_documents_after_archive_change(
     behavior_source_archives: Res<AssetArchives>,
     asset_server: Res<AssetServer>,
+    archive_events: Option<Res<Messages<ArchiveOverlayChanged>>>,
+    mut cursor: Local<bevy::ecs::message::MessageCursor<ArchiveOverlayChanged>>,
     mut loaded_behavior_documents: ResMut<LoadedBehaviorDocumentCollection>,
 ) {
-    let current_archive_revision = behavior_source_archives.revision();
-    if loaded_behavior_documents.archive_revision == Some(current_archive_revision) {
+    let assets_changed = archive_events.as_ref().is_some_and(|events| {
+        cursor.read(events).fold(false, |relevant, event| {
+            relevant
+                || event
+                    .changes
+                    .iter()
+                    .any(|change| is_behavior_document_asset_path(&change.normalized_asset_path))
+        })
+    });
+    if !behavior_source_archives.is_changed() && !assets_changed {
         return;
     }
     loaded_behavior_documents.behavior_document_assets = behavior_source_archives
         .resolved_paths()
-        .1
         .iter()
-        .cloned()
         .filter(|asset_path| is_behavior_document_asset_path(asset_path))
+        .cloned()
         .map(|asset_path| asset_server.load::<BehaviorDocumentAsset>(asset_path))
         .collect();
-    loaded_behavior_documents.archive_revision = Some(current_archive_revision);
-    loaded_behavior_documents.indexed_archive_revision = None;
+    loaded_behavior_documents.index_ready = false;
 }
 
 fn is_behavior_document_asset_path(asset_path: &Path) -> bool {
@@ -47,12 +55,9 @@ pub(super) fn rebuild_behavior_declaration_indexes_after_asset_change(
         changed | !matches!(event, AssetEvent::Unused { .. })
     });
     if any_behavior_asset_changed {
-        loaded_behavior_documents.indexed_archive_revision = None;
+        loaded_behavior_documents.index_ready = false;
     }
-    if loaded_behavior_documents.indexed_archive_revision
-        == loaded_behavior_documents.archive_revision
-        && !any_behavior_asset_changed
-    {
+    if loaded_behavior_documents.index_ready {
         return;
     }
     if loaded_behavior_documents
@@ -128,7 +133,7 @@ pub(super) fn rebuild_behavior_declaration_indexes_after_asset_change(
         .for_each(remove_duplicate_behavior_declaration_locations);
     loaded_behavior_documents.behavior_tasks_by_unique_identifier =
         behavior_tasks_by_unique_identifier;
-    loaded_behavior_documents.indexed_archive_revision = loaded_behavior_documents.archive_revision;
+    loaded_behavior_documents.index_ready = true;
 }
 
 fn remove_duplicate_behavior_declaration_locations(

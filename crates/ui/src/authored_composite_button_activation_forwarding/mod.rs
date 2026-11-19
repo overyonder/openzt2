@@ -2,17 +2,21 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
 
 use super::authored_button_runtime_policy::UiButtonPolicy;
-use super::authored_ui_node_projection_components::{UiDocumentOwner, UiNodeId};
+use super::authored_ui_node_projection_components::UiDocumentOwner;
+use super::authored_ui_target_lookup::AuthoredUiTargetLookup;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 /// Forwards composite button activations to the configured child controls.
 pub(super) fn forward_authored_composite_button_activations_to_projected_child_controls(
-    mut commands: Commands,
-    mut activations: MessageReader<UiNodeActivated>,
+    mut messages: ParamSet<(
+        MessageReader<UiNodeActivated>,
+        MessageWriter<UiNodeActivated>,
+    )>,
     composites: Query<(&UiButtonPolicy, &UiDocumentOwner)>,
-    nodes: Query<(Entity, &UiNodeId, &UiDocumentOwner)>,
+    targets: AuthoredUiTargetLookup,
 ) {
-    for activation in activations.read() {
+    let mut forwarded = Vec::new();
+    for activation in messages.p0().read() {
         let Ok((policy, owner)) = composites.get(activation.node) else {
             continue;
         };
@@ -29,9 +33,7 @@ pub(super) fn forward_authored_composite_button_activations_to_projected_child_c
             }
             _ => continue,
         };
-        let Some(node) = nodes.iter().find_map(|(entity, id, candidate_owner)| {
-            (candidate_owner.0 == owner.0 && id.id == target).then_some(entity)
-        }) else {
+        let Some(node) = targets.candidates(owner.0, target).next() else {
             continue;
         };
         // A malformed self-link cannot create an activation loop. The native
@@ -45,8 +47,7 @@ pub(super) fn forward_authored_composite_button_activations_to_projected_child_c
             node,
             trigger: activation.trigger,
         };
-        commands.queue(move |world: &mut World| {
-            world.write_message(routed);
-        });
+        forwarded.push(routed);
     }
+    let _ = messages.p1().write_batch(forwarded);
 }

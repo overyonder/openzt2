@@ -7,7 +7,6 @@ use super::super::{
     native_geometry_lowering_error::{
         NativeGeometryLoweringError, NativeGeometryLoweringErrorKind, NativeGeometrySourceFamily,
     },
-    netimmerse_bone_level_of_detail_selection::NetImmerseSelectedBoneLevelOfDetail,
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload,
         document_source_types::{NetImmerseNifBlock, NetImmerseNifDocument},
@@ -28,8 +27,8 @@ use super::{
 
 pub(in crate::model_source) fn lower_netimmerse_geometry_block(
     document: &NetImmerseNifDocument,
-    selected_bone_level_of_detail: &NetImmerseSelectedBoneLevelOfDetail,
     block: u32,
+    variant_skin: Option<i32>,
     mut resolve_material: impl FnMut(NativeMaterialReference<'_>) -> Option<AssetId>,
     mut resolve_texture: impl FnMut(&str) -> Option<String>,
 ) -> Result<ModelSource, NativeGeometryLoweringError> {
@@ -118,15 +117,11 @@ pub(in crate::model_source) fn lower_netimmerse_geometry_block(
         &document.source_path,
         NativeGeometrySourceFamily::Nif,
     )?;
-    let selected_skin_instance = selected_bone_level_of_detail.selected_shape_skin_instance(
-        i32::try_from(block).unwrap_or(i32::MAX),
-        geometry.skin_instance_ref,
-    );
-    let (skeleton, joint_hierarchy_root, joints) = match selected_skin_instance {
-        Some(skin_instance) if skin_instance >= 0 => {
-            lower_netimmerse_skin(document, skin_instance, &mut vertices, block)?
-        }
-        _ => (AssetId::default(), None, Vec::new()),
+    let skin_instance = variant_skin.unwrap_or(geometry.skin_instance_ref);
+    let (skeleton, joint_hierarchy_root, joints) = if skin_instance >= 0 {
+        lower_netimmerse_skin(document, skin_instance, &mut vertices, block)?
+    } else {
+        (AssetId::default(), None, Vec::new())
     };
     let material = resolve_material(NativeMaterialReference::NetImmerseGeometry {
         document: &document.source_path,

@@ -153,3 +153,7 @@ fn positive_finite(value: f32) -> bool {
 fn valid_range(range: &RangeInclusive<f32>) -> bool {
     range.start().is_finite() && range.end().is_finite() && range.start() <= range.end()
 }
+
+/// Definition supplied by the active map when its overhead camera was created.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct MapOverheadCameraDefinition(pub(crate) openzt2_game_data::AssetId);

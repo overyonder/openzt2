@@ -1,9 +1,9 @@
 //! Hydration of live photo-challenge entities from the active scenario catalogue.
 
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallenge;
+use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueBound;
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeProgress;
 use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeSet;
-use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengesInitializedForScenarioRevision;
 
 use std::collections::BTreeSet;
 
@@ -21,30 +21,22 @@ pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
     scenarios: Res<WorldScenarios>,
     assets: Res<Assets<WorldScenarioDocumentAsset>>,
     roots: Query<
-        (
-            Entity,
-            Option<&PhotoChallengesInitializedForScenarioRevision>,
-        ),
+        (Entity, Option<&PhotoChallengeCatalogueBound>),
         (With<WorldRoot>, With<WorldLoadCompleted>),
     >,
-    existing_challenges: Query<(Entity, &WorldMember, &PhotoChallenge)>,
-    existing_sets: Query<(Entity, &WorldMember, &PhotoChallengeSet)>,
+    mut existing_challenges: Query<(Entity, &WorldMember, &mut PhotoChallenge)>,
+    mut existing_sets: Query<(Entity, &WorldMember, &mut PhotoChallengeSet)>,
     mut commands: Commands,
 ) {
-    let Some(revision) = scenarios.revision() else {
-        return;
-    };
-    if roots.iter().all(|(_, initialized)| {
-        initialized.is_some_and(|initialized| initialized.matches_revision(revision))
-    }) || !scenarios.catalogue_documents_are_loaded(&assets)
-    {
+    let catalogue_changed = scenarios.is_changed();
+    if !scenarios.catalogue_documents_are_loaded(&assets) {
         return;
     }
     let Some(scenarios) = scenarios.get(&assets) else {
         return;
     };
     for (root, initialized) in &roots {
-        if initialized.is_some_and(|initialized| initialized.0 == revision) {
+        if initialized.is_some() && !catalogue_changed {
             continue;
         }
         let mut retained_challenges = BTreeSet::new();
@@ -66,12 +58,12 @@ pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
                 source: source.clone(),
                 row: row as u32,
             };
-            if let Some((entity, ..)) = existing_challenges
-                .iter()
+            if let Some((entity, _, mut current)) = existing_challenges
+                .iter_mut()
                 .find(|(_, member, challenge)| member.root == root && challenge.id == record.id)
             {
                 retained_challenges.insert(entity);
-                commands.entity(entity).insert(component);
+                current.set_if_neq(component);
             } else {
                 retained_challenges.insert(
                     commands
@@ -110,12 +102,12 @@ pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
                 source: handle.clone(),
                 row: row as u32,
             };
-            if let Some((entity, ..)) = existing_sets
-                .iter()
+            if let Some((entity, _, mut current)) = existing_sets
+                .iter_mut()
                 .find(|(_, member, set)| member.root == root && set.id == record.id)
             {
                 retained_sets.insert(entity);
-                commands.entity(entity).insert(component);
+                current.set_if_neq(component);
             } else {
                 retained_sets.insert(
                     commands
@@ -132,8 +124,8 @@ pub(super) fn hydrate_photo_challenges_and_sets_from_active_scenario_catalogue(
             .iter()
             .filter(|(entity, member, _)| member.root == root && !retained_sets.contains(entity))
             .for_each(|(entity, ..)| commands.entity(entity).despawn());
-        commands
-            .entity(root)
-            .insert(PhotoChallengesInitializedForScenarioRevision(revision));
+        if initialized.is_none() {
+            commands.entity(root).insert(PhotoChallengeCatalogueBound);
+        }
     }
 }

@@ -1,4 +1,4 @@
-use bevy::prelude::*;
+use bevy::{prelude::*, time::Stopwatch};
 use openzt2_game_data::AssetId;
 
 /// Model positions and interaction settings for the map-selection globe.
@@ -21,6 +21,7 @@ pub(crate) struct UiGlobePresentation {
     pub(crate) move_seconds: f32,
     pub(crate) scream_threshold: f32,
     pub(crate) scream_delay_seconds: f32,
+    pub(crate) scream_audio: AssetId,
     pub(crate) dot_highlight_rgba: [u8; 4],
     pub(crate) dot_highlight_cursor: AssetId,
 }
@@ -53,6 +54,17 @@ pub struct UiGlobeMarkerVisual {
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct UiGlobeMarkerAnchor;
 
+#[derive(Component, Default, Clone, Copy, PartialEq, Eq)]
+pub(super) struct GlobeHoveredMarker(pub(super) Option<Entity>);
+
+#[derive(Component, Default)]
+pub(super) struct GlobeSpin {
+    pub(super) velocity: Vec2,
+    pub(super) release_time: Stopwatch,
+    pub(super) above_threshold: Stopwatch,
+    pub(super) sounded: bool,
+}
+
 /// Pointer capture state for a gesture which began on the globe background.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct UiGlobeDrag {
@@ -72,9 +84,6 @@ pub(super) struct GlobeSelectionTurn {
 #[derive(Component)]
 pub(super) struct GlobeSelectedMarker(pub(super) Entity);
 
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct UiGlobeModelsHydrated;
-
 #[derive(Component, Debug, Clone)]
 pub(super) struct UiGlobePrefab {
     pub(super) handle: Handle<openzt2_game_assets::scene_prefab::ScenePrefabAsset>,
@@ -82,13 +91,34 @@ pub(super) struct UiGlobePrefab {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = UiGlobePrimaryModels)]
 pub(super) struct UiGlobePrimaryRenderable(pub(super) Entity);
 
-/// Rendered globe scene displayed inside the UI.
-#[derive(Component, Debug, Clone)]
-pub(super) struct UiGlobeRenderScene {
-    pub(super) world: Entity,
+#[derive(Component)]
+#[relationship_target(relationship = UiGlobePrimaryRenderable)]
+pub(super) struct UiGlobePrimaryModels(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = UiGlobeRenderScene)]
+pub(super) struct UiGlobeWorldOf(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = UiGlobeWorldOf)]
+pub(super) struct UiGlobeRenderScene(Entity);
+
+impl UiGlobeRenderScene {
+    pub(super) fn world(&self) -> Entity {
+        self.0
+    }
 }
+
+#[derive(Component)]
+#[relationship(relationship_target = UiGlobeBiomeVisuals)]
+pub(super) struct UiGlobeBiomeVisual(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = UiGlobeBiomeVisual, linked_spawn)]
+pub(super) struct UiGlobeBiomeVisuals(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 #[relationship(relationship_target = UiGlobeHostedSceneEntities)]

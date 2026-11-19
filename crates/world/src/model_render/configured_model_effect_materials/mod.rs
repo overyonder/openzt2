@@ -11,13 +11,15 @@ use openzt2_game_assets::material::runtime::effect_pass_gpu_data::{
 use openzt2_world_state::model_render::{ModelExpanded, ModelRenderPresentationSet};
 use openzt2_world_state::world_spawn::{
     prefab_fixed_function_world_lighting_policy::PrefabFixedFunctionWorldLightingPolicy,
-    prefab_model_tint::PrefabModelTint, prefab_presentation_types::PrefabModel,
-    prefab_texture_replacements::PrefabTextureReplacements,
+    prefab_presentation_types::PrefabModel, prefab_texture_replacements::PrefabTextureReplacements,
 };
 use std::marker::PhantomData;
 
 use super::authored_model_material_pass_projection::project_authored_model_material_passes;
-use super::mirrored_model_primitive_winding::project_mirrored_and_tinted_model_primitive_meshes;
+use super::environment_layer_rendering::EnvironmentPrimitiveLayer;
+use super::mirrored_model_primitive_winding::{
+    project_mirrored_and_tinted_model_primitive_meshes, InheritedPrimitiveTint,
+};
 use super::prefab_render_layer_camera_matching::PrefabCameraRenderLayers;
 
 #[derive(Component, PartialEq, Eq)]
@@ -51,23 +53,18 @@ struct ModelEffectMaterialVariant {
     light_context: usize,
     tint: Option<[u32; 4]>,
     animation_geometry: Option<Entity>,
+    ordered_environment: bool,
 }
 
 pub(super) fn register_configured_model_effect_materials(app: &mut App) {
     register_model_material_input::<ModelExpanded>(app);
     register_model_material_input::<PrefabTextureReplacements>(app);
     register_model_material_input::<PrefabFixedFunctionWorldLightingPolicy>(app);
-    register_model_material_input::<PrefabModelTint>(app);
 
     app.configure_sets(
         PostUpdate,
         PropagateSet::<ModelMaterialInputOwner<ModelExpanded>>::default()
             .before(project_authored_model_material_passes),
-    );
-    app.configure_sets(
-        PostUpdate,
-        PropagateSet::<ModelMaterialInputOwner<PrefabModelTint>>::default()
-            .before(project_mirrored_and_tinted_model_primitive_meshes),
     );
     app.add_systems(
         PostUpdate,
@@ -75,6 +72,7 @@ pub(super) fn register_configured_model_effect_materials(app: &mut App) {
             .after(project_authored_model_material_passes)
             .after(project_mirrored_and_tinted_model_primitive_meshes)
             .after(PropagateSet::<PrefabCameraRenderLayers>::default())
+            .after(PropagateSet::<EnvironmentPrimitiveLayer>::default())
             .in_set(ModelRenderPresentationSet::SourceMaterials)
             .before(bevy::pbr::check_entities_needing_specialization::<EffectPassMaterial>),
     );
@@ -122,9 +120,10 @@ fn project_configured_model_effect_materials(
         Ref<AuthoredModelEffectMaterial>,
         Ref<Mesh3d>,
         Option<Ref<PrefabCameraRenderLayers>>,
+        Option<Ref<EnvironmentPrimitiveLayer>>,
         Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
         Option<Ref<ModelMaterialInputOwner<PrefabTextureReplacements>>>,
-        Option<Ref<ModelMaterialInputOwner<PrefabModelTint>>>,
+        Option<Ref<InheritedPrimitiveTint>>,
         &mut MeshMaterial3d<EffectPassMaterial>,
     )>,
     models: Query<(
@@ -133,7 +132,6 @@ fn project_configured_model_effect_materials(
     )>,
     replacements: Query<Ref<PrefabTextureReplacements>>,
     lighting_policies: Query<Ref<PrefabFixedFunctionWorldLightingPolicy>>,
-    tints: Query<Ref<PrefabModelTint>>,
     meshes: Res<Assets<Mesh>>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
@@ -143,11 +141,12 @@ fn project_configured_model_effect_materials(
     mut removed_replacement_owners: RemovedComponents<
         ModelMaterialInputOwner<PrefabTextureReplacements>,
     >,
-    mut removed_tint_owners: RemovedComponents<ModelMaterialInputOwner<PrefabModelTint>>,
+    mut removed_tint_owners: RemovedComponents<InheritedPrimitiveTint>,
     mut removed_light_owners: RemovedComponents<
         ModelMaterialInputOwner<PrefabFixedFunctionWorldLightingPolicy>,
     >,
     mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
+    mut removed_environment: RemovedComponents<EnvironmentPrimitiveLayer>,
     mut variants: Local<HashMap<ModelEffectMaterialVariant, AssetId<EffectPassMaterial>>>,
 ) {
     let changed_assets = material_events
@@ -170,6 +169,7 @@ fn project_configured_model_effect_materials(
         .chain(removed_tint_owners.read())
         .chain(removed_light_owners.read())
         .chain(removed_layers.read())
+        .chain(removed_environment.read())
         .collect::<EntityHashSet>();
     let texture_replacement_enabled = graphics
         .as_ref()
@@ -178,8 +178,17 @@ fn project_configured_model_effect_materials(
         .as_ref()
         .is_some_and(|graphics| graphics.is_changed());
 
-    for (entity, authored, mesh, layers, model_owner, replacement_owner, tint_owner, mut binding) in
-        &mut draws
+    for (
+        entity,
+        authored,
+        mesh,
+        layers,
+        environment,
+        model_owner,
+        replacement_owner,
+        tint,
+        mut binding,
+    ) in &mut draws
     {
         let model = model_owner
             .as_ref()
@@ -191,21 +200,18 @@ fn project_configured_model_effect_materials(
             .as_ref()
             .and_then(|(_, owner)| owner.as_ref())
             .and_then(|owner| lighting_policies.get(owner.0).ok());
-        let tint = tint_owner
-            .as_ref()
-            .and_then(|owner| tints.get(owner.0).ok());
         let changed = authored.is_changed()
             || mesh.is_changed()
             || removed_inputs.contains(&entity)
             || changed_assets.contains(&authored.template.id())
             || layers.as_ref().is_some_and(|layers| layers.is_changed())
+            || environment.as_ref().is_some_and(|layer| layer.is_changed())
             || model_owner
                 .as_ref()
                 .is_some_and(|owner| owner.is_changed() || removed_inputs.contains(&owner.0))
             || replacement_owner
                 .as_ref()
                 .is_some_and(|owner| owner.is_changed())
-            || tint_owner.as_ref().is_some_and(|owner| owner.is_changed())
             || model.as_ref().is_some_and(|(model, policy_owner)| {
                 model.is_changed()
                     || policy_owner
@@ -265,12 +271,14 @@ fn project_configured_model_effect_materials(
         let animation_geometry = source
             .has_texture_coordinate_animation()
             .then_some(authored.geometry);
+        let ordered_environment = environment.is_some() && source.uses_binned_opaque_phase();
         if texture.is_none()
             && light_policy.is_none()
             && light_context == 0
             && tint.is_none()
             && authored.clothing_decal.is_none()
             && animation_geometry.is_none()
+            && !ordered_environment
         {
             binding.set_if_neq(MeshMaterial3d(authored.template.clone()));
             continue;
@@ -288,6 +296,7 @@ fn project_configured_model_effect_materials(
             light_context,
             tint: tint.map(|color| color.to_array().map(f32::to_bits)),
             animation_geometry,
+            ordered_environment,
         };
         let projected = variants
             .get(&key)
@@ -321,6 +330,9 @@ fn project_configured_model_effect_materials(
             }
             if let Some(tinted) = tint.and_then(|tint| derived.clone_tinted(tint, &mut buffers)) {
                 derived = tinted;
+            }
+            if ordered_environment {
+                derived.retain_authored_draw_order();
             }
             if let Some(geometry) = animation_geometry {
                 derived.bind_texture_coordinate_animation_geometry(geometry, &mut buffers);

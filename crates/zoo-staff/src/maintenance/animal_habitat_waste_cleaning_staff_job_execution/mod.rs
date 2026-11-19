@@ -1,16 +1,13 @@
 use bevy::{platform::collections::HashSet, prelude::*};
-use openzt2_game_data::{
-    behavior::action_record::BehaviorAction, world_definitions::staff_management::StaffJobKind,
-    AssetId,
+use openzt2_game_data::{world_definitions::staff_management::StaffJobKind, AssetId};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorTermination, RunningBehaviorInstruction,
 };
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorKilledTarget;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
@@ -31,10 +28,17 @@ use super::{
 
 pub(super) fn apply_authored_staff_habitat_waste_termination(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,
     mut staff: Query<
-        (Entity, &CurrentJob, &mut BehaviorTaskExecutionState),
+        (
+            Entity,
+            &CurrentJob,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorTermination,
+            ),
+        ),
         (With<Staff>, Without<PendingBehaviorTaskFailure>),
     >,
     jobs: Query<(
@@ -51,19 +55,17 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
     cancelled_jobs.clear();
     consumed_targets.clear();
     cancelled_jobs.extend(cancellations.read().map(|request| request.job));
-    for (actor, current, mut execution) in &mut staff {
+    for (actor, current, (execution, instruction, running_action)) in &mut staff {
         let Ok((job, claim, behavior, applied)) = jobs.get(current.job) else {
             continue;
         };
         if job.kind != StaffJobKind::CleanHabitat || execution.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::Termination(termination)) = documents
-            .get(&execution.document)
-            .and_then(|document| find_current_behavior_task_action(document, &execution))
-        else {
+        if !instruction.is_current(execution) {
             continue;
-        };
+        }
+        let termination = &running_action.0;
         if !termination.kill_target || termination.kill_subject {
             continue;
         }
@@ -80,7 +82,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
             // Failure branches can revisit the same kill after a later action
             // fails. Advance that instruction without consuming anything again.
             if applied.execution_id == execution.execution_id {
-                advance_behavior_task_to_next_action(&mut execution, clock.tick);
+                instruction.complete(actor, clock.tick, &mut commands);
             } else {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             }
@@ -107,7 +109,7 @@ pub(super) fn apply_authored_staff_habitat_waste_termination(
             .insert(AppliedHabitatWasteCleanup {
                 execution_id: execution.execution_id,
             });
-        advance_behavior_task_to_next_action(&mut execution, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }
 

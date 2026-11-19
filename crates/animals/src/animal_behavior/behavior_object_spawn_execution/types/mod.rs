@@ -1,10 +1,11 @@
 use super::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorInstructionId, RunningBehaviorInstruction,
+};
 
 #[derive(Component)]
 pub(super) struct PendingBehaviorObjectSpawn {
-    pub(super) execution_id: u64,
-    pub(super) origin: BehaviorTaskReturnFrame,
-    pub(super) depth: usize,
+    pub(super) instruction: BehaviorInstructionId,
     pub(super) target: Option<Entity>,
     pub(super) prefab: Option<Handle<ScenePrefabAsset>>,
     pub(super) request: Option<usize>,
@@ -12,11 +13,12 @@ pub(super) struct PendingBehaviorObjectSpawn {
 }
 
 impl PendingBehaviorObjectSpawn {
-    pub(super) fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        self.execution_id == task.execution_id
-            && self.target == task.target
-            && self.depth == task.stack.len()
-            && task.is_at_or_nested_under(&self.origin, self.depth)
+    pub(super) fn owns(
+        &self,
+        task: &BehaviorTaskExecutionState,
+        step: &RunningBehaviorInstruction,
+    ) -> bool {
+        self.instruction == step.id() && self.target == task.target && step.is_current(task)
     }
 }
 

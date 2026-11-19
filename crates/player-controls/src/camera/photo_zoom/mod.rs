@@ -10,7 +10,7 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_interface_state::input::input_types::ActionSource;
 use openzt2_interface_state::input::input_types::ActiveInputDevice;
 use crate::input::input_execution_types::DeviceControlAxes;
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
+use bevy::input::mouse::AccumulatedMouseScroll;
 use openzt2_interface_state::photos::photo_capture_types::PhotoMode;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -28,7 +28,7 @@ pub(super) struct PhotoCameraZoom {
 pub(super) fn apply_photo_camera_zoom(
     mut commands: Commands,
     time: Res<Time<Real>>,
-    pointer: Res<PrimaryPointerInputState>,
+    scroll: Res<AccumulatedMouseScroll>,
     capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     axes: Res<DeviceControlAxes>,
     active_input: Res<ActiveInputDevice>,
@@ -102,13 +102,13 @@ pub(super) fn apply_photo_camera_zoom(
                 state.scale = maximum - (maximum - minimum) * value.0.clamp(0, 100) as f32 / 100.0;
             }
         }
-        let wheel = if pointer.wheel_y == 0.0
+        let wheel = if scroll.delta.y == 0.0
             || capture.wheel
                 != openzt2_interface_state::ui::pointer_capture_types::UiWheelCapture::World
         {
             0.0
         } else {
-            pointer.wheel_y.signum()
+            scroll.delta.y.signum()
         };
         let held_command =
             f32::from(intent.photo_zoom_in_command) - f32::from(intent.photo_zoom_out_command);

@@ -6,13 +6,14 @@ use openzt2_zoo_state::terrain::{
 
 use super::{
     terrain_change_tracking_types::{TerrainDirty, TerrainDirtyFlags, TerrainDirtyRegion},
-    terrain_sample_change_calculations::queue_terrain_render_refresh,
+    terrain_sample_change_calculations::TerrainRenderInvalidated,
 };
 
 pub(super) fn mark_restored_terrain_chunks_for_presentation_rebuilding(
     mut commands: Commands,
     mut restored: MessageReader<TerrainPresentationRestored>,
     chunks: Query<&TerrainChunk>,
+    mut render_changed: MessageWriter<TerrainRenderInvalidated>,
 ) {
     for request in restored.read() {
         let Ok(chunk) = chunks.get(request.chunk) else {
@@ -24,11 +25,10 @@ pub(super) fn mark_restored_terrain_chunks_for_presentation_rebuilding(
         let min = UVec2::ZERO;
         let max = UVec2::splat(u32::from(last_sample));
         let flags = TerrainDirtyFlags::HEIGHT | TerrainDirtyFlags::SURFACE;
-        queue_terrain_render_refresh(
-            &mut commands,
-            request.chunk,
-            TerrainDirtyRegion { min, max, flags },
-        );
+        render_changed.write(TerrainRenderInvalidated {
+            chunk: request.chunk,
+            region: TerrainDirtyRegion { min, max, flags },
+        });
         commands
             .entity(request.chunk)
             .insert(TerrainDirty)

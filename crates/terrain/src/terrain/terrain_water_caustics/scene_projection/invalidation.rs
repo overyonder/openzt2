@@ -1,59 +1,9 @@
 use super::*;
 use bevy::asset::UntypedAssetId;
 use bevy::ecs::system::SystemParam;
-use bevy::platform::collections::HashMap;
-use openzt2_game_assets::graphics_settings_types::GraphicsEffectQuality;
 use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource,
 };
-
-/// Records the inputs actually read by each projection, including missing assets.
-pub(super) struct Dependencies<K> {
-    inputs: HashMap<Entity, HashSet<K>>,
-    users: HashMap<K, HashSet<Entity>>,
-}
-
-impl<K> Default for Dependencies<K> {
-    fn default() -> Self {
-        Self {
-            inputs: default(),
-            users: default(),
-        }
-    }
-}
-
-impl<K: Copy + Eq + std::hash::Hash> Dependencies<K> {
-    pub(super) fn contains(&self, entity: Entity) -> bool {
-        self.inputs.contains_key(&entity)
-    }
-    pub(super) fn remove(&mut self, entity: Entity) {
-        if let Some(inputs) = self.inputs.remove(&entity) {
-            for key in inputs {
-                if let Some(users) = self.users.get_mut(&key) {
-                    users.remove(&entity);
-                    if users.is_empty() {
-                        self.users.remove(&key);
-                    }
-                }
-            }
-        }
-    }
-    pub(super) fn record(&mut self, entity: Entity, inputs: HashSet<K>) {
-        if self.inputs.get(&entity) == Some(&inputs) {
-            return;
-        }
-        self.remove(entity);
-        for &key in &inputs {
-            self.users.entry(key).or_default().insert(entity);
-        }
-        self.inputs.insert(entity, inputs);
-    }
-    pub(super) fn affected(&self, key: K, dirty: &mut HashSet<Entity>) {
-        if let Some(users) = self.users.get(&key) {
-            dirty.extend(users.iter().copied());
-        }
-    }
-}
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 pub(super) enum BoundInput {
@@ -61,11 +11,105 @@ pub(super) enum BoundInput {
     Pose(Entity),
 }
 
-#[derive(Default)]
-pub(in crate::terrain) struct BoundCache {
-    pub(super) deps: Dependencies<BoundInput>,
-    pub(super) regions: Dependencies<Entity>,
-    pub(super) active: bool,
+impl BoundInput {
+    pub(super) fn entity(self) -> Entity {
+        match self {
+            Self::Node(entity) | Self::Pose(entity) => entity,
+        }
+    }
+}
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneBoundInputs)]
+pub(in crate::terrain) struct SceneBoundRoot(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneBoundRoot, linked_spawn)]
+pub(in crate::terrain) struct SceneBoundInputs(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneBoundUsers)]
+pub(in crate::terrain) struct SceneBoundSource(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneBoundSource)]
+pub(in crate::terrain) struct SceneBoundUsers(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct SceneBoundDependency(pub(super) BoundInput);
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneWaterBoundUsers)]
+pub(super) struct SceneWaterBoundSource(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneWaterBoundSource)]
+pub(super) struct SceneWaterBoundUsers(Vec<Entity>);
+
+#[derive(Component)]
+pub(super) struct SceneBoundInvalidated;
+
+#[derive(SystemParam)]
+pub(in crate::terrain) struct BoundDependencies<'w, 's> {
+    pub(super) roots: Query<'w, 's, &'static SceneBoundInputs>,
+    pub(super) sources: Query<'w, 's, &'static SceneBoundUsers>,
+    pub(super) edges: Query<'w, 's, (&'static SceneBoundRoot, &'static SceneBoundDependency)>,
+    pub(super) water: Query<'w, 's, &'static SceneWaterBoundUsers>,
+    pub(super) water_source: Query<'w, 's, &'static SceneWaterBoundSource>,
+    pub(super) invalidated: Query<'w, 's, Entity, With<SceneBoundInvalidated>>,
+}
+
+impl BoundDependencies<'_, '_> {
+    pub(super) fn mark_users(&self, input: BoundInput, dirty: &mut HashSet<Entity>) {
+        if let Ok(edges) = self.sources.get(input.entity()) {
+            dirty.extend(
+                self.edges
+                    .iter_many(edges.iter())
+                    .flatten()
+                    .filter(|(_, kind)| kind.0 == input)
+                    .map(|(root, _)| root.0),
+            );
+        }
+    }
+
+    pub(super) fn replace(
+        &self,
+        commands: &mut Commands,
+        root: Entity,
+        mut inputs: HashSet<BoundInput>,
+    ) {
+        if let Ok(old) = self.roots.get(root) {
+            for edge in old.iter() {
+                if self
+                    .edges
+                    .get(edge)
+                    .is_ok_and(|(_, kind)| !inputs.remove(&kind.0))
+                {
+                    commands.entity(edge).try_despawn();
+                }
+            }
+        }
+        for input in inputs {
+            commands.spawn((
+                SceneBoundRoot(root),
+                SceneBoundSource(input.entity()),
+                SceneBoundDependency(input),
+            ));
+        }
+    }
+}
+
+pub(in crate::terrain) fn invalidate_bounds_after_dependency_discard(
+    discarded: On<Discard<SceneBoundUsers>>,
+    users: Query<&SceneBoundUsers>,
+    edges: Query<&SceneBoundRoot>,
+    mut commands: Commands,
+) {
+    if let Ok(links) = users.get(discarded.entity) {
+        for owner in edges.iter_many(links.iter()).flatten() {
+            commands.entity(owner.0).try_insert(SceneBoundInvalidated);
+        }
+    }
 }
 
 #[derive(SystemParam)]
@@ -109,7 +153,11 @@ pub(in crate::terrain) struct BoundChanges<'w, 's> {
 }
 
 impl BoundChanges<'_, '_> {
-    pub(super) fn collect(&mut self, cache: &BoundCache, dirty: &mut HashSet<Entity>) {
+    pub(super) fn collect(
+        &mut self,
+        dependencies: &BoundDependencies,
+        dirty: &mut HashSet<Entity>,
+    ) {
         for entity in self
             .nodes
             .iter()
@@ -122,7 +170,7 @@ impl BoundChanges<'_, '_> {
             .chain(self.gone_visibility.read())
             .chain(self.gone_name.read())
         {
-            cache.deps.affected(BoundInput::Node(entity), dirty);
+            dependencies.mark_users(BoundInput::Node(entity), dirty);
         }
         for entity in self
             .poses
@@ -130,7 +178,7 @@ impl BoundChanges<'_, '_> {
             .chain(self.gone_transform.read())
             .chain(self.gone_parent.read())
         {
-            cache.deps.affected(BoundInput::Pose(entity), dirty);
+            dependencies.mark_users(BoundInput::Pose(entity), dirty);
         }
     }
 }
@@ -172,22 +220,37 @@ pub(super) fn changed_asset<A: Asset>(event: &AssetEvent<A>) -> Option<AssetId<A
 }
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-pub(super) enum PassInput {
+pub(super) enum PassAssetInput {
     Asset(UntypedAssetId),
     SourceEffect(AssetId<EffectPassMaterial>),
-    Region(Entity),
-    Root(Entity),
-    Ancestor(Entity),
 }
 
-#[derive(Default)]
-pub(in crate::terrain) struct PassCache {
-    pub(super) deps: Dependencies<PassInput>,
-    pub(super) draws: HashMap<Entity, Vec<Entity>>,
-    pub(super) sources: HashMap<Entity, Entity>,
-    pub(super) views: Vec<(Entity, usize)>,
-    pub(super) quality: Option<GraphicsEffectQuality>,
-}
+#[derive(Component, PartialEq)]
+pub(in crate::terrain) struct SceneCausticMaterialDependencies(pub(super) HashSet<PassAssetInput>);
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneCausticPrimitives)]
+pub(in crate::terrain) struct SceneCausticPhysicalRoot(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneCausticPhysicalRoot)]
+pub(in crate::terrain) struct SceneCausticPrimitives(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneCausticWaterDraws)]
+pub(in crate::terrain) struct SceneCausticWaterOwner(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneCausticWaterOwner, linked_spawn)]
+pub(in crate::terrain) struct SceneCausticWaterDraws(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = SceneCausticViewDraws)]
+pub(in crate::terrain) struct SceneCausticRenderView(pub(super) Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = SceneCausticRenderView, linked_spawn)]
+pub(in crate::terrain) struct SceneCausticViewDraws(Vec<Entity>);
 
 #[derive(SystemParam)]
 pub(in crate::terrain) struct PassChanges<'w, 's> {
@@ -216,5 +279,20 @@ pub(in crate::terrain) struct PassChanges<'w, 's> {
     pub(super) removed_mesh: RemovedComponents<'w, 's, Mesh3d>,
     pub(super) removed_material: RemovedComponents<'w, 's, PrefabPrimitiveMaterial>,
     pub(super) removed_handle: RemovedComponents<'w, 's, MeshMaterial3d<EffectPassMaterial>>,
-    pub(super) removed_draws: RemovedComponents<'w, 's, TerrainWaterCausticScenePass>,
+    pub(super) removed_views: RemovedComponents<'w, 's, EffectPassMaterialRenderView>,
+    pub(super) removed_cameras: RemovedComponents<'w, 's, Camera3d>,
+    pub(super) removed_zoo_cameras: RemovedComponents<'w, 's, ZooCamera>,
+    pub(super) changed_views: Query<
+        'w,
+        's,
+        (),
+        (
+            With<Camera3d>,
+            Or<(
+                Added<Camera3d>,
+                Added<ZooCamera>,
+                Changed<EffectPassMaterialRenderView>,
+            )>,
+        ),
+    >,
 }

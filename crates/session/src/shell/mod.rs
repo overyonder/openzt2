@@ -2,7 +2,6 @@
 
 mod boot_splash_lifecycle;
 mod campaign_selection_list_presentation;
-pub(crate) use campaign_selection_list_presentation::replace_text_in_list_row_and_descendants;
 mod exit_confirmation_presentation;
 mod in_game_options_overlay_lifecycle;
 mod in_game_shell_ui_action_routing;

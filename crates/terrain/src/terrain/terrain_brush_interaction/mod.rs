@@ -1,5 +1,7 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
+use openzt2_interface_state::input::input_types::MousePointer;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
@@ -35,7 +37,8 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     tool: Res<ConstructionTool>,
     policy: Res<ConstructionPlacementPolicy>,
     time: Res<Time>,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    pointer: MousePointer,
+    mut pointer_inputs: MessageReader<PointerInput>,
     ui_capture: Res<UiPointerCapture>,
     cursors: Query<&ConstructionCursor>,
     roots: Query<Entity, With<WorldRoot>>,
@@ -56,6 +59,16 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     mut strokes: MessageWriter<TerrainStroke>,
     mut commits: MessageWriter<CommitConstruction>,
 ) {
+    let mut primary_just_pressed = false;
+    let mut primary_just_released = false;
+    for input in pointer_inputs
+        .read()
+        .filter(|input| input.pointer_id.is_mouse())
+    {
+        primary_just_pressed |= input.button_just_pressed(PointerButton::Primary);
+        primary_just_released |= input.button_just_released(PointerButton::Primary);
+    }
+    let primary_pressed = pointer.primary_is_pressed();
     let ConstructionTool::Terrain(kind) = *tool else {
         return;
     };
@@ -134,7 +147,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
         .map_unchanged(|transform| &mut transform.translation)
         .set_if_neq(cursor.world);
 
-    let began = primary_pointer.just_pressed && !ui_capture.over_ui && cursor.over_terrain;
+    let began = primary_just_pressed && !ui_capture.over_ui && cursor.over_terrain;
     let kind = match (active, kind) {
         (Some(active), _) => active.kind,
         (
@@ -174,10 +187,10 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
     if began {
         commands.entity(entity).insert(ActiveTerrainBrush { kind });
     }
-    if is_active && (primary_pointer.pressed || began) {
+    if is_active && (primary_pressed || began) {
         let seconds = time.delta_secs();
         if seconds.is_finite() && seconds > 0.0 {
-            if began && primary_pointer.just_released && !primary_pointer.pressed {
+            if began && primary_just_released && !primary_pressed {
                 info!(target: "openzt2_terrain_brush", preview = ?entity, ?kind, seconds, "coalesced pointer click emitted one terrain dab");
             }
             strokes.write(TerrainStroke {
@@ -195,7 +208,7 @@ pub(super) fn update_terrain_brush_preview_and_commit_completed_pointer_strokes(
             });
         }
     }
-    if is_active && primary_pointer.just_released {
+    if is_active && primary_just_released {
         commands
             .entity(entity)
             .remove::<ActiveTerrainBrush>()

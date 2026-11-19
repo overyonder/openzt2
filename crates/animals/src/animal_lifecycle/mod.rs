@@ -19,6 +19,7 @@ mod animal_spawn_operation_contracts;
 mod animal_spawn_request_execution;
 pub mod animal_spawn_resolution;
 pub mod animal_spawn_resolution_types;
+mod authored_entity_morph;
 pub mod scripted_animal_spawning;
 mod starting_animal_hydration;
 use openzt2_zoo_state::animal_lifecycle::types;
@@ -143,6 +144,8 @@ impl Plugin for AnimalLifecyclePlugin {
                 (
                     adoption_offer_inventory_execution::advance_and_repopulate_animal_adoption_offer_inventory,
                     animal_birth_execution::spawn_children_for_authored_births,
+                    authored_entity_morph::morph_authored_entities,
+                    authored_entity_morph::remove_authored_morph_shells,
                 )
                     .chain()
                     .in_set(FixedGameSet::Act)

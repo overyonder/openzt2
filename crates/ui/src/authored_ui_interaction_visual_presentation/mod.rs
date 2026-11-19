@@ -1,11 +1,20 @@
-use bevy::prelude::*;
+use bevy::{
+    ecs::entity::EntityHashSet,
+    input_focus::{InputFocus, InputFocusVisible},
+    picking::{
+        events::{PointerCancel, PointerClick, PointerDragEnd, PointerPress, PointerState},
+        hover::DirectlyHovered,
+        pointer::{PointerButton, PointerId},
+    },
+    prelude::*,
+};
 use openzt2_game_data::ui_document::node_presentation::UiNodeVisualState;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_zoo_state::audio::audio_playback_message_types::PlayAudioClip;
 
 use super::{
-    authored_ui_focus_state::{UiFocusPresentation, UiFocusable},
+    authored_ui_focus_navigation_and_activation::AuthoredHoverPresentation,
+    authored_ui_focus_state::UiFocusable,
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
     authored_ui_selection_state::UiSelected,
     authored_ui_visual_types::{
@@ -17,13 +26,22 @@ use super::{
 pub(super) fn present_authored_ui_interaction_visual_state(
     parents: Query<(
         Entity,
-        Ref<UiPointerInteraction>,
+        Ref<DirectlyHovered>,
         Option<Ref<UiInteractionEnabled>>,
         Option<Ref<UiFocusable>>,
-        Option<Ref<UiFocusPresentation>>,
+        Option<Ref<AuthoredHoverPresentation>>,
         Option<Ref<UiSelected>>,
         Ref<Children>,
     )>,
+    pointer: Res<PointerState>,
+    focus: Res<InputFocus>,
+    focus_visible: Res<InputFocusVisible>,
+    (mut presses, mut clicks, mut drag_ends, mut cancels): (
+        MessageReader<PointerPress>,
+        MessageReader<PointerClick>,
+        MessageReader<PointerDragEnd>,
+        MessageReader<PointerCancel>,
+    ),
     layers: Query<&UiVisualLayer>,
     sounds: Query<&UiVisualSound>,
     colors: Query<&UiVisualTextColor>,
@@ -35,15 +53,39 @@ pub(super) fn present_authored_ui_interaction_visual_state(
     mut parent_picking: Query<&mut Pickable>,
     mut audio: MessageWriter<PlayAudioClip>,
 ) {
-    for (entity, interaction, interaction_enabled, focusable, focused, selected, children) in
+    let mut press_changes = EntityHashSet::default();
+    let press = presses
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
+        .map(|event| event.entity);
+    let clicks = clicks
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
+        .map(|event| event.entity);
+    let drag_ends = drag_ends
+        .read()
+        .filter(|event| event.pointer.id.is_mouse() && event.button == PointerButton::Primary)
+        .map(|event| event.entity);
+    let cancels = cancels
+        .read()
+        .filter(|event| event.pointer.id.is_mouse())
+        .map(|event| event.entity);
+    press_changes.extend(press.chain(clicks).chain(drag_ends).chain(cancels));
+    let pressed = pointer.get(PointerId::Mouse, PointerButton::Primary);
+    for (entity, hovered, interaction_enabled, focusable, hover_presentation, selected, children) in
         &parents
     {
-        if !interaction.is_changed()
+        if !hovered.is_changed()
+            && !focus.is_changed()
+            && !focus_visible.is_changed()
+            && !press_changes.contains(&entity)
             && interaction_enabled
                 .as_ref()
                 .is_none_or(|value| !value.is_changed())
             && focusable.as_ref().is_none_or(|value| !value.is_changed())
-            && focused.as_ref().is_none_or(|value| !value.is_changed())
+            && hover_presentation
+                .as_ref()
+                .is_none_or(|value| !value.is_changed())
             && selected.as_ref().is_none_or(|value| !value.is_changed())
             && !children.is_changed()
         {
@@ -53,21 +95,19 @@ pub(super) fn present_authored_ui_interaction_visual_state(
         let enabled = interaction_enabled
             .map(|enabled| enabled.0)
             .unwrap_or_else(|| focusable.is_none_or(|focusable| focusable.enabled));
-        let focused = focused.is_some_and(|focused| focused.0);
-        let presented_interaction = if focused && *interaction == UiPointerInteraction::None {
-            UiPointerInteraction::Hovered
-        } else {
-            *interaction
-        };
-        let requested = match (enabled, presented_interaction, alternate) {
-            (false, _, false) => UiNodeVisualState::Disabled,
-            (false, _, true) => UiNodeVisualState::AlternateDisabled,
-            (true, UiPointerInteraction::Pressed, false) => UiNodeVisualState::Activated,
-            (true, UiPointerInteraction::Pressed, true) => UiNodeVisualState::AlternateActivated,
-            (true, UiPointerInteraction::Hovered, false) => UiNodeVisualState::Highlighted,
-            (true, UiPointerInteraction::Hovered, true) => UiNodeVisualState::AlternateHighlighted,
-            (true, _, false) => UiNodeVisualState::Normal,
-            (true, _, true) => UiNodeVisualState::AlternateNormal,
+        let is_pressed = pressed.is_some_and(|state| state.pressing.contains_key(&entity));
+        let highlighted = hovered.get()
+            || hover_presentation.is_some_and(|presentation| presentation.0)
+            || (focus_visible.0 && focus.get() == Some(entity));
+        let requested = match (enabled, is_pressed, highlighted, alternate) {
+            (false, _, _, false) => UiNodeVisualState::Disabled,
+            (false, _, _, true) => UiNodeVisualState::AlternateDisabled,
+            (true, true, _, false) => UiNodeVisualState::Activated,
+            (true, true, _, true) => UiNodeVisualState::AlternateActivated,
+            (true, false, true, false) => UiNodeVisualState::Highlighted,
+            (true, false, true, true) => UiNodeVisualState::AlternateHighlighted,
+            (true, false, false, false) => UiNodeVisualState::Normal,
+            (true, false, false, true) => UiNodeVisualState::AlternateNormal,
         };
         let fallback_roles = match requested {
             UiNodeVisualState::Normal => [

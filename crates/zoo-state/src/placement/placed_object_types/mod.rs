@@ -10,10 +10,15 @@ pub struct PlacedObjectDefinitionReference {
 
 /// Authoritative occupied grid origin and authored orientation for a placed object.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[require(IndexedObjectPlacementCells)]
 pub struct PlacedObjectFootprintOccupancy {
     pub origin: IVec2,
     pub eighth_turns: u8,
 }
+
+/// Cells currently published to the spatial placement index.
+#[derive(Component, Debug, Default)]
+pub struct IndexedObjectPlacementCells(pub Box<[IVec2]>);
 
 /// Opt-in for objects whose physics motion changes their occupied placement cells.
 #[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]

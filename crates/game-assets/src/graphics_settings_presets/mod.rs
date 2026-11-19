@@ -1,11 +1,15 @@
-use std::io;
+use std::{io, path::Path};
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 
 use crate::{
+    asset_source::{
+        archive_entry_asset_path::{archive_entry_asset_path, ARCHIVE_ENTRY_ASSET_EXTENSION},
+        AssetArchives,
+    },
     graphics_settings_types::{
         EnvironmentalDetailObjectDensity, FourLevelGraphicsDetail, GraphicsEffectQuality,
         GraphicsSettings, ShadowDetail, ThreeLevelGraphicsDetail,
@@ -30,6 +34,11 @@ pub enum GraphicsDetailPreset {
 pub struct GraphicsSettingsPresets([GraphicsSettings; 3]);
 
 impl GraphicsSettingsPresets {
+    #[cfg(feature = "testing")]
+    pub fn from_test_source(bytes: &[u8]) -> io::Result<Self> {
+        parse_graphics_settings_presets(bytes)
+    }
+
     pub fn settings(
         &self,
         preset: GraphicsDetailPreset,
@@ -42,15 +51,15 @@ impl GraphicsSettingsPresets {
     }
 }
 
-#[derive(Resource)]
-pub struct GraphicsSettingsPresetSource(Handle<GraphicsSettingsPresets>);
+#[derive(Resource, Default)]
+pub struct GraphicsSettingsPresetSource(Option<Handle<GraphicsSettingsPresets>>);
 
 impl GraphicsSettingsPresetSource {
     pub fn get<'a>(
         &self,
         assets: &'a Assets<GraphicsSettingsPresets>,
     ) -> Option<&'a GraphicsSettingsPresets> {
-        assets.get(&self.0)
+        assets.get(self.0.as_ref()?)
     }
 }
 
@@ -70,29 +79,37 @@ impl AssetLoader for GraphicsSettingsPresetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let document =
-            parse_blue_fang_source_document(AssetPath::new(SETTINGS_SOURCE_PATH), &bytes)
-                .map_err(io::Error::other)?;
-        let settings = document
-            .root
-            .element_children()
-            .find(|child| child.name.eq_ignore_ascii_case("settings"))
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    "graphics settings table has no settings rows",
-                )
-            })?;
-        Ok(GraphicsSettingsPresets([
-            lower_graphics_settings_preset(settings, "low")?,
-            lower_graphics_settings_preset(settings, "medium")?,
-            lower_graphics_settings_preset(settings, "high")?,
-        ]))
+        parse_graphics_settings_presets(&bytes)
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml"]
+        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
+}
+
+fn parse_graphics_settings_presets(bytes: &[u8]) -> io::Result<GraphicsSettingsPresets> {
+    let document = parse_blue_fang_source_document(AssetPath::new(SETTINGS_SOURCE_PATH), bytes)
+        .map_err(io::Error::other)?;
+    lower_graphics_settings_presets(&document.root)
+}
+
+fn lower_graphics_settings_presets(
+    root: &OrderedSourceDocumentNode,
+) -> io::Result<GraphicsSettingsPresets> {
+    let settings = root
+        .element_children()
+        .find(|child| child.name.eq_ignore_ascii_case("settings"))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                "graphics settings table has no settings rows",
+            )
+        })?;
+    Ok(GraphicsSettingsPresets([
+        lower_graphics_settings_preset(settings, "low")?,
+        lower_graphics_settings_preset(settings, "medium")?,
+        lower_graphics_settings_preset(settings, "high")?,
+    ]))
 }
 
 fn lower_graphics_settings_preset(
@@ -211,12 +228,79 @@ impl Plugin for GraphicsSettingsPresetAssetPlugin {
         application
             .init_asset::<GraphicsSettingsPresets>()
             .init_asset_loader::<GraphicsSettingsPresetLoader>()
-            .add_systems(Startup, request_graphics_settings_presets);
+            .init_resource::<GraphicsSettingsPresetSource>()
+            .add_systems(
+                PreUpdate,
+                resolve_graphics_settings_preset_source.run_if(resource_changed::<AssetArchives>),
+            );
     }
 }
 
-fn request_graphics_settings_presets(mut commands: Commands, server: Res<AssetServer>) {
-    commands.insert_resource(GraphicsSettingsPresetSource(
-        server.load(SETTINGS_SOURCE_PATH),
-    ));
+fn resolve_graphics_settings_preset_source(
+    archives: Res<AssetArchives>,
+    server: Res<AssetServer>,
+    mut source: ResMut<GraphicsSettingsPresetSource>,
+) {
+    let path = Path::new(SETTINGS_SOURCE_PATH);
+    let selected_path = archives
+        .resolved_winning_entry(path)
+        .map_or_else(|| path.to_owned(), |entry| archive_entry_asset_path(&entry));
+    if source
+        .0
+        .as_ref()
+        .and_then(Handle::path)
+        .is_some_and(|path| path.path() == selected_path)
+    {
+        return;
+    }
+    source.0 = Some(server.load(selected_path));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preset_columns_use_authored_indexes_and_nested_values() -> io::Result<()> {
+        let source = parse_blue_fang_source_document(
+            AssetPath::new(SETTINGS_SOURCE_PATH),
+            br#"<UserSettings><settings>
+                <environmentDetail low="2" medium="0" high="1">
+                    <setting><skyboxQuality value="4"/></setting>
+                    <setting><skyboxQuality value="5"/></setting>
+                    <setting><skyboxQuality value="6"/></setting>
+                </environmentDetail>
+                <specularEffects low="1" medium="0" high="0"/>
+                <detailObjects low="0" medium="2" high="1"/>
+                <screenDetail low="1" medium="0" high="0"/>
+                <waterReflections low="0" medium="0" high="1"/>
+            </settings></UserSettings>"#,
+        )
+        .map_err(io::Error::other)?;
+        let presets = lower_graphics_settings_presets(&source.root)?;
+        let highest = presets.settings(GraphicsDetailPreset::Highest, 4);
+        assert_eq!(highest.environment_detail, ThreeLevelGraphicsDetail::Medium);
+        assert_eq!(highest.skybox_quality, 5);
+        assert!(!highest.specular_effects);
+        assert_eq!(
+            highest.detail_objects,
+            EnvironmentalDetailObjectDensity::Medium
+        );
+        assert!(!highest.screen_detail);
+        assert!(highest.water_reflections);
+        assert_eq!(highest.multisample_count, 4);
+        assert_eq!(
+            presets
+                .settings(GraphicsDetailPreset::High, 1)
+                .skybox_quality,
+            4
+        );
+        assert_eq!(
+            presets
+                .settings(GraphicsDetailPreset::Medium, 1)
+                .skybox_quality,
+            6
+        );
+        Ok(())
+    }
 }

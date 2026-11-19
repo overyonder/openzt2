@@ -1,3 +1,4 @@
+pub mod behavior_birth_notice_types;
 pub mod behavior_candidate_selection;
 pub mod behavior_entity_role_resolution;
 pub mod behavior_natural_water_target_types;
@@ -12,3 +13,6 @@ pub mod behavior_task_failure_transition;
 pub mod behavior_token_types;
 pub mod behavior_trigger_types;
 pub mod interaction_container_membership;
+
+pub mod behavior_traversal_types;
+pub mod behavior_world_release_types;

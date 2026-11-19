@@ -12,7 +12,7 @@ use openzt2_game_data::ui_document::action::construction::UiTerrainEditMode;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequest;
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
@@ -75,7 +75,7 @@ pub(super) fn route_construction_ui_actions(
     active_definitions: Res<WorldDefinitions>,
     action_nodes: Query<(&UiConstructionActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
     mut intents: ConstructionUiIntents,
     history: Res<ConstructionEditHistory>,
     mut policy: ResMut<ConstructionPlacementPolicy>,
@@ -115,12 +115,12 @@ pub(super) fn route_construction_ui_actions(
                         .write(SelectConstructionTool(ConstructionTool::Inspect));
                 }
                 UiConstructionAction::SellSelected => {
-                    if let Some(entity) = selected.0 {
+                    if let Some(entity) = selected.subject() {
                         intents.deletions.write(DeleteEntity(entity));
                     }
                 }
                 UiConstructionAction::SellPhysicalObject { definition } => {
-                    if let Some(entity) = selected.0 {
+                    if let Some(entity) = selected.subject() {
                         if placeables
                             .get(entity)
                             .is_ok_and(|placeable| placeable.definition.0 == definition.0)
@@ -130,14 +130,14 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::MoveSelected => {
-                    if let Some(animal) = selected.0.filter(|entity| {
+                    if let Some(animal) = selected.subject().filter(|entity| {
                         intents.animals.contains(*entity)
                             && !intents.animal_crates.contains(*entity)
                     }) {
                         intents.animal_moves.write(openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalRelocation(animal));
                         continue;
                     }
-                    if let Some((entity, placeable)) = selected.0.and_then(|entity| {
+                    if let Some((entity, placeable)) = selected.subject().and_then(|entity| {
                         let entity = intents
                             .animal_crates
                             .get(entity)
@@ -180,9 +180,9 @@ pub(super) fn route_construction_ui_actions(
                         }
                         continue;
                     }
-                    let purchasing =
-                        matches!(*selected_tool, ConstructionTool::Place(_)) && relocating.is_empty();
-                    let rotation_selection = selected.0.filter(|_| !purchasing);
+                    let purchasing = matches!(*selected_tool, ConstructionTool::Place(_))
+                        && relocating.is_empty();
+                    let rotation_selection = selected.subject().filter(|_| !purchasing);
                     if let Some((entity, placeable)) = rotation_selection.and_then(|entity| {
                         let entity = intents
                             .animal_crates
@@ -287,8 +287,9 @@ pub(super) fn route_construction_ui_actions(
                     policy.repeat_placement = false;
                 }
                 UiConstructionAction::CrateSelected => {
-                    if let Some(entity) =
-                        selected.0.filter(|entity| placeables.get(*entity).is_ok())
+                    if let Some(entity) = selected
+                        .subject()
+                        .filter(|entity| placeables.get(*entity).is_ok())
                     {
                         commands.entity(entity).insert(WorldEntityIsCrated);
                     }
@@ -457,7 +458,7 @@ pub(super) fn route_construction_ui_actions(
                 },
                 UiConstructionAction::Eyedropper => {
                     if let Some(definition) = selected
-                        .0
+                        .subject()
                         .and_then(|entity| placeables.get(entity).ok())
                         .map(|placeable| placeable.definition)
                     {
@@ -467,7 +468,7 @@ pub(super) fn route_construction_ui_actions(
                     }
                 }
                 UiConstructionAction::UncrateSelected => {
-                    if let Some(entity) = selected.0 {
+                    if let Some(entity) = selected.subject() {
                         intents.uncrate.write(RemoveWorldEntityFromCrate(entity));
                     }
                 }
@@ -543,7 +544,7 @@ pub(super) fn route_construction_ui_actions(
                         UiConstructionConfirmation::ZooGatePathDeletion
                         | UiConstructionConfirmation::TankDeletion => {
                             if *confirmed {
-                                if let Some(entity) = selected.0 {
+                                if let Some(entity) = selected.subject() {
                                     intents.deletions.write(DeleteEntity(entity));
                                 }
                             }

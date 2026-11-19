@@ -98,6 +98,7 @@ fn terrain_sample_with_uniform_surface_values(
 #[test]
 fn region_merge_undo_restores_the_same_source_entity_and_override() {
     use crate::terrain::terrain_edit_application::apply_water_region_edit_changes;
+    use bevy::ecs::system::RunSystemOnce;
     use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
         TerrainWaterRegionEdit, TerrainWaterRegionRetired, TerrainWaterRegionSource,
     };
@@ -113,23 +114,28 @@ fn region_merge_undo_restores_the_same_source_entity_and_override() {
         surface_height_metres: 4.0,
         depth_ratio: 0.25,
     };
-    apply_water_region_edit_changes(
-        &mut world.commands(),
-        vec![(owner, Some(original.clone()), true)].into_boxed_slice(),
-    );
-    world.flush();
-    apply_water_region_edit_changes(
-        &mut world.commands(),
-        vec![(owner, None, false)].into_boxed_slice(),
-    );
-    world.flush();
+    let apply = |world: &mut World, state: Option<TerrainWaterRegionEdit>, active: bool| {
+        world
+            .run_system_once(
+                move |mut commands: Commands,
+                      mut owners: Query<(
+                    Option<&mut TerrainWaterRegionEdit>,
+                    Has<TerrainWaterRegionRetired>,
+                )>| {
+                    apply_water_region_edit_changes(
+                        &mut commands,
+                        &mut owners,
+                        [(owner, state.clone(), active)],
+                    );
+                },
+            )
+            .expect("typed water edit system");
+    };
+    apply(&mut world, Some(original.clone()), true);
+    apply(&mut world, None, false);
     assert!(world.get::<TerrainWaterRegionRetired>(owner).is_some());
     assert!(world.get::<TerrainWaterRegionEdit>(owner).is_none());
-    apply_water_region_edit_changes(
-        &mut world.commands(),
-        vec![(owner, Some(original.clone()), true)].into_boxed_slice(),
-    );
-    world.flush();
+    apply(&mut world, Some(original.clone()), true);
     assert!(world.get::<TerrainWaterRegionRetired>(owner).is_none());
     assert_eq!(world.get::<TerrainWaterRegionEdit>(owner), Some(&original));
     assert_eq!(

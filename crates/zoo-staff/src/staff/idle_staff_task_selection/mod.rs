@@ -1,11 +1,9 @@
 //! Staff without a job choose among the authored tasks they may start on
 //! their own, scored by their authored needs, as animals and guests do.
 
-use arrayvec::ArrayVec;
 use bevy::prelude::*;
 use openzt2_game_data::{
     behavior::{
-        action_record::BehaviorAction,
         document::BehaviorTask,
         eligibility::{
             BehaviorCandidateEligibilityFact, BehaviorCandidateRole,
@@ -16,6 +14,9 @@ use openzt2_game_data::{
     },
     world_definitions::staff_management::StaffRoleDefinition,
     AssetId,
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorExitTankGate, RunningBehaviorInstruction,
 };
 
 use openzt2_game_assets::behavior::behavior_asset_types::{
@@ -33,12 +34,12 @@ use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRa
 use openzt2_zoo_state::animal_behavior::behavior_token_types::{
     BehaviorSelfToken, ClaimedBehaviorSelfToken,
 };
-use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRetryDelays;
+use openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorTargetRejections;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::Tank;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    abandon_behavior_task_for_reconsideration, advance_behavior_task_to_next_action,
-    find_current_behavior_task_action, BehaviorTaskExecutionPhase,
+    abandon_behavior_task_for_reconsideration,
+    BehaviorTaskExecutionPhase,
     BehaviorTaskExecutionSequence, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
     SynchronizedBehaviorParticipant,
 };
@@ -67,7 +68,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     mut sequence: ResMut<BehaviorTaskExecutionSequence>,
-    target_retry_delays: Query<&BehaviorTargetRetryDelays>,
+    target_retry_delays: BehaviorTargetRejections,
     surfaces: DrySurfaceEligibility,
     world_objects: Query<(Entity, &GlobalTransform, &DefinitionId, &WorldMember)>,
     mut idle: Query<
@@ -123,11 +124,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
             for target in idle_task_targets(task, staff, world, &world_objects, |object| {
                 catalogue.find_object(object)
             }) {
-                if target.is_some_and(|(target, _)| {
-                    target_retry_delays
-                        .get(staff)
-                        .is_ok_and(|delays| delays.rejects(target))
-                }) {
+                if target.is_some_and(|(target, _)| target_retry_delays.rejects(staff, target)) {
                     continue;
                 }
                 let target_position = target.map_or(position, |(_, position)| position);
@@ -219,7 +216,7 @@ pub(crate) fn start_authored_idle_staff_tasks(
                 next_action_tick: 0,
                 object: None,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             },
             IdleStaffTask { execution_id },
         ));
@@ -355,14 +352,18 @@ pub(crate) fn interrupt_idle_staff_tasks_for_claimed_jobs(
     }
 }
 
-use openzt2_zoo_state::staff::staff_tank_gate_types::StaffExitTankGate;
+#[derive(Component)]
+pub(crate) struct PendingStaffExitTankGate {
+    instruction:
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorInstructionId,
+    request_id: u64,
+}
 
 /// Chooses an outside endpoint across an actual tank gate. The navigation
 /// owner approaches and traverses that gate before completing this request.
 pub(crate) fn execute_staff_exit_tank_gate_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     habitats: Res<HabitatIndex>,
     topology: Res<TopologyGrid>,
     tanks: Query<&openzt2_zoo_state::habitat::habitat_types::HabitatRegion, With<Tank>>,
@@ -378,12 +379,13 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
     mut requests: MessageWriter<openzt2_zoo_state::locomotion::locomotion_types::NavigateTo>,
     mut arrivals: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::Arrived>,
     mut failures: MessageReader<openzt2_zoo_state::locomotion::locomotion_types::NavigationFailed>,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
             &GlobalTransform,
-            &mut BehaviorTaskExecutionState,
-            Option<&StaffExitTankGate>,
+            &BehaviorTaskExecutionState,
+            Option<(&RunningBehaviorInstruction, &RunBehaviorExitTankGate)>,
+            Option<&PendingStaffExitTankGate>,
         ),
         Without<PendingBehaviorTaskFailure>,
     >,
@@ -396,40 +398,34 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
         .read()
         .map(|event| (event.entity, event.request_id))
         .collect();
-    for (actor, transform, mut task, exiting) in &mut actors {
-        let exiting = exiting.filter(|exiting| {
-            exiting.execution_id == task.execution_id
-                && exiting.depth == task.stack.len()
-                && task.is_at_or_nested_under(&exiting.origin, exiting.depth)
-        });
-        if exiting.is_none() {
-            commands.entity(actor).remove::<StaffExitTankGate>();
-        }
-        if task.next_action_tick > clock.tick
-            || !matches!(
-                documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, &task)),
-                Some(BehaviorAction::ExitTankGate)
-            )
-        {
+    for (actor, transform, task, running, exiting) in &actors {
+        let Some((instruction, _)) =
+            running.filter(|(instruction, _)| instruction.is_current(task))
+        else {
+            if exiting.is_some() {
+                commands.entity(actor).remove::<PendingStaffExitTankGate>();
+            }
+            continue;
+        };
+        let exiting = exiting.filter(|exiting| exiting.instruction == instruction.id());
+        if task.next_action_tick > clock.tick {
             continue;
         }
         let tank =
             locate_habitat_at_world_position(&habitats, transform.translation().xz(), *topology)
                 .filter(|habitat| tanks.contains(*habitat));
-        if let Some(exiting) = exiting.filter(|exiting| exiting.execution_id == task.execution_id) {
+        if let Some(exiting) = exiting {
             if failed.contains(&(actor, exiting.request_id)) {
-                commands.entity(actor).remove::<StaffExitTankGate>();
+                commands.entity(actor).remove::<PendingStaffExitTankGate>();
                 openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             } else if arrived.contains(&(actor, exiting.request_id)) && tank.is_none() {
-                commands.entity(actor).remove::<StaffExitTankGate>();
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                commands.entity(actor).remove::<PendingStaffExitTankGate>();
+                instruction.complete(actor, clock.tick, &mut commands);
             }
             continue;
         }
         let Some(tank) = tank else {
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
             continue;
         };
         let Ok(region) = tanks.get(tank) else {
@@ -478,11 +474,9 @@ pub(crate) fn execute_staff_exit_tank_gate_actions(
                 arrival_radius_m: 0.1,
             },
         );
-        commands.entity(actor).insert(StaffExitTankGate {
-            execution_id: task.execution_id,
+        commands.entity(actor).insert(PendingStaffExitTankGate {
+            instruction: instruction.id(),
             request_id,
-            origin: task.create_return_frame_after_action(task.action),
-            depth: task.stack.len(),
         });
     }
 }
@@ -618,7 +612,7 @@ pub(crate) fn start_staff_token_tasks(
                 next_action_tick: 0,
                 object: Some(token_entity),
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             },
         ));
         started.push(member);

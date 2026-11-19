@@ -5,7 +5,7 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
@@ -23,7 +23,7 @@ use openzt2_zoo_state::transport_tours::transport_vehicle_types::GenerateTranspo
 /// circuit. The circuit component is the sole owner of that selection.
 pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     mut purchase_choices: MessageReader<PurchaseChoice>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     transport_circuits: Query<&TransportCircuit>,
@@ -33,7 +33,7 @@ pub(super) fn select_authored_transport_vehicle_for_selected_compatible_circuit(
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
-    let Some(circuit_entity) = selected_entity.0.and_then(|selected_entity| {
+    let Some(circuit_entity) = selected_entity.subject().and_then(|selected_entity| {
         transport_circuits
             .contains(selected_entity)
             .then_some(selected_entity)
@@ -78,7 +78,7 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
     documents: Res<Assets<UiDocumentAsset>>,
     action_nodes: Query<(&UiTransportActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     circuits: Query<(&TransportCircuit, Option<&CircuitDirection>)>,
     circuit_members: Query<&CircuitMember>,
     vehicle_definitions: Query<&CircuitVehicleDefinition>,
@@ -99,7 +99,7 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
         let Some(document) = documents.get(&root.document) else {
             continue;
         };
-        let selected_transport_circuit = selected_entity.0.and_then(|selected_entity| {
+        let selected_transport_circuit = selected_entity.subject().and_then(|selected_entity| {
             circuits
                 .contains(selected_entity)
                 .then_some(selected_entity)
@@ -158,7 +158,8 @@ pub(super) fn route_authored_transport_ui_actions_to_selected_circuit_and_path_d
                 }
                 UiTransportAction::ResolvePendingTransportPathDeletion { deletion_confirmed } => {
                     if let Ok(pending) = pending_deletions.get(owner.0) {
-                        if *deletion_confirmed && selected_entity.0 == Some(pending.target) {
+                        if *deletion_confirmed && selected_entity.subject() == Some(pending.target)
+                        {
                             deletions.write(
                                 openzt2_zoo_state::construction::construction_interaction_types::DeleteEntity(
                                     pending.target,

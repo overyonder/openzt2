@@ -98,7 +98,10 @@ pub(super) fn orient_prefab_model_billboards_toward_active_camera_on_matching_re
         transforms
             .p2()
             .par_iter_many_unique_mut(&frontier)
-            .for_each(|(entity, mode, mut transform)| {
+            .for_each(|item| {
+                let Ok((entity, mode, mut transform)) = item else {
+                    return;
+                };
                 let Some(&(parent, camera)) = bases.get(&entity) else {
                     return;
                 };

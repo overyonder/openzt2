@@ -107,7 +107,7 @@ pub(super) fn policy_document() -> WorldDefinitionDocument {
             enabled: false,
             use_test_type: false,
             maximum_guests_base: 0,
-            maximum_guests_per_half_star: 0,
+            maximum_guests_per_star: 0,
             spawn_at_entrance: false,
             arrival_offset_m: [0.0; 2],
             departure_offset_m: [0.0; 2],
@@ -150,6 +150,7 @@ fn install_policy(app: &mut App, document: &WorldDefinitionDocument) {
 
 fn fixture() -> (App, Entity, Entity, Entity) {
     let mut app = App::new();
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>>()
         .add_message::<GuestReaction>()
@@ -282,6 +283,9 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
         action_record::BehaviorAction,
         document::{BehaviorDocument, BehaviorSet, BehaviorTaskActionPhase},
     };
+    use openzt2_zoo_state::behavior_task_execution_types::{
+        BehaviorTaskExecutionPhase, BehaviorTaskExecutionState,
+    };
 
     let (mut app, subject, guest, _) = fixture();
     app.add_systems(
@@ -309,25 +313,24 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
                 )]),
             }]),
         ));
+    let task = BehaviorTaskExecutionState {
+        execution_id: 1,
+        program: AssetId::default(),
+        target: area,
+        document,
+        declaration: 0,
+        phase: BehaviorTaskExecutionPhase::Set,
+        action: 0,
+        repetitions: 0,
+        next_action_tick: 0,
+        object: None,
+        interaction_slot: None,
+        depth: 0,
+    };
     app.world_mut()
         .entity_mut(guest)
         .remove::<(GuestDestination, GuestNavigationRequest)>()
-        .insert(
-            openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState {
-                execution_id: 1,
-                program: AssetId::default(),
-                target: area,
-                document,
-                declaration: 0,
-                phase: openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase::Set,
-                action: 0,
-                repetitions: 0,
-                next_action_tick: 0,
-                object: None,
-                interaction_slot: None,
-                stack: default(),
-            },
-        );
+        .insert(task.clone());
     let mut viewing = *app.world().get::<Viewing>(guest).unwrap();
     viewing.task_execution_id = Some(1);
     app.world_mut().entity_mut(guest).insert(viewing);
@@ -335,11 +338,11 @@ fn a_guest_watching_through_its_view_task_receives_the_event() {
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);
     app.world_mut()
-        .get_mut::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>(
-            guest,
-        )
-        .unwrap()
-        .execution_id = 2;
+        .entity_mut(guest)
+        .insert(BehaviorTaskExecutionState {
+            execution_id: 2,
+            ..task
+        });
     emit(&mut app, subject, 2);
     app.update();
     assert_eq!(app.world().get::<GuestEducation>(guest).unwrap().0, 30);

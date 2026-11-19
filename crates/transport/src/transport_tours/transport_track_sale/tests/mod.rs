@@ -11,7 +11,8 @@ use openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::SelectedSubject;
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::InGameUiOwner;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::construction::construction_edit_history_types::ConstructionEditHistory;
@@ -28,7 +29,6 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
     let mut app = App::new();
     app.init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<SelectedEntity>()
         .init_resource::<ConstructionEditHistory>()
         .add_message::<DeleteEntity>()
         .add_message::<PrepareDeletion>()
@@ -215,7 +215,8 @@ fn sale_application(refund_percent: f32) -> (App, Entity, [Entity; 2], Entity, E
             length: 2.0,
         },
     ));
-    app.world_mut().resource_mut::<SelectedEntity>().0 = Some(second);
+    app.world_mut()
+        .spawn((InGameUiOwner, SelectedSubject(second)));
     (app, circuit, [first, second], junction, station)
 }
 
@@ -232,7 +233,14 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
             Money(expected / 2)
         );
         // Leaving a quoted selection without a deletion intent cannot mutate the route.
-        app.world_mut().resource_mut::<SelectedEntity>().0 = None;
+        let owner = app
+            .world_mut()
+            .query_filtered::<Entity, With<InGameUiOwner>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .entity_mut(owner)
+            .remove::<SelectedSubject>();
         app.update();
         assert!(app.world().get_entity(attachment).is_ok());
         assert!(app
@@ -242,7 +250,9 @@ fn terminal_route_quote_and_removal_include_all_owned_pieces_once() {
             .next()
             .is_none());
 
-        app.world_mut().resource_mut::<SelectedEntity>().0 = Some(junction);
+        app.world_mut()
+            .entity_mut(owner)
+            .insert(SelectedSubject(junction));
         app.update();
         assert_eq!(
             app.world().get::<CurrentSellQuote>(junction).unwrap().0,

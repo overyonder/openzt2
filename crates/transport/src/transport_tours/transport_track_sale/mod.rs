@@ -14,7 +14,7 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 
 pub(crate) fn refresh_selected_transport_sale_quote(
     mut commands: Commands,
-    selected: Res<openzt2_interface_state::information::entity_selection_types::SelectedEntity>,
+    selected: openzt2_interface_state::information::entity_selection_types::WorldUiSelection,
     sales: TransportTrackSaleQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
@@ -22,7 +22,7 @@ pub(crate) fn refresh_selected_transport_sale_quote(
 ) {
     use openzt2_zoo_state::economy::facility_economy_types::CurrentSellQuote;
     let Some(target) = selected
-        .0
+        .subject()
         .filter(|target| sales.requires_transport_sale(*target))
     else {
         return;

@@ -1,4 +1,5 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{RunBehaviorViewAnimals, RunningBehaviorInstruction};
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestMemoryKind;
 use openzt2_game_data::world_definitions::guest_simulation_definitions::GuestVisitPurpose;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -65,9 +66,6 @@ pub(crate) fn apply_guest_reactions(
     mut applied: MessageWriter<GuestReactionApplied>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
-    documents: Res<
-        Assets<openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset>,
-    >,
     mut guests: Query<
         (
             &GuestArchetype,
@@ -77,7 +75,11 @@ pub(crate) fn apply_guest_reactions(
             &mut GuestMemories,
             Option<&Viewing>,
             Option<&super::guest_simulation_types::GuestViewReactionReceipt>,
-            Option<&BehaviorTaskExecutionState>,
+            Option<(
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorViewAnimals,
+            )>,
         ),
         With<Guest>,
     >,
@@ -125,11 +127,11 @@ pub(crate) fn apply_guest_reactions(
                             && Some(destination.entity) == origin.viewing.area
                             && request.is_none_or(|request| request.0.is_none())
                     });
-            let watching_through_task = task.is_some_and(|task| {
+            let watching_through_task = task.is_some_and(|(task, instruction, _)| {
                 super::guest_viewing_lifecycle::viewing_owned_by_current_view_action(
                     task,
                     &origin.viewing,
-                    &documents,
+                    instruction,
                 )
             });
             if viewing != Some(&origin.viewing)

@@ -41,10 +41,34 @@ struct SkyVertexColorSource {
     node_name: String,
 }
 
+#[derive(Component, PartialEq)]
+pub(super) struct SkyVertexColorMeshes(Vec<SkyVertexColorMesh>);
+
+#[derive(Default, PartialEq)]
+struct SkyVertexColorMesh {
+    node: Option<AssetId<GltfNode>>,
+    gltf_mesh: Option<AssetId<GltfMesh>>,
+    mesh: Option<Handle<Mesh>>,
+}
+
 #[derive(Component)]
 pub(super) struct InterpolatedSkyMesh {
     mesh: Handle<Mesh>,
+    base_mesh: Handle<Mesh>,
     sampled_fraction: f32,
+}
+
+fn changed_asset_ids<A: Asset>(events: &mut MessageReader<AssetEvent<A>>) -> HashSet<AssetId<A>> {
+    events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id }
+            | AssetEvent::Removed { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
@@ -64,16 +88,7 @@ pub(super) fn retain_sky_vertex_color_keyframe_models(
         Option<&mut SkyVertexColorSources>,
     )>,
 ) {
-    let changed_prefabs: HashSet<_> = prefab_events
-        .read()
-        .filter_map(|event| match *event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id }
-            | AssetEvent::Removed { id } => Some(id),
-            AssetEvent::Unused { .. } => None,
-        })
-        .collect();
+    let changed_prefabs = changed_asset_ids(&mut prefab_events);
     let definitions_changed = active.is_changed() || definitions.is_changed();
     let Some(definitions) = active.get(&definitions) else {
         return;
@@ -134,43 +149,156 @@ pub(super) fn retain_sky_vertex_color_keyframe_models(
                     .insert(SkyVertexColorSources(sources));
             }
             (Some(_), None) => {
-                commands.entity(entity).remove::<SkyVertexColorSources>();
+                commands
+                    .entity(entity)
+                    .remove::<(SkyVertexColorSources, SkyVertexColorMeshes)>();
             }
             (None, None) => {}
         }
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn resolve_sky_vertex_color_meshes(
+    mut commands: Commands,
+    models: Res<Assets<Gltf>>,
+    nodes: Res<Assets<GltfNode>>,
+    gltf_meshes: Res<Assets<GltfMesh>>,
+    mut model_events: MessageReader<AssetEvent<Gltf>>,
+    mut node_events: MessageReader<AssetEvent<GltfNode>>,
+    mut gltf_mesh_events: MessageReader<AssetEvent<GltfMesh>>,
+    mut visuals: Query<(
+        Entity,
+        Ref<SkyVertexColorSources>,
+        Option<&mut SkyVertexColorMeshes>,
+    )>,
+) {
+    let changed_models = changed_asset_ids(&mut model_events);
+    let changed_nodes = changed_asset_ids(&mut node_events);
+    let changed_gltf_meshes = changed_asset_ids(&mut gltf_mesh_events);
+    let resolve = |source: &SkyVertexColorSource| {
+        let mut resolved = SkyVertexColorMesh::default();
+        if let Some(model) = models.get(&source.model) {
+            resolved.node = model
+                .named_nodes
+                .get(source.node_name.as_str())
+                .or_else(|| model.nodes.first())
+                .map(Handle::id);
+        }
+        resolved.gltf_mesh = resolved
+            .node
+            .and_then(|id| nodes.get(id))
+            .and_then(|node| node.mesh.as_ref())
+            .map(Handle::id);
+        resolved.mesh = resolved
+            .gltf_mesh
+            .and_then(|id| gltf_meshes.get(id))
+            .and_then(|mesh| mesh.primitives.first())
+            .map(|primitive| primitive.mesh.clone());
+        resolved
+    };
+    for (entity, sources, current) in &mut visuals {
+        let Some(mut current) = current else {
+            commands.entity(entity).insert(SkyVertexColorMeshes(
+                sources.0.iter().map(resolve).collect(),
+            ));
+            continue;
+        };
+        if sources.is_changed() {
+            current.set_if_neq(SkyVertexColorMeshes(
+                sources.0.iter().map(resolve).collect(),
+            ));
+            continue;
+        }
+        for (index, source) in sources.0.iter().enumerate() {
+            let dependency = &current.0[index];
+            if changed_models.contains(&source.model.id())
+                || dependency
+                    .node
+                    .is_some_and(|id| changed_nodes.contains(&id))
+                || dependency
+                    .gltf_mesh
+                    .is_some_and(|id| changed_gltf_meshes.contains(&id))
+            {
+                let resolved = resolve(source);
+                if *dependency != resolved {
+                    current.0[index] = resolved;
+                }
+            }
+        }
+    }
+}
+
+#[derive(Message)]
+pub(super) struct SkyPrimitiveTreeChanged(Entity);
+
+pub(super) fn invalidate_discarded_sky_tree_parent(
+    discard: On<Discard<ChildOf>>,
+    parents: Query<&ChildOf>,
+    groups: Query<(), With<SkyVertexColorGroup>>,
+    mut changed: MessageWriter<SkyPrimitiveTreeChanged>,
+) {
+    if let Some(group) = parents
+        .iter_ancestors::<ChildOf>(discard.entity)
+        .find(|entity| groups.contains(*entity))
+    {
+        changed.write(SkyPrimitiveTreeChanged(group));
+    }
+}
+
 pub(super) fn link_first_sky_vertex_color_primitive(
     mut commands: Commands,
-    visuals: Query<Entity, (With<SkyVertexColorGroup>, Without<SkyVertexColorPrimitives>)>,
-    added_primitives: Query<(), Added<Mesh3d>>,
-    mut removed_primitives: RemovedComponents<Mesh3d>,
+    visuals: Query<Option<&SkyVertexColorPrimitives>, With<SkyVertexColorGroup>>,
+    added_groups: Query<Entity, Added<SkyVertexColorGroup>>,
+    changed_hierarchy: Query<Entity, Or<(Added<Mesh3d>, Changed<ChildOf>)>>,
+    parents: Query<&ChildOf>,
+    mut tree_changes: MessageReader<SkyPrimitiveTreeChanged>,
     children: Query<&Children>,
     primitives: Query<(), With<Mesh3d>>,
 ) {
-    let removed = removed_primitives.read().count() > 0;
-    if added_primitives.is_empty() && !removed {
-        return;
-    }
-    for visual in &visuals {
-        if let Some(primitive) = std::iter::once(visual)
-            .chain(children.iter_descendants_depth_first::<Children>(visual))
-            .find(|entity| primitives.contains(*entity))
+    let mut affected: bevy::ecs::entity::EntityHashSet = added_groups
+        .iter()
+        .chain(tree_changes.read().map(|change| change.0))
+        .collect();
+    for entity in &changed_hierarchy {
+        if let Some(group) = std::iter::once(entity)
+            .chain(parents.iter_ancestors::<ChildOf>(entity))
+            .find(|entity| visuals.contains(*entity))
         {
-            commands
-                .entity(primitive)
-                .insert(SkyVertexColorPrimitiveOf(visual));
+            affected.insert(group);
+        }
+    }
+    for group in affected {
+        let Ok(previous) = visuals.get(group) else {
+            continue;
+        };
+        let previous = previous.and_then(|primitives| primitives.iter().next());
+        let next = std::iter::once(group)
+            .chain(children.iter_descendants_depth_first::<Children>(group))
+            .find(|entity| primitives.contains(*entity));
+        if next != previous {
+            if let Some(previous) = previous {
+                commands
+                    .entity(previous)
+                    .try_remove::<SkyVertexColorPrimitiveOf>();
+            }
+            if let Some(next) = next {
+                commands
+                    .entity(next)
+                    .try_insert(SkyVertexColorPrimitiveOf(group));
+            }
         }
     }
 }
 
 pub(super) fn unlink_removed_sky_vertex_color_mesh(
     removed: On<Remove<Mesh3d>>,
-    primitives: Query<(), With<SkyVertexColorPrimitiveOf>>,
+    primitives: Query<&SkyVertexColorPrimitiveOf>,
+    mut changed: MessageWriter<SkyPrimitiveTreeChanged>,
     mut commands: Commands,
 ) {
-    if primitives.contains(removed.entity) {
+    if let Ok(link) = primitives.get(removed.entity) {
+        changed.write(SkyPrimitiveTreeChanged(link.0));
         commands
             .entity(removed.entity)
             .try_remove::<SkyVertexColorPrimitiveOf>();
@@ -185,25 +313,14 @@ pub(super) fn interpolate_sky_model_vertex_colors(
         &SkyVertexColorPrimitives,
         &EnvironmentVisualOwner,
         Ref<SkyVertexColorSources>,
+        Ref<SkyVertexColorMeshes>,
     )>,
     mut primitives: Query<(&mut Mesh3d, Option<&mut InterpolatedSkyMesh>)>,
-    models: Res<Assets<Gltf>>,
-    nodes: Res<Assets<GltfNode>>,
-    gltf_meshes: Res<Assets<GltfMesh>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut mesh_events: MessageReader<AssetEvent<Mesh>>,
 ) {
-    let changed_meshes: HashSet<_> = mesh_events
-        .read()
-        .filter_map(|event| match *event {
-            AssetEvent::Added { id }
-            | AssetEvent::Modified { id }
-            | AssetEvent::LoadedWithDependencies { id } => Some(id),
-            _ => None,
-        })
-        .collect();
-    let sources_changed = models.is_changed() || nodes.is_changed() || gltf_meshes.is_changed();
-    for (primitives_of_visual, owner, sources) in &visuals {
+    let changed_meshes = changed_asset_ids(&mut mesh_events);
+    for (primitives_of_visual, owner, sources, resolved) in &visuals {
         let Ok(daylight) = environments.get(owner.0) else {
             continue;
         };
@@ -219,7 +336,7 @@ pub(super) fn interpolate_sky_model_vertex_colors(
         });
         if fraction_already_sampled
             && !sources.is_changed()
-            && !sources_changed
+            && !resolved.is_changed()
             && changed_meshes.is_empty()
         {
             continue;
@@ -231,23 +348,25 @@ pub(super) fn interpolate_sky_model_vertex_colors(
         else {
             continue;
         };
-        let source_mesh =
-            |source: &SkyVertexColorSource| -> Option<(&Mesh, bevy::asset::AssetId<Mesh>)> {
-                let model = models.get(&source.model)?;
-                let node = model
-                    .named_nodes
-                    .get(source.node_name.as_str())
-                    .or_else(|| model.nodes.first())
-                    .and_then(|node| nodes.get(node))?;
-                let mesh = gltf_meshes.get(node.mesh.as_ref()?)?.primitives.first()?;
-                Some((meshes.get(&mesh.mesh)?, mesh.mesh.id()))
-            };
-        let colors = source_mesh(&sources.0[curve.left_keyframe_index])
-            .zip(source_mesh(&sources.0[curve.right_keyframe_index]))
+        let source_mesh = |index: usize| {
+            let handle = resolved.0.get(index)?.mesh.as_ref()?;
+            Some((meshes.get(handle)?, handle.id()))
+        };
+        let base_mesh = projected
+            .as_ref()
+            .filter(|projected| projected.mesh == primitive.0)
+            .map_or_else(
+                || primitive.0.clone(),
+                |projected| projected.base_mesh.clone(),
+            );
+        let base_changed = changed_meshes.contains(&base_mesh.id());
+        let colors = source_mesh(curve.left_keyframe_index)
+            .zip(source_mesh(curve.right_keyframe_index))
             .and_then(|((left, left_id), (right, right_id))| {
                 if fraction_already_sampled
                     && !sources.is_changed()
-                    && !sources_changed
+                    && !resolved.is_changed()
+                    && !base_changed
                     && !changed_meshes.contains(&left_id)
                     && !changed_meshes.contains(&right_id)
                 {
@@ -281,7 +400,7 @@ pub(super) fn interpolate_sky_model_vertex_colors(
                 })
             });
         let Some(colors) = colors else { continue };
-        let Some(mesh) = meshes.get(&primitive.0) else {
+        let Some(mesh) = meshes.get(&base_mesh) else {
             continue;
         };
         if mesh.count_vertices() != colors.len() {
@@ -289,7 +408,7 @@ pub(super) fn interpolate_sky_model_vertex_colors(
         }
         let output = if let Some(projected) = projected
             .as_mut()
-            .filter(|projected| projected.mesh == primitive.0)
+            .filter(|projected| projected.mesh == primitive.0 && !base_changed)
         {
             projected.sampled_fraction = daylight.fraction;
             primitive.0.clone()
@@ -299,6 +418,7 @@ pub(super) fn interpolate_sky_model_vertex_colors(
             primitive.0 = output.clone();
             let next = InterpolatedSkyMesh {
                 mesh: output.clone(),
+                base_mesh,
                 sampled_fraction: daylight.fraction,
             };
             if let Some(mut current) = projected {

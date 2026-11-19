@@ -9,19 +9,23 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use openzt2_zoo_state::shows::show_schedule_types::ScheduledShowPerformancePlan;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_show_schedule_status_to_visible_information_panels(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     show_subjects: Query<Option<&ScheduledShowPerformancePlan>>,
     mut authored_integer_values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
     mut authored_boolean_visibility: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
 ) {
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
-        let Ok(scheduled_performance_plan) = show_subjects.get(information_panel.subject) else {
+        let Ok(scheduled_performance_plan) = show_subjects.get(selection.0) else {
             continue;
         };
 

@@ -13,7 +13,15 @@ use super::authored_node_property_binding_projection::{
 };
 use super::authored_node_visual_projection::project_authored_node_visuals_into_bevy_presentation;
 use super::authored_widget_projection::project_widget;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
+use crate::authored_pointer_events::LastAuthoredPrimaryPress;
+use crate::authored_ui_focus_navigation_and_activation::{
+    AuthoredHoverPresentation, UiFocusMemory,
+};
+use bevy::input_focus::{
+    tab_navigation::{TabGroup, TabIndex},
+    Focusable,
+};
+use bevy::picking::hover::DirectlyHovered;
 use std::{collections::hash_map::RandomState, hash::BuildHasher};
 
 use bevy::prelude::*;
@@ -38,18 +46,13 @@ use crate::authored_tooltip_presentation::UiShortTooltipKey;
 use crate::authored_tree_expansion_and_row_indentation::UiAuthoredTreeHeader;
 use crate::authored_ui_canvas_scaling_and_clipping::UiLogicalCanvas;
 use crate::authored_ui_canvas_scaling_and_clipping::UiPhysicalListRowHeight;
-use crate::authored_ui_change_activation_dispatch::UiPreviousFocus;
-use crate::authored_ui_change_activation_dispatch::UiPreviousVisibility;
 use crate::authored_ui_focus_navigation_and_activation::UiSubmitTarget;
 use crate::authored_ui_layout_participation::UiAuthoredLayoutDisplay;
 use crate::authored_ui_node_projection_components::UiDocumentOwner;
 use crate::authored_ui_node_projection_components::UiDocumentRoot;
 use crate::authored_ui_node_projection_components::UiNodeId;
-use crate::authored_ui_pointer_activation::UiPreviousPointerInteraction;
-use crate::authored_ui_pointer_activation::UiPreviousPointerPressTimeSeconds;
 use crate::authored_ui_presentation_action_application::UiExclusiveHoverPresentation;
 use crate::cursor::UiCursorStyle;
-use crate::scrollbar_value_and_scroll_position_synchronization::UiScrollDecoration;
 use crate::slider::UiSliderAxis;
 use crate::ui_document_lifecycle_contracts::ShowUiDocument;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
@@ -57,8 +60,6 @@ use openzt2_interface_state::ui::authored_online_message_node_roles::UiAuthoredO
 use openzt2_interface_state::ui::authored_online_message_node_roles::UiAuthoredOnlineMessageList;
 use openzt2_interface_state::ui::authored_online_message_node_roles::UiAuthoredOnlineMessageSurface;
 use openzt2_interface_state::ui::authored_online_message_node_roles::UiAuthoredOnlineMessageText;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusPresentation;
-use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusScope;
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualBackgroundSlotOwner;
@@ -231,6 +232,24 @@ pub(super) fn project_document_on_entity(
             UiAuthoredLayoutDisplay::from_authored_display(authored_display),
             initial_bevy_pickable_for_authored_node(record),
         ));
+        let overhead_only = match data.role {
+            UiDocumentRole::InGameHud => {
+                index != 0
+                    && record.parent == 0
+                    && !["Camera Set", "Message bar layout", "pause layout"]
+                        .iter()
+                        .any(|name| record.name.eq_ignore_ascii_case(name))
+            }
+            UiDocumentRole::EntityInfo
+            | UiDocumentRole::AnimalCareCatalogue
+            | UiDocumentRole::PurchaseCatalogue => index == 0,
+            _ => false,
+        };
+        if overhead_only {
+            commands
+                .entity(entity)
+                .insert(crate::authored_ui_layout_participation::UiOverheadOnly);
+        }
         if index == 0 && data.role == UiDocumentRole::InGamePersistentStatus {
             commands.entity(entity).insert(GlobalZIndex(1));
         }
@@ -242,7 +261,6 @@ pub(super) fn project_document_on_entity(
         if index == 0 && data.role == UiDocumentRole::TutorialComplete {
             commands.entity(entity).insert(GlobalZIndex(3));
         }
-        commands.entity(entity).insert(UiPreviousVisibility(false));
         if data.role == UiDocumentRole::MainMenu
             && record.animation.is_some()
             && record
@@ -257,16 +275,10 @@ pub(super) fn project_document_on_entity(
         if cursor != AssetId::default() {
             commands.entity(entity).insert(UiCursorStyle(cursor));
         }
-        if let Some((axis, owner_index)) = scroll_decoration {
-            // Decorations belong to the viewport, not its scrolling content.
-            // Bevy retains their authored parent-relative layout and clipping.
+        if scroll_decoration.is_some() {
             commands
                 .entity(entity)
                 .insert(bevy::ui::IgnoreScroll(BVec2::TRUE));
-            commands.entity(entity).insert(UiScrollDecoration {
-                owner: entities[owner_index],
-                axis,
-            });
         }
         if flags & UiNodeFlags::ONLINE_MESSAGE_SURFACE.0 != 0 {
             commands
@@ -321,13 +333,9 @@ pub(super) fn project_document_on_entity(
         }
 
         if index == 0 {
-            commands.entity(entity).insert((
-                UiDocumentRoot {
-                    document: request.document.clone(),
-                },
-                UiFocusScope::default(),
-                UiPreviousFocus::default(),
-            ));
+            commands.entity(entity).insert((UiDocumentRoot {
+                document: request.document.clone(),
+            },));
             if existing_root.is_none() {
                 commands.entity(entity).insert((
                     super::ui_document_opening::UiDocumentOpeningEffects::default(),
@@ -420,13 +428,12 @@ pub(super) fn project_document_on_entity(
             };
             commands.entity(entity).insert((
                 UiFocusable { order, enabled },
+                Focusable,
+                TabIndex(i32::try_from(order).unwrap_or(i32::MAX)),
                 UiInteractionEnabled(enabled),
-                UiFocusPresentation::default(),
-                UiPointerInteraction::None,
-            ));
-            commands.entity(entity).insert((
-                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
-                UiPreviousPointerPressTimeSeconds::default(),
+                DirectlyHovered::default(),
+                LastAuthoredPrimaryPress::default(),
+                AuthoredHoverPresentation::default(),
             ));
             default_focus.get_or_insert(entity);
         }
@@ -435,16 +442,13 @@ pub(super) fn project_document_on_entity(
         if interactive && !focusable {
             commands.entity(entity).insert((
                 UiInteractionEnabled(enabled),
-                UiPointerInteraction::None,
-                UiPreviousPointerInteraction::from_current_interaction(UiPointerInteraction::None),
-                UiPreviousPointerPressTimeSeconds::default(),
+                DirectlyHovered::default(),
+                LastAuthoredPrimaryPress::default(),
+                AuthoredHoverPresentation::default(),
             ));
         }
 
-        if matches!(
-            &record.kind,
-            UiNodeKind::Button | UiNodeKind::Toggle | UiNodeKind::Slider
-        ) {
+        if matches!(&record.kind, UiNodeKind::Button | UiNodeKind::Toggle) {
             commands.entity(entity).insert(bevy::ui_widgets::Button);
         }
         if matches!(&record.kind, UiNodeKind::Edit) {
@@ -498,6 +502,7 @@ pub(super) fn project_document_on_entity(
             record,
             index as u32,
             localization,
+            scroll_decoration.map(|(axis, owner)| (axis, entities[owner])),
         );
     }
 
@@ -561,13 +566,52 @@ pub(super) fn project_document_on_entity(
     }
 
     if let Some(root) = root {
-        commands.entity(root).insert(UiFocusScope {
-            focused: default_focus,
+        commands.entity(root).insert(UiFocusMemory {
+            remembered: default_focus,
             default: default_focus,
         });
-        project_authored_hotkey_action_proxies(commands, root, document);
+        if default_focus.is_some() {
+            commands.entity(root).insert(TabGroup::modal());
+        }
+        project_authored_hotkey_action_proxies(commands, root, document, &entities);
     }
     let root = root.expect("validated UI document has a root");
+    if data.role == UiDocumentRole::EntityInfo {
+        commands
+            .entity(root)
+            .insert(openzt2_interface_state::information::entity_selection_types::InfoPanel);
+    }
+    use openzt2_game_data::ui_document::action::{
+        presentation::UiPresentationAction, UiActionRecord,
+    };
+    let cache_receivers = data
+        .nodes
+        .iter()
+        .flat_map(|record| {
+            record
+                .actions
+                .iter()
+                .chain(record.hotkeys.iter().map(|hotkey| &hotkey.action))
+        })
+        .filter_map(|record| {
+            let UiActionRecord::Presentation(record) = record else {
+                return None;
+            };
+            match record.action {
+                UiPresentationAction::AdvanceTargetNodeMessageCursor { target_node } => {
+                    Some(target_node)
+                }
+                _ => None,
+            }
+        })
+        .collect::<std::collections::HashSet<_>>();
+    for (record, entity) in data.nodes.iter().zip(&entities) {
+        if cache_receivers.contains(&record.id) {
+            commands.entity(*entity).insert(
+                crate::authored_ui_presentation_action_application::UiCachedMessages::default(),
+            );
+        }
+    }
     let targets = crate::authored_ui_target_lookup::ProjectedUiTargets::from_authored_node_entities(
         data.nodes
             .iter()
@@ -687,6 +731,7 @@ pub fn insert_authored_text_prototype(
         record,
         prototype_index,
         localization,
+        None,
     );
     true
 }

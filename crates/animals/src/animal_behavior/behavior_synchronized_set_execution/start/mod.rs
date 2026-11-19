@@ -5,61 +5,44 @@ use super::super::{
 use super::{
     SynchronizedBehaviorOwner, SynchronizedBehaviorParticipant, SynchronizedBehaviorSources,
 };
-use bevy::{ecs::system::SystemParam, platform::collections::HashSet, prelude::*};
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use bevy::prelude::*;
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_data::AssetId;
 use openzt2_world_state::animation_graph::animation_presentation_relationship_types::AnimationPresentationOwner;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::abandon_behavior_task_for_reconsideration;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-
-#[derive(SystemParam)]
-pub(super) struct SynchronizedBehaviorActors<'w, 's> {
-    tasks: Query<
-        'w,
-        's,
-        (Entity, &'static mut BehaviorTaskExecutionState),
-        (
-            Without<SynchronizedBehaviorOwner>,
-            Without<SynchronizedBehaviorParticipant>,
-            Without<PendingBehaviorTaskFailure>,
-        ),
-    >,
-    synchronized_targets: Query<
-        'w,
-        's,
-        (),
-        Or<(
-            With<SynchronizedBehaviorOwner>,
-            With<SynchronizedBehaviorParticipant>,
-        )>,
-    >,
-    busy_targets: Query<'w, 's, (), With<BehaviorTaskExecutionState>>,
-    controllers: Query<
-        'w,
-        's,
-        (
-            &'static AnimationPresentationOwner,
-            &'static mut AnimationPlaybackController,
-        ),
-    >,
-}
+use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
+    SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
+};
+use openzt2_zoo_state::behavior_task_execution_types::{
+    abandon_behavior_task_for_reconsideration,
+    running_actions::{
+        BehaviorInstructionId, RunBehaviorSynchronizedSets, RunningBehaviorInstruction,
+        SelectedBehaviorSet,
+    },
+    BehaviorTaskExecutionPhase, BehaviorTaskExecutionSequence, BehaviorTaskExecutionState,
+    PendingBehaviorTaskFailure, MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT,
+};
 
 pub(super) fn start_synchronized_behavior_sets(
     mut commands: Commands,
     clock: Res<ZooClock>,
     sources: SynchronizedBehaviorSources,
     animal_types: super::super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
-    mut actors: SynchronizedBehaviorActors,
-    mut claims_this_tick: Local<HashSet<Entity>>,
-    mut execution_sequence: ResMut<
-        openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence,
+    actors: Query<
+        (
+            Entity,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorSynchronizedSets,
+        ),
+        (
+            Without<SynchronizedBehaviorOwner>,
+            Without<SynchronizedBehaviorParticipant>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
     >,
 ) {
-    claims_this_tick.clear();
     let (Some(definitions), Some(declarations)) = (
         sources.definitions.get(&sources.definition_assets),
         sources
@@ -68,32 +51,11 @@ pub(super) fn start_synchronized_behavior_sets(
     ) else {
         return;
     };
-    for (actor, mut task) in &mut actors.tasks {
-        // A partner claimed earlier this tick has lost its own task.
-        if task.next_action_tick > clock.tick || claims_this_tick.contains(&actor) {
+    for (actor, task, instruction, running) in &actors {
+        if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }
-        let Some(BehaviorAction::SynchronizedSets(action)) = sources
-            .documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
-            continue;
-        };
-        let Some(target) = task.target().filter(|target| *target != actor) else {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        if actors.synchronized_targets.contains(target) || claims_this_tick.contains(&target) {
-            // A partner already synchronized with another actor stays with it.
-            debug!(
-                ?actor,
-                ?target,
-                "synchronized partner is in another synchronization"
-            );
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
+        let action = &running.0;
         // An object partner, such as a food stand, matches its set's subjects
         // through its authored type family (`foodstand_burger` for
         // `foodstand_burger_df`) as well as its own definition.
@@ -117,81 +79,137 @@ pub(super) fn start_synchronized_behavior_sets(
                 .chain(object_types.iter().copied()),
             )
         };
-        let (subject_set, target_set) = (
-            resolve(actor, action.subject_behavior_set),
-            resolve(target, action.target_behavior_set),
-        );
-        let (
-            Some((subject_document, subject_declaration)),
-            Some((target_document, target_declaration)),
-        ) = (subject_set.clone(), target_set.clone())
-        else {
-            debug!(
-                ?actor,
-                ?target,
-                subject_set_found = subject_set.is_some(),
-                target_set_found = target_set.is_some(),
-                "synchronized behavior set has no declaration for its participant's types"
-            );
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        };
-        let origin = task.create_return_frame_after_action(task.action);
-        let depth = task.stack.len();
-        if !task.push_return_frame(origin.clone()) {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-            continue;
-        }
-        claims_this_tick.insert(target);
-        // The synchronization interrupts the partner's own task, as a keeper
-        // treats an animal whatever it was doing.
-        if actors.busy_targets.contains(target) {
-            abandon_behavior_task_for_reconsideration(target, &mut commands);
-        }
-        let target_execution_id = execution_sequence.next();
-        commands
-            .entity(target)
-            .insert((
-                SynchronizedBehaviorParticipant {
-                    owner: actor,
-                    execution_id: target_execution_id,
-                },
-                BehaviorTaskExecutionState {
-                    execution_id: target_execution_id,
-                    program: action.target_behavior_set,
-                    target: Some(actor),
-                    document: target_document,
-                    declaration: target_declaration,
-                    phase: BehaviorTaskExecutionPhase::Set,
-                    action: 0,
-                    repetitions: 0,
-                    next_action_tick: clock.tick.saturating_add(1),
-                    object: None,
-                    interaction_slot: None,
-                    stack: Default::default(),
-                },
-            ))
-            .remove::<super::super::behavior_set_start_request_types::PendingBehaviorSet>();
-        commands.entity(actor).insert(SynchronizedBehaviorOwner {
+        let participants = task
+            .target()
+            .filter(|target| *target != actor)
+            .and_then(|target| {
+                Some(PreparedSynchronization {
+                    target,
+                    subject_set: action.subject_behavior_set,
+                    subject: resolve(actor, action.subject_behavior_set)?,
+                    partner_set: action.target_behavior_set,
+                    partner: resolve(target, action.target_behavior_set)?,
+                    reset_animation_phase: action.reset_animation_phase,
+                })
+            });
+        commands.trigger(ClaimSynchronizedBehavior {
+            actor,
+            instruction: instruction.id(),
+            tick: clock.tick,
+            participants,
+        });
+    }
+}
+
+struct PreparedSynchronization {
+    target: Entity,
+    subject_set: AssetId,
+    subject: (Handle<BehaviorDocumentAsset>, usize),
+    partner_set: AssetId,
+    partner: (Handle<BehaviorDocumentAsset>, usize),
+    reset_animation_phase: bool,
+}
+
+#[derive(EntityEvent)]
+pub(super) struct ClaimSynchronizedBehavior {
+    #[event_target]
+    actor: Entity,
+    instruction: BehaviorInstructionId,
+    tick: u64,
+    participants: Option<PreparedSynchronization>,
+}
+
+pub(super) fn claim_synchronized_behavior(
+    request: On<ClaimSynchronizedBehavior>,
+    mut commands: Commands,
+    actors: Query<
+        (&BehaviorTaskExecutionState, &RunningBehaviorInstruction),
+        (
+            Without<SynchronizedBehaviorOwner>,
+            Without<SynchronizedBehaviorParticipant>,
+            Without<PendingBehaviorTaskFailure>,
+        ),
+    >,
+    targets: Query<(
+        Has<SynchronizedBehaviorOwner>,
+        Has<SynchronizedBehaviorParticipant>,
+        Has<BehaviorTaskExecutionState>,
+    )>,
+    mut sequence: ResMut<BehaviorTaskExecutionSequence>,
+    mut controllers: Query<(
+        &AnimationPresentationOwner,
+        &mut AnimationPlaybackController,
+    )>,
+) {
+    let actor = request.actor;
+    let Ok((task, instruction)) = actors.get(actor) else {
+        return;
+    };
+    if instruction.id() != request.instruction || !instruction.is_current(task) {
+        return;
+    }
+    let Some(prepared) = request.participants.as_ref() else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    let target = prepared.target;
+    let Ok((false, false, busy)) = targets.get(target) else {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    };
+    let depth = task.depth;
+    if depth == MAXIMUM_BEHAVIOR_TASK_RETURN_FRAME_COUNT {
+        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
+        return;
+    }
+    if busy {
+        abandon_behavior_task_for_reconsideration(target, &mut commands);
+    }
+    let target_execution_id = sequence.next();
+    commands.spawn((
+        SynchronizedBehaviorSubject(actor),
+        SynchronizedBehaviorPartner(target),
+        SynchronizedBehaviorOperation {
             execution_id: task.execution_id,
             target_execution_id,
-            target,
-            origin,
+            origin: task.create_return_frame_after_action(task.action),
             depth,
             target_outcome: None,
-        });
-        task.program = action.subject_behavior_set;
-        task.document = subject_document;
-        task.declaration = subject_declaration;
-        task.phase = BehaviorTaskExecutionPhase::Set;
-        task.action = 0;
-        task.repetitions = 0;
-        task.next_action_tick = clock.tick.saturating_add(1);
-        if action.reset_animation_phase {
-            for (owner, mut controller) in &mut actors.controllers {
-                if owner.gameplay_entity == actor || owner.gameplay_entity == target {
-                    controller.elapsed_milliseconds = 0;
-                }
+        },
+    ));
+    commands
+        .entity(target)
+        .insert(BehaviorTaskExecutionState {
+            execution_id: target_execution_id,
+            program: prepared.partner_set,
+            target: Some(actor),
+            document: prepared.partner.0.clone(),
+            declaration: prepared.partner.1,
+            phase: BehaviorTaskExecutionPhase::Set,
+            action: 0,
+            repetitions: 0,
+            next_action_tick: request.tick.saturating_add(1),
+            object: None,
+            interaction_slot: None,
+            depth: 0,
+        })
+        .remove::<super::super::behavior_set_start_request_types::PendingBehaviorSet>();
+    instruction.enter_set(
+        actor,
+        SelectedBehaviorSet {
+            program: prepared.subject_set,
+            document: prepared.subject.0.clone(),
+            declaration: prepared.subject.1,
+            tick: request.tick,
+            repeat: Some(task.repetitions),
+            target: None,
+        },
+        &mut commands,
+    );
+    if prepared.reset_animation_phase {
+        for (owner, mut controller) in &mut controllers {
+            if owner.gameplay_entity == actor || owner.gameplay_entity == target {
+                controller.elapsed_milliseconds = 0;
             }
         }
     }

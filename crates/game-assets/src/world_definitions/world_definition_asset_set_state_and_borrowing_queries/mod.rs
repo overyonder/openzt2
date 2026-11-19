@@ -3,14 +3,13 @@
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc,
         atomic::{AtomicUsize, Ordering},
+        Arc,
     },
 };
 
 use bevy::{gltf::Gltf, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     world_definitions::{
         animal_health::*,
         animal_shows_and_training::*,
@@ -43,6 +42,7 @@ use openzt2_game_data::{
         transportation_and_tours::*,
         world_objects::*,
     },
+    AssetId,
 };
 
 use crate::{effect::ParticleEffectDocumentAsset, scene_prefab::ScenePrefabAsset};
@@ -153,9 +153,14 @@ pub(super) enum SingletonKind {
 #[derive(Resource, Default)]
 pub struct WorldDefinitions {
     pub(super) server: Option<AssetServer>,
-    pub(super) binder_source_version: u64,
-    pub(super) dirty: bool,
+    pub(super) binder_sources:
+        Option<Arc<super::world_definition_asset_loading::authored_binder_reference_resolution::AuthoredBinderSources>>,
+    pub(super) pending: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
+    pub(super) failed: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
     pub(super) handles: Vec<Handle<WorldDefinitionAsset>>,
+    pub(super) source_ids: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
+    pub(super) reload_queue: BTreeMap<bevy::asset::AssetId<WorldDefinitionAsset>, bevy::asset::AssetPath<'static>>,
+    pub(super) reloading: std::collections::BTreeSet<bevy::asset::AssetId<WorldDefinitionAsset>>,
     pub(super) fame_documents: Vec<Handle<WorldDefinitionAsset>>,
     pub(super) loading_task: Option<bevy::tasks::Task<Vec<Handle<WorldDefinitionAsset>>>>,
     pub(super) complete: bool,
@@ -169,9 +174,7 @@ pub struct WorldDefinitions {
     pub(super) catalogue_by_definition: std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
     pub(super) research_by_definition: std::sync::OnceLock<BTreeMap<AssetId, AssetId>>,
     pub(super) topology_cell_size_cm: u16,
-    /// Whether an indexed handle lacked its asset. Indexing reruns whenever
-    /// the definition assets change, so views need not rescan every handle.
-    pub(super) pending_assets: bool,
+    pub(super) maximum_ground_path_width_cm: u16,
 }
 
 impl WorldDefinitions {
@@ -240,6 +243,15 @@ impl WorldDefinitions {
             .map(|path| path.width_cm / 2)
             .min()
             .unwrap_or_default();
+        self.maximum_ground_path_width_cm = self.maximum_ground_path_width_cm.max(
+            document
+                .paths
+                .iter()
+                .filter(|path| !path.elevated)
+                .map(|path| path.width_cm)
+                .max()
+                .unwrap_or_default(),
+        );
         if !document.fame_thresholds.is_empty() || !document.starting_fame.is_empty() {
             self.fame_documents.push(handle.clone());
         }
@@ -266,7 +278,10 @@ impl WorldDefinitions {
         &'a self,
         assets: &'a Assets<WorldDefinitionAsset>,
     ) -> Option<WorldDefinitionsView<'a>> {
-        let ready = !self.dirty
+        let ready = self.loading_task.is_none()
+            && self.pending.is_empty()
+            && self.reload_queue.is_empty()
+            && self.reloading.is_empty()
             && !self.handles.is_empty()
             && self
                 .singletons
@@ -281,7 +296,8 @@ impl WorldDefinitions {
             catalogue_by_definition: &self.catalogue_by_definition,
             research_by_definition: &self.research_by_definition,
             topology_cell_size_cm: self.topology_cell_size_cm,
-            pending_assets: self.pending_assets,
+            maximum_ground_path_width_cm: self.maximum_ground_path_width_cm,
+            pending_assets: false,
             assets,
         })
     }
@@ -298,6 +314,7 @@ pub struct WorldDefinitionsView<'a> {
     catalogue_by_definition: &'a std::sync::OnceLock<BTreeMap<AssetId, (usize, AssetId)>>,
     research_by_definition: &'a std::sync::OnceLock<BTreeMap<AssetId, AssetId>>,
     topology_cell_size_cm: u16,
+    maximum_ground_path_width_cm: u16,
     pending_assets: bool,
     assets: &'a Assets<WorldDefinitionAsset>,
 }
@@ -1081,6 +1098,10 @@ impl<'a> WorldDefinitionsView<'a> {
 
     pub fn topology_cell_size_cm(self) -> u16 {
         self.topology_cell_size_cm
+    }
+
+    pub fn maximum_ground_path_width_cm(self) -> u16 {
+        self.maximum_ground_path_width_cm
     }
 
     pub fn texture_image(self, id: AssetId) -> Option<Handle<Image>> {

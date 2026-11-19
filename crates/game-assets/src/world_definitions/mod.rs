@@ -3,6 +3,7 @@
 pub mod behavior_auxiliary_source_document_lowering;
 pub mod behavior_auxiliary_source_types;
 pub mod ground_path_surface_images;
+pub mod loaded_staff_behavior_capabilities;
 pub mod lower;
 pub mod path_placement_highlight_asset;
 mod path_placement_highlight_loading;
@@ -29,6 +30,9 @@ use self::{
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
 
+#[derive(SystemSet, Debug, Hash, Eq, PartialEq, Clone)]
+pub struct WorldDefinitionPublicationSet;
+
 pub struct WorldDefinitionAssetPlugin;
 
 impl Plugin for WorldDefinitionAssetPlugin {
@@ -40,19 +44,24 @@ impl Plugin for WorldDefinitionAssetPlugin {
             .init_asset_loader::<path_placement_highlight_loading::PathPlacementHighlightLoader>()
             .init_asset_loader::<WorldDefinitionAssetLoader>()
             .init_resource::<WorldDefinitions>()
+            .init_resource::<loaded_staff_behavior_capabilities::LoadedStaffBehaviorCapabilities>()
+            .add_systems(
+                PostUpdate,
+                loaded_staff_behavior_capabilities::publish_staff_behavior_capabilities,
+            )
             .add_systems(
                 PreUpdate,
                 (
-                    discover_world_definition_catalogue_sources,
-                    index_loaded_world_definition_assets_by_identifier_and_singleton_kind,
-                )
-                    .chain()
-                    .after(bevy::asset::AssetTrackingSystems)
-                    .run_if(
+                    discover_world_definition_catalogue_sources.run_if(
                         in_state(GamePhase::Loading)
                             .or_else(in_state(GamePhase::InGame))
                             .or_else(any_with_component::<WorldAssetPreparation>),
                     ),
+                    index_loaded_world_definition_assets_by_identifier_and_singleton_kind
+                        .in_set(WorldDefinitionPublicationSet),
+                )
+                    .chain()
+                    .after(bevy::asset::AssetTrackingSystems),
             );
     }
 }

@@ -16,19 +16,18 @@ use super::immersive_mode_input_policy_operations::interaction_action_flags_allo
 use super::immersive_mode_input_policy_operations::request_cancelled_immersive_mode_exit;
 use super::immersive_mode_message_types::ExitImmersiveMode;
 use super::immersive_mode_policy_types::AllowedInteractionActions;
-use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::ControlledEntity;
 use crate::immersive_modes::immersive_control_execution_types::FirstPersonViewAngles;
 
 pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
     control_axes: &DeviceControlAxes,
-    active_immersive_mode: &ActiveImmersiveMode,
+    subject: Option<Entity>,
     allowed_interaction_actions: Option<&AllowedInteractionActions>,
     controller_entity: Entity,
     view_yaw_radians: f32,
     controlled_subjects: &mut Query<(&ControlledEntity, &mut DirectLocomotion)>,
 ) {
-    let Some(subject_entity) = active_immersive_mode.subject else {
+    let Some(subject_entity) = subject else {
         return;
     };
     let Ok((ownership, mut direct_locomotion)) = controlled_subjects.get_mut(subject_entity) else {
@@ -59,7 +58,6 @@ pub(super) fn apply_allowed_navigation_axes_to_directly_controlled_subject(
 
 #[cfg(test)]
 mod tests {
-    use super::super::immersive_mode_state_types::ImmersiveMode;
     use super::*;
     use bevy::ecs::system::SystemState;
 
@@ -75,12 +73,6 @@ mod tests {
                 },
             ))
             .id();
-        let mode = ActiveImmersiveMode {
-            mode: ImmersiveMode::FirstPerson,
-            subject: Some(subject),
-            camera: controller,
-            restore_camera_on_exit: true,
-        };
         let controls = DeviceControlAxes {
             pan: Vec2::Y,
             ..DeviceControlAxes::default()
@@ -94,7 +86,7 @@ mod tests {
         ] {
             apply_allowed_navigation_axes_to_directly_controlled_subject(
                 &controls,
-                &mode,
+                Some(subject),
                 None,
                 controller,
                 yaw,
@@ -115,7 +107,7 @@ pub(super) fn apply_allowed_look_rotation_and_cancellation_to_first_person_view<
     action_requests: &mut MessageReader<ActionRequest>,
     control_axes: &DeviceControlAxes,
     elapsed_seconds: f32,
-    active_immersive_mode: &ActiveImmersiveMode,
+    camera: Entity,
     allowed_interaction_actions: Option<&AllowedInteractionActions>,
     controller_entity: Entity,
     active_action_source: ActionSource,
@@ -142,7 +134,7 @@ pub(super) fn apply_allowed_look_rotation_and_cancellation_to_first_person_view<
     }
     let (Ok(mut view_angles), Ok((camera_tuning, camera_has_mouse_look))) = (
         first_person_view_angles.single_mut(),
-        zoo_camera_tuning.get(active_immersive_mode.camera),
+        zoo_camera_tuning.get(camera),
     ) else {
         return;
     };

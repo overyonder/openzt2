@@ -23,7 +23,6 @@ mod staff_job_claiming;
 pub mod staff_job_completion_and_cancellation;
 mod staff_job_eligibility;
 pub(crate) mod staff_job_request_creation;
-use openzt2_zoo_state::staff::staff_job_completion_rules;
 use openzt2_zoo_state::staff::staff_job_types;
 use openzt2_zoo_state::staff::staff_lifecycle_messages;
 mod staff_navigation_agent_projection;

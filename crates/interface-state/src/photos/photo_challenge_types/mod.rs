@@ -4,13 +4,7 @@ use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
 #[derive(Component)]
-pub struct PhotoChallengesInitializedForScenarioRevision(pub u64);
-
-impl PhotoChallengesInitializedForScenarioRevision {
-    pub fn matches_revision(&self, revision: u64) -> bool {
-        self.0 == revision
-    }
-}
+pub struct PhotoChallengeCatalogueBound;
 
 #[derive(Component, Debug, Clone, PartialEq, Eq)]
 pub struct PhotoChallenge {

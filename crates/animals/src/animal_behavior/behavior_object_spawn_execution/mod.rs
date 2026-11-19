@@ -15,7 +15,6 @@ use avian3d::prelude::RigidBody;
 use bevy::{asset::LoadState, prelude::*};
 use openzt2_game_data::{
     animation::animation_text_key::AuthoredAnimationTextAction,
-    behavior::action_record::BehaviorAction,
     world_definitions::world_objects::WorldObjectPropertyFlags, AssetId,
 };
 
@@ -23,7 +22,6 @@ use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     {
-        behavior::behavior_asset_types::BehaviorDocumentAsset,
         scene_prefab::ScenePrefabAsset,
         world_definitions::{
             world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -47,10 +45,7 @@ use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::maintenance::maintenance_types::{AnimalHabitatWaste, LooseLitterWaste};
 

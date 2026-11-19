@@ -1,5 +1,7 @@
 use bevy::math::UVec2;
 
+use crate::aquatic::tank_navigation_water::TankNavigationWater;
+
 use crate::locomotion::locomotion_types::NavFlags;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraph;
 use crate::locomotion::terrain_derived_navigation_graph_types::TerrainDerivedNavigationGraphNode;
@@ -22,8 +24,19 @@ impl TerrainDerivedNavigationGraph {
             })
     }
 
-    /// Overlays that own a node fact the terrain does not, such as tank
-    /// water, write it here.
+    pub fn effective_navigation_node(
+        &self,
+        index: u32,
+        tank_water: Option<&TankNavigationWater>,
+    ) -> Option<TerrainDerivedNavigationGraphNode> {
+        let mut node = *self.find_navigation_node(index)?;
+        if let Some(depth) = tank_water.and_then(|water| water.depth_centimetres(index)) {
+            node.eligibility_flags.0 |= NavFlags::WATER.0;
+            node.water_depth_centimetres = depth;
+        }
+        Some(node)
+    }
+
     pub fn find_navigation_node_mut(
         &mut self,
         navigation_node: u32,

@@ -53,6 +53,8 @@ pub(super) struct BuildOutput {
     pub(super) nodes: Vec<UiNodeDefinition>,
     pub(super) bindings: Vec<UiNodePropertyBinding>,
     pub(super) actions: Vec<UiActionRecord>,
+    pub(super) action_receivers:
+        BTreeMap<(u32, usize), super::authored_ui_event_collection_lowering::UiActionReceiverPath>,
     pub(super) visuals: Vec<UiNodeVisualStateDefinition>,
     pub(super) hotkeys: Vec<UiDocumentHotkeyDefinition>,
     pub(super) field_definitions: Vec<UiNodeFieldDefinition>,
@@ -388,6 +390,7 @@ pub(super) fn lower_node(
         output,
         input,
         confirmation_scope,
+        index,
     )?;
     let animation = match &effective.widget {
         SourceUiWidgetData::Animation(source) => lower_widget_animation(source, input)?,
@@ -501,7 +504,15 @@ pub(super) fn lower_node(
         tab_order: -1,
     });
 
-    add_lowered_hotkey_definitions_to_current_ui_node(&effective, id, input.role, output, input)?;
+    add_lowered_hotkey_definitions_to_current_ui_node(
+        &effective,
+        index,
+        id,
+        input.role,
+        output,
+        input,
+        confirmation_scope,
+    )?;
     output.nodes[index as usize].hotkeys = std::mem::take(&mut output.hotkeys);
 
     let mut direct = Vec::with_capacity(effective.children.len());

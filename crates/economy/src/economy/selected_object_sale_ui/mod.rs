@@ -14,12 +14,14 @@ use openzt2_game_data::{
     localization::LocalizationFormatArgument,
     ui_document::node_property_binding::UiTextPropertyBindingSource, AssetId,
 };
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_ui::authored_ui_text_content_binding::UiTextBinding;
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 
 pub(super) fn project_selected_object_sale_confirmation(
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
+    mut selection_changes: MessageReader<SelectionChanged>,
     objects: Query<(Option<&DefinitionId>, Option<&Name>, Ref<CurrentSellQuote>)>,
     transport_sales: openzt2_zoo_state::transport_tours::transport_track_sale::TransportTrackSaleQueries,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -29,13 +31,16 @@ pub(super) fn project_selected_object_sale_confirmation(
     mut fields: Query<(Ref<UiTextBinding>, &mut Text)>,
     mut removed_quotes: RemovedComponents<CurrentSellQuote>,
 ) {
+    let selection_changed = selection_changes.read().count() != 0;
     let quote_removed = removed_quotes.read().count() != 0;
-    let object = selected.0.and_then(|entity| objects.get(entity).ok());
+    let object = selected
+        .subject()
+        .and_then(|entity| objects.get(entity).ok());
     let localization = active_localization.borrow_loaded_localization_view(&localizations);
     let definition = object.as_ref().and_then(|(definition, _, _)| {
         let definitions = active_definitions.get(&definitions)?;
         let transport_definition = selected
-            .0
+            .subject()
             .and_then(|target| transport_sales.definition(target))
             .and_then(|track| definitions.find_track(track))
             .map(|track| track.object);
@@ -53,7 +58,7 @@ pub(super) fn project_selected_object_sale_confirmation(
         }
         if !quote_removed
             && !binding.is_added()
-            && !selected.is_changed()
+            && !selection_changed
             && !definitions.is_changed()
             && !active_definitions.is_changed()
             && !localizations.is_changed()

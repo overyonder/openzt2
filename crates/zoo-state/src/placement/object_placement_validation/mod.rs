@@ -1,11 +1,11 @@
 //! Pure geometry and authored-rule evaluation for object placement.
 
 use bevy::prelude::*;
+use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
 use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
-use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectKind;
 
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;

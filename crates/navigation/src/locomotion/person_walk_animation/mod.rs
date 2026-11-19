@@ -4,19 +4,13 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_game_data::{
-    behavior::{action::wander::BehaviorGroundLocomotionSpeed, action_record::BehaviorAction},
-    AssetId,
-};
+use openzt2_game_data::{behavior::action::wander::BehaviorGroundLocomotionSpeed, AssetId};
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
-use openzt2_zoo_state::behavior_task_execution_types::{
-    find_current_behavior_task_action, BehaviorTaskExecutionState,
-};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorLocomotionIntent;
 use openzt2_zoo_state::locomotion::locomotion_types::{LocomotionMode, SwimLayer};
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
 
@@ -57,7 +51,6 @@ pub(super) struct PersonAnimationAssets<'w> {
     server: Option<Res<'w, AssetServer>>,
     definitions: Option<Res<'w, WorldDefinitions>>,
     definition_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
-    documents: Option<Res<'w, Assets<BehaviorDocumentAsset>>>,
     time: Option<Res<'w, Time<Fixed>>>,
 }
 
@@ -93,7 +86,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             Option<&StaffRole>,
             Option<&LocomotionMode>,
             Option<&SwimLayer>,
-            Option<&BehaviorTaskExecutionState>,
+            Option<&BehaviorLocomotionIntent>,
             Option<&mut BehaviorRandomStream>,
             Has<openzt2_zoo_state::staff::staff_employment_types::StaffClimbingTankGate>,
             Option<&openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier>,
@@ -120,7 +113,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             role,
             mode,
             layer,
-            task,
+            intent,
             mut random,
             climbing,
             modifier,
@@ -154,22 +147,7 @@ pub(super) fn project_person_motion_to_walk_animation(
             .and_then(|(index, definitions)| index.get(definitions));
         let role_definition =
             role.and_then(|role| catalogue.and_then(|catalogue| catalogue.find_staff(role.0)));
-        let speed = task
-            .and_then(|task| {
-                assets
-                    .documents
-                    .as_ref()?
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, task))
-            })
-            .and_then(|action| match action {
-                BehaviorAction::Wander(action) => Some(action.locomotion_speed),
-                BehaviorAction::Evasion(action) => Some(action.locomotion_speed),
-                BehaviorAction::Pursuit(action) => Some(action.locomotion_speed),
-                BehaviorAction::Move(action) => Some(action.locomotion_speed.unwrap_or_default()),
-                _ => None,
-            })
-            .unwrap_or_default();
+        let speed = intent.map(|intent| intent.0).unwrap_or_default();
         let binder = if mode == Some(&LocomotionMode::Swim) {
             if layer == Some(&SwimLayer::Submerged) {
                 "underwater"

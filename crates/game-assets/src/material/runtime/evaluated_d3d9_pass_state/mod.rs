@@ -6,7 +6,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{
         BlendComponent, BlendFactor, BlendOperation, BlendState, ColorWrites, CompareFunction,
-        Face, PolygonMode,
+        Face, PolygonMode, StencilFaceState, StencilOperation, StencilState,
     },
 };
 
@@ -55,6 +55,10 @@ pub(super) struct EvaluatedD3d9PassState {
     depth_enabled: bool,
     pub(super) depth_write: bool,
     depth_compare: CompareFunction,
+    stencil_enabled: bool,
+    stencil_two_sided: bool,
+    stencil: StencilState,
+    stencil_reference: u32,
     pub(super) blend_enabled: bool,
     pub(super) source_blend: u32,
     pub(super) destination_blend: u32,
@@ -111,6 +115,15 @@ impl Default for EvaluatedD3d9PassState {
             // Bevy's perspective projection uses reversed Z, so D3D9's
             // default LESS_EQUAL comparison becomes GREATER_EQUAL.
             depth_compare: CompareFunction::GreaterEqual,
+            stencil_enabled: false,
+            stencil_two_sided: false,
+            stencil: StencilState {
+                front: StencilFaceState::IGNORE,
+                back: StencilFaceState::IGNORE,
+                read_mask: u32::MAX,
+                write_mask: u32::MAX,
+            },
+            stencil_reference: 0,
             blend_enabled: false,
             source_blend: 2,
             destination_blend: 1,
@@ -270,17 +283,6 @@ impl EvaluatedD3d9PassState {
         self.samplers
             .iter()
             .try_for_each(EvaluatedD3d9SamplerState::validate)?;
-        if self.pixel_shader.is_some()
-            && self
-                .samplers
-                .iter()
-                .any(|sampler| sampler.lod_bias() != 0.0)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "D3D9 sampler LOD bias in a programmable pixel shader is unsupported",
-            ));
-        }
         if self.pixel_shader.is_none() {
             for stage in &self.stages {
                 for (kind, value) in [("color operation", stage[0]), ("alpha operation", stage[3])]
@@ -321,6 +323,14 @@ impl EvaluatedD3d9PassState {
             }
             23 => self.depth_compare = compare(value)?,
             27 => self.blend_enabled = value != 0,
+            52 => self.stencil_enabled = value != 0,
+            53 => self.stencil.front.fail_op = stencil_operation(value)?,
+            54 => self.stencil.front.depth_fail_op = stencil_operation(value)?,
+            55 => self.stencil.front.pass_op = stencil_operation(value)?,
+            56 => self.stencil.front.compare = compare_stencil(value)?,
+            57 => self.stencil_reference = value,
+            58 => self.stencil.read_mask = value,
+            59 => self.stencil.write_mask = value,
             139 => {
                 self.effect_states[49] = value;
                 self.ambient_state_is_authored = true;
@@ -330,6 +340,11 @@ impl EvaluatedD3d9PassState {
                     .ok_or_else(|| invalid("color write mask", value))?;
             }
             171 => self.blend_operation = value,
+            185 => self.stencil_two_sided = value != 0,
+            186 => self.stencil.back.fail_op = stencil_operation(value)?,
+            187 => self.stencil.back.depth_fail_op = stencil_operation(value)?,
+            188 => self.stencil.back.pass_op = stencil_operation(value)?,
+            189 => self.stencil.back.compare = compare_stencil(value)?,
             206 => self.separate_alpha_blend = value != 0,
             207 => self.source_alpha_blend = value,
             208 => self.destination_alpha_blend = value,
@@ -345,6 +360,20 @@ impl EvaluatedD3d9PassState {
         } else {
             (false, CompareFunction::Always)
         }
+    }
+
+    pub(super) fn effective_stencil(&self) -> (StencilState, u32) {
+        if !self.stencil_enabled {
+            return (StencilState::default(), 0);
+        }
+        let mut stencil = self.stencil.clone();
+        if self.stencil_two_sided {
+            // The D3D9 CW face maps to Bevy's back face in the cull-state lowering.
+            std::mem::swap(&mut stencil.front, &mut stencil.back);
+        } else {
+            stencil.back = stencil.front;
+        }
+        (stencil, self.stencil_reference)
     }
 
     pub(super) fn blend(&self) -> io::Result<Option<BlendState>> {
@@ -393,6 +422,34 @@ fn compare(value: u32) -> io::Result<CompareFunction> {
         _ => return Err(invalid("compare function", value)),
     })
 }
+fn compare_stencil(value: u32) -> io::Result<CompareFunction> {
+    Ok(match value {
+        1 => CompareFunction::Never,
+        2 => CompareFunction::Less,
+        3 => CompareFunction::Equal,
+        4 => CompareFunction::LessEqual,
+        5 => CompareFunction::Greater,
+        6 => CompareFunction::NotEqual,
+        7 => CompareFunction::GreaterEqual,
+        8 => CompareFunction::Always,
+        _ => return Err(invalid("stencil comparison", value)),
+    })
+}
+
+fn stencil_operation(value: u32) -> io::Result<StencilOperation> {
+    Ok(match value {
+        1 => StencilOperation::Keep,
+        2 => StencilOperation::Zero,
+        3 => StencilOperation::Replace,
+        4 => StencilOperation::IncrementClamp,
+        5 => StencilOperation::DecrementClamp,
+        6 => StencilOperation::Invert,
+        7 => StencilOperation::IncrementWrap,
+        8 => StencilOperation::DecrementWrap,
+        _ => return Err(invalid("stencil operation", value)),
+    })
+}
+
 fn blend_factor(value: u32) -> io::Result<BlendFactor> {
     Ok(match value {
         1 => BlendFactor::Zero,

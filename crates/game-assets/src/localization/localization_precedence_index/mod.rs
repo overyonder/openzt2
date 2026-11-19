@@ -7,15 +7,17 @@ use bevy::{
     asset::{AssetId as BevyAssetId, AssetLoadFailedEvent, LoadState},
     prelude::*,
 };
-use openzt2_game_data::{AssetId, localization::LocalizationDateFormatToken};
+use openzt2_game_data::{localization::LocalizationDateFormatToken, AssetId};
 
-use crate::asset_source::{ArchiveOverlayChanged, AssetArchives};
+use crate::asset_source::{
+    archive_entry_asset_path::archive_entry_asset_path, ArchiveOverlayChanged, AssetArchives,
+};
 
 use super::{
     blue_fang_localization_date_format_tokenization::tokenize_blue_fang_localization_date_format,
     loaded_localization_queries::LoadedLocalizationView,
     localization_asset_types::LocalizationAsset,
-    localization_configuration::{LOCALE_CONFIGURATION_PATH, LocalizationConfiguration},
+    localization_configuration::{LocalizationConfiguration, LOCALE_CONFIGURATION_PATH},
 };
 
 #[derive(Resource, Default)]
@@ -23,6 +25,7 @@ pub struct LocalizationPrecedenceIndex {
     configuration_handle: Option<Handle<LocalizationConfiguration>>,
     configuration: LocalizationConfiguration,
     discovered: bool,
+    selected_table_ids: BTreeSet<BevyAssetId<LocalizationAsset>>,
     pending: BTreeSet<BevyAssetId<LocalizationAsset>>,
     failed: BTreeSet<BevyAssetId<LocalizationAsset>>,
     localization_asset_handles: Vec<Handle<LocalizationAsset>>,
@@ -45,6 +48,7 @@ impl LocalizationPrecedenceIndex {
         let handle = assets.add(LocalizationAsset::from_localization_catalog(catalogue));
         self.localization_entry_asset_index
             .extend(identifiers.into_iter().map(|id| (id, handle.clone())));
+        self.selected_table_ids.insert(handle.id());
         self.localization_asset_handles.push(handle);
         self.discovered = true;
         self.update_month_year_format(assets);
@@ -100,6 +104,10 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
     server: Res<AssetServer>,
     configurations: Res<Assets<LocalizationConfiguration>>,
     assets: Res<Assets<LocalizationAsset>>,
+    (mut configuration_events, mut configuration_failures): (
+        MessageReader<AssetEvent<LocalizationConfiguration>>,
+        MessageReader<AssetLoadFailedEvent<LocalizationConfiguration>>,
+    ),
     mut events: MessageReader<AssetEvent<LocalizationAsset>>,
     mut failures: MessageReader<AssetLoadFailedEvent<LocalizationAsset>>,
     mut overlay_changes: MessageReader<ArchiveOverlayChanged>,
@@ -107,15 +115,33 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
     mut index: ResMut<LocalizationPrecedenceIndex>,
 ) {
     let configuration_path = Path::new(LOCALE_CONFIGURATION_PATH);
-    let mut discovery_changed = false;
+    let mut configuration_changed = false;
     if archives.is_changed() {
+        let path = archives
+            .resolved_winning_entry(configuration_path)
+            .map_or_else(
+                || configuration_path.to_owned(),
+                |entry| archive_entry_asset_path(&entry),
+            );
         let handle = archives
             .source_exists(configuration_path)
-            .then(|| server.load(configuration_path));
+            .then(|| server.load(path));
         if index.configuration_handle != handle {
             index.configuration_handle = handle;
-            discovery_changed = true;
+            configuration_changed = true;
         }
+    }
+    let current_configuration = index.configuration_handle.as_ref().map(Handle::id);
+    for event in configuration_events.read() {
+        match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                configuration_changed |= current_configuration == Some(id);
+            }
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => {}
+        }
+    }
+    for failure in configuration_failures.read() {
+        configuration_changed |= current_configuration == Some(failure.id);
     }
     let mut catalogue_sources_changed = false;
     for change in overlay_changes.read().flat_map(|overlay| &overlay.changes) {
@@ -123,55 +149,49 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
             .configuration
             .selects_string_table(&change.normalized_asset_path);
     }
-    let configuration = if let Some(handle) = index.configuration_handle.as_ref() {
-        if matches!(
-            server.get_load_state(handle.id()),
-            Some(LoadState::Failed(_))
-        ) {
-            &*default_configuration
-        } else if let Some(configuration) = configurations.get(handle) {
-            configuration
-        } else {
-            for _ in events.read() {}
-            for _ in failures.read() {}
-            return;
-        }
-    } else {
-        &*default_configuration
-    };
-    if !index.discovered
-        || discovery_changed
+    let mut discovery_changed = false;
+    if configuration_changed
         || catalogue_sources_changed
-        || index.configuration != *configuration
+        || (!index.discovered && current_configuration.is_none())
     {
-        let handles = archives
-            .resolved_paths()
-            .1
-            .iter()
-            .filter(|path| configuration.selects_string_table(path))
-            .map(|path| server.load(path.clone()))
-            .collect::<Vec<_>>();
-        if !index.discovered
-            || index.localization_asset_handles != handles
-            || index.configuration != *configuration
-        {
-            index.pending = handles
+        let selected = match current_configuration {
+            None => Some(&*default_configuration),
+            Some(id) if matches!(server.get_load_state(id), Some(LoadState::Failed(_))) => {
+                Some(&*default_configuration)
+            }
+            Some(id) => configurations.get(id),
+        };
+        if let Some(configuration) = selected {
+            let handles = archives
+                .resolved_paths()
                 .iter()
-                .map(Handle::id)
-                .filter(|id| {
-                    !assets.contains(*id)
-                        && !matches!(server.get_load_state(*id), Some(LoadState::Failed(_)))
-                })
-                .collect();
-            index.failed = handles
-                .iter()
-                .map(Handle::id)
-                .filter(|id| matches!(server.get_load_state(*id), Some(LoadState::Failed(_))))
-                .collect();
-            index.localization_asset_handles = handles;
-            index.configuration = configuration.clone();
-            index.discovered = true;
-            discovery_changed = true;
+                .filter(|path| configuration.selects_string_table(path))
+                .filter_map(|path| archives.resolved_winning_entry(path))
+                .map(|entry| server.load(archive_entry_asset_path(&entry)))
+                .collect::<Vec<_>>();
+            if !index.discovered
+                || index.localization_asset_handles != handles
+                || index.configuration != *configuration
+            {
+                index.pending.clear();
+                index.failed.clear();
+                for id in handles.iter().map(Handle::id) {
+                    match server.get_load_state(id) {
+                        Some(LoadState::Failed(_)) => {
+                            index.failed.insert(id);
+                        }
+                        Some(LoadState::Loaded) if assets.contains(id) => {}
+                        _ => {
+                            index.pending.insert(id);
+                        }
+                    }
+                }
+                index.selected_table_ids = handles.iter().map(Handle::id).collect();
+                index.localization_asset_handles = handles;
+                index.configuration = configuration.clone();
+                index.discovered = true;
+                discovery_changed = true;
+            }
         }
     }
     let mut changed = discovery_changed;
@@ -182,22 +202,14 @@ pub(super) fn index_loaded_localization_entries_after_asset_events(
             }
             AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
         };
-        if index
-            .localization_asset_handles
-            .iter()
-            .any(|handle| handle.id() == id)
-        {
+        if index.selected_table_ids.contains(&id) {
             changed = true;
             index.pending.remove(&id);
             index.failed.remove(&id);
         }
     }
     for failure in failures.read() {
-        if index
-            .localization_asset_handles
-            .iter()
-            .any(|handle| handle.id() == failure.id)
-        {
+        if index.selected_table_ids.contains(&failure.id) {
             changed |= index.pending.remove(&failure.id);
             changed |= index.failed.insert(failure.id);
         }
@@ -229,7 +241,7 @@ mod tests {
     };
     use bevy::{
         app::TaskPoolPlugin,
-        asset::{AssetPlugin, io::AssetSourceId},
+        asset::{io::AssetSourceId, AssetPlugin},
     };
     use std::{
         io,

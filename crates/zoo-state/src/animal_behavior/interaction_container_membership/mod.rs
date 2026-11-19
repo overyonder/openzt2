@@ -94,6 +94,7 @@ impl<'w, 's> InteractionContainerMemberships<'w, 's> {
                     .into_iter()
                     .flat_map(RelationshipTarget::iter),
             )
+            .flatten()
             .flat_map(|(_, _, members)| members.into_iter().flat_map(RelationshipTarget::iter))
             .filter_map(|member| {
                 let membership = self.all_members.get(member).ok()?;
@@ -116,6 +117,7 @@ impl<'w, 's> InteractionContainerMemberships<'w, 's> {
                     .into_iter()
                     .flat_map(RelationshipTarget::iter),
             )
+            .flatten()
             .find_map(|(_, candidate, members)| (candidate.index == slot).then_some(members))
             .flatten()
             .into_iter()

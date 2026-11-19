@@ -12,7 +12,6 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_ui::authored_tooltip_presentation::UiDisplayNameKey;
 use openzt2_ui::authored_tooltip_presentation::UiLongTooltipKey;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiSourceRect;
@@ -58,23 +57,20 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     mut rows: Query<(
         Entity,
         Ref<UiListRow>,
+        Ref<ChildOf>,
         Option<&CatalogueRowEntry>,
         Option<&mut ImageNode>,
         Option<&mut UiInteractionEnabled>,
         Option<&mut UiSelected>,
-        Option<&mut UiPreviousSelection>,
         &mut Visibility,
     )>,
-    mut previous_catalogue_revision: Local<u64>,
 ) {
-    let definitions_changed = *previous_catalogue_revision
-        != active_definitions.catalogue_revision()
+    let definitions_changed = active_definitions.is_changed()
         || research_availability
             .iter()
             .any(|availability| availability.is_changed())
         || unlocks.is_changed()
         || catalogue_world_session_or_scenario_availability_changed(&worlds);
-    *previous_catalogue_revision = active_definitions.catalogue_revision();
     let details_changed = selected_entry.is_changed();
     let removed_filters = removed_filters.read().collect::<Vec<_>>();
     let Some(definitions) = active_definitions.get(&definitions) else {
@@ -84,29 +80,22 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
     let (mode, scenario) = resolve_catalogue_world_session_mode_and_scenario_availability(&worlds);
     let selected_definition = selected_entry.0;
     let mut catalogue_entries_by_type_list = EntityHashMap::default();
-    for (
-        entity,
-        row,
-        bound,
-        image,
-        interaction_enabled,
-        selected,
-        selection_state,
-        mut visibility,
-    ) in &mut rows
+    for (entity, row, parent, bound, image, interaction_enabled, selected, mut visibility) in
+        &mut rows
     {
         // A row's catalogue binding is immutable until either the reusable row
         // is assigned a new index/list or the loaded definitions asset is
         // replaced. Do not rescan the entire catalogue for every row on every
         // rendered frame.
-        let Ok((policy, filter)) = lists.get(row.list) else {
+        let Ok((policy, filter)) = lists.get(parent.parent()) else {
             continue;
         };
         let presentation_changed = policy.is_changed()
             || filter.as_ref().is_some_and(Ref::is_changed)
-            || removed_filters.contains(&row.list);
+            || removed_filters.contains(&parent.parent());
         if bound.is_some()
             && !row.is_changed()
+            && !parent.is_changed()
             && !definitions_changed
             && !presentation_changed
             && !details_changed
@@ -115,7 +104,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         }
         let filter = filter.as_deref().copied().unwrap_or_default();
         let included_entries = catalogue_entries_by_type_list
-            .entry(row.list)
+            .entry(parent.parent())
             .or_insert_with(|| {
                 catalog
                     .catalogue_in_authored_purchase_order()
@@ -200,10 +189,7 @@ pub(crate) fn project_catalogue_entries_to_authored_type_list_rows(
         let definition = AssetId(entry.definition.0);
         let is_selected = selected_definition == Some(definition);
         if let Some(mut selected) = selected {
-            selected.0 = is_selected;
-        }
-        if let Some(mut selection_state) = selection_state {
-            selection_state.synchronize_with_non_authored_selection_change(is_selected);
+            selected.set_if_neq(UiSelected(is_selected));
         }
         if definitions_changed || bound.is_none_or(|bound| bound.definition != definition) {
             let name = AssetId(entry.name_key.0);

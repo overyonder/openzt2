@@ -34,7 +34,6 @@ pub(super) struct InformationActionParams<'w, 's> {
     action_nodes: Query<'w, 's, (&'static UiInformationActions, &'static UiDocumentOwner)>,
     roots: Query<'w, 's, (&'static UiDocumentRoot, &'static ChildOf)>,
     selection: super::information_selection_action_types::InformationSelectionActionTargets<'w, 's>,
-    settings: openzt2_settings::settings_action_types::SettingsActionTargets<'w, 's>,
     lists: Query<'w, 's, (Entity, &'static mut InformationEntityListPanel)>,
     ui_nodes: Query<'w, 's, (Entity, &'static UiDocumentOwner, &'static UiNodeId)>,
     selected_catalogue: Res<'w, SelectedCatalogueEntry>,
@@ -69,7 +68,6 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
         action_nodes,
         roots,
         mut selection,
-        mut settings,
         mut lists,
         ui_nodes,
         selected_catalogue,
@@ -137,13 +135,7 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                         &mut commands,
                     );
                 }
-                UiInformationAction::ApplySetting { setting } => {
-                    openzt2_settings::settings_ui_routing_and_projection::apply_authored_setting_action(
-                        setting,
-                        &mut settings,
-                        &mut commands,
-                    );
-                }
+                UiInformationAction::ApplySetting { .. } => {}
                 UiInformationAction::OpenEncyclopediaEntry { .. }
                 | UiInformationAction::OpenContextEncyclopediaEntry
                 | UiInformationAction::ZoopediaBack
@@ -154,7 +146,7 @@ pub(super) fn route_authored_information_actions_from_activated_ui_nodes(
                             source_document_role: &document.canonical_ui_document().role,
                             source_document_entity: owner.0,
                             source_lifecycle_owner_entity: lifecycle_owner.parent(),
-                            selected_world_entity: selection.selected_entity.0,
+                            selected_world_entity: selection.selected_entity.subject(),
                             selected_catalogue_entry: &selected_catalogue,
                             world_definitions: active_world_definitions
                                 .get(&world_definition_assets),

@@ -80,7 +80,12 @@ impl AuthoredEffectTechniquePassSubmissionOrder {
     ) {
         distances
             .entry(self.technique_invocation)
-            .and_modify(|value| value.0 |= self.opaque_base_pass)
+            .and_modify(|value| {
+                value.0 |= self.opaque_base_pass;
+                if distance.total_cmp(&value.1).is_lt() {
+                    value.1 = distance;
+                }
+            })
             .or_insert((self.opaque_base_pass, distance));
     }
 
@@ -91,19 +96,12 @@ impl AuthoredEffectTechniquePassSubmissionOrder {
         distances.get(&self.technique_invocation).copied()
     }
 
-    pub fn compare_hierarchy_order(&self, other: &Self) -> std::cmp::Ordering {
-        self.source_hierarchy_parent
-            .to_bits()
-            .cmp(&other.source_hierarchy_parent.to_bits())
-            .then(
-                self.source_hierarchy_index
-                    .cmp(&other.source_hierarchy_index),
-            )
-            .then(
-                self.technique_invocation
-                    .to_bits()
-                    .cmp(&other.technique_invocation.to_bits()),
-            )
-            .then(self.authored_pass_index.cmp(&other.authored_pass_index))
+    pub fn hierarchy_order(&self) -> (u64, usize, u64, u16) {
+        (
+            self.source_hierarchy_parent.to_bits(),
+            self.source_hierarchy_index,
+            self.technique_invocation.to_bits(),
+            self.authored_pass_index,
+        )
     }
 }

@@ -12,13 +12,10 @@ pub enum ImmersiveMode {
     SuperStaff,
 }
 
-/// The active relationship lives on its controller entity. The subject and
-/// camera are ordinary ECS entity links.
+/// Policy for the admitted gameplay session.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveImmersiveMode {
     pub mode: ImmersiveMode,
-    pub subject: Option<Entity>,
-    pub camera: Entity,
     pub restore_camera_on_exit: bool,
 }
 
@@ -29,11 +26,36 @@ pub struct FirstPersonTraining {
 }
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
+#[relationship(relationship_target = ImmersiveControlledSubjects)]
 pub struct ControlledEntity {
     pub controller: Entity,
 }
+
+#[derive(Component)]
+#[relationship_target(relationship = ControlledEntity)]
+pub struct ImmersiveControlledSubjects(Vec<Entity>);
 
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EquippedInteractionTool {
     pub policy: AssetId,
 }
+
+/// Requests overhead-only UI to leave layout while the mode is active.
+#[derive(Component)]
+pub struct ImmersiveHudSuppression;
+
+#[derive(Component)]
+#[relationship(relationship_target = ImmersiveSubjectSessions)]
+pub struct ImmersiveSubject(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ImmersiveSubject)]
+pub struct ImmersiveSubjectSessions(Vec<Entity>);
+
+#[derive(Component)]
+#[relationship(relationship_target = ImmersiveCameraSessions)]
+pub struct ImmersiveCamera(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = ImmersiveCamera)]
+pub struct ImmersiveCameraSessions(Vec<Entity>);

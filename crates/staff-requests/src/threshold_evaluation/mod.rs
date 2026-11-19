@@ -27,7 +27,6 @@ use super::staff_request_state_types::StaffRequestRowIdentity;
 use super::staff_request_state_types::StaffRequestRuntimeState;
 use super::staff_request_state_types::StaffRequestThresholdState;
 use super::staff_request_state_types::StaffRequestRuntimeBinding;
-use super::staff_request_state_types::StaffRequestBindingPending;
 use super::staff_request_state_types::StaffRequestJobKey;
 use super::staff_request_state_types::StaffRequestJobEvent;
 use super::staff_request_threshold_comparison::staff_threshold_matches;
@@ -158,97 +157,44 @@ fn reconcile_rows(
         .collect()
 }
 
-/// Binds only newly spawned or definition-changed entities. Pending asset
-/// resolution leaves the entity marked pending and retries without inventing
-/// an empty controller set.
 pub(super) fn bind_staff_request_rows_on_definition_change(
     active_world_definitions: Res<WorldDefinitions>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut commands: Commands,
-    entities: Query<
-        (Entity, &DefinitionId, Option<&StaffRequestRuntimeBinding>),
-        Or<(
-            Added<DefinitionId>,
-            Changed<DefinitionId>,
-            With<StaffRequestBindingPending>,
-        )>,
-    >,
+    all_entities: Query<Entity, With<DefinitionId>>,
+    changed_entities: Query<Entity, Changed<DefinitionId>>,
+    mut entities: Query<(&DefinitionId, Option<&mut StaffRequestRuntimeBinding>)>,
     jobs: Query<(Entity, &StaffJob)>,
     mut cancellations: MessageWriter<CancelStaffJobRequest>,
 ) {
-    for (entity, definition, previous) in &entities {
-        let Some(rows) = canonical_rows(
-            &active_world_definitions,
-            &world_definition_assets,
-            definition.0,
-        ) else {
-            commands.entity(entity).insert(StaffRequestBindingPending);
-            continue;
-        };
-        let next = previous.map_or_else(
-            || bind_rows(definition.0, rows),
-            |previous| reconcile_rows(definition.0, rows, &previous.rows),
+    let Some(definitions) = active_world_definitions.get(&world_definition_assets) else {
+        return;
+    };
+    let definitions_changed = active_world_definitions.is_changed();
+    let candidates = all_entities
+        .iter()
+        .take(if definitions_changed { usize::MAX } else { 0 })
+        .chain(
+            changed_entities
+                .iter()
+                .take(if definitions_changed { 0 } else { usize::MAX }),
         );
-        if let Some(previous) = previous {
-            cancel_removed_rows(entity, &previous.rows, &next, &jobs, &mut cancellations);
-        }
-        commands
-            .entity(entity)
-            .insert(StaffRequestRuntimeBinding {
-                revision: active_world_definitions.catalogue_revision(),
-                rows: next,
-            })
-            .remove::<StaffRequestBindingPending>();
-    }
-}
-
-/// Reconciles once when the canonical definition revision changes. Removed
-/// rows cancel their exact existing jobs before their primitive state is
-/// discarded; retained rows preserve only their previous samples.
-pub(super) fn reconcile_staff_request_rows_on_definition_revision(
-    active_world_definitions: Res<WorldDefinitions>,
-    world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
-    mut commands: Commands,
-    entities: Query<(Entity, &DefinitionId, &StaffRequestRuntimeBinding)>,
-    jobs: Query<(Entity, &StaffJob)>,
-    mut cancellations: MessageWriter<CancelStaffJobRequest>,
-    mut last_revision: Local<Option<u64>>,
-) {
-    let revision = active_world_definitions.catalogue_revision();
-    if *last_revision == Some(revision) {
-        return;
-    }
-    if entities.iter().any(|(_, definition, _)| {
-        canonical_rows(
-            &active_world_definitions,
-            &world_definition_assets,
-            definition.0,
-        )
-        .is_none()
-    }) {
-        return;
-    }
-    *last_revision = Some(revision);
-    for (entity, definition, binding) in &entities {
-        if binding.revision == revision {
-            continue;
-        }
-        let Some(rows) = canonical_rows(
-            &active_world_definitions,
-            &world_definition_assets,
-            definition.0,
-        ) else {
+    for entity in candidates {
+        let Ok((definition, binding)) = entities.get_mut(entity) else {
             continue;
         };
-        let next = reconcile_rows(definition.0, rows, &binding.rows);
-        cancel_removed_rows(entity, &binding.rows, &next, &jobs, &mut cancellations);
-        commands
-            .entity(entity)
-            .insert(StaffRequestRuntimeBinding {
-                revision,
-                rows: next,
-            })
-            .remove::<StaffRequestBindingPending>();
+        let Some(rows) = definitions.staff_request_rows(definition.0) else {
+            continue;
+        };
+        if let Some(mut binding) = binding {
+            let next = reconcile_rows(definition.0, rows, &binding.rows);
+            cancel_removed_rows(entity, &binding.rows, &next, &jobs, &mut cancellations);
+            binding.rows = next;
+        } else if !rows.is_empty() {
+            commands.entity(entity).insert(StaffRequestRuntimeBinding {
+                rows: bind_rows(definition.0, rows),
+            });
+        }
     }
 }
 
@@ -458,8 +404,11 @@ fn evaluate_staff_request_row(
     });
     // Keep each result under the thresholds in effect when it was sampled.
     let previous = state.previous;
-    state.previous =
-        current.or_else(|| row.attribute_key.is_none().then(StaffRequestThresholdState::default));
+    state.previous = current.or_else(|| {
+        row.attribute_key
+            .is_none()
+            .then(StaffRequestThresholdState::default)
+    });
     let token = row.request.token?;
     let trigger_on_creation = previous.is_none() && row.trigger_on_creation;
     let previous = previous.unwrap_or_default();

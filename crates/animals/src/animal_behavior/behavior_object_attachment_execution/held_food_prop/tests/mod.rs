@@ -1,5 +1,7 @@
 use super::*;
 use crate::animal_behavior::behavior_container_admission::add_test_container_member;
+use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
 #[test]
 fn authored_food_prop_action_keeps_its_detach_continuation() {
@@ -47,11 +49,18 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
             FoodPropInstructionOwner(actor),
         ))
         .id();
+    app.init_resource::<Assets<BehaviorDocumentAsset>>();
+    let document = app.world_mut().resource_mut::<Assets<BehaviorDocumentAsset>>().add(
+        BehaviorDocumentAsset::from_test_source(br#"
+            <BehaviorSets><Eat><behaviors>
+            <BFBehAttachObject attachEntity="s_prop" targetAnim="Chew_Eat" detachAction="killitem" container="foodprop"/>
+            </behaviors></Eat></BehaviorSets>"#)
+    );
     let task = BehaviorTaskExecutionState {
         execution_id: 4,
         program: AssetId::from_key("eat"),
         target: Some(source),
-        document: Handle::default(),
+        document,
         declaration: 0,
         phase: BehaviorTaskExecutionPhase::Set,
         action: 0,
@@ -59,20 +68,24 @@ fn food_prop_attach_and_detach_keys_share_one_request_and_cancel_with_the_task()
         next_action_tick: 0,
         object: None,
         interaction_slot: None,
-        stack: Default::default(),
+        depth: 0,
     };
-    let mut origin = PendingObjectAttachment::waiting_for_attachment(&task, None);
+    app.world_mut().entity_mut(actor).insert(task.clone());
+    let step = app
+        .world()
+        .get::<RunningBehaviorInstruction>(actor)
+        .unwrap();
+    let mut origin = PendingObjectAttachment::waiting_for_attachment(&task, step, None);
     origin.request_id = Some(7);
-    app.world_mut().entity_mut(actor).insert((
-        task,
-        HeldFoodPropAttachment {
+    app.world_mut()
+        .entity_mut(actor)
+        .insert(HeldFoodPropAttachment {
             origin,
             item: Some(item),
             attached: false,
             detached: false,
             completed: false,
-        },
-    ));
+        });
     add_test_container_member(app.world_mut(), actor, item, 3);
     let controller = app
         .world_mut()

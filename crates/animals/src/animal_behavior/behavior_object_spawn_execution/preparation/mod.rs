@@ -1,8 +1,10 @@
 use super::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSpawnObject, RunningBehaviorInstruction,
+};
 
 pub(super) fn prepare_behavior_object_spawns(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -12,7 +14,11 @@ pub(super) fn prepare_behavior_object_spawns(
     actors: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorSpawnObject,
+            ),
             Option<&PendingBehaviorObjectSpawn>,
         ),
         Without<PendingBehaviorTaskFailure>,
@@ -22,7 +28,7 @@ pub(super) fn prepare_behavior_object_spawns(
         (
             With<PendingBehaviorObjectSpawn>,
             Or<(
-                Without<BehaviorTaskExecutionState>,
+                Without<RunBehaviorSpawnObject>,
                 With<PendingBehaviorTaskFailure>,
             )>,
         ),
@@ -36,8 +42,8 @@ pub(super) fn prepare_behavior_object_spawns(
     let Some(view) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, task, pending) in &actors {
-        if pending.is_some_and(|pending| !pending.owns(task)) {
+    for (actor, (task, instruction, running_action), pending) in &actors {
+        if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
             commands
                 .entity(actor)
                 .remove::<PendingBehaviorObjectSpawn>();
@@ -48,14 +54,12 @@ pub(super) fn prepare_behavior_object_spawns(
         {
             continue;
         }
-        let Some(BehaviorAction::SpawnObject {
-            entity, animation, ..
-        }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let RunBehaviorSpawnObject {
+            entity, animation, ..
+        } = running_action;
         let Some(object) = view.find_object(*entity) else {
             if definitions.is_complete() {
                 mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -98,9 +102,7 @@ pub(super) fn prepare_behavior_object_spawns(
                 .id
         });
         commands.entity(actor).insert(PendingBehaviorObjectSpawn {
-            execution_id: task.execution_id,
-            origin: task.create_return_frame_after_action(task.action),
-            depth: task.stack.len(),
+            instruction: instruction.id(),
             target: task.target,
             prefab,
             request,

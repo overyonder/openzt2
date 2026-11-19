@@ -57,18 +57,36 @@ pub(super) fn changed_terrain_sample_bounds(
         })
 }
 
-pub(super) fn queue_terrain_render_refresh(
-    commands: &mut Commands,
-    chunk: Entity,
-    region: TerrainDirtyRegion,
+#[derive(Message)]
+pub(super) struct TerrainRenderInvalidated {
+    pub(super) chunk: Entity,
+    pub(super) region: TerrainDirtyRegion,
+}
+
+pub(super) fn merge_terrain_render_invalidations(
+    mut commands: Commands,
+    mut changes: MessageReader<TerrainRenderInvalidated>,
+    mut pending: Query<&mut TerrainRenderPending>,
 ) {
-    commands
-        .entity(chunk)
-        .entry::<TerrainRenderPending>()
-        .and_modify(move |mut pending| {
-            pending.0 = merge_terrain_dirty_sample_rectangles(pending.0, region);
-        })
-        .or_insert(TerrainRenderPending(region));
+    let mut dirty = bevy::ecs::entity::EntityHashMap::default();
+    for change in changes.read() {
+        dirty
+            .entry(change.chunk)
+            .and_modify(|region| {
+                *region = merge_terrain_dirty_sample_rectangles(*region, change.region)
+            })
+            .or_insert(change.region);
+    }
+    for (chunk, region) in dirty {
+        if let Ok(mut pending) = pending.get_mut(chunk) {
+            let merged = merge_terrain_dirty_sample_rectangles(pending.0, region);
+            pending.set_if_neq(TerrainRenderPending(merged));
+        } else {
+            commands
+                .entity(chunk)
+                .try_insert(TerrainRenderPending(region));
+        }
+    }
 }
 
 pub(super) fn merge_terrain_dirty_sample_rectangles(

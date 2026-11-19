@@ -1,13 +1,15 @@
 use bevy::prelude::*;
-use openzt2_game_assets::{
-    application_lifecycle::GamePhase, behavior::behavior_asset_types::BehaviorDocumentAsset,
-};
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
+    travel_target, BehaviorPlacementTravelSite,
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorFaceTarget, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::{
-    advance_behavior_task_to_next_action, find_current_behavior_task_action,
     BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
 
@@ -25,26 +27,32 @@ pub(super) fn register_face_target_execution(application: &mut App) {
 /// authored offset, unless its heading is already within the authored error.
 /// Headings change at once, as docking aligns them.
 fn face_current_behavior_targets(
+    mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     mut actors: Query<
-        (&mut BehaviorTaskExecutionState, &mut Transform),
+        (
+            Entity,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorFaceTarget,
+            ),
+            &mut Transform,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
     targets: Query<&GlobalTransform>,
+    travel_sites: Query<&BehaviorPlacementTravelSite>,
 ) {
-    for (mut task, mut transform) in &mut actors {
+    for (actor, (task, instruction, running_action), mut transform) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(&BehaviorAction::FaceTarget(action)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
-        if let Some(toward) = task
-            .target()
+        }
+        let action = running_action.0;
+        if let Some(toward) = travel_target(task, travel_sites.get(actor).ok())
             .and_then(|target| targets.get(target).ok())
             .and_then(|target| {
                 (target.translation() - transform.translation)
@@ -62,6 +70,6 @@ fn face_current_behavior_targets(
                 transform.rotation = Quat::from_rotation_y(wanted);
             }
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

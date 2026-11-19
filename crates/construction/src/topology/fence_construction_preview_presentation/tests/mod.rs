@@ -13,8 +13,9 @@ use crate::topology::topology_construction_interaction::drive_selected_topology_
 use crate::topology::topology_construction_preview_types::PlaceFence;
 use crate::topology::topology_construction_preview_types::PlacePath;
 use crate::topology::topology_fence_definition_test_fixture::install_fence_definition_for_topology_transaction_tests;
+use bevy::camera::NormalizedRenderTarget;
+use bevy::picking::pointer::{Location, PointerAction, PointerButton, PointerId, PointerInput};
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
@@ -29,7 +30,7 @@ fn fence_preview_app() -> App {
         .init_resource::<Assets<TerrainAsset>>()
         .init_resource::<TopologyIndex>()
         .init_resource::<TopologyGrid>()
-        .init_resource::<PrimaryPointerInputState>()
+        .add_message::<PointerInput>()
         .init_resource::<UiPointerCapture>()
         .init_resource::<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionPlacementPolicy>()
         .insert_resource(ConstructionTool::Fence(AssetId::from_key("fence")))
@@ -151,13 +152,18 @@ fn spawn_preview(app: &mut App, from: IVec3, to: IVec3) -> Entity {
             over_terrain: true,
         })
         .id();
-    app.world_mut()
-        .resource_mut::<PrimaryPointerInputState>()
-        .just_pressed = true;
+    app.world_mut().write_message(PointerInput::new(
+        PointerId::Mouse,
+        Location {
+            target: NormalizedRenderTarget::None {
+                width: 1,
+                height: 1,
+            },
+            position: Vec2::ZERO,
+        },
+        PointerAction::Press(PointerButton::Primary),
+    ));
     app.update();
-    app.world_mut()
-        .resource_mut::<PrimaryPointerInputState>()
-        .just_pressed = false;
     app.world_mut()
         .get_mut::<ConstructionCursor>(cursor)
         .unwrap()

@@ -9,7 +9,7 @@ use crate::terrain::terrain_change_tracking_types::TerrainDirtyRegion;
 use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_sample_change_calculations::changed_terrain_sample_bounds;
 use crate::terrain::terrain_sample_change_calculations::determine_terrain_dirty_flags_from_changed_samples;
-use crate::terrain::terrain_sample_change_calculations::queue_terrain_render_refresh;
+use crate::terrain::terrain_sample_change_calculations::TerrainRenderInvalidated;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
@@ -25,21 +25,40 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEditAcknowledged;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterRegionEdit, TerrainWaterRegionRetired,
+};
 /// Marks a transaction whose edit a held brush applied live, so its initial
 /// commit has nothing left to write.
 #[derive(Component)]
 pub(super) struct LiveAppliedTerrainEdit;
 
-#[allow(clippy::too_many_arguments, clippy::type_complexity)]
-pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
+#[derive(Event)]
+pub(super) struct ApplyTerrainEdit(CommitTerrainEdit);
+
+pub(super) fn dispatch_committed_terrain_edits(
     mut commands: Commands,
     mut requests: MessageReader<CommitTerrainEdit>,
+) {
+    for &request in requests.read() {
+        commands.trigger(ApplyTerrainEdit(request));
+    }
+}
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
+    request: On<ApplyTerrainEdit>,
+    mut commands: Commands,
     edits: Query<(
         &TerrainEdit,
         Option<&openzt2_zoo_state::construction::construction_transaction_types::RollbackContext>,
         Has<LiveAppliedTerrainEdit>,
     )>,
     entities: Query<Entity>,
+    mut owners: Query<(
+        Option<&mut TerrainWaterRegionEdit>,
+        Has<TerrainWaterRegionRetired>,
+    )>,
     chunk_ids: Res<TerrainChunkIdLookup>,
     mut chunks: Query<(
         Entity,
@@ -51,170 +70,199 @@ pub(super) fn apply_committed_terrain_sample_deltas_and_publish_changed_regions(
     mut changed: MessageWriter<TerrainChanged>,
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
+    mut render_changed: MessageWriter<TerrainRenderInvalidated>,
     mut acknowledged: MessageWriter<TerrainEditAcknowledged>,
 ) {
-    for request in requests.read() {
-        let Ok((edit, rollback, live_applied)) = edits.get(request.transaction) else {
-            acknowledged.write(TerrainEditAcknowledged {
-                transaction: request.transaction,
-                application: request.application,
-                accepted: false,
-            });
-            continue;
-        };
-
-        let use_after = matches!(
-            request.application,
-            EditApplication::InitialCommit | EditApplication::Redo
-        ) || (request.application == EditApplication::FailureRollback
-            && rollback.is_some_and(|context| context.failed_application == EditApplication::Undo));
-        let mut targets = Vec::with_capacity(edit.deltas.len());
-        let mut valid = edit.water_regions.iter().all(|delta| {
-            entities.contains(delta.owner)
-                && [&delta.before, &delta.after]
-                    .into_iter()
-                    .flatten()
-                    .all(|state| {
-                        state.surface_height_metres.is_finite()
-                            && state.depth_ratio.is_finite()
-                            && (0.0..=1.0).contains(&state.depth_ratio)
-                            && assets.get(&state.terrain).is_some_and(|asset| {
-                                state.biome_index < asset.canonical_terrain_grid().biomes.len()
-                            })
-                    })
+    let request = request.0;
+    let Ok((edit, rollback, live_applied)) = edits.get(request.transaction) else {
+        acknowledged.write(TerrainEditAcknowledged {
+            transaction: request.transaction,
+            application: request.application,
+            accepted: false,
         });
-        for delta in edit.deltas.iter() {
-            let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
-                valid = false;
-                break;
-            };
-            let Ok((_, chunk, edited, _)) = chunks.get(entity) else {
-                valid = false;
-                break;
-            };
-            let expected = chunk.side as usize * chunk.side as usize;
-            let area = terrain_sample_rectangle_length(delta.min, delta.max);
-            if area != Some(delta.before.len()) || delta.before.len() != delta.after.len() {
-                valid = false;
-                break;
-            }
-            let Some(asset) = assets.get(&chunk.asset) else {
-                valid = false;
-                break;
-            };
-            if edited.is_some_and(|samples| {
-                !terrain_sample_overlay_has_expected_lengths(samples, expected)
-            }) || (edited.is_none()
+        return;
+    };
+
+    let use_after = matches!(
+        request.application,
+        EditApplication::InitialCommit | EditApplication::Redo
+    ) || (request.application == EditApplication::FailureRollback
+        && rollback.is_some_and(|context| context.failed_application == EditApplication::Undo));
+    let mut targets = Vec::with_capacity(edit.deltas.len());
+    let mut valid = edit.water_regions.iter().all(|delta| {
+        entities.contains(delta.owner)
+            && [&delta.before, &delta.after]
+                .into_iter()
+                .flatten()
+                .all(|state| {
+                    state.surface_height_metres.is_finite()
+                        && state.depth_ratio.is_finite()
+                        && (0.0..=1.0).contains(&state.depth_ratio)
+                        && assets.get(&state.terrain).is_some_and(|asset| {
+                            state.biome_index < asset.canonical_terrain_grid().biomes.len()
+                        })
+                })
+    });
+    for delta in edit.deltas.iter() {
+        let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
+            valid = false;
+            break;
+        };
+        let Ok((_, chunk, edited, _)) = chunks.get(entity) else {
+            valid = false;
+            break;
+        };
+        let expected = chunk.side as usize * chunk.side as usize;
+        let area = terrain_sample_rectangle_length(delta.min, delta.max);
+        if area != Some(delta.before.len()) || delta.before.len() != delta.after.len() {
+            valid = false;
+            break;
+        }
+        let Some(asset) = assets.get(&chunk.asset) else {
+            valid = false;
+            break;
+        };
+        if edited
+            .is_some_and(|samples| !terrain_sample_overlay_has_expected_lengths(samples, expected))
+            || (edited.is_none()
                 && !(0..chunk.side as usize).all(|z| {
                     (0..chunk.side as usize).all(|x| {
                         read_materialized_terrain_sample(chunk, asset, None, x, z).is_some()
                     })
                 }))
-            {
-                valid = false;
-                break;
-            }
-            targets.push(entity);
+        {
+            valid = false;
+            break;
         }
-        if !valid {
-            acknowledged.write(TerrainEditAcknowledged {
-                transaction: request.transaction,
-                application: request.application,
-                accepted: false,
-            });
-            continue;
-        }
+        targets.push(entity);
+    }
+    if !valid {
+        acknowledged.write(TerrainEditAcknowledged {
+            transaction: request.transaction,
+            application: request.application,
+            accepted: false,
+        });
+        return;
+    }
 
-        // A held brush already wrote its samples and water regions dab by dab.
-        if live_applied && request.application == EditApplication::InitialCommit {
-            acknowledged.write(TerrainEditAcknowledged {
-                transaction: request.transaction,
-                application: request.application,
-                accepted: true,
-            });
-            continue;
-        }
-        let owner_changes: Box<[_]> = if use_after {
-            edit.water_regions
-                .iter()
-                .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
-                .collect()
-        } else {
-            edit.water_regions
-                .iter()
-                .rev()
-                .map(|delta| (delta.owner, delta.before.clone(), delta.before_active))
-                .collect()
-        };
-        apply_water_region_edit_changes(&mut commands, owner_changes);
-
-        if use_after {
-            for (entity, delta) in targets.into_iter().zip(edit.deltas.iter()) {
-                apply_validated_terrain_edit_delta_and_publish_changed_region(
-                    &mut commands,
-                    &mut chunks,
-                    &assets,
-                    request.transaction,
-                    entity,
-                    delta,
-                    true,
-                    &mut changed,
-                    &mut navigation_changed,
-                    &mut water_changed,
-                );
-            }
-        } else {
-            for (entity, delta) in targets.into_iter().zip(edit.deltas.iter()).rev() {
-                apply_validated_terrain_edit_delta_and_publish_changed_region(
-                    &mut commands,
-                    &mut chunks,
-                    &assets,
-                    request.transaction,
-                    entity,
-                    delta,
-                    false,
-                    &mut changed,
-                    &mut navigation_changed,
-                    &mut water_changed,
-                );
-            }
-        }
+    // A held brush already wrote its samples and water regions dab by dab.
+    if live_applied && request.application == EditApplication::InitialCommit {
         acknowledged.write(TerrainEditAcknowledged {
             transaction: request.transaction,
             application: request.application,
             accepted: true,
         });
+        return;
     }
+    let owner_changes: Box<[_]> = if use_after {
+        edit.water_regions
+            .iter()
+            .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
+            .collect()
+    } else {
+        edit.water_regions
+            .iter()
+            .rev()
+            .map(|delta| (delta.owner, delta.before.clone(), delta.before_active))
+            .collect()
+    };
+    apply_water_region_edit_changes(&mut commands, &mut owners, owner_changes);
+    let mut pending_overlays = bevy::ecs::entity::EntityHashMap::default();
+
+    if use_after {
+        for (entity, delta) in targets.into_iter().zip(edit.deltas.iter()) {
+            apply_validated_terrain_edit_delta_and_publish_changed_region(
+                &mut commands,
+                &mut chunks,
+                &assets,
+                request.transaction,
+                entity,
+                delta,
+                true,
+                &mut changed,
+                &mut navigation_changed,
+                &mut water_changed,
+                &mut render_changed,
+                &mut pending_overlays,
+            );
+        }
+    } else {
+        for (entity, delta) in targets.into_iter().zip(edit.deltas.iter()).rev() {
+            apply_validated_terrain_edit_delta_and_publish_changed_region(
+                &mut commands,
+                &mut chunks,
+                &assets,
+                request.transaction,
+                entity,
+                delta,
+                false,
+                &mut changed,
+                &mut navigation_changed,
+                &mut water_changed,
+                &mut render_changed,
+                &mut pending_overlays,
+            );
+        }
+    }
+    for (chunk, overlay) in pending_overlays {
+        commands.entity(chunk).insert(overlay);
+    }
+    commands.write_message(TerrainEditAcknowledged {
+        transaction: request.transaction,
+        application: request.application,
+        accepted: true,
+    });
 }
 
 pub(super) fn apply_water_region_edit_changes(
     commands: &mut Commands,
-    changes: Box<[(Entity, Option<openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionEdit>, bool)]>,
+    owners: &mut Query<(
+        Option<&mut TerrainWaterRegionEdit>,
+        Has<TerrainWaterRegionRetired>,
+    )>,
+    changes: impl IntoIterator<Item = (Entity, Option<TerrainWaterRegionEdit>, bool)>,
 ) {
-    commands.queue(move |world: &mut World| {
-        for (owner, state, active) in changes {
-            use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
-                TerrainWaterRegionEdit, TerrainWaterRegionRetired,
-            };
-            let Ok(mut entity) = world.get_entity_mut(owner) else {
-                continue;
-            };
-            // Held dabs restate an unchanged region on every step; inserting
-            // it again would mark the region changed.
-            if let Some(state) = state {
-                if entity.get::<TerrainWaterRegionEdit>() != Some(&state) {
-                    entity.insert(state);
+    let mut next = bevy::ecs::entity::EntityHashMap::default();
+    for (entity, state, active) in changes {
+        next.insert(entity, (state, active));
+    }
+    for (entity, (state, active)) in next {
+        match owners.get_mut(entity) {
+            Ok((current, retired)) => {
+                match (current, state) {
+                    (Some(mut current), Some(state)) => {
+                        current.set_if_neq(state);
+                    }
+                    (None, Some(state)) => {
+                        commands.entity(entity).insert(state);
+                    }
+                    (Some(_), None) => {
+                        commands.entity(entity).remove::<TerrainWaterRegionEdit>();
+                    }
+                    (None, None) => {}
                 }
-            } else {
-                entity.remove::<TerrainWaterRegionEdit>();
+                if active && retired {
+                    commands
+                        .entity(entity)
+                        .remove::<TerrainWaterRegionRetired>();
+                } else if !active && !retired {
+                    commands.entity(entity).insert(TerrainWaterRegionRetired);
+                }
             }
-            if active {
-                entity.remove::<TerrainWaterRegionRetired>();
-            } else if !entity.contains::<TerrainWaterRegionRetired>() {
-                entity.insert(TerrainWaterRegionRetired);
+            Err(_) => {
+                // A newly allocated owner is materialized by the accepted
+                // edit before these structural additions are applied.
+                if let Some(state) = state {
+                    commands.entity(entity).insert(state);
+                }
+                if active {
+                    commands
+                        .entity(entity)
+                        .remove::<TerrainWaterRegionRetired>();
+                }
             }
         }
-    });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -234,6 +282,8 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     changed: &mut MessageWriter<TerrainChanged>,
     navigation_changed: &mut MessageWriter<TerrainNavigationChanged>,
     water_changed: &mut MessageWriter<TerrainWaterChanged>,
+    render_changed: &mut MessageWriter<TerrainRenderInvalidated>,
+    pending_overlays: &mut bevy::ecs::entity::EntityHashMap<EditedTerrainSamples>,
 ) {
     let Ok((_, chunk, existing, _)) = chunks.get_mut(entity) else {
         return;
@@ -253,19 +303,19 @@ pub(super) fn apply_validated_terrain_edit_delta_and_publish_changed_region(
     if let Some(mut overlay) = existing {
         apply_terrain_sample_rectangle(&mut overlay, chunk.side, delta.min, delta.max, samples);
     } else {
-        let mut overlay = materialize_complete_edited_terrain_sample_overlay(chunk, asset);
-        apply_terrain_sample_rectangle(&mut overlay, chunk.side, delta.min, delta.max, samples);
-        commands.entity(entity).insert(overlay);
+        let overlay = pending_overlays
+            .entry(entity)
+            .or_insert_with(|| materialize_complete_edited_terrain_sample_overlay(chunk, asset));
+        apply_terrain_sample_rectangle(overlay, chunk.side, delta.min, delta.max, samples);
     }
-    queue_terrain_render_refresh(
-        commands,
-        entity,
-        TerrainDirtyRegion {
+    render_changed.write(TerrainRenderInvalidated {
+        chunk: entity,
+        region: TerrainDirtyRegion {
             min: changed_min,
             max: changed_max,
             flags,
         },
-    );
+    });
     changed.write(TerrainChanged {
         transaction,
         chunk: entity,

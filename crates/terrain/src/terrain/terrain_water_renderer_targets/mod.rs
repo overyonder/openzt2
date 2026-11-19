@@ -18,12 +18,14 @@ use openzt2_world_state::world_spawn::{
     world_membership_types::WorldRoot,
 };
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TERRAIN_RENDER_LAYER;
-use openzt2_zoo_state::terrain::terrain_water_renderer_types::AuthoredTerrainWaterRendererTargets;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TerrainWaterSurfacePassKind;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_BUMP_COMBINATION_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFLECTION_TARGET_SIZE;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_REFRACTION_TARGET_SIZE;
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::WATER_RENDER_TARGET_SIDE;
+use openzt2_zoo_state::terrain::terrain_water_renderer_types::{
+    AuthoredTerrainWaterRendererTargets, TerrainWaterCaptureExtent, TerrainWaterCaptureRole,
+};
 
 #[derive(Component)]
 struct AuthoredTerrainWaterBumpCombinationQuad;
@@ -36,10 +38,14 @@ pub(super) struct WaterCaptureRigOf(Entity);
 #[relationship_target(relationship = WaterCaptureRigOf, linked_spawn)]
 pub(super) struct WorldWaterCaptureRigs(Vec<Entity>);
 
+#[derive(Component)]
+pub(super) struct WaterCaptureRefreshPending;
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn initialize_authored_terrain_water_renderer_targets(
     mut commands: Commands,
     terrain_assets: Res<Assets<TerrainAsset>>,
+    mut terrain_events: MessageReader<AssetEvent<TerrainAsset>>,
     authored_materials: Res<Assets<MaterialAsset>>,
     graphics_settings: Res<GraphicsSettings>,
     mut effect_pass_materials: ResMut<Assets<EffectPassMaterial>>,
@@ -47,13 +53,28 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
     mut images: ResMut<Assets<Image>>,
     mut meshes: ResMut<Assets<Mesh>>,
     worlds: Query<
-        (Entity, &SelectedWorldTerrainAssetHandle),
-        (With<WorldRoot>, Without<WorldWaterCaptureRigs>),
+        (
+            Entity,
+            Ref<SelectedWorldTerrainAssetHandle>,
+            Option<&WorldWaterCaptureRigs>,
+            Has<WaterCaptureRefreshPending>,
+        ),
+        With<WorldRoot>,
     >,
 ) {
-    let Ok((world, terrain)) = worlds.single() else {
+    let Ok((world, terrain, rigs, pending)) = worlds.single() else {
+        terrain_events.clear();
         return;
     };
+    let id = terrain.0.id();
+    let reloaded = terrain_events.read().any(|event| event.is_modified(id));
+    terrain_events.clear();
+    if rigs.is_some() && !terrain.is_changed() && !reloaded && !pending {
+        return;
+    }
+    if !pending {
+        commands.entity(world).insert(WaterCaptureRefreshPending);
+    }
     let Some(terrain_asset) = terrain_assets.get(&terrain.0) else {
         return;
     };
@@ -101,6 +122,14 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
         TextureFormat::Rgba8UnormSrgb,
         None,
     ));
+    if let Some(rigs) = rigs {
+        for rig in rigs.iter() {
+            commands.entity(rig).try_despawn();
+        }
+    }
+    commands
+        .entity(world)
+        .remove::<WaterCaptureRefreshPending>();
     let bump_mesh = Mesh3d(meshes.add(Rectangle::new(2.0, 2.0)));
     let rig = commands
         .spawn((
@@ -126,51 +155,54 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
                 .expect("the authored water bump effect pass index fits u16"),
         );
     }
-    let bump_camera = commands
-        .spawn((
-            Camera3d::default(),
-            // This fullscreen effect uses no clustered lighting. Keep one cell
-            // because Bevy 0.19's GPU path creates a zero-sized texture for None.
-            bevy::light::cluster::ClusterConfig::Single,
-            Camera {
-                order: -3,
-                is_active: false,
-                clear_color: ClearColorConfig::Custom(Color::BLACK),
-                ..default()
+    commands.spawn((
+        Camera3d::default(),
+        TerrainWaterCaptureRole::Bump,
+        TerrainWaterCaptureExtent(Vec2::splat(50.0)),
+        // This fullscreen effect uses no clustered lighting. Keep one cell
+        // because Bevy 0.19's GPU path creates a zero-sized texture for None.
+        bevy::light::cluster::ClusterConfig::Single,
+        Camera {
+            order: -3,
+            is_active: false,
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            ..default()
+        },
+        Projection::Orthographic(OrthographicProjection {
+            scaling_mode: bevy::camera::ScalingMode::Fixed {
+                width: 2.0,
+                height: 2.0,
             },
-            Projection::Orthographic(OrthographicProjection {
-                scaling_mode: bevy::camera::ScalingMode::Fixed {
-                    width: 2.0,
-                    height: 2.0,
-                },
-                ..OrthographicProjection::default_3d()
-            }),
-            Transform::from_xyz(0.0, 0.0, 1.0),
-            RenderTarget::Image(combined_bump_map.clone().into()),
-            RenderLayers::layer(WATER_BUMP_COMBINATION_RENDER_LAYER),
-            ChildOf(rig),
-        ))
-        .id();
-    let refraction_camera = spawn_water_scene_render_target_camera(
+            ..OrthographicProjection::default_3d()
+        }),
+        Transform::from_xyz(0.0, 0.0, 1.0),
+        RenderTarget::Image(combined_bump_map.clone().into()),
+        RenderLayers::layer(WATER_BUMP_COMBINATION_RENDER_LAYER),
+        ChildOf(rig),
+    ));
+    spawn_water_scene_render_target_camera(
         &mut commands,
         rig,
         refraction.clone(),
+        TerrainWaterCaptureRole::Refraction,
         -2,
         WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
         false,
     );
-    let reflection_camera = spawn_water_scene_render_target_camera(
+    spawn_water_scene_render_target_camera(
         &mut commands,
         rig,
         reflection.clone(),
+        TerrainWaterCaptureRole::Reflection,
         -1,
         WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
         true,
     );
-    let fallback_reflection_camera = spawn_water_scene_render_target_camera(
+    spawn_water_scene_render_target_camera(
         &mut commands,
         rig,
         fallback_reflection.clone(),
+        TerrainWaterCaptureRole::FallbackReflection,
         -4,
         WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
         true,
@@ -182,16 +214,8 @@ pub(super) fn initialize_authored_terrain_water_renderer_targets(
             reflection,
             refraction,
             fallback_reflection,
-            bump_camera,
-            reflection_camera,
-            refraction_camera,
-            fallback_reflection_camera,
             water_bump_combination_materials,
             elapsed_seconds: 0.0,
-            active_water_plane_height: None,
-            reflection_world_extent: Vec2::splat(50.0),
-            refraction_world_extent: Vec2::splat(50.0),
-            fallback_reflection_world_extent: Vec2::splat(50.0),
         });
 }
 
@@ -199,53 +223,50 @@ fn spawn_water_scene_render_target_camera(
     commands: &mut Commands,
     rig: Entity,
     target: Handle<Image>,
+    role: TerrainWaterCaptureRole,
     order: isize,
     effect_pass_render_layer: usize,
     invert_culling: bool,
-) -> Entity {
-    commands
-        .spawn((
-            Camera3d::default(),
-            Camera {
-                order,
-                is_active: false,
-                invert_culling,
-                clear_color: ClearColorConfig::Custom(Color::BLACK),
-                ..default()
-            },
-            RenderTarget::Image(target.into()),
-            RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER, effect_pass_render_layer]),
-            ChildOf(rig),
-        ))
-        .id()
+) {
+    commands.spawn((
+        Camera3d::default(),
+        role,
+        TerrainWaterCaptureExtent(Vec2::splat(50.0)),
+        Camera {
+            order,
+            is_active: false,
+            invert_culling,
+            clear_color: ClearColorConfig::Custom(Color::BLACK),
+            ..default()
+        },
+        RenderTarget::Image(target.into()),
+        RenderLayers::from_layers(&[0, TERRAIN_RENDER_LAYER, effect_pass_render_layer]),
+        ChildOf(rig),
+    ));
 }
 
 /// A water camera needs model draws only while the zoo has a surface that
 /// samples the scene. Keep them across camera moves and visibility changes.
 pub(super) fn reconcile_water_material_render_views(
     mut commands: Commands,
-    targets: Query<&AuthoredTerrainWaterRendererTargets>,
+    targets: Query<&Children, With<AuthoredTerrainWaterRendererTargets>>,
+    captures: Query<(Entity, &TerrainWaterCaptureRole)>,
     passes: Query<&TerrainWaterSurfacePassKind>,
     views: Query<(), With<EffectPassMaterialRenderView>>,
 ) {
-    let Ok(targets) = targets.single() else {
+    let Ok(children) = targets.single() else {
         return;
     };
     let needs_capture = passes.iter().any(|pass| !pass.uses_stitch_geometry());
-    for (camera, render_layer) in [
-        (
-            targets.reflection_camera,
-            WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
-        ),
-        (
-            targets.refraction_camera,
-            WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
-        ),
-        (
-            targets.fallback_reflection_camera,
-            WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
-        ),
-    ] {
+    for (camera, role) in captures.iter_many(children.iter()).flatten() {
+        let render_layer = match role {
+            TerrainWaterCaptureRole::Bump => continue,
+            TerrainWaterCaptureRole::Reflection => WATER_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+            TerrainWaterCaptureRole::Refraction => WATER_REFRACTION_EFFECT_PASS_RENDER_VIEW_LAYER,
+            TerrainWaterCaptureRole::FallbackReflection => {
+                WATER_FALLBACK_REFLECTION_EFFECT_PASS_RENDER_VIEW_LAYER
+            }
+        };
         if needs_capture != views.contains(camera) {
             if needs_capture {
                 commands
@@ -267,24 +288,24 @@ mod tests {
     #[test]
     fn scene_capture_views_follow_the_lifetime_of_water_that_samples_them() {
         let mut app = App::new();
-        let [bump_camera, reflection_camera, refraction_camera, fallback_reflection_camera] =
-            std::array::from_fn(|_| app.world_mut().spawn_empty().id());
-        app.world_mut().spawn(AuthoredTerrainWaterRendererTargets {
-            combined_bump_map: default(),
-            reflection: default(),
-            refraction: default(),
-            fallback_reflection: default(),
-            bump_camera,
-            reflection_camera,
-            refraction_camera,
-            fallback_reflection_camera,
-            water_bump_combination_materials: default(),
-            elapsed_seconds: 0.0,
-            active_water_plane_height: None,
-            reflection_world_extent: Vec2::ZERO,
-            refraction_world_extent: Vec2::ZERO,
-            fallback_reflection_world_extent: Vec2::ZERO,
-        });
+        let rig = app
+            .world_mut()
+            .spawn(AuthoredTerrainWaterRendererTargets {
+                combined_bump_map: default(),
+                reflection: default(),
+                refraction: default(),
+                fallback_reflection: default(),
+                water_bump_combination_materials: default(),
+                elapsed_seconds: 0.0,
+            })
+            .id();
+        let [bump_camera, reflection_camera, refraction_camera, fallback_reflection_camera] = [
+            TerrainWaterCaptureRole::Bump,
+            TerrainWaterCaptureRole::Reflection,
+            TerrainWaterCaptureRole::Refraction,
+            TerrainWaterCaptureRole::FallbackReflection,
+        ]
+        .map(|role| app.world_mut().spawn((role, ChildOf(rig))).id());
         app.add_systems(Update, reconcile_water_material_render_views);
         let pass = app
             .world_mut()

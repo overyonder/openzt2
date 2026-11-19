@@ -121,7 +121,8 @@ fn accumulates_parameter_state_and_programmable_shader_bytecode(
         enabled_states
             .first()
             .ok_or_else(|| std::io::Error::other("D3DX returned no enabled pass"))?
-            .depth_compare,
+            .effective_depth_state()
+            .1,
         CompareFunction::GreaterEqual
     );
     let programmed = enabled_states

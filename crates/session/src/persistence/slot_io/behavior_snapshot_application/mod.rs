@@ -41,6 +41,15 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
         return Ok(true);
     }
     super::behavior_snapshot_section_encoding::validate_behavior_actor_snapshots(records)?;
+    let retry_records = records
+        .iter()
+        .filter_map(BehaviorActorSnapshot::retry_record)
+        .collect::<Vec<_>>();
+    let task_records = records
+        .iter()
+        .filter_map(BehaviorActorSnapshot::task_record)
+        .collect::<Vec<_>>();
+    let records = task_records.as_slice();
     if !interaction_membership::validate_authored_behavior_memberships(records, application)? {
         return Ok(false);
     }
@@ -83,6 +92,7 @@ pub(super) fn prepare_behavior_snapshot_before_world_replacement(
         }
     }
     validate_behavior_snapshot_references(records, &identities)?;
+    validate_behavior_retry_references(&retry_records, &identities)?;
     Ok(true)
 }
 
@@ -96,6 +106,15 @@ pub(super) fn restore_behavior_actor_snapshots(
         return Ok(true);
     }
     super::behavior_snapshot_section_encoding::validate_behavior_actor_snapshots(records)?;
+    let retry_records = records
+        .iter()
+        .filter_map(BehaviorActorSnapshot::retry_record)
+        .collect::<Vec<_>>();
+    let task_records = records
+        .iter()
+        .filter_map(BehaviorActorSnapshot::task_record)
+        .collect::<Vec<_>>();
+    let records = task_records.as_slice();
     if !interaction_membership::validate_authored_behavior_memberships(records, application)? {
         return Ok(false);
     }
@@ -110,6 +129,7 @@ pub(super) fn restore_behavior_actor_snapshots(
     };
     let mut identities = index_behavior_snapshot_entity_references(&application.entities)?;
     validate_behavior_snapshot_references(records, &identities)?;
+    validate_behavior_retry_references(&retry_records, &identities)?;
     let capacity = application
         .capacity
         .as_deref()
@@ -174,24 +194,7 @@ pub(super) fn restore_behavior_actor_snapshots(
                 [&BehaviorSnapshotEntityReference::Persistent(record.persistent_identifier)],
             current: resolve(&record.task.current)?,
             stack,
-            move_origin: nav
-                .and_then(|nav| nav.move_completion.as_ref())
-                .map(|pending| resolve(&pending.origin))
-                .transpose()?,
-            dock_origin: nav
-                .and_then(|nav| nav.docking_completion.as_ref())
-                .map(|pending| resolve(&pending.origin))
-                .transpose()?,
-            pursuit_origin: nav
-                .and_then(|nav| nav.pursuit.as_ref())
-                .map(|pending| resolve(&pending.origin))
-                .transpose()?,
             job_frame,
-            transaction_origin: record
-                .transaction
-                .as_ref()
-                .map(|pending| resolve(&pending.origin))
-                .transpose()?,
             synchronized_origin: record
                 .synchronized
                 .as_ref()
@@ -233,12 +236,13 @@ pub(super) fn restore_behavior_actor_snapshots(
     }
     // The complete plan is valid. Auxiliary task objects are created only now.
     for actor in &prepared {
-        commands.entity(actor.actor).remove::<(
-            SynchronizedBehaviorOwner,
-            SynchronizedBehaviorParticipant,
-            InteractionContainerMember,
-        )>();
+        commands
+            .entity(actor.actor)
+            .despawn_related::<SynchronizedBehaviorOwner>()
+            .despawn_related::<SynchronizedBehaviorParticipant>()
+            .remove::<InteractionContainerMember>();
     }
+
     for record in records {
         for reference in actor_references(record) {
             if identities.contains_key(reference) {
@@ -305,8 +309,41 @@ pub(super) fn restore_behavior_actor_snapshots(
             }
         });
     }
+    for record in retry_records {
+        let actor =
+            identities[&BehaviorSnapshotEntityReference::Persistent(record.persistent_identifier)];
+        commands.entity(actor).despawn_related::<openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::BehaviorRejections>();
+        for retry in &record.retry_delays {
+            let target = identities[&retry.target];
+            let failures = retry.failures;
+            let remaining = retry.remaining_updates;
+            commands.queue(move |world: &mut World| {
+                openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::restore_behavior_target_retry(
+                    world, actor, target, failures, remaining,
+                );
+            });
+        }
+    }
     for (record, prepared) in records.iter().zip(prepared) {
         apply_prepared_behavior_actor(commands, record, prepared, &identities, application);
     }
     Ok(true)
+}
+
+fn validate_behavior_retry_references(
+    records: &[&super::behavior_snapshot_types::BehaviorActorRetrySnapshot],
+    identities: &std::collections::BTreeMap<BehaviorSnapshotEntityReference, Entity>,
+) -> Result<(), WorldSnapshotPersistenceFailure> {
+    for record in records {
+        if !identities.contains_key(&BehaviorSnapshotEntityReference::Persistent(
+            record.persistent_identifier,
+        )) || record
+            .retry_delays
+            .iter()
+            .any(|retry| !identities.contains_key(&retry.target))
+        {
+            return Err(WorldSnapshotPersistenceFailure::BrokenPersistentEntityReference);
+        }
+    }
+    Ok(())
 }

@@ -69,7 +69,7 @@ pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
     pointer_input: (
-        Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+        openzt2_interface_state::input::input_types::MousePointer,
         Res<openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture>,
     ),
     mut tranquilizer_controls: Query<
@@ -88,7 +88,8 @@ pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
     mut commands: Commands,
     mut hide_ui_document_requests: MessageWriter<HideUiDocument>,
 ) {
-    let (pointer_input, modal_input) = pointer_input;
+    let (pointer, modal_input) = pointer_input;
+    let trigger_pressed = pointer.primary_is_pressed();
     if modal_input.0.is_some() {
         action_requests.clear();
         // Losing input capture is not a trigger release. Keep the tool's
@@ -161,7 +162,7 @@ pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
                     .distance(animal_transform.translation())
                     <= tranquilizer_mode_policy.range_cm as f32 / 100.0
             });
-        let trigger_is_charging = targeted_animal_is_in_range && pointer_input.pressed;
+        let trigger_is_charging = targeted_animal_is_in_range && trigger_pressed;
         let charge_audio_selection = controller_entity.to_bits().wrapping_add(1);
         let charge_rate_points_per_second = if trigger_is_charging {
             tranquilizer_mode_policy.charge_points_per_second
@@ -228,12 +229,12 @@ pub(super) fn aim_charge_fire_or_cancel_active_tranquilizer_controls(
         }
         audio_feedback.targeted_animal_entity = targeted_animal_entity;
         audio_feedback.charge_is_ready = charge_is_ready;
-        if audio_feedback.trigger_is_held && !pointer_input.pressed {
+        if audio_feedback.trigger_is_held && !trigger_pressed {
             fire_requests.write(FireTranquilizer {
                 controller: controller_entity,
             });
         }
-        audio_feedback.trigger_is_held = pointer_input.pressed;
+        audio_feedback.trigger_is_held = trigger_pressed;
         aim_requests.write(AimTranquilizer {
             controller: controller_entity,
         });

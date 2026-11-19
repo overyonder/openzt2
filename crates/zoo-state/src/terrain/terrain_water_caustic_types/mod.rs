@@ -31,9 +31,4 @@ pub struct TerrainWaterCausticSceneTarget {
 }
 
 #[derive(Component, Clone, Copy)]
-pub struct TerrainWaterCausticScenePass {
-    pub physical_presentation: Entity,
-    pub source_primitive: Entity,
-    pub water_owner: Entity,
-    pub render_view: Entity,
-}
+pub struct TerrainWaterCausticScenePass;

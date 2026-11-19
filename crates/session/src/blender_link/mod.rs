@@ -5,6 +5,10 @@
 mod link_server;
 mod mod_archive;
 
+use bevy::{
+    picking::{events::PointerPress, hover::DirectlyHovered, pointer::PointerButton},
+    ui::Pressed,
+};
 use std::{
     path::Path,
     time::{Duration, Instant},
@@ -31,13 +35,12 @@ use openzt2_game_data::{
     ui_document::action::simulation_time::UiSimulationAction,
 };
 use openzt2_interface_state::{
-    information::entity_selection_types::SelectedEntity,
+    information::entity_selection_types::WorldUiSelection,
     settings::modder_tools_settings_types::ModderToolsSettings,
     ui::{
         authored_ui_action_projection_components::UiSimulationActions,
         authored_ui_interaction_enabled_state::UiInteractionEnabled,
         authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot},
-        pointer_capture_types::UiPointerInteraction,
         UiSet,
     },
 };
@@ -104,15 +107,21 @@ pub(crate) fn modder_tools_checkbox_label(enabled: bool) -> String {
 
 fn toggle_modder_tools(
     mut settings: ResMut<ModderToolsSettings>,
-    mut checkboxes: Query<(Ref<UiPointerInteraction>, &mut Text), With<ModderToolsCheckbox>>,
+    mut presses: MessageReader<PointerPress>,
+    mut checkboxes: Query<&mut Text, With<ModderToolsCheckbox>>,
 ) {
-    for (interaction, mut label) in &mut checkboxes {
-        if interaction.is_changed() && *interaction == UiPointerInteraction::Pressed {
+    for press in presses.read() {
+        if press.pointer.id.is_mouse()
+            && press.button == PointerButton::Primary
+            && checkboxes.contains(press.entity)
+        {
             settings.enabled = !settings.enabled;
         }
-        let expected = modder_tools_checkbox_label(settings.enabled);
+    }
+    let expected = modder_tools_checkbox_label(settings.enabled);
+    for mut label in &mut checkboxes {
         if label.0 != expected {
-            label.0 = expected;
+            label.0.clone_from(&expected);
         }
     }
 }
@@ -161,6 +170,7 @@ fn attach_blender_button(
             ChildOf(parent.parent()),
             ZIndex(z.0 + 1),
             bevy::ui_widgets::Button,
+            DirectlyHovered::default(),
             UiInteractionEnabled(false),
             Visibility::Hidden,
             ImageNode::new(load_embedded_asset!(&*assets, "button.png")),
@@ -182,14 +192,15 @@ fn present_blender_button(
     mut buttons: Query<(
         Entity,
         &BlenderButton,
-        &UiPointerInteraction,
+        &DirectlyHovered,
+        Has<Pressed>,
         &mut Node,
         &mut Visibility,
         &mut ImageNode,
         &mut UiInteractionEnabled,
     )>,
 ) {
-    for (entity, button, interaction, mut node, mut visibility, mut image, mut interactive) in
+    for (entity, button, hovered, pressed, mut node, mut visibility, mut image, mut interactive) in
         &mut buttons
     {
         let Ok((pause_layout, pause_visibility)) = pause_controls.get(button.pause) else {
@@ -205,11 +216,11 @@ fn present_blender_button(
             Visibility::Hidden
         });
         interactive.set_if_neq(UiInteractionEnabled(settings.enabled));
-        let x = match (link.server.is_some(), interaction) {
-            (_, UiPointerInteraction::Pressed) => 192.0,
-            (_, UiPointerInteraction::Hovered) => 128.0,
-            (true, UiPointerInteraction::None) => 64.0,
-            (false, UiPointerInteraction::None) => 0.0,
+        let x = match (link.server.is_some(), hovered.get(), pressed) {
+            (_, _, true) => 192.0,
+            (_, true, false) => 128.0,
+            (true, false, false) => 64.0,
+            (false, false, false) => 0.0,
         };
         let rect = Some(Rect::new(x, 0.0, x + 64.0, 64.0));
         if image.rect != rect {
@@ -222,15 +233,16 @@ fn toggle_blender_link(
     mut link: ResMut<BlenderLink>,
     archives: Res<AssetArchives>,
     mut replaced: MessageWriter<PrefabModelReplaced>,
-    buttons: Query<
-        (&UiPointerInteraction, &UiInteractionEnabled),
-        (With<BlenderButton>, Changed<UiPointerInteraction>),
-    >,
+    mut presses: MessageReader<PointerPress>,
+    buttons: Query<&UiInteractionEnabled, With<BlenderButton>>,
 ) {
-    if !buttons
-        .iter()
-        .any(|(interaction, enabled)| enabled.0 && *interaction == UiPointerInteraction::Pressed)
-    {
+    let pressed = presses.read().any(|press| {
+        press.pointer.id.is_mouse()
+            && press.button == PointerButton::Primary
+            && buttons.get(press.entity).is_ok_and(|enabled| enabled.0)
+    });
+    presses.clear();
+    if !pressed {
         return;
     }
     if link.server.is_some() {
@@ -291,7 +303,6 @@ fn announce(
     }));
 }
 
-
 /// One prefab presentation within the selected object.
 struct ObjectPart {
     model: String,
@@ -313,7 +324,7 @@ struct PendingLoad {
 
 #[derive(bevy::ecs::system::SystemParam)]
 struct LinkWorld<'w, 's> {
-    selected: Res<'w, SelectedEntity>,
+    selected: WorldUiSelection<'w, 's>,
     children: Query<'w, 's, &'static Children>,
     names: Query<'w, 's, &'static Name>,
     transforms: Query<'w, 's, &'static GlobalTransform>,
@@ -321,7 +332,10 @@ struct LinkWorld<'w, 's> {
         'w,
         's,
         (
-            AnyOf<(&'static PrefabSourceAssetHandle, &'static PrefabPresentation)>,
+            AnyOf<(
+                &'static PrefabSourceAssetHandle,
+                &'static PrefabPresentation,
+            )>,
             &'static GlobalTransform,
             &'static InheritedVisibility,
         ),
@@ -441,7 +455,7 @@ fn answer(
 /// building has its own model, built onto the object, and attached parts
 /// such as components and states.
 fn selected_object(world: &LinkWorld) -> Option<(String, Vec<ObjectPart>)> {
-    let selected = world.selected.0?;
+    let selected = world.selected.subject()?;
     let object_transform = world.transforms.get(selected).ok()?;
     let mut parts = Vec::<ObjectPart>::new();
     for entity in std::iter::once(selected).chain(world.children.iter_descendants(selected)) {
@@ -490,7 +504,11 @@ fn selected_object(world: &LinkWorld) -> Option<(String, Vec<ObjectPart>)> {
     Some((object, parts))
 }
 
-type BegunLoad = (String, Vec<ObjectPart>, Vec<(String, Handle<MaterialAsset>)>);
+type BegunLoad = (
+    String,
+    Vec<ObjectPart>,
+    Vec<(String, Handle<MaterialAsset>)>,
+);
 
 fn begin_load(world: &LinkWorld, replaced_models: &mut Vec<String>) -> Result<BegunLoad, String> {
     let (object, parts) = selected_object(world).ok_or("no object is selected in the game")?;

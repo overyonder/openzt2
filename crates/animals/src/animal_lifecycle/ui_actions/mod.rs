@@ -2,7 +2,7 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::animals::{UiAnimalAction, UiAnimalGender};
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
@@ -22,7 +22,7 @@ pub(super) fn consume_animal_ui_actions(
     documents: Res<Assets<UiDocumentAsset>>,
     nodes: Query<(&UiAnimalActions, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
     animals: Query<Has<ReleaseRestricted>, With<Animal>>,
     mut catalogue_genders: Query<&mut AnimalCatalogueGender>,
     mut outgoing_adoptions: MessageWriter<PlaceAnimalForAdoption>,
@@ -58,7 +58,7 @@ pub(super) fn consume_animal_ui_actions(
                 }
                 UiAnimalAction::PutSelectedAnimalUpForAdoption => {
                     if let Some(animal) = selected
-                        .0
+                        .subject()
                         .filter(|entity| animals.get(*entity).is_ok_and(|restricted| !restricted))
                     {
                         outgoing_adoptions.write(PlaceAnimalForAdoption(animal));
@@ -66,7 +66,7 @@ pub(super) fn consume_animal_ui_actions(
                 }
                 UiAnimalAction::ReleaseSelectedAnimalToWild => {
                     if let Some(animal) = selected
-                        .0
+                        .subject()
                         .filter(|entity| animals.get(*entity).is_ok_and(|restricted| !restricted))
                     {
                         releases.write(ReleaseAnimal(animal));

@@ -18,7 +18,7 @@ pub struct AuthoredParticleSystemEmitter {
     pub spawn: AuthoredParticleSpawnPolicy,
     pub clock: ParticleEffectSimulationClock,
     pub shape: AuthoredParticleEmitterShape,
-    pub material: String,
+    pub renderers: Vec<AuthoredParticleRenderer>,
     pub modifiers: Vec<AuthoredParticleSystemModifier>,
 }
 
@@ -63,6 +63,19 @@ pub enum AuthoredParticleEmitterShape {
     Decal,
     Proxy,
     Mesh,
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthoredParticleRenderer {
+    pub material: String,
+    pub kind: AuthoredParticleRendererKind,
+    pub width: f32,
+    pub height: f32,
+    pub columns: u16,
+    pub rows: u16,
+    pub sort_by_distance: bool,
+    pub minimum_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -194,15 +207,6 @@ pub enum AuthoredParticleSystemModifier {
         stop_seconds: f32,
         frequency: f32,
         phase: f32,
-    },
-    Renderer {
-        kind: AuthoredParticleRendererKind,
-        width: f32,
-        height: f32,
-        columns: u16,
-        rows: u16,
-        sort_by_distance: bool,
-        minimum_height: f32,
     },
     DieWhenEmpty {
         enabled: bool,

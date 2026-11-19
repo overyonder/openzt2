@@ -157,7 +157,10 @@ pub(crate) fn spawn_zoo_camera(
                 TERRAIN_WATER_RENDER_LAYER,
                 PRIMARY_EFFECT_PASS_RENDER_VIEW_LAYER,
             ]),
-            CameraDefinition(camera_id),
+            (
+                CameraDefinition(camera_id),
+                crate::camera::camera_execution_types::MapOverheadCameraDefinition(camera_id),
+            ),
             CameraMode::Overhead,
             rig,
             tuning,

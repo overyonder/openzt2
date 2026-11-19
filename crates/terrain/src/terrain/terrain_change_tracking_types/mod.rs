@@ -8,7 +8,7 @@ use bevy::prelude::*;
 pub(super) struct TerrainDirty;
 
 /// The region still owed to the mesh and base surface refresh.
-#[derive(Component)]
+#[derive(Component, PartialEq, Eq)]
 #[component(storage = "SparseSet")]
 pub(super) struct TerrainRenderPending(pub(super) TerrainDirtyRegion);
 

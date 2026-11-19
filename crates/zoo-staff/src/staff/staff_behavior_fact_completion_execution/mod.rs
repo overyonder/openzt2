@@ -1,44 +1,42 @@
-use super::staff_job_completion_rules::behavior_fact_modification_is_owned_by_terminal_maintenance_system;
 use bevy::prelude::*;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
-
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
+use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
+use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFinished;
 
 use super::{
     staff_employment_types::Staff,
-    staff_job_types::{CurrentJob, StaffJob},
+    staff_job_types::{CurrentJob, JobClaim, StaffJob, StaffJobBehaviorTask},
+    staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCompleted},
 };
 
 pub(super) fn acknowledge_staff_job_completion_fact_actions_owned_by_terminal_domain_systems(
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
-    simulation_clock: Res<ZooClock>,
-    mut staff: Query<(&CurrentJob, &mut BehaviorTaskExecutionState), With<Staff>>,
-    jobs: Query<&StaffJob>,
+    mut finished: MessageReader<BehaviorTaskFinished>,
+    staff: Query<&CurrentJob, With<Staff>>,
+    jobs: Query<(&StaffJob, &JobClaim, &StaffJobBehaviorTask)>,
+    cancellations: Res<Messages<CancelStaffJobRequest>>,
+    mut completed: MessageWriter<StaffJobCompleted>,
 ) {
-    for (current_job, mut behavior_task) in &mut staff {
-        if behavior_task.next_action_tick > simulation_clock.tick {
-            continue;
-        }
-        let Some(BehaviorAction::FactModifications(modifications)) = behavior_document_assets
-            .get(&behavior_task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
-        else {
+    for outcome in finished.read() {
+        let Ok(current) = staff.get(outcome.actor) else {
             continue;
         };
-        let Ok(job) = jobs.get(current_job.job) else {
+        let Ok((job, claim, behavior)) = jobs.get(current.job) else {
             continue;
         };
-        if modifications.iter().all(|modification| {
-            behavior_fact_modification_is_owned_by_terminal_maintenance_system(
-                modification,
-                Some(job.kind),
-            )
-        }) {
-            advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
+        if job.kind != StaffJobKind::EmptyBin
+            || claim.staff != outcome.actor
+            || behavior.execution_id != Some(outcome.execution_id)
+            || cancellations
+                .get_cursor()
+                .read(&cancellations)
+                .any(|event| event.job == current.job)
+        {
+            continue;
         }
+        completed.write(StaffJobCompleted {
+            staff: outcome.actor,
+            job: current.job,
+            kind: job.kind,
+            target: job.target,
+        });
     }
 }

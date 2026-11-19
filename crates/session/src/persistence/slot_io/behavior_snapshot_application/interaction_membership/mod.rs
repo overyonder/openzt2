@@ -4,13 +4,13 @@ use bevy::{ecs::entity::EntityHashSet, prelude::*};
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::requests::InteractionContainerAdmissionRequest;
 
 use super::{
-    super::behavior_snapshot_types::{BehaviorActorSnapshot, BehaviorSnapshotEntityReference},
+    super::behavior_snapshot_types::{BehaviorSnapshotEntityReference, BehaviorTaskActorSnapshot},
     parameters::BehaviorSnapshotApplication,
 };
 use crate::persistence::persistence_failure_types::WorldSnapshotPersistenceFailure as Failure;
 
 pub(super) fn validate_authored_behavior_memberships(
-    records: &[BehaviorActorSnapshot],
+    records: &[&BehaviorTaskActorSnapshot],
     application: &BehaviorSnapshotApplication,
 ) -> Result<bool, Failure> {
     if records.iter().all(|record| record.membership.is_none()) {
@@ -46,7 +46,7 @@ pub(super) fn validate_authored_behavior_memberships(
 }
 
 pub(super) fn prepare_behavior_membership_restoration(
-    records: &[BehaviorActorSnapshot],
+    records: &[&BehaviorTaskActorSnapshot],
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
     application: &BehaviorSnapshotApplication,
 ) -> Result<Vec<(Entity, InteractionContainerAdmissionRequest, bool)>, Failure> {

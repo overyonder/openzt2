@@ -1,5 +1,4 @@
 use super::*;
-use arrayvec::ArrayVec;
 use openzt2_game_data::{
     behavior::{
         action::termination::BehaviorTerminationAction,
@@ -17,6 +16,7 @@ use openzt2_zoo_state::locomotion::locomotion_types::{NavAgent, NavFlags, Route,
 
 fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecutionState) {
     let mut app = App::new();
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
     app.init_resource::<Assets<BehaviorDocumentAsset>>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
@@ -84,7 +84,7 @@ fn fixture(kill_subject: bool, kill_target: bool) -> (App, BehaviorTaskExecution
             repetitions: 0,
             next_action_tick: 0,
             interaction_slot: None,
-            stack: ArrayVec::new(),
+            depth: 0,
         },
     )
 }

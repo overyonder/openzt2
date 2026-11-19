@@ -1,5 +1,9 @@
 //! Authored carried objects use ordinary world entities and the shared container owner.
 
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorInstructionId, RunBehaviorAttachObject, RunBehaviorDetachObject,
+    RunningBehaviorInstruction,
+};
 mod admission;
 mod created;
 mod detach;
@@ -22,11 +26,8 @@ use openzt2_zoo_state::animal_behavior::interaction_container_membership::{
 };
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorHeldAnimationClip;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::prefab_authored_attachment_identifier::PrefabAuthoredAttachmentIdentifier;
@@ -35,8 +36,11 @@ use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
 use avian3d::prelude::RigidBody;
+use openzt2_zoo_state::animal_behavior::behavior_world_release_types::{
+    BehaviorWorldObjectReleased, BehaviorWorldReleaseMotion, BehaviorWorldReleaseSupport,
+};
 use bevy::{asset::LoadState, ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::{AssetId};
 
 #[derive(Component)]
 struct PendingObjectAttachment {
@@ -44,8 +48,7 @@ struct PendingObjectAttachment {
     request_id: Option<usize>,
     prefab: Option<Handle<ScenePrefabAsset>>,
     detach_after_attachment: bool,
-    origin: BehaviorTaskReturnFrame,
-    depth: usize,
+    instruction: BehaviorInstructionId,
     target: Option<Entity>,
     joint: Option<Entity>,
 }
@@ -77,6 +80,7 @@ fn release_detached_object_locomotion_modifiers(
 impl PendingObjectAttachment {
     fn waiting_for_attachment(
         task: &BehaviorTaskExecutionState,
+        instruction: &RunningBehaviorInstruction,
         prefab: Option<Handle<ScenePrefabAsset>>,
     ) -> Self {
         Self {
@@ -84,23 +88,20 @@ impl PendingObjectAttachment {
             request_id: None,
             prefab,
             detach_after_attachment: false,
-            origin: task.create_return_frame_after_action(task.action),
-            depth: task.stack.len(),
+            instruction: instruction.id(),
             target: task.target,
             joint: None,
         }
     }
 
-    fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        task.execution_id == self.execution_id
-            && task.target == self.target
-            && task.stack.len() == self.depth
-            && task.is_at_or_nested_under(&self.origin, self.depth)
+    fn owns(&self, task: &BehaviorTaskExecutionState, step: &RunningBehaviorInstruction) -> bool {
+        self.instruction == step.id() && task.target == self.target && step.is_current(task)
     }
 }
 
 #[derive(SystemParam)]
 struct AttachmentAssets<'w> {
+    world_releases: Option<Res<'w, BehaviorWorldReleaseSupport>>,
     documents: Res<'w, Assets<BehaviorDocumentAsset>>,
     definitions: Res<'w, WorldDefinitions>,
     definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
@@ -151,7 +152,11 @@ fn start_or_finish_object_attachment(
     actors: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorAttachObject,
+            ),
             &DefinitionId,
             &WorldMember,
             Option<&PendingObjectAttachment>,
@@ -183,21 +188,18 @@ fn start_or_finish_object_attachment(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, task, actor_definition, world, pending) in &actors {
-        if pending.is_some_and(|pending| !pending.owns(task)) {
+    for (actor, (task, instruction, running_action), actor_definition, world, pending) in &actors {
+        if pending.is_some_and(|pending| !pending.owns(task, instruction)) {
             commands.entity(actor).remove::<PendingObjectAttachment>();
             continue;
         }
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::AttachObject(action)) = assets
-            .documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let action = &running_action.0;
         if action.attaches_target_held_prop() {
             continue;
         }
@@ -257,6 +259,7 @@ fn start_or_finish_object_attachment(
                         .entity(actor)
                         .insert(PendingObjectAttachment::waiting_for_attachment(
                             task,
+                            instruction,
                             Some(prefab_handle.clone()),
                         ));
                 }
@@ -291,6 +294,7 @@ fn start_or_finish_object_attachment(
                         request_id: Some(request.id),
                         ..PendingObjectAttachment::waiting_for_attachment(
                             task,
+                            instruction,
                             prefab_handle.clone(),
                         )
                     },
@@ -338,6 +342,7 @@ fn start_or_finish_object_attachment(
                 &objects,
                 &transforms,
                 &memberships,
+                assets.world_releases.as_deref(),
                 &mut commands,
             )
         {
@@ -389,7 +394,7 @@ fn start_or_finish_object_attachment(
         });
         let admission = admission::AttachmentAdmission::Attach(admission::AttachAfterAdmission {
             actor,
-            instruction: BehaviorAdmissionInstruction::new(actor, task),
+            instruction: BehaviorAdmissionInstruction::new(actor, task, instruction),
             attachment,
             visibility,
             modifier,
@@ -426,7 +431,14 @@ fn detach_held_objects_for_current_actions(
     clock: Res<ZooClock>,
     memberships: InteractionContainerMemberships,
     mut actors: Query<
-        (Entity, &mut BehaviorTaskExecutionState),
+        (
+            Entity,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorDetachObject,
+            ),
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
     objects: Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
@@ -435,17 +447,14 @@ fn detach_held_objects_for_current_actions(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (actor, mut task) in &mut actors {
+    for (actor, (task, instruction, running_action)) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::DetachObject(action)) = assets
-            .documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let action = &running_action.0;
         let item = if action.entity == AssetId::from_key("object") {
             task.object
         } else {
@@ -473,6 +482,7 @@ fn detach_held_objects_for_current_actions(
             &definitions,
             &objects,
             &transforms,
+            assets.world_releases.as_deref(),
             &mut commands,
         ) {
             warn!(
@@ -482,7 +492,7 @@ fn detach_held_objects_for_current_actions(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }
 

@@ -8,9 +8,12 @@ use openzt2_game_data::terrain::TerrainSlopeTile;
 use openzt2_game_data::terrain::TerrainUnits;
 use openzt2_game_data::terrain::TerrainWaterDepth;
 
+use bevy::camera::NormalizedRenderTarget;
+use bevy::picking::pointer::{
+    Location, PointerAction, PointerButton, PointerId, PointerInput, PointerMap,
+};
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::construction::construction_interaction_types::CommitConstruction;
@@ -21,7 +24,6 @@ use openzt2_zoo_state::construction::construction_transaction_types::EditApplica
 use openzt2_zoo_state::construction::construction_transaction_types::PrepareConstruction;
 
 use crate::terrain::terrain_brush_interaction::update_terrain_brush_preview_and_commit_completed_pointer_strokes;
-use crate::terrain::terrain_brush_preview_accumulation::accumulate_terrain_stroke_dabs_into_brush_preview;
 use crate::terrain::terrain_edit_application::apply_committed_terrain_sample_deltas_and_publish_changed_regions;
 use crate::terrain::terrain_edit_preparation::prepare_terrain_sample_deltas_for_construction_transactions;
 use crate::terrain::terrain_live_brush_application::apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit;
@@ -95,6 +97,20 @@ fn stepped_terrain_asset(destination_height_cm: i16) -> TerrainAsset {
     })
 }
 
+fn write_primary_pointer_input(app: &mut App, action: PointerAction) {
+    app.world_mut().write_message(PointerInput::new(
+        PointerId::Mouse,
+        Location {
+            target: NormalizedRenderTarget::None {
+                width: 1,
+                height: 1,
+            },
+            position: Vec2::ZERO,
+        },
+        action,
+    ));
+}
+
 #[test]
 fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
     for (offset_cm, destination_height_cm) in [
@@ -108,7 +124,8 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
         let mut app = App::new();
         app.init_resource::<Assets<TerrainAsset>>()
             .init_resource::<Time>()
-            .init_resource::<PrimaryPointerInputState>()
+            .init_resource::<PointerMap>()
+        .add_message::<PointerInput>()
             .init_resource::<UiPointerCapture>()
             .insert_resource(ConstructionPlacementPolicy {
                 terrain_deformation_brush_radius_half_metre_steps: 2,
@@ -122,6 +139,9 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .add_message::<CommitConstruction>()
             .add_message::<PrepareConstruction>()
             .add_message::<TerrainChanged>()
+            .add_message::<crate::terrain::terrain_sample_change_calculations::TerrainRenderInvalidated>()
+            .add_observer(apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit)
+            .add_observer(apply_committed_terrain_sample_deltas_and_publish_changed_regions)
             .add_message::<TerrainNavigationChanged>()
             .add_message::<TerrainWaterChanged>()
             .add_message::<TerrainEditPrepared>()
@@ -131,14 +151,15 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .add_systems(
                 Update,
                 (
+                    PointerInput::receive,
                     update_terrain_brush_preview_and_commit_completed_pointer_strokes,
-                    accumulate_terrain_stroke_dabs_into_brush_preview,
-                    apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit,
+                    crate::terrain::terrain_live_brush_application::dispatch_held_terrain_strokes,
                     prepare_terrain_sample_deltas_for_construction_transactions,
-                    apply_committed_terrain_sample_deltas_and_publish_changed_regions,
+                    crate::terrain::terrain_edit_application::dispatch_committed_terrain_edits,
                 )
                     .chain(),
             );
+        app.world_mut().spawn(PointerId::Mouse);
         let asset = app
             .world_mut()
             .resource_mut::<Assets<TerrainAsset>>()
@@ -188,11 +209,7 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .query_filtered::<Entity, With<TerrainBrushPreview>>()
             .single(app.world())
             .unwrap();
-        *app.world_mut().resource_mut::<PrimaryPointerInputState>() = PrimaryPointerInputState {
-            pressed: true,
-            just_pressed: true,
-            ..default()
-        };
+        write_primary_pointer_input(&mut app, PointerAction::Press(PointerButton::Primary));
         app.world_mut()
             .get_mut::<ConstructionCursor>(cursor)
             .unwrap()
@@ -205,14 +222,17 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
             .unwrap()
             .over_terrain = true;
         app.world_mut().resource_mut::<UiPointerCapture>().over_ui = true;
+        write_primary_pointer_input(&mut app, PointerAction::Release(PointerButton::Primary));
+        app.update();
+        write_primary_pointer_input(&mut app, PointerAction::Press(PointerButton::Primary));
         app.update();
         assert!(app.world().get::<ActiveTerrainBrush>(preview).is_none());
         assert!(app.world().get::<EditedTerrainSamples>(chunk).is_none());
         app.world_mut().resource_mut::<UiPointerCapture>().over_ui = false;
+        write_primary_pointer_input(&mut app, PointerAction::Release(PointerButton::Primary));
         app.update();
-        app.world_mut()
-            .resource_mut::<PrimaryPointerInputState>()
-            .just_pressed = false;
+        write_primary_pointer_input(&mut app, PointerAction::Press(PointerButton::Primary));
+        app.update();
         // A second stationary dab must not add the cliff/ditch offset again.
         app.update();
         app.world_mut()
@@ -227,10 +247,7 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
         assert_eq!(edited.heights_cm[4 * 17 + 4], expected);
         assert_eq!(edited.heights_cm[0], 1000);
         let committed = edited.clone();
-        *app.world_mut().resource_mut::<PrimaryPointerInputState>() = PrimaryPointerInputState {
-            just_released: true,
-            ..default()
-        };
+        write_primary_pointer_input(&mut app, PointerAction::Release(PointerButton::Primary));
         app.update();
         assert!(app.world().get::<ActiveTerrainBrush>(preview).is_none());
         assert!(app
@@ -277,13 +294,9 @@ fn flatten_offsets_hold_the_press_height_through_drag_commit_undo_and_redo() {
         }
         // A fresh press samples the edited surface rather than reusing the last target.
         app.world_mut().entity_mut(preview).despawn();
-        *app.world_mut().resource_mut::<PrimaryPointerInputState>() = default();
         app.update();
-        *app.world_mut().resource_mut::<PrimaryPointerInputState>() = PrimaryPointerInputState {
-            just_pressed: true,
-            just_released: true,
-            ..default()
-        };
+        write_primary_pointer_input(&mut app, PointerAction::Press(PointerButton::Primary));
+        write_primary_pointer_input(&mut app, PointerAction::Release(PointerButton::Primary));
         app.update();
         assert_eq!(app.world().resource::<Messages<TerrainStroke>>().len(), 1);
         assert_eq!(

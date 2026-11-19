@@ -3,10 +3,7 @@ use super::{
     natural_water_targets::NaturalWaterTargets,
 };
 use bevy::prelude::*;
-use openzt2_game_assets::{
-    application_lifecycle::GamePhase, behavior::behavior_asset_types::BehaviorDocumentAsset,
-};
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::{
     animation_graph::animation_graph_playback_message_types::{
         AnimationClipPlaybackRequest, AnimationClipPlaybackRequestRejected,
@@ -23,12 +20,13 @@ use openzt2_world_state::{
     world_spawn::world_entity_crating::WorldEntityIsCrated,
 };
 use openzt2_zoo_state::animal_behavior::behavior_natural_water_target_types::SelectedNaturalWaterTarget;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    BehaviorInstructionId, RunBehaviorDockWater, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::{
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
-        advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
-        SamplingBehaviorDockPose,
+        BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SamplingBehaviorDockPose,
     },
     locomotion::locomotion_types::{
         Arrived, Destination, DockAt, Docking, NavigationFailed, NavigationRequestSequence,
@@ -58,9 +56,7 @@ enum WaterDockStage {
 
 #[derive(Component)]
 struct WaterDock {
-    execution: u64,
-    origin: BehaviorTaskReturnFrame,
-    depth: usize,
+    instruction: BehaviorInstructionId,
     shore: SelectedNaturalWaterTarget,
     node: String,
     clip_request: Option<usize>,
@@ -68,11 +64,10 @@ struct WaterDock {
 }
 
 impl WaterDock {
-    fn owns(&self, task: &BehaviorTaskExecutionState) -> bool {
-        self.execution == task.execution_id
+    fn owns(&self, task: &BehaviorTaskExecutionState, step: &RunningBehaviorInstruction) -> bool {
+        self.instruction == step.id()
             && task.target() == Some(self.shore.region)
-            && task.stack.len() == self.depth
-            && task.is_at_or_nested_under(&self.origin, self.depth)
+            && step.is_current(task)
     }
 }
 
@@ -164,7 +159,6 @@ fn receive_water_docking_events(
 fn execute_water_docking(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     shores: NaturalWaterTargets,
     transforms: Query<&GlobalTransform>,
     controllers: Query<&AnimationPlaybackController>,
@@ -177,7 +171,8 @@ fn execute_water_docking(
     mut actors: Query<
         (
             Entity,
-            Option<&mut BehaviorTaskExecutionState>,
+            Option<&BehaviorTaskExecutionState>,
+            Option<(&RunningBehaviorInstruction, &RunBehaviorDockWater)>,
             Option<&SelectedNaturalWaterTarget>,
             Option<&mut WaterDock>,
             Has<PendingBehaviorTaskFailure>,
@@ -186,17 +181,19 @@ fn execute_water_docking(
             Has<Frozen>,
             Has<Tranquilized>,
         ),
-        Or<(With<BehaviorTaskExecutionState>, With<WaterDock>)>,
+        Or<(With<RunBehaviorDockWater>, With<WaterDock>)>,
     >,
 ) {
-    for (actor, task, selected, pending, failing, crated, dead, frozen, tranquilized) in &mut actors
+    for (actor, task, running, selected, pending, failing, crated, dead, frozen, tranquilized) in
+        &mut actors
     {
-        let mut task = task;
         let mut pending = pending;
         let invalid = failing || crated || dead || frozen || tranquilized;
         if let Some(dock) = pending.as_deref() {
             if invalid
-                || task.as_ref().is_none_or(|task| !dock.owns(task))
+                || task
+                    .zip(running)
+                    .is_none_or(|(task, (step, _))| !dock.owns(task, step))
                 || !shores.valid(&dock.shore)
             {
                 if let Some(request) = dock.clip_request {
@@ -209,7 +206,11 @@ fn execute_water_docking(
                 {
                     commands.entity(actor).remove::<(Destination, Docking)>();
                 }
-                if !invalid && task.as_ref().is_some_and(|task| dock.owns(task)) {
+                if !invalid
+                    && task
+                        .zip(running)
+                        .is_some_and(|(task, (step, _))| dock.owns(task, step))
+                {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                 }
                 commands.entity(actor).remove::<(
@@ -220,18 +221,15 @@ fn execute_water_docking(
                 continue;
             }
         }
-        let Some(task) = task
-            .as_deref_mut()
-            .filter(|task| !invalid && task.next_action_tick <= clock.tick)
+        let Some(task) = task.filter(|task| !invalid && task.next_action_tick <= clock.tick) else {
+            continue;
+        };
+        let Some((instruction, running)) =
+            running.filter(|(instruction, _)| instruction.is_current(task))
         else {
             continue;
         };
-        let Some(BehaviorAction::DockWater(action)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task))
-        else {
-            continue;
-        };
+        let action = &running.0;
         let Some(shore) = selected
             .copied()
             .filter(|shore| task.target() == Some(shore.region) && shores.valid(shore))
@@ -299,7 +297,7 @@ fn execute_water_docking(
                             request_id: request,
                         });
                     }
-                    advance_behavior_task_to_next_action(task, clock.tick);
+                    instruction.complete(actor, clock.tick, &mut commands);
                     commands
                         .entity(actor)
                         .remove::<(WaterDock, SamplingBehaviorDockPose)>();
@@ -355,9 +353,7 @@ fn execute_water_docking(
             commands.entity(actor).insert((
                 SamplingBehaviorDockPose,
                 WaterDock {
-                    execution: task.execution_id,
-                    origin: task.create_return_frame_after_action(task.action),
-                    depth: task.stack.len(),
+                    instruction: instruction.id(),
                     shore,
                     node: action.subject_node_name.clone(),
                     clip_request: Some(request),

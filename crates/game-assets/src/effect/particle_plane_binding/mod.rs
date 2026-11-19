@@ -15,6 +15,9 @@ pub(super) struct UsesParticleEffectPlane;
 
 pub(super) struct ParticleEffectPlaneBindingPlugin;
 
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ParticlePlaneSources;
+
 impl Plugin for ParticleEffectPlaneBindingPlugin {
     fn build(&self, app: &mut App) {
         app.add_plugins(HierarchyPropagatePlugin::<InheritedParticleEffectPlane>::new(PostUpdate))
@@ -22,6 +25,7 @@ impl Plugin for ParticleEffectPlaneBindingPlugin {
                 PostUpdate,
                 (
                     project_particle_effect_plane_sources
+                        .in_set(ParticlePlaneSources)
                         .before(PropagateSet::<InheritedParticleEffectPlane>::default()),
                     upload_inherited_particle_effect_planes
                         .after(PropagateSet::<InheritedParticleEffectPlane>::default())

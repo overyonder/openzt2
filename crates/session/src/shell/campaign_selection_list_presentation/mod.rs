@@ -13,7 +13,6 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_world_state::game_session_types::WorldSessionMode;
 
 use openzt2_interface_state::shell::shell_selection_types::ShellSelection;
@@ -159,7 +158,7 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     visibility.set_if_neq(Visibility::Hidden);
                     commands
                         .entity(entity)
-                        .remove::<(CampaignChoice, UiSelected, UiPreviousSelection)>();
+                        .remove::<(CampaignChoice, UiSelected)>();
                     continue;
                 };
                 visibility.set_if_neq(Visibility::Inherited);
@@ -167,17 +166,11 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     commands.entity(entity).insert((
                         CampaignChoice(campaign.id),
                         UiSelected(Some(campaign.id) == active_campaign),
-                        UiPreviousSelection::from_current_selection(
-                            Some(campaign.id) == active_campaign,
-                        ),
                     ));
                 } else if selected_campaign_id != active_campaign {
-                    commands.entity(entity).insert((
-                        UiSelected(Some(campaign.id) == active_campaign),
-                        UiPreviousSelection::from_current_selection(
-                            Some(campaign.id) == active_campaign,
-                        ),
-                    ));
+                    commands
+                        .entity(entity)
+                        .insert(UiSelected(Some(campaign.id) == active_campaign));
                 }
                 replace_text_in_list_row_and_descendants(
                     entity,
@@ -212,9 +205,6 @@ pub(super) fn project_campaign_and_scenario_records_into_authored_list_rows(
                     commands.entity(entity).insert((
                         WorldChoiceView(source),
                         UiSelected(selection.scenario == Some(scenario.id)),
-                        UiPreviousSelection::from_current_selection(
-                            selection.scenario == Some(scenario.id),
-                        ),
                     ));
                 }
                 replace_text_in_list_row_and_descendants(

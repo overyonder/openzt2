@@ -1,4 +1,10 @@
-use bevy::prelude::*;
+use super::camera_definition_hydration::camera_runtime_components_from_authored_definition;
+use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
+use openzt2_game_data::AssetId;
+use openzt2_world_state::world_spawn::{
+    world_membership_types::WorldMember, world_terrain_hydration::WorldTerrainHorizontalBounds,
+};
 
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -13,7 +19,7 @@ use super::super::camera_runtime_state_types::CameraMode;
 use super::super::camera_runtime_state_types::CameraMouseLook;
 use super::super::camera_runtime_state_types::OverheadRig;
 use super::super::camera_runtime_state_types::ZooCamera;
-use super::super::math::advance_transition;
+use super::super::math::{advance_transition, clamp_rig, overhead_pose};
 use super::camera_pose_comparison::camera_pose_materially_changed;
 use crate::camera::camera_execution_types::CameraBounds;
 use crate::camera::camera_execution_types::CameraEasing;
@@ -21,24 +27,30 @@ use crate::camera::camera_execution_types::CameraIntent;
 use crate::camera::camera_execution_types::CameraReturnState;
 use crate::camera::camera_execution_types::CameraTransition;
 use crate::camera::camera_execution_types::CameraTuning;
-use crate::camera::camera_execution_types::RemoveReturnStateOnComplete;
+use crate::camera::camera_execution_types::{
+    MapOverheadCameraDefinition, RemoveReturnStateOnComplete,
+};
 
-pub(crate) fn clear_camera_input_on_return(
-    mut commands: Commands,
-    mut requests: MessageReader<RestoreCameraMode>,
-    mut cameras: Query<(Entity, &mut CameraIntent), With<ZooCamera>>,
-) {
-    let mut returning = false;
-    for request in requests.read() {
-        returning |= requested_duration_is_valid(request.transition_seconds);
-    }
-    if !returning {
-        return;
-    }
-    // Escape and mode-owner exits must release the same held controls as Overhead.
-    for (camera, mut intent) in &mut cameras {
-        *intent = CameraIntent::default();
-        commands.entity(camera).remove::<CameraMouseLook>();
+#[derive(SystemParam)]
+pub(crate) struct CameraDefinitionSources<'w, 's> {
+    authored: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
+    active: Option<Res<'w, WorldDefinitions>>,
+    graphics: Option<Res<'w, GraphicsSettings>>,
+    worlds: Query<'w, 's, &'static WorldTerrainHorizontalBounds>,
+}
+
+impl CameraDefinitionSources<'_, '_> {
+    fn prepare(
+        &self,
+        definition: AssetId,
+        membership: Option<&WorldMember>,
+    ) -> Option<(Projection, CameraTuning, OverheadRig, CameraBounds)> {
+        let definitions = self.active.as_deref()?.get(self.authored.as_deref()?)?;
+        camera_runtime_components_from_authored_definition(
+            definitions.find_camera(definition)?,
+            self.worlds.get(membership?.root).ok()?,
+            self.graphics.as_deref()?,
+        )
     }
 }
 
@@ -48,6 +60,7 @@ pub(crate) fn begin_camera_transition(
     mut focus_requests: MessageReader<FocusCamera>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    settings: CameraDefinitionSources,
     mut camera: Single<
         (
             Entity,
@@ -55,9 +68,11 @@ pub(crate) fn begin_camera_transition(
             &mut CameraMode,
             &mut CameraDefinition,
             &mut OverheadRig,
-            &CameraBounds,
-            &CameraTuning,
+            &mut CameraBounds,
+            &mut CameraTuning,
             Option<&CameraReturnState>,
+            Option<&mut Projection>,
+            Option<&WorldMember>,
         ),
         With<ZooCamera>,
     >,
@@ -66,6 +81,7 @@ pub(crate) fn begin_camera_transition(
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
+    let initial_definition = camera.3 .0;
     let mut has_return_state = camera.7.is_some();
     let mut entered_overhead = false;
     for request in modes.read() {
@@ -138,6 +154,16 @@ pub(crate) fn begin_camera_transition(
                 .remove::<RemoveReturnStateOnComplete>();
         }
     }
+    if initial_definition != camera.3 .0 {
+        if let Some((projection, tuning, _, bounds)) = settings.prepare(camera.3 .0, camera.9) {
+            clamp_rig(&mut camera.4, &tuning, &bounds);
+            *camera.5 = bounds;
+            *camera.6 = tuning;
+            if let Some(projection_component) = camera.8.as_deref_mut() {
+                *projection_component = projection;
+            }
+        }
+    }
 }
 
 /// Applies final floating-camera facts straight to Bevy's camera entity.
@@ -179,9 +205,10 @@ pub(crate) fn apply_free_camera_pose(
     }
 }
 
-pub(crate) fn restore_camera_return_state(
+pub(crate) fn apply_camera_return(
     mut commands: Commands,
-    mut requests: MessageReader<RestoreCameraMode>,
+    mut messages: MessageReader<RestoreCameraMode>,
+    settings: CameraDefinitionSources,
     mut camera: Single<
         (
             Entity,
@@ -189,40 +216,92 @@ pub(crate) fn restore_camera_return_state(
             &mut CameraMode,
             &mut CameraDefinition,
             &mut OverheadRig,
-            &CameraReturnState,
+            Option<&mut CameraIntent>,
+            Has<CameraMouseLook>,
+            Option<&CameraReturnState>,
+            Option<&MapOverheadCameraDefinition>,
+            Option<&WorldMember>,
+            Option<&mut Projection>,
+            Option<&mut CameraTuning>,
+            Option<&mut CameraBounds>,
         ),
         With<ZooCamera>,
     >,
 ) {
-    for request in requests.read() {
-        if !requested_duration_is_valid(request.transition_seconds) {
-            continue;
+    let mut requests = messages
+        .read()
+        .filter(|request| requested_duration_is_valid(request.transition_seconds));
+    let Some(first) = requests.next() else { return };
+    let entity = camera.0;
+    if let Some(intent) = camera.5.as_deref_mut() {
+        *intent = CameraIntent::default();
+    }
+    if camera.6 {
+        commands.entity(entity).remove::<CameraMouseLook>();
+    }
+
+    let (duration, mode, definition, transform, mut rig, prepared, restore_snapshot) =
+        if let Some(snapshot) = camera.7 {
+            let last = requests.last().unwrap_or(first);
+            (
+                last.transition_seconds,
+                snapshot.mode,
+                snapshot.definition,
+                snapshot.transform,
+                snapshot.overhead.clone(),
+                settings.prepare(snapshot.definition, camera.9),
+                true,
+            )
+        } else {
+            if *camera.2 == CameraMode::Overhead {
+                return;
+            }
+            let Some(authored) = camera.8 else { return };
+            let Some((projection, tuning, mut rig, bounds)) =
+                settings.prepare(authored.0, camera.9)
+            else {
+                return;
+            };
+            rig.focus = camera.4.focus;
+            rig.height_m = camera.4.height_m;
+            rig.yaw = camera.4.yaw;
+            clamp_rig(&mut rig, &tuning, &bounds);
+            let transform = overhead_pose(&rig);
+            (
+                first.transition_seconds,
+                CameraMode::Overhead,
+                authored.0,
+                transform,
+                rig.clone(),
+                Some((projection, tuning, rig, bounds)),
+                false,
+            )
+        };
+    if let Some((projection, tuning, _, bounds)) = prepared {
+        if restore_snapshot {
+            clamp_rig(&mut rig, &tuning, &bounds);
         }
-        *camera.2 = camera.5.mode;
-        camera.3 .0 = camera.5.definition;
-        *camera.4 = camera.5.overhead.clone();
-        if valid_duration(request.transition_seconds).is_some() {
-            let entity = camera.0;
-            let target = camera.5.transform;
-            apply_requested_transition(
-                &mut commands,
-                entity,
-                &mut camera.1,
-                target,
-                request.transition_seconds,
-            );
-            commands
-                .entity(camera.0)
-                .insert(RemoveReturnStateOnComplete);
-        } else if request.transition_seconds.is_none() {
-            let target = camera.5.transform;
-            *camera.1 = target;
-            commands
-                .entity(camera.0)
-                .remove::<CameraTransition>()
-                .remove::<RemoveReturnStateOnComplete>()
-                .remove::<CameraReturnState>();
+        if let Some(current) = camera.10.as_deref_mut() {
+            *current = projection;
         }
+        if let Some(current) = camera.11.as_deref_mut() {
+            *current = tuning;
+        }
+        if let Some(current) = camera.12.as_deref_mut() {
+            *current = bounds;
+        }
+    }
+    camera.2.set_if_neq(mode);
+    if camera.3 .0 != definition {
+        camera.3 .0 = definition;
+    }
+    *camera.4 = rig;
+    apply_requested_transition(&mut commands, entity, &mut camera.1, transform, duration);
+    let mut commands = commands.entity(entity);
+    if restore_snapshot && duration.is_some() {
+        commands.insert(RemoveReturnStateOnComplete);
+    } else {
+        commands.remove::<(RemoveReturnStateOnComplete, CameraReturnState)>();
     }
 }
 
@@ -252,41 +331,19 @@ pub(crate) fn advance_camera_transition(
     }
 }
 
-pub(crate) fn validate_camera_mode_targets(
-    mut commands: Commands,
-    mut camera: Single<
-        (
-            Entity,
-            &mut Transform,
-            &mut CameraMode,
-            &mut CameraDefinition,
-            &mut OverheadRig,
-            Option<&CameraReturnState>,
-        ),
-        With<ZooCamera>,
-    >,
+pub(crate) fn request_return_when_camera_target_disappears(
+    camera: Single<&CameraMode, With<ZooCamera>>,
     subjects: Query<(), Without<ZooCamera>>,
+    mut returns: MessageWriter<RestoreCameraMode>,
 ) {
-    let Some(subject) = camera.2.subject() else {
-        return;
-    };
-    if subjects.get(subject).is_ok() {
-        return;
+    if camera
+        .subject()
+        .is_some_and(|subject| !subjects.contains(subject))
+    {
+        returns.write(RestoreCameraMode {
+            transition_seconds: None,
+        });
     }
-
-    if let Some(return_state) = camera.5 {
-        *camera.1 = return_state.transform;
-        *camera.2 = return_state.mode;
-        camera.3 .0 = return_state.definition;
-        *camera.4 = return_state.overhead.clone();
-        commands.entity(camera.0).remove::<CameraReturnState>();
-    } else {
-        *camera.2 = CameraMode::Overhead;
-    }
-    commands
-        .entity(camera.0)
-        .remove::<CameraTransition>()
-        .remove::<RemoveReturnStateOnComplete>();
 }
 
 pub(super) fn mode_target(

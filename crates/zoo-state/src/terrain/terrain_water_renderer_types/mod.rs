@@ -13,17 +13,27 @@ pub struct AuthoredTerrainWaterRendererTargets {
     pub reflection: Handle<Image>,
     pub refraction: Handle<Image>,
     pub fallback_reflection: Handle<Image>,
-    pub bump_camera: Entity,
-    pub reflection_camera: Entity,
-    pub refraction_camera: Entity,
-    pub fallback_reflection_camera: Entity,
     pub water_bump_combination_materials: Box<[Handle<EffectPassMaterial>]>,
     pub elapsed_seconds: f32,
-    pub active_water_plane_height: Option<f32>,
-    pub reflection_world_extent: Vec2,
-    pub refraction_world_extent: Vec2,
-    pub fallback_reflection_world_extent: Vec2,
 }
+
+#[derive(Component, Clone, Copy, PartialEq, Eq)]
+pub enum TerrainWaterCaptureRole {
+    Bump,
+    Reflection,
+    Refraction,
+    FallbackReflection,
+}
+
+#[derive(Component, PartialEq)]
+pub struct TerrainWaterCaptureExtent(pub Vec2);
+
+#[derive(Component, Default, PartialEq, Eq)]
+pub struct TerrainWaterSurfaceCoverage(pub bool);
+
+/// Converts the authored water bounds from world axes to the draw's local axes.
+#[derive(Component, PartialEq)]
+pub struct TerrainWaterSurfaceLocalFromWorld(pub Mat4);
 
 #[derive(Component, Default)]
 pub struct TerrainWaterScumScroll {
@@ -31,7 +41,12 @@ pub struct TerrainWaterScumScroll {
 }
 
 #[derive(Component)]
+#[relationship(relationship_target = TerrainWaterRegionDraws)]
 pub struct TerrainWaterSurfaceRegion(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = TerrainWaterSurfaceRegion, linked_spawn)]
+pub struct TerrainWaterRegionDraws(Vec<Entity>);
 
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TerrainWaterWaveStateKey(pub Entity);
@@ -56,7 +71,8 @@ impl TerrainWaterSurfacePassKind {
     }
 }
 
-#[derive(Component)]
+#[derive(Component, PartialEq)]
+#[require(TerrainWaterSurfaceCoverage)]
 pub struct AuthoredTerrainWaterSurfaceEffectPass {
     pub surface_plane_height: f32,
     pub horizontal_minimum: Vec2,

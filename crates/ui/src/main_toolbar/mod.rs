@@ -9,10 +9,11 @@ use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_quer
 use openzt2_interface_state::camera::camera_runtime_state_types::CameraMode;
 use openzt2_interface_state::camera::camera_runtime_state_types::ZooCamera;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode;
-use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveMode;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{
+    ImmersiveCamera, ImmersiveMode,
+};
 use openzt2_interface_state::persistence::save_slot_types::WorldSnapshotLoadedFromSlot;
 
-use super::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use super::authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot};
 use super::authored_ui_selection_binding::UiSelectedBinding;
 use super::authored_ui_selection_state::UiSelected;
@@ -22,22 +23,18 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPre
 
 pub(super) fn reflect_accepted_camera_mode_in_main_toolbar(
     cameras: Query<(Entity, &CameraMode), With<ZooCamera>>,
-    immersive_modes: Query<&ActiveImmersiveMode>,
-    mut buttons: Query<(
-        &UiSelectedBinding,
-        &mut UiSelected,
-        &mut UiPreviousSelection,
-    )>,
+    immersive_modes: Query<(&ActiveImmersiveMode, &ImmersiveCamera)>,
+    mut buttons: Query<(&UiSelectedBinding, &mut UiSelected)>,
 ) {
     let camera = cameras.single().ok();
     let active = camera.and_then(|(camera, _)| {
         immersive_modes
             .iter()
-            .find(|active| active.camera == camera)
+            .find_map(|(active, link)| (link.0 == camera).then_some(active))
     });
     let photo = active.is_some_and(|active| active.mode == ImmersiveMode::Photo)
         && camera.is_some_and(|(_, mode)| *mode == CameraMode::Free);
-    for (binding, mut selected, mut previous) in &mut buttons {
+    for (binding, mut selected) in &mut buttons {
         let current = match &binding.0 {
             UiBooleanPropertyBindingSource::OverheadViewSelected => {
                 camera.is_some_and(|(_, mode)| {
@@ -57,7 +54,6 @@ pub(super) fn reflect_accepted_camera_mode_in_main_toolbar(
         if selected.0 != current {
             selected.0 = current;
             // Reflection must not re-run a mode's authored On/Off commands.
-            previous.synchronize_with_non_authored_selection_change(current);
         }
     }
 }

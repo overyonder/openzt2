@@ -174,6 +174,7 @@ impl AssetLoader for NativeModelAssetLoader {
                 lowered_particle_effect.particle_effect_document,
                 &label,
                 Some(&loaded_gltf),
+                &Default::default(),
                 native_model_load_context,
             );
             native_model_load_context.add_labeled_asset(label, asset);

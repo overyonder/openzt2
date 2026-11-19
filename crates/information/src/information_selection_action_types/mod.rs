@@ -9,14 +9,14 @@ use openzt2_zoo_state::animal_health::types::Rampaging;
 
 use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_interface_state::information::entity_selection_types::SelectionRequest;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 
 /// Canonical selection state, world identity queries, and selection and camera
 /// outputs used by authored information-selection actions.
 #[derive(SystemParam)]
 pub(super) struct InformationSelectionActionTargets<'w, 's> {
-    pub(super) selected_entity: Res<'w, SelectedEntity>,
+    pub(super) selected_entity: WorldUiSelection<'w, 's>,
     pub(super) live_entity_names: Query<'w, 's, &'static mut Name>,
     pub(super) zoo_roots: Query<
         'w,

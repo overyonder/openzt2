@@ -194,7 +194,7 @@ pub(super) fn register_world_definition_presentation_dependencies(
     sort_paths(&mut animation_sets);
     Ok(WorldDefinitionAsset {
         document,
-        authored_binder_source_index_revision: None,
+        authored_binder_sources: None,
         textures: textures.into_boxed_slice(),
         models: models.into_boxed_slice(),
         effects: effects.into_boxed_slice(),

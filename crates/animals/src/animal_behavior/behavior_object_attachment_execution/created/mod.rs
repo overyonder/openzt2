@@ -25,12 +25,29 @@ pub(super) fn reserve_detach_created_objects(
     definitions: &WorldDefinitionsView<'_>,
     commands: &mut Commands,
 ) {
-    let Some(holder_policy) = super::holder::AttachmentHolder::find(definitions, holder_definition)
-    else {
-        return;
-    };
+    let holder_policy = super::holder::AttachmentHolder::find(definitions, holder_definition);
     for &(definition, destination) in created {
-        let WorldObjectDetachDestination::Container(destination) = destination else {
+        let destination = match destination {
+            WorldObjectDetachDestination::Container(destination) => destination,
+            WorldObjectDetachDestination::Drop | WorldObjectDetachDestination::Fall => {
+                let motion = if destination == WorldObjectDetachDestination::Drop {
+                    BehaviorWorldReleaseMotion::Drop
+                } else {
+                    BehaviorWorldReleaseMotion::Fall
+                };
+                commands.queue(move |state: &mut World| {
+                    let Some(mut ids) = state.get_resource_mut::<openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator>() else { return; };
+                    let Ok(id) = ids.allocate(world.root) else { return; };
+                    state.spawn((
+                        id, world, DefinitionId(definition), joint_transform.compute_transform(),
+                        joint_transform, motion, PendingDetachCreatedObject::default(),
+                    ));
+                });
+                continue;
+            }
+            WorldObjectDetachDestination::Kill => continue,
+        };
+        let Some(holder_policy) = holder_policy.as_ref() else {
             continue;
         };
         let Some((slot, policy)) = holder_policy
@@ -77,6 +94,7 @@ pub(super) fn hydrate_detach_created_objects(
             &PersistentId,
             &GlobalTransform,
             Option<&ContainedObject>,
+            Option<&BehaviorWorldReleaseMotion>,
         ),
         With<PendingDetachCreatedObject>,
     >,
@@ -85,7 +103,9 @@ pub(super) fn hydrate_detach_created_objects(
     let Some(definitions) = assets.definitions.get(&assets.definition_assets) else {
         return;
     };
-    for (pending_entity, mut loading, definition, world, id, transform, contained) in &mut pending {
+    for (pending_entity, mut loading, definition, world, id, transform, contained, motion) in
+        &mut pending
+    {
         let membership = memberships.container_for_member(pending_entity);
         if contained.is_some() && membership.is_none() {
             continue;
@@ -195,6 +215,17 @@ pub(super) fn hydrate_detach_created_objects(
                         },
                     )),
             });
+        }
+        if let Some(motion) = motion {
+            commands.trigger(BehaviorWorldObjectReleased {
+                object: pending_entity,
+                world: world.root,
+                pose: instance_transform.mul_transform(scale),
+                motion: *motion,
+            });
+            commands
+                .entity(pending_entity)
+                .remove::<BehaviorWorldReleaseMotion>();
         }
         commands
             .entity(pending_entity)

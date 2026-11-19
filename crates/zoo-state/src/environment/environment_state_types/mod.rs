@@ -3,6 +3,10 @@ use openzt2_game_data::AssetId;
 
 mod wind_shader_state_operations;
 
+/// An authoritative simulation step accepted by the zoo clock.
+#[derive(Message, Clone, Copy)]
+pub struct ZooTickAdvanced(pub u64);
+
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorldEnvironment {
     pub definition: AssetId,

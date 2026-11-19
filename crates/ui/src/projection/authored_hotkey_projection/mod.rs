@@ -13,6 +13,7 @@ pub(super) fn project_authored_hotkey_action_proxies(
     commands: &mut Commands,
     root: Entity,
     document: &UiDocumentAsset,
+    entities: &[Entity],
 ) {
     let data = document.canonical_ui_document();
     for (node_index, node) in data.nodes.iter().enumerate() {
@@ -36,14 +37,13 @@ pub(super) fn project_authored_hotkey_action_proxies(
                 .spawn((
                     Name::new("ui hotkey"),
                     UiAuthoredHotkeyKeyboardActivationBinding::from_projected_authored_hotkey(
-                        node_index as u32,
                         key,
                         hotkey.control_state,
                         matches!(&hotkey.trigger, UiDocumentHotkeyTrigger::KeyReleased),
                         hotkey.allow_repeat,
                     ),
                     UiDocumentOwner(root),
-                    ChildOf(root),
+                    ChildOf(entities[node_index]),
                 ))
                 .id();
             let source = UiActionSource::Hotkey {

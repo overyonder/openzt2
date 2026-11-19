@@ -19,6 +19,8 @@ use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequ
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
 
+use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
+
 pub(super) fn apply_prepared_placed_object_relocation_edit(
     commands: &mut Commands,
     application: EditApplication,
@@ -27,6 +29,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     placement: &mut PlacedObjectFootprintOccupancyIndex,
     scratch: &mut ObjectPlacementCellCollectionScratch,
     footprints: &ScenePlacementFootprints,
+    indexed_cells: &mut Query<&mut IndexedObjectPlacementCells>,
     placed: &mut Query<(
         &PersistentId,
         &PlacedObjectDefinitionReference,
@@ -94,6 +97,9 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
     {
         return false;
     }
+    let Ok(mut indexed) = indexed_cells.get_mut(target) else {
+        return false;
+    };
     for cell in edit.cells.iter().chain(edit.previous_cells.iter()) {
         placement.remove_entity_from_cell(*cell, target);
     }
@@ -102,6 +108,7 @@ pub(super) fn apply_prepared_placed_object_relocation_edit(
         origin,
         eighth_turns: turns,
     };
+    indexed.0 = cells.into();
     for cell in cells.iter().copied() {
         placement.insert_entity_into_cell(cell, target);
     }

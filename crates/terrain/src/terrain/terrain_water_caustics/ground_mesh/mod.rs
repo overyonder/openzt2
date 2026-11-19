@@ -1,15 +1,13 @@
 use bevy::mesh::Indices;
 use bevy::prelude::*;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
-use openzt2_zoo_state::terrain::terrain_chunk_types::{EditedTerrainSamples, TerrainChunk};
+use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_sample_grid_queries::authored_terrain_sample_index;
-
-use crate::terrain::terrain_chunk_mesh_construction::construct_terrain_chunk_mesh;
 
 pub(super) fn construct_caustic_ground_mesh(
     chunk: &TerrainChunk,
     asset: &TerrainAsset,
-    edited: Option<&EditedTerrainSamples>,
+    ground: &Mesh,
     terrain_tint: [f32; 4],
     mut owns_sample: impl FnMut(usize) -> bool,
     mut renders_tile: impl FnMut(UVec2) -> bool,
@@ -34,7 +32,7 @@ pub(super) fn construct_caustic_ground_mesh(
     }
     // The projection uses the ground triangles, including the authored diagonal;
     // the owner mask interpolates across their shared vertices.
-    let mut mesh = construct_terrain_chunk_mesh(chunk, asset, edited)?;
+    let mut mesh = ground.clone();
     let Some(Indices::U32(indices)) = mesh.indices_mut() else {
         return None;
     };

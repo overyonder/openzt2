@@ -2,12 +2,6 @@ use bevy::prelude::*;
 
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
-use openzt2_zoo_state::locomotion::locomotion_types::Destination;
-use openzt2_zoo_state::locomotion::locomotion_types::Docking;
-use openzt2_zoo_state::locomotion::locomotion_types::Route;
-use openzt2_zoo_state::locomotion::locomotion_types::Steering;
 use openzt2_zoo_state::locomotion::locomotion_types::{
     ContactSteering, DirectLocomotion, MotionProgress, NavAgent, SpatialCell, Velocity,
 };
@@ -24,12 +18,6 @@ type AnimalActivityStateRemovedAfterDeath = (
     RecoveringFromTranquilizer,
     Escaped,
     Rampaging,
-    BehaviorTaskExecutionState,
-    PendingBehaviorAnimationClipCompletion,
-    Destination,
-    Route,
-    Steering,
-    Docking,
 );
 
 pub(super) fn finalize_disease_deaths_after_vitality_reaches_zero(
@@ -78,5 +66,6 @@ pub(crate) fn finalize_animal_death(
         MotionProgress,
         Velocity,
     )>();
+    super::animal_activity_immobilization_execution::stop_animal_activity(animal, commands);
     messages.write(AnimalDied { animal, cause });
 }

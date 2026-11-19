@@ -38,7 +38,10 @@ impl AssetLoader for CompatibleSourceImageAssetLoader {
     type Settings = ImageLoaderSettings;
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_compatible_image", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_compatible_image", skip_all)
+    )]
     async fn load(
         &self,
         reader: &mut dyn Reader,

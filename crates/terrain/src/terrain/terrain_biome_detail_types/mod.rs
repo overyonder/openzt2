@@ -6,6 +6,7 @@ use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
 #[derive(Component, Debug, Clone, PartialEq)]
 pub(super) struct TerrainDetail {
     pub(super) placement_key: u64,
+    pub(super) placement_region: UVec2,
     pub(super) prefab: Handle<ScenePrefabAsset>,
     pub(super) solid_m: f32,
     pub(super) fade_m: f32,

@@ -25,6 +25,9 @@ pub(super) enum EffectRetirementReadback {
     Drained,
 }
 
+#[derive(Component)]
+pub(super) struct ParticleEffectGraphReady;
+
 #[derive(Component, Clone, Debug)]
 pub(super) struct ControlledEffectEmissionState {
     pub(super) elapsed_seconds: f32,

@@ -109,7 +109,12 @@ pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
     scenarios: Res<WorldScenarios>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     lists: Query<&ScenarioGoalListProjection>,
-    rows: Query<(Entity, &UiListRow, Option<&ScenarioGoalRowProjection>)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        &ChildOf,
+        Option<&ScenarioGoalRowProjection>,
+    )>,
     objectives: Query<(&ScenarioObjective, &ScenarioObjectiveStatus)>,
     parents: Query<&ChildOf>,
     texts: Query<(Entity, Option<&UiTextBinding>), With<Text>>,
@@ -126,8 +131,8 @@ pub(super) fn connect_authored_scenario_goal_rows_to_live_objectives(
     let Some(scenarios) = scenarios.get(&scenario_assets) else {
         return;
     };
-    for (row_entity, row, current_projection) in &rows {
-        let Ok(list) = lists.get(row.list) else {
+    for (row_entity, row, parent, current_projection) in &rows {
+        let Ok(list) = lists.get(parent.parent()) else {
             continue;
         };
         let Some(&objective_entity) = list.objectives.get(usize::from(row.index)) else {
@@ -189,7 +194,7 @@ pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
     status_filters: Query<&ScenarioObjectiveStatusFilter>,
     category_filters: Query<&ScenarioObjectiveCategoryFilter>,
     lists: Query<(&ScenarioGoalListProjection, &UiDocumentOwner)>,
-    mut rows: Query<(&UiListRow, &ScenarioGoalRowProjection, &mut Visibility)>,
+    mut rows: Query<(&ChildOf, &ScenarioGoalRowProjection, &mut Visibility), With<UiListRow>>,
     mut descriptions: Query<
         (&UiDocumentOwner, &UiTextBinding, &mut Visibility),
         Without<UiListRow>,
@@ -201,8 +206,8 @@ pub(super) fn apply_scenario_goal_panel_filters_to_projected_rows(
     )>,
 ) {
     let scenarios = scenarios.get(&scenario_assets);
-    for (row, projection, mut visibility) in &mut rows {
-        let Ok((_, owner)) = lists.get(row.list) else {
+    for (parent, projection, mut visibility) in &mut rows {
+        let Ok((_, owner)) = lists.get(parent.parent()) else {
             continue;
         };
         let status_filter = status_filters.get(owner.0).copied().unwrap_or_default();

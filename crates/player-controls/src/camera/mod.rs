@@ -16,20 +16,16 @@ use camera_control_message_types::{
 };
 use systems::{
     camera_action_intent_projection::project_camera_actions_into_camera_intent,
-    camera_definition_hydration::{
-        apply_authored_camera_definition_to_runtime_components,
-        apply_view_distance_graphics_setting_to_zoo_camera_far_planes,
-    },
+    camera_definition_hydration::apply_view_distance_graphics_setting_to_zoo_camera_far_planes,
     camera_mode_transitions::{
-        advance_camera_transition, apply_free_camera_pose, begin_camera_transition,
-        clear_camera_input_on_return, restore_camera_return_state, validate_camera_mode_targets,
+        advance_camera_transition, apply_camera_return, apply_free_camera_pose,
+        begin_camera_transition, request_return_when_camera_target_disappears,
     },
     camera_motion_reporting::report_camera_motion,
     default_ui_camera_routing::route_default_ui_camera,
     ground_fitted_free_camera_initialization::initialize_ground_fitted_free_camera_from_overhead_focus,
     mouse_look_cursor_projection::project_camera_mouse_look_onto_primary_window_cursor,
     overhead_camera_advancement::{advance_overhead_camera, CameraFittingSurfaceSample},
-    overhead_camera_return_without_snapshot::restore_authored_overhead_camera_without_snapshot,
     overhead_camera_zoom_policy::apply_overhead_camera_zoom_graphics_setting,
     pointer_ray_projection::project_pointer_ray,
     subject_camera_following::update_subject_camera_pose,
@@ -65,22 +61,13 @@ impl Plugin for ZooCameraPlugin {
                     ui_actions::route_camera_ui_actions.in_set(CameraUiActionRouting),
                     project_camera_actions_into_camera_intent
                         .after(ui_actions::route_camera_ui_actions),
-                    project_camera_mouse_look_onto_primary_window_cursor
-                        .after(clear_camera_input_on_return),
                     begin_camera_transition.after(crate::immersive_modes::ImmersiveModeTransitions),
-                    apply_free_camera_pose
-                        .after(begin_camera_transition)
-                        .before(restore_authored_overhead_camera_without_snapshot),
-                    restore_camera_return_state,
-                    clear_camera_input_on_return
+                    apply_free_camera_pose.after(begin_camera_transition),
+                    apply_camera_return
                         .after(apply_free_camera_pose)
-                        .after(project_camera_actions_into_camera_intent)
-                        .before(restore_authored_overhead_camera_without_snapshot),
-                    restore_authored_overhead_camera_without_snapshot
-                        .before(restore_camera_return_state),
-                    validate_camera_mode_targets
-                        .after(begin_camera_transition)
-                        .after(restore_camera_return_state),
+                        .after(project_camera_actions_into_camera_intent),
+                    project_camera_mouse_look_onto_primary_window_cursor.after(apply_camera_return),
+                    request_return_when_camera_target_disappears.after(begin_camera_transition).before(apply_camera_return),
                 )
                     .in_set(GameSet::Intent),
             )
@@ -89,20 +76,19 @@ impl Plugin for ZooCameraPlugin {
                 (
                     spawn_zoo_camera,
                     route_default_ui_camera.after(spawn_zoo_camera),
-                    apply_authored_camera_definition_to_runtime_components.after(spawn_zoo_camera),
                     initialize_ground_fitted_free_camera_from_overhead_focus
-                        .after(apply_authored_camera_definition_to_runtime_components)
+                        .after(spawn_zoo_camera)
                         .before(advance_camera_transition),
                     apply_overhead_camera_zoom_graphics_setting
-                        .after(apply_authored_camera_definition_to_runtime_components),
+                        .after(spawn_zoo_camera),
                     apply_view_distance_graphics_setting_to_zoo_camera_far_planes
-                        .after(apply_authored_camera_definition_to_runtime_components)
+                        .after(spawn_zoo_camera)
                         .after(photo_zoom::apply_photo_camera_zoom),
                     advance_overhead_camera.after(apply_overhead_camera_zoom_graphics_setting),
                     photo_zoom::apply_photo_camera_zoom
-                        .after(apply_authored_camera_definition_to_runtime_components),
+                        .after(spawn_zoo_camera),
                     advance_camera_transition
-                        .after(apply_authored_camera_definition_to_runtime_components),
+                        .after(spawn_zoo_camera),
                     update_subject_camera_pose
                         .after(advance_overhead_camera)
                         .after(advance_camera_transition),
@@ -113,7 +99,7 @@ impl Plugin for ZooCameraPlugin {
             .add_systems(
                 PreUpdate,
                 // Pick against the last presented camera pose with this frame's pointer.
-                project_pointer_ray.after(GameSet::Input),
+                project_pointer_ray.after(bevy::picking::PickingSystems::ProcessInput),
             )
             .add_systems(
                 PostUpdate,

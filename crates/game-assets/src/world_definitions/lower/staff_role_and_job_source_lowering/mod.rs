@@ -5,10 +5,10 @@ use super::world_definition_source_value_reading_and_conversion::{
     asset, asset_list, flags, id, number_or, required, required_number,
 };
 use crate::source_document::resolved_source_record_index::{BindError, RecordView};
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::staff_management::{
     StaffJobCapabilityFlags, StaffJobDefinition, StaffJobEffect, StaffJobKind, StaffRoleDefinition,
 };
+use openzt2_game_data::AssetId;
 
 pub(super) fn lower_authored_staff_job_capabilities(
     record: &RecordView<'_, '_>,

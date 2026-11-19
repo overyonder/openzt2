@@ -1,26 +1,25 @@
 use bevy::{ecs::system::Command, prelude::*};
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    behavior::behavior_asset_types::BehaviorDocumentAsset,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::behavior::{
-    action::token::BehaviorTokenRecipient, action_record::BehaviorAction,
-};
+use openzt2_game_data::behavior::action::token::BehaviorTokenRecipient;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSendSelfTokens, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     animal_health::types::Dead,
     animal_lifecycle::types::{Animal, SpeciesHandle},
     behavior_task_execution_types::{
-        abandon_behavior_task_for_reconsideration, advance_behavior_task_to_next_action,
-        find_current_behavior_task_action, BehaviorTaskExecutionState, BehaviorTaskFailed,
+        abandon_behavior_task_for_reconsideration, BehaviorTaskExecutionState, BehaviorTaskFailed,
         PendingBehaviorTaskFailure,
     },
     guests::guest_simulation_types::GuestRng,
@@ -177,13 +176,16 @@ pub(super) fn register_token_execution(application: &mut App) {
 fn execute_current_self_token_deliveries(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorSendSelfTokens,
+            ),
             Option<&mut BehaviorRandomStream>,
             Option<&mut GuestRng>,
         ),
@@ -200,16 +202,14 @@ fn execute_current_self_token_deliveries(
     let Some(definitions) = definitions.get(&definition_assets) else {
         return;
     };
-    for (actor, mut task, mut random, mut guest_random) in &mut actors {
+    for (actor, (task, instruction, running_action), mut random, mut guest_random) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::SendSelfTokens(deliveries)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let deliveries = &running_action.0;
         if deliveries
             .iter()
             .flat_map(|delivery| {
@@ -331,6 +331,6 @@ fn execute_current_self_token_deliveries(
                 });
             }
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

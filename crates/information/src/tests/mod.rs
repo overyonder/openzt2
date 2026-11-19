@@ -2,16 +2,10 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::AssetId;
 
-use openzt2_interface_state::information::catalogue_types::PurchaseChoice;
-use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
-use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
 use openzt2_interface_state::information::entity_selection_types::SelectionRequest;
 
-use super::selection::{apply_selection_requests, clear_removed_selection};
 use openzt2_interface_state::input::input_types::ActionSource;
-use openzt2_zoo_state::animal_lifecycle::animal_adoption_contracts::BeginAnimalAdoptionPlacement;
 
 fn id(byte: u8) -> AssetId {
     AssetId([byte; 16])
@@ -23,7 +17,9 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
     use openzt2_interface_state::information::entity_selection_types::InformationEntitySource;
     use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-    use openzt2_interface_state::ui::authored_ui_node_projection_components::{UiValue, UiValueBinding};
+    use openzt2_interface_state::ui::authored_ui_node_projection_components::{
+        UiValue, UiValueBinding,
+    };
     use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
     use openzt2_zoo_state::guests::guest_simulation_types::GuestSatisfaction;
 
@@ -43,15 +39,16 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     let happy = world.spawn(GuestSatisfaction(800, 0)).id();
     let unhappy = world.spawn(GuestSatisfaction(100, 0)).id();
     let row = world
-        .spawn((UiListRow { list, index: 0 }, InformationEntitySource(happy)))
+        .spawn((
+            UiListRow { index: 0 },
+            ChildOf(list),
+            InformationEntitySource(happy),
+        ))
         .id();
     let nested = world
         .spawn((
             ChildOf(row),
-            UiListRow {
-                list: row,
-                index: 0,
-            },
+            UiListRow { index: 0 },
             InformationEntitySource(unhappy),
         ))
         .id();
@@ -70,21 +67,6 @@ fn nested_information_row_uses_its_own_subject_until_unbound() {
     assert_eq!(app.world().get::<UiValue>(value), Some(&UiValue(1)));
     assert_eq!(app.world().get::<Text>(value).unwrap().0, "1");
     assert_eq!(app.world().get::<UiValue>(unrelated), Some(&UiValue(-1)));
-}
-
-fn test_app() -> App {
-    let mut app = App::new();
-    app.init_resource::<SelectedEntity>()
-        .init_resource::<SelectedCatalogueEntry>()
-        .add_message::<SelectionRequest>()
-        .add_message::<SelectionChanged>()
-        .add_message::<PurchaseChoice>()
-        .add_message::<BeginAnimalAdoptionPlacement>()
-        .add_systems(
-            Update,
-            (apply_selection_requests, clear_removed_selection).chain(),
-        );
-    app
 }
 
 #[test]
@@ -109,12 +91,7 @@ fn reopening_editor_rebinds_rows_after_hidden_membership_changes() {
     let editor = world
         .spawn((EntityEditorDataRootSurface, InheritedVisibility::VISIBLE))
         .id();
-    let row = world
-        .spawn(UiListRow {
-            list: editor,
-            index: 0,
-        })
-        .id();
+    let row = world.spawn((UiListRow { index: 0 }, ChildOf(editor))).id();
     let original = world.spawn(Inspectable { definition: id(1) }).id();
     app.update();
     assert_eq!(
@@ -137,72 +114,6 @@ fn reopening_editor_rebinds_rows_after_hidden_membership_changes() {
 }
 
 #[test]
-fn selection_uses_last_valid_request_and_emits_once() {
-    let mut app = test_app();
-    let valid = app
-        .world_mut()
-        .spawn(Inspectable { definition: id(1) })
-        .id();
-    let invalid = app.world_mut().spawn_empty().id();
-    app.world_mut().write_message(SelectionRequest {
-        entity: Some(valid),
-        source: ActionSource::KeyboardMouse,
-    });
-    app.world_mut().write_message(SelectionRequest {
-        entity: Some(invalid),
-        source: ActionSource::KeyboardMouse,
-    });
-    app.update();
-
-    assert_eq!(app.world().resource::<SelectedEntity>().0, Some(valid));
-    let events = app.world().resource::<Messages<SelectionChanged>>();
-    assert_eq!(events.len(), 1);
-}
-
-#[test]
-fn selecting_native_crate_uses_its_inspectable_animal() {
-    use openzt2_world_state::world_spawn::world_entity_crating::ContainedCratedAnimal;
-    let mut app = test_app();
-    let animal = app
-        .world_mut()
-        .spawn(Inspectable { definition: id(1) })
-        .id();
-    let crate_entity = app
-        .world_mut()
-        .spawn((
-            Inspectable { definition: id(2) },
-            ContainedCratedAnimal(animal),
-        ))
-        .id();
-    app.world_mut().write_message(SelectionRequest {
-        entity: Some(crate_entity),
-        source: ActionSource::KeyboardMouse,
-    });
-    app.update();
-    assert_eq!(app.world().resource::<SelectedEntity>().0, Some(animal));
-}
-
-#[test]
-fn removing_selected_inspectable_clears_it_once() {
-    let mut app = test_app();
-    let subject = app
-        .world_mut()
-        .spawn(Inspectable { definition: id(1) })
-        .id();
-    app.world_mut().write_message(SelectionRequest {
-        entity: Some(subject),
-        source: ActionSource::KeyboardMouse,
-    });
-    app.update();
-    app.world_mut().entity_mut(subject).remove::<Inspectable>();
-    app.update();
-
-    assert_eq!(app.world().resource::<SelectedEntity>().0, None);
-    let events = app.world().resource::<Messages<SelectionChanged>>();
-    assert_eq!(events.len(), 2);
-}
-
-#[test]
 fn authored_selection_action_clears_without_subject_and_selects_row_ancestor() {
     use bevy::ecs::system::SystemState;
     use openzt2_game_data::ui_document::action::information::UiInformationAction;
@@ -215,13 +126,13 @@ fn authored_selection_action_clears_without_subject_and_selects_row_ancestor() {
     };
     use openzt2_interface_state::camera::camera_control_message_types::SetCameraMode;
 
-    let mut app = test_app();
-    app.add_message::<SetCameraMode>();
+    let mut app = App::new();
+    app.add_message::<SetCameraMode>()
+        .add_message::<SelectionRequest>();
     let subject = app
         .world_mut()
         .spawn(Inspectable { definition: id(1) })
         .id();
-    app.world_mut().resource_mut::<SelectedEntity>().0 = Some(subject);
     let close_button = app.world_mut().spawn_empty().id();
     let row = app.world_mut().spawn(InformationEntitySource(subject)).id();
     let row_button = app.world_mut().spawn(ChildOf(row)).id();
@@ -237,8 +148,13 @@ fn authored_selection_action_clears_without_subject_and_selects_row_ancestor() {
                 .expect("selection action resources are installed"),
         );
         action_targets.apply(app.world_mut());
-        app.update();
-        assert_eq!(app.world().resource::<SelectedEntity>().0, expected);
+        let requests = app.world_mut().resource_mut::<Messages<SelectionRequest>>();
+        let actual: Vec<_> = requests
+            .into_inner()
+            .drain()
+            .map(|request| request.entity)
+            .collect();
+        assert_eq!(actual, [expected]);
     }
 }
 

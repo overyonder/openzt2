@@ -28,23 +28,35 @@ impl UiFullCanvasClickCatcher {
 /// to the catcher's typed action consumers.
 pub(super) fn hide_activated_or_elapsed_full_canvas_click_catchers(
     time: Res<Time<Real>>,
-    mut activations: MessageReader<UiNodeActivated>,
-    mut click_catchers: Query<(&mut UiFullCanvasClickCatcher, &mut Visibility)>,
+    mut activations: ParamSet<(
+        MessageReader<UiNodeActivated>,
+        MessageWriter<UiNodeActivated>,
+    )>,
+    mut click_catchers: Query<(Entity, &mut UiFullCanvasClickCatcher, &mut Visibility)>,
 ) {
-    for activation in activations.read() {
+    let mut transitions = Vec::new();
+    for activation in activations.p0().read() {
         if activation.trigger != UiTrigger::Press {
             continue;
         }
-        let Ok((mut click_catcher, mut visibility)) = click_catchers.get_mut(activation.node)
+        let Ok((entity, mut click_catcher, mut visibility)) =
+            click_catchers.get_mut(activation.node)
         else {
             continue;
         };
-        *visibility = Visibility::Hidden;
+        transitions.extend(
+            super::authored_ui_change_activation_dispatch::set_authored_visibility(
+                entity,
+                &mut visibility,
+                Visibility::Hidden,
+                true,
+            ),
+        );
         click_catcher.elapsed_seconds = 0.0;
     }
 
     let delta_seconds = time.delta_secs();
-    for (mut click_catcher, mut visibility) in &mut click_catchers {
+    for (entity, mut click_catcher, mut visibility) in &mut click_catchers {
         if *visibility == Visibility::Hidden {
             click_catcher.elapsed_seconds = 0.0;
             continue;
@@ -55,6 +67,14 @@ pub(super) fn hide_activated_or_elapsed_full_canvas_click_catchers(
             continue;
         }
         click_catcher.elapsed_seconds = 0.0;
-        *visibility = Visibility::Hidden;
+        transitions.extend(
+            super::authored_ui_change_activation_dispatch::set_authored_visibility(
+                entity,
+                &mut visibility,
+                Visibility::Hidden,
+                true,
+            ),
+        );
     }
+    let _ = activations.p1().write_batch(transitions);
 }

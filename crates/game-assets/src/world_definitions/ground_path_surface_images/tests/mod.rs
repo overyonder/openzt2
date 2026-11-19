@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use bevy::{
     app::TaskPoolPlugin,
-    asset::{AssetPlugin, io::AssetSourceId},
+    asset::{io::AssetSourceId, AssetPlugin},
 };
 
 use crate::asset_source::{
@@ -83,11 +83,9 @@ fn archive_image_override_reloads_the_ground_path_parent_and_its_image() -> std:
                 .read(events)
                 .any(|event| event.is_loaded_with_dependencies(handle.id()))
             {
-                assert!(
-                    world
-                        .resource::<AssetServer>()
-                        .is_loaded_with_dependencies(handle.id())
-                );
+                assert!(world
+                    .resource::<AssetServer>()
+                    .is_loaded_with_dependencies(handle.id()));
                 let parent = world
                     .resource::<Assets<GroundPathSurfaceImage>>()
                     .get(&handle)

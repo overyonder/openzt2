@@ -5,21 +5,23 @@ use super::immersive_mode_policy_types::{
 };
 
 pub(super) fn move_immersive_mode_cursor_visual_to_current_pointer_position(
-    pointer_input: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    pointer_input: openzt2_interface_state::input::input_types::MousePointer,
     mut cursor_visual_nodes: Query<&mut Node, With<InteractionCursorVisual>>,
 ) {
-    if !pointer_input.is_changed() {
+    let Some(position) = pointer_input.physical_position() else {
         return;
-    }
-    for mut cursor_visual_node in &mut cursor_visual_nodes {
-        cursor_visual_node.left = Val::Px(pointer_input.screen.x);
-        cursor_visual_node.top = Val::Px(pointer_input.screen.y);
+    };
+    for mut node in &mut cursor_visual_nodes {
+        if node.left != px(position.x) || node.top != px(position.y) {
+            node.left = px(position.x);
+            node.top = px(position.y);
+        }
     }
 }
 
 pub(super) fn project_changed_immersive_mode_cursor_images(
     mut commands: Commands,
-    pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    pointer: openzt2_interface_state::input::input_types::MousePointer,
     policies: Query<
         (
             Entity,
@@ -41,12 +43,13 @@ pub(super) fn project_changed_immersive_mode_cursor_images(
                 .set_if_neq(cursor.image.clone());
             continue;
         }
+        let position = pointer.physical_position().unwrap_or_default();
         commands.spawn((
             InteractionCursorVisual(controller),
             Node {
                 position_type: PositionType::Absolute,
-                left: Val::Px(pointer.screen.x),
-                top: Val::Px(pointer.screen.y),
+                left: px(position.x),
+                top: px(position.y),
                 ..default()
             },
             ImageNode::new(cursor.image.clone()),

@@ -75,7 +75,7 @@ fn ground_paths_block_grid_snapped_objects_whose_nearest_path_rule_prevents_them
     ].map(|(path, source)| parse_blue_fang_source_document(AssetPath::new(path), source.as_bytes()).unwrap());
     let index = SourceIndex::build(&documents).unwrap();
     use openzt2_game_data::{
-        AssetId, world_definitions::object_placement::placement_stomp_rules::PlacementStompAction,
+        world_definitions::object_placement::placement_stomp_rules::PlacementStompAction, AssetId,
     };
     let blocks = |key: &str| {
         let rules =

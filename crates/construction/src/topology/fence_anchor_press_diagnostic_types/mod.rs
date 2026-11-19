@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
+use bevy::picking::pointer::PointerInput;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_zoo_state::construction::construction_interaction_types::ConstructionCursor;
 
@@ -14,7 +14,7 @@ pub struct InitialFenceAnchorPressDiagnosticState {
 }
 
 impl InitialFenceAnchorPressDiagnosticState {
-    pub(super) const fn record_press(&mut self, press: InitialFenceAnchorPress) {
+    pub(super) fn record_press(&mut self, press: InitialFenceAnchorPress) {
         self.pending = Some(press);
     }
 
@@ -24,12 +24,12 @@ impl InitialFenceAnchorPressDiagnosticState {
 }
 
 /// The inputs topology consumed when an ordinary press began a fence preview.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct InitialFenceAnchorPress {
     pub root: Entity,
     pub definition: AssetId,
     pub grid: TopologyGrid,
-    pub pointer: PrimaryPointerInputState,
+    pub pointer: PointerInput,
     pub cursor: ConstructionCursor,
     pub ui_capture: UiPointerCapture,
     pub cell: IVec3,

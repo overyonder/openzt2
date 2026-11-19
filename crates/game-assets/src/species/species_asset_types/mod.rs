@@ -2,8 +2,8 @@ use std::collections::BTreeMap;
 
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{LifeStage, Sex, SpeciesDocument},
+    AssetId,
 };
 
 pub mod species_animation_set_loading;
@@ -31,8 +31,43 @@ impl SpeciesAsset {
     }
 }
 
-#[cfg(any(test, feature = "testing"))]
+#[derive(Resource, Default)]
+pub struct SpeciesAssets {
+    pub(super) discovered: bool,
+    pub(super) source_set_changed: bool,
+    pub(super) pending_paths: std::collections::VecDeque<std::path::PathBuf>,
+    pub(super) pending: std::collections::BTreeSet<bevy::asset::AssetId<SpeciesAsset>>,
+    pub(super) failed: std::collections::BTreeSet<bevy::asset::AssetId<SpeciesAsset>>,
+    pub(super) handles: Vec<Handle<SpeciesAsset>>,
+    pub(super) source_ids: std::collections::BTreeSet<bevy::asset::AssetId<SpeciesAsset>>,
+    loaded_handles: Vec<Handle<SpeciesAsset>>,
+    by_species: BTreeMap<AssetId, SpeciesDocumentRow>,
+    by_variant: BTreeMap<AssetId, VariantLocation>,
+    variants_by_species: BTreeMap<AssetId, Box<[VariantLocation]>>,
+    variant_by_model_path: BTreeMap<String, VariantLocation>,
+    animation_set_owners: BTreeMap<AssetId, SpeciesDocumentRow>,
+}
+
+#[derive(Clone, Copy)]
+struct SpeciesDocumentRow {
+    document: usize,
+    index: usize,
+}
+
+#[derive(Clone, Copy)]
+struct VariantLocation {
+    row: SpeciesDocumentRow,
+    animation_set: Option<SpeciesDocumentRow>,
+}
+
+#[derive(Clone, Copy)]
+pub struct SpeciesView<'a> {
+    index: &'a SpeciesAssets,
+    assets: &'a Assets<SpeciesAsset>,
+}
+
 impl SpeciesAssets {
+    #[cfg(any(test, feature = "testing"))]
     pub fn index_test_document(
         &mut self,
         handle: Handle<SpeciesAsset>,
@@ -40,127 +75,88 @@ impl SpeciesAssets {
     ) {
         self.discovered = true;
         self.handles = vec![handle.clone()];
-        self.loaded_handles = vec![handle.clone()];
-        self.by_species = document
-            .species
-            .iter()
-            .map(|species| (species.id, handle.clone()))
-            .collect();
-        self.by_variant = document
-            .variants
-            .iter()
-            .enumerate()
-            .map(|(index, binding)| {
-                (
-                    binding.variant.id,
-                    VariantHandle {
-                        species: binding.species,
-                        document: handle.clone(),
-                        index,
-                    },
-                )
-            })
-            .collect();
-        self.rebuild_variant_indexes([(&handle, document, &[][..])]);
+        self.source_ids = std::collections::BTreeSet::from([handle.id()]);
+        self.index_loaded_documents(&[(handle, document, &[])]);
     }
-}
 
-#[derive(Resource, Default)]
-pub struct SpeciesAssets {
-    pub(super) discovered: bool,
-    pub(super) dirty: bool,
-    pub(super) pending_paths: std::collections::VecDeque<std::path::PathBuf>,
-    pub(super) handles: Vec<Handle<SpeciesAsset>>,
-    pub(super) loaded_handles: Vec<Handle<SpeciesAsset>>,
-    pub(super) by_species: BTreeMap<AssetId, Handle<SpeciesAsset>>,
-    pub(super) by_variant: BTreeMap<AssetId, VariantHandle>,
-    variants_by_species: BTreeMap<AssetId, Vec<AssetId>>,
-    variant_by_model_path: BTreeMap<String, VariantHandle>,
-    animation_set_owners: BTreeMap<AssetId, Handle<SpeciesAsset>>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct VariantHandle {
-    pub(super) species: AssetId,
-    pub(super) document: Handle<SpeciesAsset>,
-    pub(super) index: usize,
-}
-
-#[derive(Clone, Copy)]
-pub struct SpeciesView<'a> {
-    handles: &'a [Handle<SpeciesAsset>],
-    by_species: &'a BTreeMap<AssetId, Handle<SpeciesAsset>>,
-    by_variant: &'a BTreeMap<AssetId, VariantHandle>,
-    variants_by_species: &'a BTreeMap<AssetId, Vec<AssetId>>,
-    variant_by_model_path: &'a BTreeMap<String, VariantHandle>,
-    animation_set_owners: &'a BTreeMap<AssetId, Handle<SpeciesAsset>>,
-    assets: &'a Assets<SpeciesAsset>,
-}
-
-impl SpeciesAssets {
-    pub(super) fn rebuild_variant_indexes<'a>(
+    pub(super) fn index_loaded_documents(
         &mut self,
-        documents: impl IntoIterator<
-            Item = (
-                &'a Handle<SpeciesAsset>,
-                &'a SpeciesDocument,
-                &'a [SpeciesAnimationSetDependencyPath],
-            ),
-        >,
+        documents: &[(
+            Handle<SpeciesAsset>,
+            &SpeciesDocument,
+            &[SpeciesAnimationSetDependencyPath],
+        )],
     ) {
+        self.loaded_handles = documents
+            .iter()
+            .map(|(handle, _, _)| handle.clone())
+            .collect();
+        self.by_species.clear();
+        self.by_variant.clear();
         self.variant_by_model_path.clear();
         self.animation_set_owners.clear();
-        self.variants_by_species.clear();
-        let mut adult_fallbacks = BTreeMap::<AssetId, Vec<AssetId>>::new();
-        let mut species_with_concrete_adult = std::collections::BTreeSet::new();
-        for (handle, document, animation_sets) in documents {
-            let mut variants_by_model_in_document = BTreeMap::new();
-            for (index, binding) in document.variants.iter().enumerate() {
-                let location = VariantHandle {
-                    species: binding.species,
-                    document: handle.clone(),
-                    index,
-                };
-                variants_by_model_in_document
-                    .entry(normalized_species_model_path(&binding.variant.model))
-                    .or_insert_with(|| location.clone());
-                let id = binding.variant.id;
-                if !self.by_variant.get(&id).is_some_and(|winner| {
-                    winner.document.id() == handle.id() && winner.index == index
-                }) {
-                    continue;
-                }
-                if binding.variant.life_stage == LifeStage::Adult {
-                    if binding.variant.sex == Sex::Any {
-                        adult_fallbacks.entry(binding.species).or_default().push(id);
-                        continue;
-                    }
-                    species_with_concrete_adult.insert(binding.species);
-                }
-                self.variants_by_species
-                    .entry(binding.species)
-                    .or_default()
-                    .push(id);
-            }
-            self.variant_by_model_path
-                .extend(variants_by_model_in_document);
-            self.animation_set_owners.extend(
-                animation_sets
+        for (document, (_, _, animation_sets)) in documents.iter().enumerate() {
+            self.animation_set_owners
+                .extend(
+                    animation_sets
+                        .iter()
+                        .enumerate()
+                        .map(|(index, dependency)| {
+                            (dependency.id, SpeciesDocumentRow { document, index })
+                        }),
+                );
+        }
+        for (document, (_, species, _)) in documents.iter().enumerate() {
+            self.by_species.extend(
+                species
+                    .species
                     .iter()
-                    .map(|dependency| (dependency.id, handle.clone())),
+                    .enumerate()
+                    .map(|(index, species)| (species.id, SpeciesDocumentRow { document, index })),
             );
-        }
-        for (species, fallbacks) in adult_fallbacks {
-            if !species_with_concrete_adult.contains(&species) {
-                self.variants_by_species
-                    .entry(species)
-                    .or_default()
-                    .extend(fallbacks);
+            let mut models = BTreeMap::new();
+            for (index, binding) in species.variants.iter().enumerate() {
+                let location = VariantLocation {
+                    row: SpeciesDocumentRow { document, index },
+                    animation_set: self
+                        .animation_set_owners
+                        .get(&binding.variant.model_animation_set)
+                        .copied(),
+                };
+                self.by_variant.insert(binding.variant.id, location);
+                models
+                    .entry(normalized_species_model_path(&binding.variant.model))
+                    .or_insert(location);
             }
+            self.variant_by_model_path.extend(models);
         }
-        for variants in self.variants_by_species.values_mut() {
-            variants.sort_unstable();
+        let mut variants_by_species = BTreeMap::<AssetId, Vec<VariantLocation>>::new();
+        let mut species_with_concrete_adults = std::collections::BTreeSet::new();
+        for location in self.by_variant.values() {
+            let binding = &documents[location.row.document].1.variants[location.row.index];
+            let variant = &binding.variant;
+            if variant.life_stage == LifeStage::Adult && variant.sex != Sex::Any {
+                species_with_concrete_adults.insert(binding.species);
+            }
+            variants_by_species
+                .entry(binding.species)
+                .or_default()
+                .push(*location);
         }
+        self.variants_by_species = variants_by_species
+            .into_iter()
+            .map(|(species, mut variants)| {
+                if species_with_concrete_adults.contains(&species) {
+                    variants.retain(|location| {
+                        let variant = &documents[location.row.document].1.variants
+                            [location.row.index]
+                            .variant;
+                        variant.life_stage != LifeStage::Adult || variant.sex != Sex::Any
+                    });
+                }
+                (species, variants.into_boxed_slice())
+            })
+            .collect();
     }
 }
 

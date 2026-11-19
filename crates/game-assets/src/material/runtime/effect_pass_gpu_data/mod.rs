@@ -11,6 +11,7 @@ use bevy::{
     prelude::*,
     render::render_resource::{
         AsBindGroup, BlendState, ColorWrites, CompareFunction, Face, PolygonMode, ShaderType,
+        StencilState,
     },
     render::storage::ShaderBuffer,
     shader::Shader,
@@ -221,6 +222,9 @@ pub struct EffectPassPipelineSpecializationKey {
     pub(super) polygon_mode: PolygonMode,
     pub(super) depth_write_enabled: bool,
     pub(super) depth_compare: CompareFunction,
+    pub(super) stencil: StencilState,
+    pub(super) stencil_reference: u32,
+    pub(super) independent_opaque: bool,
     pub(super) blend_state: Option<BlendState>,
     pub(super) color_writes: ColorWrites,
 }

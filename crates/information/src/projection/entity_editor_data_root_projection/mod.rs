@@ -35,7 +35,12 @@ pub(crate) fn project_inspectable_entities_to_visible_entity_editor_data_roots(
         (Entity, &InheritedVisibility),
         With<EntityEditorDataRootSurface>,
     >,
-    reusable_rows: Query<(Entity, &UiListRow, Option<&InformationEntitySource>)>,
+    reusable_rows: Query<(
+        Entity,
+        &UiListRow,
+        &ChildOf,
+        Option<&InformationEntitySource>,
+    )>,
     inspectable_entities: Query<Entity, With<Inspectable>>,
     membership: Res<InspectableMembership>,
     mut members: Local<Option<ArrayVec<Entity, MAXIMUM_VISIBLE_ENTITY_EDITOR_ROWS>>>,
@@ -58,8 +63,8 @@ pub(crate) fn project_inspectable_entities_to_visible_entity_editor_data_roots(
             members
         });
         let mut row_count = 0;
-        for (row_entity, row, source) in &reusable_rows {
-            if row.list != surface_entity {
+        for (row_entity, row, parent, source) in &reusable_rows {
+            if parent.parent() != surface_entity {
                 continue;
             }
             row_count += 1;

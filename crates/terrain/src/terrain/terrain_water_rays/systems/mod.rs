@@ -1,5 +1,7 @@
 use bevy::{camera::visibility::RenderLayers, prelude::*, render::storage::ShaderBuffer};
-use openzt2_game_assets::graphics_settings_types::{FourLevelGraphicsDetail, GraphicsSettings};
+use openzt2_game_assets::graphics_settings_types::{
+    FourLevelGraphicsDetail, GraphicsEffectQuality, GraphicsSettings,
+};
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -18,6 +20,7 @@ use super::{build_water_ray_disk_mesh, build_water_ray_strip_mesh};
 #[derive(Component)]
 pub(in crate::terrain) struct TerrainWaterRayEffect {
     pub(super) secondary_strip: bool,
+    effects_quality: GraphicsEffectQuality,
 }
 
 #[derive(Component, Default)]
@@ -46,6 +49,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
     indexes: Query<Ref<TerrainWaterMembershipIndex>>,
     sources: TerrainWaterRegionQuery,
     effects: Query<(Entity, &ChildOf, &TerrainWaterRayEffect)>,
+    children: Query<&Children>,
 ) {
     let changed_assets: bevy::platform::collections::HashSet<_> = asset_changes
         .read()
@@ -59,6 +63,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
         graphics.water_detail,
         FourLevelGraphicsDetail::High | FourLevelGraphicsDetail::Ultra
     );
+    let mut retiring = bevy::ecs::entity::EntityHashSet::default();
     for (effect, parent, state) in &effects {
         let valid = sources.get(parent.parent()).is_some_and(|source| {
             assets.get(source.terrain()).is_some()
@@ -68,7 +73,12 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
                         && index.accepted_points(parent.parent()).next().is_some()
                 })
         });
-        if !enabled || !valid || graphics.is_changed() || state.secondary_strip != secondary_strip {
+        if !enabled
+            || !valid
+            || state.effects_quality != graphics.effects
+            || state.secondary_strip != secondary_strip
+        {
+            retiring.insert(effect);
             commands.entity(effect).despawn();
         }
     }
@@ -76,10 +86,12 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
         return;
     }
     for (owner, source) in sources.iter() {
-        if effects
-            .iter()
-            .any(|(_, parent, _)| parent.parent() == owner)
-        {
+        if children.get(owner).is_ok_and(|children| {
+            effects
+                .iter_many(children.iter())
+                .flatten()
+                .any(|(effect, _, _)| !retiring.contains(&effect))
+        }) {
             continue;
         }
         let Some(asset) = assets.get(source.terrain()) else {
@@ -137,7 +149,10 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
         }
         let effect = commands
             .spawn((
-                TerrainWaterRayEffect { secondary_strip },
+                TerrainWaterRayEffect {
+                    secondary_strip,
+                    effects_quality: graphics.effects,
+                },
                 TerrainWaterRayAnimation::default(),
                 TerrainWaterRayMeshPoses::default(),
                 Transform::IDENTITY,
@@ -151,6 +166,7 @@ pub(in crate::terrain) fn maintain_terrain_water_ray_effects(
         let disk_mesh = meshes.add(build_water_ray_disk_mesh());
         for (submission_index, (disk, texture_layer, mut pass)) in prepared.into_iter().enumerate()
         {
+            pass.retain_authored_draw_order();
             pass.recreate_uniform_buffers_for_runtime_material(&mut buffers);
             commands.spawn((
                 TerrainWaterRayPass {
@@ -186,24 +202,29 @@ pub(in crate::terrain) fn advance_terrain_water_ray_materials(
     passes: Query<(
         &ChildOf,
         &TerrainWaterRayPass,
-        &MeshMaterial3d<EffectPassMaterial>,
+        Ref<MeshMaterial3d<EffectPassMaterial>>,
     )>,
     mut materials: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     for (effect, mut animation, mut visibility) in &mut effects {
-        animation.advance_texture_offsets(time.delta_secs(), effect.secondary_strip);
+        if time.delta_secs() > 0.0 {
+            animation.advance_texture_offsets(time.delta_secs(), effect.secondary_strip);
+        }
         // Unknown camera membership cannot enable an effect. Environment
         // inputs are also required and have no fallback value.
         if view.as_ref().and_then(|view| view.underwater_status()) != Some(true) {
-            *visibility = Visibility::Hidden;
+            visibility.set_if_neq(Visibility::Hidden);
         }
     }
     for (parent, pass, material) in &passes {
+        if time.delta_secs() == 0.0 && !material.is_changed() {
+            continue;
+        }
         let Ok((_, animation, _)) = effects.get(parent.parent()) else {
             continue;
         };
-        let Some(mut material) = materials.get_mut(&material.0) else {
+        let Some(material) = materials.get_mut_untracked(&material.0) else {
             continue;
         };
         let transforms = if pass.disk {
@@ -211,20 +232,13 @@ pub(in crate::terrain) fn advance_terrain_water_ray_materials(
         } else {
             &animation.strip_texture_transforms()[pass.texture_layer]
         };
-        let mut valid = true;
-        for (semantic, transform) in ["TextureTransform0", "TextureTransform1"]
-            .into_iter()
-            .zip(transforms)
+        if material
+            .bind_fixed_function_matrix_effect_semantics(&[
+                ("TextureTransform0", transforms[0]),
+                ("TextureTransform1", transforms[1]),
+            ])
+            .is_ok()
         {
-            match material.bind_fixed_function_matrix_effect_semantic(semantic, *transform) {
-                Ok(_) => {}
-                Err(_) => {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if valid {
             material.write_changed_fixed_function_transforms_to_persistent_buffer(&mut buffers);
         }
     }

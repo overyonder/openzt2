@@ -9,6 +9,7 @@ use super::{
     conversion_error::ConversionError,
     native_geometry::{
         bfb_geometry_and_skin_lowering::lower_blue_fang_render_parts,
+        native_geometry_identity::netimmerse_geometry_skin_variant_path,
         nif_geometry_lowering::lower_netimmerse_geometry_block,
     },
     native_model_glb_encoding::encode_models_as_glb,
@@ -21,7 +22,7 @@ use super::{
         bfb_scene_prefab_lowering::lower_blue_fang_scene_prefab,
         nif_scene_prefab_lowering::lower_netimmerse_scene_prefab,
     },
-    netimmerse_bone_level_of_detail_selection::NetImmerseSelectedBoneLevelOfDetail,
+    netimmerse_bone_level_of_detail_selection::NetImmerseBoneLod,
     netimmerse_fixed_function_material_effect_lowering::lower_netimmerse_material_into_evaluated_d3d9_effect,
     netimmerse_nif_source::{
         block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
@@ -44,28 +45,27 @@ pub fn lower_native_model_source(
                 native_model_asset_path.to_owned(),
                 native_model_source_bytes,
             )?;
-            let selected_bone_level_of_detail =
-                NetImmerseSelectedBoneLevelOfDetail::from_document(&netimmerse_document);
-            let renderer_neutral_models = netimmerse_document
-                .blocks()
-                .filter_map(|block| {
-                    matches!(
-                        &block.payload,
-                        NetImmerseNifBlockPayload::NiTriShape(_)
-                            | NetImmerseNifBlockPayload::NiTriStrips(_)
-                    )
-                    .then_some(block.index)
-                    .filter(|index| {
-                        i32::try_from(*index).is_ok_and(|block| {
-                            selected_bone_level_of_detail.scene_block_is_visible(block)
-                        })
-                    })
-                })
-                .map(|geometry_block_index| {
+            let bone_lod = NetImmerseBoneLod::from_document(&netimmerse_document);
+            let mut renderer_neutral_models = Vec::new();
+            let mut alternate_models = Vec::new();
+            for block in netimmerse_document.blocks() {
+                if !matches!(
+                    &block.payload,
+                    NetImmerseNifBlockPayload::NiTriShape(_)
+                        | NetImmerseNifBlockPayload::NiTriStrips(_)
+                ) {
+                    continue;
+                }
+                let block_ref = i32::try_from(block.index)?;
+                let initial_node = bone_lod
+                    .nodes
+                    .get(&block_ref)
+                    .is_none_or(|node| node.initial == node.ordinal);
+                let mut lower_geometry = |skin| {
                     lower_netimmerse_geometry_block(
                         &netimmerse_document,
-                        &selected_bone_level_of_detail,
-                        geometry_block_index,
+                        block.index,
+                        skin,
                         |material_reference| {
                             Some(openzt2_game_data::AssetId::from_key(
                                 &material_reference.asset_key(),
@@ -73,11 +73,38 @@ pub fn lower_native_model_source(
                         },
                         &mut resolve_texture_asset_path,
                     )
-                    .map(|model| (geometry_block_index, model))
-                })
-                .collect::<Result<Vec<_>, _>>()?;
+                };
+                if let Some(shape) = bone_lod.shapes.get(&block_ref) {
+                    for (&ordinal, &skin) in &shape.skins {
+                        let mut lowered = lower_geometry(Some(skin))?;
+                        if ordinal != shape.initial {
+                            lowered.virtual_path = netimmerse_geometry_skin_variant_path(
+                                &netimmerse_document,
+                                block.index,
+                                ordinal,
+                            );
+                        }
+                        if ordinal == shape.initial && initial_node {
+                            renderer_neutral_models.push((block.index, lowered));
+                        } else {
+                            alternate_models.push((block.index, lowered));
+                        }
+                    }
+                } else {
+                    let lowered = (block.index, lower_geometry(None)?);
+                    if initial_node {
+                        renderer_neutral_models.push(lowered);
+                    } else {
+                        alternate_models.push(lowered);
+                    }
+                }
+            }
+            let has_default_scene = !renderer_neutral_models.is_empty();
+            renderer_neutral_models.extend(alternate_models);
+            let mut material_geometry = std::collections::BTreeSet::new();
             let materials = renderer_neutral_models
                 .iter()
+                .filter(|(geometry_block_index, _)| material_geometry.insert(*geometry_block_index))
                 .filter_map(|(geometry_block_index, model)| {
                     model
                         .meshes
@@ -130,7 +157,7 @@ pub fn lower_native_model_source(
                 .collect();
             let mut scene_prefab_document = lower_netimmerse_scene_prefab(
                 &netimmerse_document,
-                &selected_bone_level_of_detail,
+                &bone_lod,
                 native_model_asset_path,
                 None,
                 lower_netimmerse_footprint_collision_hull(&netimmerse_document)?,
@@ -138,7 +165,7 @@ pub fn lower_native_model_source(
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_netimmerse_automatic_placement_bounds(&netimmerse_document)?;
             Ok(LoweredNativeModel {
-                glb: encode_models_as_glb(renderer_neutral_models)?,
+                glb: encode_models_as_glb(renderer_neutral_models, has_default_scene)?,
                 scene_prefab_document,
                 particle_effects: particles::lower_all(
                     &netimmerse_document,
@@ -158,6 +185,13 @@ pub fn lower_native_model_source(
                         &material_reference.asset_key(),
                     ))
                 })?;
+            let has_default_scene = renderer_neutral_models
+                .first()
+                .is_some_and(|(_, is_initial)| *is_initial);
+            let renderer_neutral_models = renderer_neutral_models
+                .into_iter()
+                .map(|(model, _)| model)
+                .collect();
             let mut scene_prefab_document = lower_blue_fang_scene_prefab(
                 &blue_fang_document,
                 native_model_asset_path,
@@ -167,7 +201,7 @@ pub fn lower_native_model_source(
             scene_prefab_document.automatic_placement_bounds_xz =
                 lower_blue_fang_automatic_placement_bounds(&blue_fang_document)?;
             Ok(LoweredNativeModel {
-                glb: encode_models_as_glb(renderer_neutral_models)?,
+                glb: encode_models_as_glb(renderer_neutral_models, has_default_scene)?,
                 scene_prefab_document,
                 particle_effects: Vec::new(),
                 materials: Vec::new(),

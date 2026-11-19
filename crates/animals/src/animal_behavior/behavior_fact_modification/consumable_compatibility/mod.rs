@@ -23,6 +23,11 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState
 
 #[derive(SystemParam)]
 pub(crate) struct AnimalConsumableCompatibility<'w, 's> {
+    continuations:
+        openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames<
+            'w,
+            's,
+        >,
     species_assets: Option<Res<'w, Assets<SpeciesAsset>>>,
     species_index: Option<Res<'w, SpeciesAssets>>,
     world_assets: Option<Res<'w, Assets<WorldDefinitionAsset>>>,
@@ -76,7 +81,7 @@ impl AnimalConsumableCompatibility<'_, '_> {
         };
         // Nested sets keep the enclosing task's authored species/source contract.
         let origin = std::iter::once((&task.document, task.declaration, task.phase, task.program))
-            .chain(task.stack.iter().rev().map(|frame| {
+            .chain(self.continuations.frames(animal).rev().map(|frame| {
                 (
                     &frame.document,
                     frame.declaration,

@@ -5,7 +5,7 @@ use openzt2_game_data::ui_document::action::animal_health::UiAnimalHealthAction;
 use openzt2_game_data::ui_document::document::UiDocumentRole;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiAnimalHealthActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -22,7 +22,7 @@ pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     ui_nodes: Query<(&UiAnimalHealthActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     mut show_ui_document_requests: MessageWriter<ShowUiRole>,
 ) {
     for activation in ui_node_activations.read() {
@@ -44,7 +44,7 @@ pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
                     commands.entity(activation.node).insert((
                         DiseaseTreatmentControl,
                         AnimalCareTarget {
-                            animal_entity: selected_entity.0,
+                            animal_entity: selected_entity.subject(),
                         },
                     ));
                 }
@@ -52,7 +52,7 @@ pub(super) fn route_animal_health_tool_actions_from_activated_ui_nodes(
                     commands.entity(activation.node).insert((
                         TranquilizerControl,
                         AnimalCareTarget {
-                            animal_entity: selected_entity.0,
+                            animal_entity: selected_entity.subject(),
                         },
                     ));
                     show_ui_document_requests.write(ShowUiRole {

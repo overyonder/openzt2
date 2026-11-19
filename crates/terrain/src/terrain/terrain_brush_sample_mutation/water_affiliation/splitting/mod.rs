@@ -72,6 +72,7 @@ pub(in crate::terrain) fn split_disconnected_water_affiliations<'a>(
             .map(|change| change.owner),
     );
     let mut assignments = BTreeMap::new();
+    let mut new_owners = Vec::new();
     for owner in affected {
         if owner_changes
             .iter()
@@ -137,26 +138,14 @@ pub(in crate::terrain) fn split_disconnected_water_affiliations<'a>(
         // The first component contains the lowest source point, matching the
         // ordered point traversal; its owner and effect phases are retained.
         for component in components.into_iter().skip(1) {
-            let child = commands
-                .spawn((
-                    ChildOf(map_parent),
-                    TerrainWaterRegionRetired,
-                    TerrainWaterRegionFade::default(),
-                    TerrainWaterRegionVisibility::default(),
-                ))
-                .id();
-            owner_changes.push(TerrainWaterRegionEditDelta {
-                owner: child,
-                before: None,
-                after: Some(state.clone()),
-                before_active: false,
-                after_active: true,
-            });
+            let child = new_owners.len();
+            new_owners.push(state.clone());
             for point in component {
                 assignments.insert(point, child);
             }
         }
     }
+    let mut assignments_by_chunk = BTreeMap::new();
     for (chunk, edited, id) in chunks {
         let cells = u32::from(chunk.side.checked_sub(1)?);
         let minimum = chunk.source_coord.as_uvec2() * cells;
@@ -220,10 +209,18 @@ pub(in crate::terrain) fn split_disconnected_water_affiliations<'a>(
                 &previous.after,
             );
         }
-        for (point, owner) in local_changes {
-            after[(point.y - min.y) as usize * width + (point.x - min.x) as usize]
-                .water_affiliation = Some(TerrainWaterAffiliation::Edited(owner));
-        }
+        assignments_by_chunk.insert(
+            id.0,
+            local_changes
+                .into_iter()
+                .map(|(point, owner)| {
+                    (
+                        (point.y - min.y) as usize * width + (point.x - min.x) as usize,
+                        owner,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        );
         deltas.push(TerrainEditDelta {
             chunk: id,
             min,
@@ -231,6 +228,65 @@ pub(in crate::terrain) fn split_disconnected_water_affiliations<'a>(
             before: before.into_boxed_slice(),
             after: after.into_boxed_slice(),
         });
+    }
+    // All sample reads and region checks have succeeded. Assign entity IDs
+    // only to owners that will be referenced by the retained edit.
+    let new_owner_has_samples = deltas.iter().any(|delta| {
+        delta.after.iter().any(|sample| {
+            sample.water_affiliation == Some(TerrainWaterAffiliation::Edited(Entity::PLACEHOLDER))
+        })
+    });
+    if !new_owner_has_samples {
+        owner_changes.retain(|change| change.owner != Entity::PLACEHOLDER);
+    }
+    let mut spawn_owner = || {
+        commands
+            .spawn((
+                ChildOf(map_parent),
+                TerrainWaterRegionRetired,
+                TerrainWaterRegionFade::default(),
+                TerrainWaterRegionVisibility::default(),
+            ))
+            .id()
+    };
+    let initial_owner = owner_changes
+        .iter_mut()
+        .find(|change| change.owner == Entity::PLACEHOLDER)
+        .map(|change| {
+            let owner = spawn_owner();
+            change.owner = owner;
+            owner
+        });
+    let split_owners: Vec<_> = new_owners
+        .into_iter()
+        .map(|state| {
+            let owner = spawn_owner();
+            owner_changes.push(TerrainWaterRegionEditDelta {
+                owner,
+                before: None,
+                after: Some(state),
+                before_active: false,
+                after_active: true,
+            });
+            owner
+        })
+        .collect();
+    for delta in deltas.iter_mut() {
+        if let Some(owner) = initial_owner {
+            for sample in delta.after.iter_mut() {
+                if sample.water_affiliation
+                    == Some(TerrainWaterAffiliation::Edited(Entity::PLACEHOLDER))
+                {
+                    sample.water_affiliation = Some(TerrainWaterAffiliation::Edited(owner));
+                }
+            }
+        }
+        if let Some(assignments) = assignments_by_chunk.remove(&delta.chunk.0) {
+            for (sample, owner) in assignments {
+                delta.after[sample].water_affiliation =
+                    Some(TerrainWaterAffiliation::Edited(split_owners[owner]));
+            }
+        }
     }
     Some(())
 }

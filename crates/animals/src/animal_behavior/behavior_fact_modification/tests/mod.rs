@@ -1,4 +1,3 @@
-use arrayvec::ArrayVec;
 mod compatibility_fixtures;
 use bevy::prelude::*;
 use openzt2_game_data::behavior::scalar::BehaviorScalarQ16;
@@ -35,18 +34,21 @@ use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::feeding::container_quantity::AUTHORED_CONTAINER_CAPACITY_Q16;
+use openzt2_zoo_state::maintenance::maintenance_types::AdjustFacilityContainedWaste;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
 
 fn install_action_app() -> (App, Entity, Entity) {
     let mut app = App::new();
-    app.init_resource::<Assets<BehaviorDocumentAsset>>()
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion)
+        .init_resource::<Assets<BehaviorDocumentAsset>>()
+        .init_resource::<Assets<openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset>>()
+        .init_resource::<openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions>()
         .insert_resource(ZooClock {
             fractional_tick: Default::default(),
             tick: 0,
             absolute_day: 0,
             tick_in_day: 0,
         })
-        .add_message::<openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt>()
         .add_message::<AdjustHunger>()
         .add_message::<AdjustBathroom>()
         .add_message::<openzt2_zoo_state::animal_welfare::types::AdjustReproduction>()
@@ -58,6 +60,7 @@ fn install_action_app() -> (App, Entity, Entity) {
         .add_message::<AdjustStimulation>()
         .add_message::<AdjustHealthNeed>()
         .add_message::<AdjustHygiene>()
+        .add_message::<AdjustFacilityContainedWaste>()
         .add_message::<openzt2_zoo_state::guests::guest_simulation_types::AdjustGuestSatisfaction>()
         .add_message::<FreezeAnimal>()
         .add_message::<ThawAnimal>();
@@ -130,7 +133,7 @@ fn attach_task(
             next_action_tick: 0,
             object: None,
             interaction_slot: None,
-            stack: ArrayVec::new(),
+            depth: 0,
         });
 }
 

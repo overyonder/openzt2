@@ -1,9 +1,11 @@
 use super::authored_globe_presentation_types::UiGlobeCamera;
-use super::authored_globe_presentation_types::UiGlobeModelsHydrated;
 use super::authored_globe_presentation_types::UiGlobePrefab;
 use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
 use super::authored_globe_presentation_types::UiGlobeRenderScene;
 use super::authored_globe_presentation_types::UiGlobeSceneOwner;
+use super::authored_globe_presentation_types::{
+    UiGlobeBiomeVisual, UiGlobeBiomeVisuals, UiGlobeHostedSceneEntities, UiGlobeWorldOf,
+};
 use crate::authored_globe_presentation_types::UiGlobeBiomeAsset;
 use crate::authored_globe_presentation_types::UiGlobeBiomeModel;
 use crate::authored_globe_presentation_types::UiGlobeMarkerVisual;
@@ -23,7 +25,7 @@ pub(crate) fn hydrate_globe_models(
     mut commands: Commands,
     globes: Query<
         (Entity, &UiGlobePresentation, &UiGlobeSceneAssets),
-        Without<UiGlobeModelsHydrated>,
+        Without<UiGlobeHostedSceneEntities>,
     >,
     biome_models: Query<
         (
@@ -33,7 +35,7 @@ pub(crate) fn hydrate_globe_models(
             &Visibility,
             &ChildOf,
         ),
-        (Without<UiGlobeModelsHydrated>, Without<UiGlobePrefab>),
+        (Without<UiGlobeBiomeVisuals>, Without<UiGlobePrefab>),
     >,
     scenes: Query<&UiGlobeRenderScene>,
     children: Query<&Children>,
@@ -60,6 +62,7 @@ pub(crate) fn hydrate_globe_models(
                 Visibility::Inherited,
                 RenderLayers::layer(GLOBE_RENDER_LAYER),
                 ChildOf(scene),
+                UiGlobeWorldOf(entity),
             ))
             .id();
         let mut has_primary = false;
@@ -122,9 +125,6 @@ pub(crate) fn hydrate_globe_models(
                 commands.entity(child).despawn();
             }
         }
-        commands
-            .entity(entity)
-            .insert((UiGlobeRenderScene { world }, UiGlobeModelsHydrated));
     }
     for (entity, biome, asset, visibility, parent) in &biome_models {
         let Ok(scene) = scenes.get(parent.parent()) else {
@@ -139,9 +139,9 @@ pub(crate) fn hydrate_globe_models(
             },
             Transform::IDENTITY,
             *visibility,
-            ChildOf(scene.world),
+            ChildOf(scene.world()),
+            UiGlobeBiomeVisual(entity),
         ));
-        commands.entity(entity).insert(UiGlobeModelsHydrated);
     }
 }
 
@@ -198,7 +198,7 @@ pub(crate) fn project_globe_prefabs(
                     for (camera_entity, owner) in &cameras {
                         if !scenes
                             .get(owner.0)
-                            .is_ok_and(|scene| scene.world == globe_world)
+                            .is_ok_and(|scene| scene.world() == globe_world)
                         {
                             continue;
                         }
@@ -222,6 +222,13 @@ pub(crate) fn project_globe_prefabs(
             for renderable in &renderables {
                 let mut entity = commands.entity(*renderable);
                 entity.insert(marker);
+                if !marker.selected {
+                    entity.insert(
+                        openzt2_world_state::world_spawn::prefab_model_tint::PrefabModelTint(
+                            Color::WHITE,
+                        ),
+                    );
+                }
                 if let Some(owner) = owner.copied() {
                     entity.insert(owner);
                 }

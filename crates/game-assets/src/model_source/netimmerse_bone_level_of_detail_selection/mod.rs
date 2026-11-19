@@ -1,4 +1,4 @@
-//! Static selection of the active bone LOD authored by a NetImmerse model.
+//! Authored bone LOD variants and the initial tier of a NetImmerse model.
 
 use std::collections::BTreeMap;
 
@@ -6,83 +6,82 @@ use super::netimmerse_nif_source::{
     block_payload::NetImmerseNifBlockPayload, document_source_types::NetImmerseNifDocument,
 };
 
-pub(super) struct NetImmerseSelectedBoneLevelOfDetail {
-    node_visibility_by_block: BTreeMap<i32, bool>,
-    shape_skin_instance_by_block: BTreeMap<i32, Option<i32>>,
+pub(super) struct NetImmerseBoneLod {
+    pub(super) nodes: BTreeMap<i32, NetImmerseNodeBoneLod>,
+    pub(super) shapes: BTreeMap<i32, NetImmerseShapeBoneLod>,
 }
 
-impl NetImmerseSelectedBoneLevelOfDetail {
+pub(super) struct NetImmerseNodeBoneLod {
+    pub(super) controller: u32,
+    pub(super) ordinal: u16,
+    pub(super) initial: u16,
+}
+
+pub(super) struct NetImmerseShapeBoneLod {
+    pub(super) controller: u32,
+    pub(super) initial: u16,
+    pub(super) skins: BTreeMap<u16, i32>,
+}
+
+impl NetImmerseBoneLod {
     pub(super) fn from_document(document: &NetImmerseNifDocument) -> Self {
-        let mut selection = Self {
-            node_visibility_by_block: BTreeMap::new(),
-            shape_skin_instance_by_block: BTreeMap::new(),
+        let mut lod = Self {
+            nodes: BTreeMap::new(),
+            shapes: BTreeMap::new(),
         };
-        document.blocks().for_each(|block| {
+        for block in document.blocks() {
             let NetImmerseNifBlockPayload::NiBoneLODController(controller) = &block.payload else {
-                return;
+                continue;
             };
-            controller
-                .node_groups
-                .iter()
-                .enumerate()
-                .for_each(|(ordinal, nodes)| {
-                    let visible = usize::try_from(controller.lod).ok() == Some(ordinal);
-                    nodes.iter().for_each(|node| {
-                        selection.node_visibility_by_block.insert(*node, visible);
+            let initial = u16::try_from(controller.lod).unwrap_or(u16::MAX);
+            for (ordinal, nodes) in controller.node_groups.iter().enumerate() {
+                let Ok(ordinal) = u16::try_from(ordinal) else {
+                    break;
+                };
+                for node in nodes {
+                    lod.nodes.insert(
+                        *node,
+                        NetImmerseNodeBoneLod {
+                            controller: block.index,
+                            ordinal,
+                            initial,
+                        },
+                    );
+                }
+            }
+            for shape in &controller.shape_refs {
+                lod.shapes.insert(
+                    *shape,
+                    NetImmerseShapeBoneLod {
+                        controller: block.index,
+                        initial,
+                        skins: BTreeMap::new(),
+                    },
+                );
+            }
+            for (ordinal, shapes) in controller.shape_groups.iter().enumerate() {
+                let Ok(ordinal) = u16::try_from(ordinal) else {
+                    break;
+                };
+                for shape in shapes {
+                    let plan = lod.shapes.entry(shape.shape_ref).or_insert_with(|| {
+                        NetImmerseShapeBoneLod {
+                            controller: block.index,
+                            initial,
+                            skins: BTreeMap::new(),
+                        }
                     });
-                });
-            controller.shape_refs.iter().for_each(|shape| {
-                selection.shape_skin_instance_by_block.insert(*shape, None);
-            });
-            usize::try_from(controller.lod)
-                .ok()
-                .and_then(|ordinal| controller.shape_groups.get(ordinal))
-                .into_iter()
-                .flatten()
-                .for_each(|shape| {
-                    selection
-                        .shape_skin_instance_by_block
-                        .insert(shape.shape_ref, Some(shape.skin_instance_ref));
-                });
-        });
-        selection
-    }
-
-    pub(super) fn scene_block_is_visible(&self, block: i32) -> bool {
-        self.node_visibility_by_block
-            .get(&block)
-            .copied()
-            .unwrap_or(true)
-            && self
-                .shape_skin_instance_by_block
-                .get(&block)
-                .is_none_or(Option::is_some)
-    }
-
-    pub(super) fn selected_or_authored_scene_block_visibility(
-        &self,
-        block: i32,
-        authored_visibility: bool,
-    ) -> bool {
-        self.shape_skin_instance_by_block.get(&block).map_or_else(
-            || {
-                self.node_visibility_by_block
-                    .get(&block)
-                    .copied()
-                    .unwrap_or(authored_visibility)
-            },
-            Option::is_some,
-        )
-    }
-
-    pub(super) fn selected_shape_skin_instance(
-        &self,
-        block: i32,
-        authored_skin_instance: i32,
-    ) -> Option<i32> {
-        self.shape_skin_instance_by_block
-            .get(&block)
-            .copied()
-            .unwrap_or(Some(authored_skin_instance))
+                    if plan.controller != block.index {
+                        *plan = NetImmerseShapeBoneLod {
+                            controller: block.index,
+                            initial,
+                            skins: BTreeMap::new(),
+                        };
+                    }
+                    plan.skins.insert(ordinal, shape.skin_instance_ref);
+                }
+            }
+        }
+        lod
     }
 }

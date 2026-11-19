@@ -1,3 +1,4 @@
+use super::immersive_mode_state_types::ImmersiveSubject;
 use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use bevy::prelude::*;
 
@@ -22,8 +23,17 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     pointer_ray: Res<WorldPointerRay>,
     spatial_query: SpatialQuery,
     active_navigation: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    tank_water: Query<
+        Ref<openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater>,
+        With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>,
+    >,
     mut active: Query<
-        (Entity, &ActiveImmersiveMode, &mut GuestViewTileCount),
+        (
+            Entity,
+            &ActiveImmersiveMode,
+            &ImmersiveSubject,
+            &mut GuestViewTileCount,
+        ),
         With<GuestViewControl>,
     >,
     parents: Query<&ChildOf>,
@@ -33,7 +43,7 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     mut gizmos: ResMut<Assets<GizmoAsset>>,
     mut commands: Commands,
 ) {
-    let (Ok((controller_entity, mode, mut count)), Some(ray), Some(active_navigation)) =
+    let (Ok((controller_entity, mode, subject, mut count)), Some(ray), Some(active_navigation)) =
         (active.single_mut(), pointer_ray.0, active_navigation)
     else {
         return;
@@ -49,9 +59,8 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
         &SpatialQueryFilter::DEFAULT,
         &|entity| {
             entity != controller_entity
-                && mode.subject.is_none_or(|subject| {
-                    entity != subject && !entity_has_ancestor(entity, subject, &parents)
-                })
+                && entity != subject.0
+                && !entity_has_ancestor(entity, subject.0, &parents)
         },
     ) else {
         despawn_projected_navigation_markers(markers.get(controller_entity).ok(), &mut commands);
@@ -62,7 +71,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
         return;
     };
     let existing = markers.get(controller_entity).ok();
+    let tank_water = tank_water.single().ok();
     if !active_navigation.is_changed()
+        && !tank_water.as_ref().is_some_and(Ref::is_changed)
         && existing
             .into_iter()
             .flat_map(|markers| markers.iter())
@@ -79,7 +90,9 @@ pub(super) fn project_nearest_guest_navigation_positions_as_view_markers(
     let position_cm = (world * 100.0).round().as_ivec3().to_array();
     let mut nearest_navigation_positions =
         [(f32::INFINITY, Vec3::ZERO); MAXIMUM_GUEST_VIEW_NAVIGATION_MARKER_COUNT];
-    for position in active_navigation.candidate_positions(position_cm, NavFlags::GUEST) {
+    for position in
+        active_navigation.candidate_positions(position_cm, NavFlags::GUEST, tank_water.as_deref())
+    {
         let position = Vec3::new(position[0] as f32, position[1] as f32, position[2] as f32) * 0.01;
         insert_navigation_position_among_nearest_guest_view_positions(
             &mut nearest_navigation_positions,

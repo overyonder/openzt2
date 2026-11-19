@@ -2,12 +2,11 @@ use bevy::asset::AssetId;
 use bevy::ecs::entity::EntityHashSet;
 use bevy::platform::collections::{HashMap, HashSet};
 use bevy::prelude::*;
-use openzt2_world_state::{
-    model_render::ModelExpanded, world_spawn::prefab_model_tint::PrefabModelTint,
-};
+use openzt2_world_state::model_render::ModelExpanded;
 
 use super::authored_model_material_pass_projection::AuthoredModelStandardMaterial;
 use super::configured_model_effect_materials::ModelMaterialInputOwner;
+use super::mirrored_model_primitive_winding::InheritedPrimitiveTint;
 
 pub(super) type TintedStandardMaterialKey = (AssetId<StandardMaterial>, [u32; 3]);
 
@@ -17,11 +16,10 @@ pub(super) fn project_model_tints_onto_standard_materials(
         Entity,
         Mut<MeshMaterial3d<StandardMaterial>>,
         Option<&mut AuthoredModelStandardMaterial>,
-        Option<Ref<ModelMaterialInputOwner<PrefabModelTint>>>,
+        Option<Ref<InheritedPrimitiveTint>>,
         Option<Ref<ModelMaterialInputOwner<ModelExpanded>>>,
     )>,
-    tints: Query<Ref<PrefabModelTint>>,
-    mut removed_tints: RemovedComponents<ModelMaterialInputOwner<PrefabModelTint>>,
+    mut removed_tints: RemovedComponents<InheritedPrimitiveTint>,
     mut removed_models: RemovedComponents<ModelMaterialInputOwner<ModelExpanded>>,
     mut assets: ResMut<Assets<StandardMaterial>>,
     mut events: MessageReader<AssetEvent<StandardMaterial>>,
@@ -45,19 +43,17 @@ pub(super) fn project_model_tints_onto_standard_materials(
         .read()
         .chain(removed_models.read())
         .collect::<EntityHashSet>();
-    for (entity, mut binding, authored, owner, model) in &mut primitives {
-        if owner.is_none() && authored.is_none() {
+    for (entity, mut binding, authored, tint, model) in &mut primitives {
+        if tint.is_none() && authored.is_none() {
             continue;
         }
         let source = authored
             .as_ref()
             .filter(|authored| authored.rendered_material == binding.id())
             .map_or_else(|| binding.0.clone(), |authored| authored.source.clone());
-        let tint = owner.as_ref().and_then(|owner| tints.get(owner.0).ok());
         if !binding.is_changed()
             && !changed_assets.contains(&source.id())
             && !removed.contains(&entity)
-            && !owner.as_ref().is_some_and(|owner| owner.is_changed())
             && !model.as_ref().is_some_and(|model| model.is_changed())
             && !tint.as_ref().is_some_and(|tint| tint.is_changed())
         {

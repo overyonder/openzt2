@@ -24,17 +24,15 @@ use crate::placement::ground_path_placement_stomp::{
 };
 use crate::placement::object_placement_request_routing::reject_object_placement_edit_preparation;
 use crate::placement::stomped_object_edit_preparation::{
-    StompablePlacedObject, prepare_stomped_object_removals,
+    object_stomp_prevents_placement_at_cell, prepare_stomped_object_removals, StompablePlacedObject,
 };
-use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_origin_and_quarter_turns;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
-use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns;
-use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
+use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference;
 use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccupancy;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
@@ -172,17 +170,14 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             terrain,
             |cell| {
                 path_overlaps.prevents_placement(cell)
-                    || placement.entities_occupying_cell(cell).any(|entity| {
-                        Some(entity) != relocation.map(|source| source.0)
-                            && object_placement_stomp_action(
-                                definition,
-                                catalogue,
-                                placed
-                                    .get(entity)
-                                    .ok()
-                                    .map(|(_, placeable, _, _, _)| placeable.definition),
-                            ) == PlacementStompAction::Prevent
-                    })
+                    || object_stomp_prevents_placement_at_cell(
+                        cell,
+                        definition,
+                        catalogue,
+                        &placement,
+                        &placed,
+                        |entity| Some(entity) == relocation.map(|source| source.0),
+                    )
             },
             ObjectPlacementAuthoritativeFacts {
                 habitat: habitat.map(|member| member.habitat_entity),
@@ -293,11 +288,9 @@ pub(super) fn prepare_object_placement_or_relocation_edit(
             &cells,
             definition,
             catalogue,
-            &footprints,
             &placement,
             &placed,
             |entity| Some(entity) == relocation.map(|source| source.0),
-            &mut scratch.cells,
         ) else {
             reject_object_placement_edit_preparation(
                 &mut rejected,

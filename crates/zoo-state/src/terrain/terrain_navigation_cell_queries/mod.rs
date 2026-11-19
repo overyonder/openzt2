@@ -12,7 +12,7 @@ pub fn read_navigation_cell_geometry_from_terrain_samples(
     terrain_asset: &TerrainAsset,
     edited_terrain_samples: Option<&EditedTerrainSamples>,
     terrain_cell: UVec2,
-) -> Option<(i32, bool, f32)> {
+) -> Option<(i32, bool, u16, f32)> {
     let sample_x = usize::try_from(terrain_cell.x).ok()?;
     let sample_z = usize::try_from(terrain_cell.y).ok()?;
     let terrain_cell_count = usize::from(terrain_chunk.side.checked_sub(1)?);
@@ -60,7 +60,35 @@ pub fn read_navigation_cell_geometry_from_terrain_samples(
                 terrain_cell,
             )?,
         )?;
-    Some((height, water, minimum_normal_y))
+    let depth_cm = if water {
+        corner_samples
+            .iter()
+            .map(|sample| {
+                if edited_terrain_samples.is_some() {
+                    return u16::try_from(
+                        (i32::from(sample.water_cm) - i32::from(sample.height_cm)).max(0),
+                    )
+                    .unwrap_or(u16::MAX);
+                }
+                let biome = terrain_asset
+                    .canonical_terrain_grid()
+                    .biomes
+                    .get(usize::from(sample.water_biome_channel));
+                biome
+                    .and_then(|biome| match sample.water_style {
+                        1 => biome.shallow_water_depth_mm,
+                        2 => biome.deep_water_depth_mm.or(biome.shallow_water_depth_mm),
+                        _ => None,
+                    })
+                    .and_then(|depth| u16::try_from(depth.max(0) / 10).ok())
+                    .unwrap_or(0)
+            })
+            .min()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    Some((height, water, depth_cm, minimum_normal_y))
 }
 
 /// Applies the terrain-owned reduction from four corner samples to one

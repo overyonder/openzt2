@@ -17,8 +17,7 @@ use super::{
 };
 
 /// The most game time one frame advances; slower frames slow the game.
-const MAXIMUM_FRAME_CATCH_UP: std::time::Duration =
-    std::time::Duration::from_millis(250);
+const MAXIMUM_FRAME_CATCH_UP: std::time::Duration = std::time::Duration::from_millis(250);
 
 pub fn initialize_simulation_time_from_selected_world(
     mut commands: Commands,

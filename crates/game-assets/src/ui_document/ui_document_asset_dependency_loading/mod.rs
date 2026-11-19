@@ -57,7 +57,7 @@ pub(super) fn create_ui_document_asset_and_load_typed_dependencies(
             }
             UiDependencyKind::Document => {
                 let handle = if let Some(label) = same_source_fragment_labels.get(&dependency.id) {
-                    load_context.get_label_handle::<UiDocumentAsset>(label.as_str())
+                    load_context.get_label_handle::<UiDocumentAsset>(label.clone())
                 } else {
                     load_context.load(
                         dependency

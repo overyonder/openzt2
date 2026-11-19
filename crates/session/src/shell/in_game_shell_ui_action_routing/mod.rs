@@ -5,8 +5,8 @@ use openzt2_world_state::simulation_time::simulation_control_types::AuthoredUiTe
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::information::catalogue_types::SelectedCatalogueEntry;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
 use openzt2_interface_state::information::entity_selection_types::SelectionRequest;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::photos::photo_capture_types::CaptureScreenshotRequest;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
@@ -23,8 +23,8 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiShe
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 #[derive(SystemParam)]
-pub(super) struct OverheadInformationDismissalTargets<'w> {
-    selected_entity: Res<'w, SelectedEntity>,
+pub(super) struct OverheadInformationDismissalTargets<'w, 's> {
+    selected_entity: WorldUiSelection<'w, 's>,
     selected_catalogue_entry: ResMut<'w, SelectedCatalogueEntry>,
     selection_requests: MessageWriter<'w, SelectionRequest>,
 }
@@ -97,7 +97,7 @@ pub(super) fn route_authored_in_game_shell_ui_actions(
                 UiShellAction::ShowInGameOptionsOverlay
                 | UiShellAction::OpenInGameOptionsFromOverheadEscape => {
                     if record.action == UiShellAction::OpenInGameOptionsFromOverheadEscape {
-                        if information.selected_entity.0.is_some() {
+                        if information.selected_entity.subject().is_some() {
                             information.selection_requests.write(SelectionRequest {
                                 entity: None,
                                 source: activation.source,

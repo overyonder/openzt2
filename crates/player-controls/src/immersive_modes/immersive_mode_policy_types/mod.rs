@@ -33,11 +33,3 @@ pub(super) struct InteractionPrefabVisual(pub(super) Entity);
 #[derive(Component)]
 #[relationship_target(relationship = InteractionPrefabVisual, linked_spawn)]
 pub(super) struct InteractionPrefabVisuals(Vec<Entity>);
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ModeHiddenHud {
-    pub(crate) previous: Visibility,
-}
-
-#[derive(Component, Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct HideHudWhileActive;

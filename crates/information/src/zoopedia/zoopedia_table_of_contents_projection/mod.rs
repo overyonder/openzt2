@@ -63,17 +63,17 @@ pub(crate) fn apply_authored_zoopedia_table_of_contents_expansion_changes(
         (With<UiAuthoredTreeItem>, Changed<UiAuthoredTreeExpansion>),
     >,
     parents: Query<&ChildOf>,
-    rows: Query<(&UiListRow, &ZoopediaTableOfContentsRow)>,
+    rows: Query<(&ChildOf, &ZoopediaTableOfContentsRow), With<UiListRow>>,
     mut lists: Query<&mut ZoopediaTableOfContentsState>,
 ) {
     for (tree_entity, expanded) in &changed_trees {
-        let Some((row, presentation)) = std::iter::successors(Some(tree_entity), |entity| {
+        let Some((parent, presentation)) = std::iter::successors(Some(tree_entity), |entity| {
             parents.get(*entity).ok().map(ChildOf::parent)
         })
         .find_map(|entity| rows.get(entity).ok()) else {
             continue;
         };
-        let Ok(mut state) = lists.get_mut(row.list) else {
+        let Ok(mut state) = lists.get_mut(parent.parent()) else {
             continue;
         };
         if expanded.is_expanded() {
@@ -116,7 +116,12 @@ pub(crate) fn project_zoopedia_table_of_contents_rows(
     active_definitions: Res<WorldDefinitions>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
-    rows: Query<(Entity, &UiListRow, Option<&ZoopediaTableOfContentsRow>)>,
+    rows: Query<(
+        Entity,
+        &UiListRow,
+        &ChildOf,
+        Option<&ZoopediaTableOfContentsRow>,
+    )>,
     lists: Query<(&UiDocumentOwner, &ZoopediaTableOfContentsState)>,
     children: Query<&Children>,
     mut buttons: Query<(
@@ -147,11 +152,11 @@ pub(crate) fn project_zoopedia_table_of_contents_rows(
     };
     // Rows of one list share its visible entries; each row touches only its own subtree.
     let mut visible_by_list = std::collections::HashMap::new();
-    for (row_entity, row, current) in &rows {
-        let Ok((owner, state)) = lists.get(row.list) else {
+    for (row_entity, row, parent, current) in &rows {
+        let Ok((owner, state)) = lists.get(parent.parent()) else {
             continue;
         };
-        let visible = visible_by_list.entry(row.list).or_insert_with(|| {
+        let visible = visible_by_list.entry(parent.parent()).or_insert_with(|| {
             collect_visible_zoopedia_entries(catalog, root, &state.expanded_subjects)
         });
         let Some((entry, depth)) = visible.get(usize::from(row.index)).copied() else {

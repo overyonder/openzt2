@@ -55,12 +55,15 @@ impl<'a> SelectedBlueFangBfbRenderPart<'a> {
 pub(in crate::model_source) fn lower_blue_fang_render_parts(
     document: &BlueFangBfbDocument,
     mut resolve_material: impl FnMut(NativeMaterialReference<'_>) -> Option<AssetId>,
-) -> Result<Vec<ModelSource>, NativeGeometryLoweringError> {
+) -> Result<Vec<(ModelSource, bool)>, NativeGeometryLoweringError> {
     collect_blue_fang_render_parts(document)
         .into_iter()
         // Retain empty mesh slots in the scene hierarchy without emitting geometry.
         .filter(|part| !(part.vertices().is_empty() && part.indices().is_empty()))
-        .map(|part| adapt_bfb_part(document, part, &mut resolve_material))
+        .map(|part| {
+            let is_initial = part.lod_index.is_none_or(|lod| lod == 0);
+            adapt_bfb_part(document, part, &mut resolve_material).map(|model| (model, is_initial))
+        })
         .collect()
 }
 

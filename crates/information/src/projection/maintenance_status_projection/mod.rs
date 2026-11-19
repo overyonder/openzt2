@@ -11,12 +11,13 @@ use openzt2_zoo_state::maintenance::maintenance_types::FacilityContainedWastePre
 use openzt2_zoo_state::maintenance::maintenance_types::LooseLitterWaste;
 use openzt2_zoo_state::maintenance::maintenance_types::ZooCleanlinessPermille;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 /// Updates maintenance information for the selected entity.
 pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
     cleanliness: Res<ZooCleanlinessPermille>,
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     subjects: Query<(
         Option<Ref<FacilityContainedWaste>>,
         Option<Ref<LooseLitterWaste>>,
@@ -30,15 +31,19 @@ pub(crate) fn project_live_maintenance_status_to_visible_information_panels(
         &mut Visibility,
     )>,
 ) {
-    for (panel_entity, panel, visible) in &panels {
+    for (panel_entity, parent, visible) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !visible.get() {
             continue;
         }
-        let Ok((container, litter, habitat_waste, water_quality)) = subjects.get(panel.subject)
+        let Ok((container, litter, habitat_waste, water_quality)) = subjects.get(selection.0)
         else {
             continue;
         };
-        if !panel.is_changed()
+        if !selection.is_changed()
+            && !visible.is_changed()
             && !cleanliness.is_changed()
             && container.as_ref().is_none_or(|value| !value.is_changed())
             && litter.as_ref().is_none_or(|value| !value.is_changed())

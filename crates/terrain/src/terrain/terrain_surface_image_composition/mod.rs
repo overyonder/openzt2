@@ -100,8 +100,8 @@ pub(super) fn recompose_terrain_surface_image_region(
     edited_chunks: &[(Handle<TerrainAsset>, IVec2, EditedTerrainSamples)],
     images: &Assets<Image>,
     previous: &Image,
-    changed_min: UVec2,
-    changed_max: UVec2,
+    changed_samples: Option<(UVec2, UVec2)>,
+    changed_pixels: Option<IRect>,
 ) -> Option<(Image, IRect)> {
     let _span = info_span!("recompose_terrain_surface_region").entered();
     let (paints, layout) = compose_terrain_surface_paints(chunk, asset, edited_chunks)?;
@@ -116,20 +116,23 @@ pub(super) fn recompose_terrain_surface_image_region(
         let extent = read_rgba_image_extent(&image)?.as_ivec2();
         return Some((image, IRect::from_corners(IVec2::ZERO, extent)));
     };
-    let reach_min = changed_min.as_ivec2() + IVec2::splat(layout.margin - 2);
-    let reach_max = changed_max.as_ivec2() + IVec2::splat(layout.margin + 2);
-    let mut region: Option<(IVec2, IVec2)> = None;
-    for paint in &paints {
-        let cell = paint.coordinate - layout.origin;
-        if cell.cmplt(reach_min).any() || cell.cmpgt(reach_max).any() {
-            continue;
+    let mut region = changed_pixels.map(|bounds| (bounds.min, bounds.max));
+    if let Some((changed_min, changed_max)) = changed_samples {
+        let reach_min = changed_min.as_ivec2() + IVec2::splat(layout.margin - 2);
+        let reach_max = changed_max.as_ivec2() + IVec2::splat(layout.margin + 2);
+        for paint in &paints {
+            let cell = paint.coordinate - layout.origin;
+            if cell.cmplt(reach_min).any() || cell.cmpgt(reach_max).any() {
+                continue;
+            }
+            let Some((corner, size)) = terrain_surface_stamp_bounds(asset, images, &layout, paint)
+            else {
+                continue;
+            };
+            let end = corner + size.as_ivec2();
+            region =
+                Some(region.map_or((corner, end), |(min, max)| (min.min(corner), max.max(end))));
         }
-        let Some((corner, size)) = terrain_surface_stamp_bounds(asset, images, &layout, paint)
-        else {
-            continue;
-        };
-        let end = corner + size.as_ivec2();
-        region = Some(region.map_or((corner, end), |(min, max)| (min.min(corner), max.max(end))));
     }
     let Some((min, max)) = region else {
         return Some((
@@ -141,6 +144,12 @@ pub(super) fn recompose_terrain_surface_image_region(
         min.max(IVec2::ZERO),
         max.min(IVec2::splat(layout.extent as i32)),
     );
+    if clip.0.cmpge(clip.1).any() {
+        return Some((
+            previous.clone(),
+            IRect::from_corners(IVec2::ZERO, IVec2::ZERO),
+        ));
+    }
     let mut rgba = previous_data.clone();
     // Most stamps lie far from the region, and their centres alone rule them
     // out without looking up their brushes.
@@ -1182,8 +1191,8 @@ mod region_recomposition_tests {
             &edited_chunks,
             &images,
             &before,
-            min,
-            max,
+            Some((min, max)),
+            None,
         )
         .expect("region surface");
         assert_ne!(before.data, whole.data, "the edit changes the surface");

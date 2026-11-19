@@ -85,11 +85,7 @@ pub enum UiWidgetRecord {
     },
     TimedSequence {
         events: Vec<UiTimedEventRecord>,
-    },
-    ButtonPulser {
-        target: AssetId,
-        hidden_ms: u32,
-        visible_ms: u32,
+        starts_active: bool,
     },
     Tool {
         tool: AssetId,

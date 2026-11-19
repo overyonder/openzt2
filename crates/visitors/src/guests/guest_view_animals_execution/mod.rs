@@ -1,16 +1,15 @@
 //! Authored animal viewing: a docked guest watches the nearest animal in view.
-use openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorViewAnimals, RunningBehaviorInstruction,
+};
 
 use bevy::prelude::*;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
@@ -24,20 +23,23 @@ use super::guest_simulation_types::{Guest, GuestArchetype, GuestPhase, GuestRng,
 pub(super) fn watch_animals_for_current_view_actions(
     clock: Res<ZooClock>,
     time: Res<Time<Fixed>>,
-    assets: Res<Assets<BehaviorDocumentAsset>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
     mut guests: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorViewAnimals,
+            ),
             &GlobalTransform,
             &WorldMember,
             &GuestPhase,
             Option<&Viewing>,
             &GuestArchetype,
             &mut GuestRng,
-            Option<&mut ActiveGuestAnimalViewingMeter>,
+            Option<&mut BehaviorViewingProgress>,
         ),
         (With<Guest>, Without<PendingBehaviorTaskFailure>),
     >,
@@ -56,22 +58,29 @@ pub(super) fn watch_animals_for_current_view_actions(
     else {
         return;
     };
-    for (guest, mut task, transform, world, phase, viewing, archetype, mut random, meter) in
-        &mut guests
+    for (
+        guest,
+        (task, instruction, running_action),
+        transform,
+        world,
+        phase,
+        viewing,
+        archetype,
+        mut random,
+        meter,
+    ) in &mut guests
     {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::ViewAnimals(action)) = assets
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let action = &running_action.0;
         let Some(definition) = definitions.find_guest(archetype.0) else {
             continue;
         };
-        let mut meter = meter.filter(|meter| meter.owns(&task));
+        let mut meter = meter.filter(|meter| meter.instruction == instruction.id());
         let origin = transform.translation().xz();
         let in_view = |animal: Entity| {
             animals
@@ -116,8 +125,8 @@ pub(super) fn watch_animals_for_current_view_actions(
                 if watched || !in_view(viewing.subject) {
                     commands
                         .entity(guest)
-                        .remove::<(Viewing, ActiveGuestAnimalViewingMeter)>();
-                    advance_behavior_task_to_next_action(&mut task, clock.tick);
+                        .remove::<(Viewing, BehaviorViewingProgress)>();
+                    instruction.complete(guest, clock.tick, &mut commands);
                     continue;
                 }
             }
@@ -144,15 +153,11 @@ pub(super) fn watch_animals_for_current_view_actions(
             } else {
                 action.view_meter_start
             };
-            commands
-                .entity(guest)
-                .insert(ActiveGuestAnimalViewingMeter {
-                    execution_id: task.execution_id,
-                    origin: task.create_return_frame_after_action(task.action),
-                    stack_depth: task.stack.len(),
-                    remaining: start,
-                    maximum: start,
-                });
+            commands.entity(guest).insert(BehaviorViewingProgress {
+                instruction: instruction.id(),
+                remaining: start,
+                maximum: start,
+            });
         }
     }
 }

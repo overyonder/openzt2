@@ -1,3 +1,4 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
@@ -47,7 +48,7 @@ fn selected_transport_track_definition(
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_action(
     mut commands: Commands,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    mut pointer_inputs: MessageReader<PointerInput>,
     ui_capture: Res<UiPointerCapture>,
     tool: Res<ConstructionTool>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
@@ -77,6 +78,10 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
     mut continue_from: Local<Option<Vec3>>,
     pointer_ray: Res<openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay>,
 ) {
+    let primary_just_pressed = pointer_inputs.read().any(|input| {
+        input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
+    });
+    pointer_inputs.clear();
     let Some((definition, kind)) = selected_transport_track_definition(*tool) else {
         *continue_from = None;
         return;
@@ -111,7 +116,7 @@ pub(super) fn begin_or_commit_transport_track_construction_from_primary_pointer_
             return;
         }
     }
-    if !primary_pointer.just_pressed || ui_capture.over_ui {
+    if !primary_just_pressed || ui_capture.over_ui {
         return;
     }
     if let Ok((preview_entity, preview, track_preview)) = previews.single() {

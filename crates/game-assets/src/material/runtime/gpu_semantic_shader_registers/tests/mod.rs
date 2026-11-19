@@ -79,3 +79,30 @@ fn computes_model_and_view_registers_in_the_shader() {
     assert!(text.contains("@builtin(instance_index) openzt2_instance_index: u32"));
     assert!(text.contains("@location(15) @interpolate(flat) openzt2_instance_index: u32,"));
 }
+
+#[test]
+fn programmable_sampler_bias_uses_each_authored_binding() {
+    let mut source = String::from(concat!(
+        "@group(3) @binding(10)\nvar s0: sampler;\n",
+        "@group(3) @binding(11) var s1: sampler;\n",
+        "textureSample(t, s0, vec2(0.0, 0.0)); ",
+        "textureSampleBias(t, s0, uv, -1.0); ",
+        "textureSampleLevel(t, s0, uv, level); ",
+        "textureSampleGrad(t, s0, uv, dx, dy); ",
+        "textureSample(t, s1, uv);",
+    ));
+    apply_translated_sampler_biases(
+        &mut source,
+        BINDING_LAYOUT,
+        &[1.5, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+    )
+    .unwrap();
+    let bias = "bitcast<f32>(0x3fc00000u)";
+    assert!(source.contains(&format!("textureSampleBias(t, s0, vec2(0.0, 0.0), {bias})")));
+    assert!(source.contains(&format!("textureSampleBias(t, s0, uv, (-1.0) + {bias})")));
+    assert!(source.contains(&format!("textureSampleLevel(t, s0, uv, (level) + {bias})")));
+    assert!(source.contains(&format!(
+        "textureSampleGrad(t, s0, uv, (dx) * exp2({bias}), (dy) * exp2({bias}))"
+    )));
+    assert!(source.contains("textureSample(t, s1, uv)"));
+}

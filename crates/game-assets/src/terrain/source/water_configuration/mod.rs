@@ -609,9 +609,7 @@ fn colour<const N: usize>(
     node: &OrderedSourceDocumentNode,
     name: &str,
 ) -> io::Result<Option<[u8; N]>> {
-    vector::<N>(node, name)?
-        .map(colour_channels)
-        .transpose()
+    vector::<N>(node, name)?.map(colour_channels).transpose()
 }
 
 fn rgba_colour(node: &OrderedSourceDocumentNode, name: &str) -> io::Result<Option<[u8; 4]>> {

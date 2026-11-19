@@ -1,5 +1,5 @@
 use super::super::behavior_snapshot_types::{
-    BehaviorActorSnapshot, BehaviorSnapshotEntityReference,
+    BehaviorSnapshotEntityReference, BehaviorTaskActorSnapshot,
 };
 use super::parameters::{BehaviorSnapshotApplication, PreparedBehaviorActor};
 use bevy::prelude::*;
@@ -9,12 +9,14 @@ use openzt2_zoo_state::{
         behavior_natural_water_target_types::{NaturalWaterTargetKind, SelectedNaturalWaterTarget},
         behavior_pursuit_types::PendingBehaviorPursuit,
         behavior_random_stream_state::BehaviorRandomStream,
-        behavior_synchronized_set_types::SynchronizedBehaviorOwner,
+        behavior_synchronized_set_types::{
+            SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
+        },
         behavior_task_effective_score_types::BehaviorTaskEffectiveScore,
     },
     behavior_task_execution_types::{
         BehaviorTaskExecutionState, PendingBehaviorDockingCompletion,
-        PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
+        PendingBehaviorMoveCompletion, PendingBehaviorTaskFailure,
     },
     locomotion::locomotion_types::{
         Destination, Docking, EntityPursuit, MotionProgress, Route, SpatialCell, Steering,
@@ -29,7 +31,7 @@ use std::collections::BTreeMap;
 
 pub(super) fn apply_prepared_behavior_actor(
     commands: &mut Commands,
-    record: &BehaviorActorSnapshot,
+    record: &BehaviorTaskActorSnapshot,
     prepared: PreparedBehaviorActor,
     identities: &BTreeMap<BehaviorSnapshotEntityReference, Entity>,
     application: &mut BehaviorSnapshotApplication,
@@ -50,9 +52,17 @@ pub(super) fn apply_prepared_behavior_actor(
         object: record.task.object.as_ref().map(resolve),
         next_action_tick: record.task.next_action_tick,
         interaction_slot: record.task.interaction_slot,
-        stack: prepared.stack,
+        depth: prepared.stack.len(),
     };
     application.executions.reserve_restored(execution_id);
+    commands
+        .entity(actor)
+        .remove::<BehaviorTaskExecutionState>();
+    for frame in prepared.stack {
+        openzt2_zoo_state::behavior_task_execution_types::continuations::suspend_behavior_frame(
+            actor, frame, commands,
+        );
+    }
     let mut entity = commands.entity(actor);
     entity.remove::<(
         BehaviorTaskEffectiveScore,
@@ -64,7 +74,7 @@ pub(super) fn apply_prepared_behavior_actor(
         Docking,
         EntityPursuit,
         SelectedNaturalWaterTarget,
-        openzt2_zoo_state::economy::behavior_transaction_state::PendingBehaviorTransaction,
+        openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorEconomyTransaction,
     )>();
     if let Some(score) = &record.task.score {
         entity.insert(BehaviorTaskEffectiveScore {
@@ -90,6 +100,7 @@ pub(super) fn apply_prepared_behavior_actor(
             }),
         });
     }
+    let mut restored_pursuit = None;
     if let Some(nav) = &record.navigation {
         let mut route = Route::with_capacity(
             application
@@ -165,50 +176,18 @@ pub(super) fn apply_prepared_behavior_actor(
                 radius_m: dock.radius_m,
             });
         }
-        if let (Some(pending), Some(origin)) = (&nav.move_completion, prepared.move_origin) {
+        if let Some(pending) = &nav.move_completion {
             application.requests.reserve_restored(pending.request_id);
-            if nav.destination.is_some()
-                || nav
-                    .pending_results
-                    .iter()
-                    .any(|result| result.request_id() == pending.request_id)
-            {
-                entity.insert(PendingBehaviorMoveCompletion {
-                    origin,
-                    stack_depth: pending.stack_depth,
-                    request_id: pending.request_id,
-                });
-            }
         }
-        if let (Some(pending), Some(origin)) = (&nav.docking_completion, prepared.dock_origin) {
+        if let Some(pending) = &nav.docking_completion {
             application.requests.reserve_restored(pending.request_id);
-            if nav.destination.is_some()
-                || nav.docking.is_some()
-                || nav
-                    .pending_results
-                    .iter()
-                    .any(|result| result.request_id() == pending.request_id)
-            {
-                entity.insert(PendingBehaviorDockingCompletion {
-                    origin,
-                    stack_depth: pending.stack_depth,
-                    request_id: pending.request_id,
-                    target: resolve(pending.target.as_ref().expect("validated docking target")),
-                });
-            }
         }
-        if let (Some(pending), Some(origin)) = (&nav.pursuit, prepared.pursuit_origin) {
+        if let Some(pending) = &nav.pursuit {
             for request in pending.leg.navigation_request_ids().into_iter().flatten() {
                 application.requests.reserve_restored(request);
             }
             let leg = reissue_unaccepted_pursuit_navigation(actor, nav, &task, application);
-            entity.insert(PendingBehaviorPursuit {
-                execution_id,
-                origin,
-                stack_depth: pending.stack_depth,
-                poll_remaining_seconds: pending.poll_remaining_seconds,
-                leg,
-            });
+            restored_pursuit = Some((leg, pending.poll_remaining_seconds));
         }
         for result in &nav.pending_results {
             use super::super::behavior_snapshot_types::BehaviorNavigationResultSnapshot;
@@ -234,37 +213,93 @@ pub(super) fn apply_prepared_behavior_actor(
             }
         }
     }
-    if let (Some(pending), Some(origin)) = (&record.transaction, prepared.transaction_origin) {
-        entity.insert(
-            openzt2_zoo_state::economy::behavior_transaction_state::PendingBehaviorTransaction {
-                execution_id: pending.execution_id,
-                stack_depth: pending.stack_depth,
-                origin,
-                facility: resolve(&pending.facility),
-                transaction: pending.transaction,
-                cost_override: pending.cost_override.map(f32::from_bits),
-                payment: None,
-                next_transaction: pending.next_transaction,
-            },
-        );
-    }
+    let transaction_target = task.target;
     entity.insert(task);
+    if let Some((leg, poll_remaining_seconds)) = restored_pursuit {
+        entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+            use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
+            if let Some(instruction) = actor.get::<RunningBehaviorInstruction>().map(RunningBehaviorInstruction::id) {
+                actor.insert(PendingBehaviorPursuit { instruction, poll_remaining_seconds, leg });
+            }
+        });
+    }
+
+    if let Some(pending) = &record.transaction {
+        let facility = resolve(&pending.facility);
+        let transaction = pending.transaction;
+        let cost_override = pending.cost_override.map(f32::from_bits);
+        let next_transaction = pending.next_transaction;
+        entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+            use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+                RunningBehaviorEconomyTransaction, RunningBehaviorInstruction,
+            };
+            if let Some(instruction) = actor
+                .get::<RunningBehaviorInstruction>()
+                .map(RunningBehaviorInstruction::id)
+            {
+                actor.insert(RunningBehaviorEconomyTransaction {
+                    instruction,
+                    facility,
+                    target: transaction_target,
+                    transaction,
+                    cost_override,
+                    payment: None,
+                    next_transaction,
+                });
+            }
+        });
+    }
+    if let Some(nav) = &record.navigation {
+        if let Some(pending) = &nav.move_completion {
+            let request_id = pending.request_id;
+            if nav.destination.is_some()
+                || nav
+                    .pending_results
+                    .iter()
+                    .any(|result| result.request_id() == request_id)
+            {
+                entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+                    use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
+                    if let Some(instruction) = actor.get::<RunningBehaviorInstruction>().map(RunningBehaviorInstruction::id) {
+                        actor.insert(PendingBehaviorMoveCompletion { instruction, request_id });
+                    }
+                });
+            }
+        }
+    }
+    if let Some(nav) = &record.navigation {
+        if let Some(pending) = &nav.docking_completion {
+            let request_id = pending.request_id;
+            let target = resolve(pending.target.as_ref().expect("validated docking target"));
+            if nav.destination.is_some()
+                || nav.docking.is_some()
+                || nav
+                    .pending_results
+                    .iter()
+                    .any(|result| result.request_id() == request_id)
+            {
+                entity.queue(move |mut actor: bevy::ecs::world::EntityWorldMut<'_>| {
+                    use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
+                    if let Some(instruction) = actor.get::<RunningBehaviorInstruction>().map(RunningBehaviorInstruction::id) {
+                        actor.insert(PendingBehaviorDockingCompletion { target, instruction, request_id });
+                    }
+                });
+            }
+        }
+    }
     if let (Some(owner), Some(origin)) = (&record.synchronized, prepared.synchronized_origin) {
         let target = resolve(&owner.target);
-        entity.insert(SynchronizedBehaviorOwner {
-            execution_id,
-            target_execution_id: owner.target_execution_id,
-            target,
-            origin,
-            depth: owner.depth,
-            target_outcome: owner.target_outcome,
-        });
-        commands
-            .entity(target)
-            .insert(SynchronizedBehaviorParticipant {
-                owner: actor,
-                execution_id: owner.target_execution_id,
-            });
+        commands.spawn((
+            SynchronizedBehaviorSubject(actor),
+            SynchronizedBehaviorPartner(target),
+            SynchronizedBehaviorOperation {
+                execution_id,
+                target_execution_id: owner.target_execution_id,
+                origin,
+                depth: owner.depth,
+                target_outcome: owner.target_outcome,
+            },
+        ));
     }
     if let (Some(job), Some(frame)) = (&record.staff_job, prepared.job_frame) {
         let job_entity = commands
@@ -317,10 +352,9 @@ fn reissue_unaccepted_pursuit_navigation(
         .documents
         .get(&task.document)
         .expect("validated pursuit document");
-    let Some(openzt2_game_data::behavior::action_record::BehaviorAction::Pursuit(action)) =
-        openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action(
-            document, task,
-        )
+    let Some(openzt2_game_data::behavior::action_record::BehaviorAction::Pursuit(action)) = task
+        .phase
+        .authored_action(document, task.declaration, task.action)
     else {
         unreachable!("validated pursuit action");
     };

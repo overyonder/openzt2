@@ -5345,7 +5345,6 @@ dependencies = [
  "bevy-inspector-egui",
  "bevy_hanabi",
  "dirs",
- "indexmap",
  "openzt2_animals",
  "openzt2_aquatic",
  "openzt2_audio",
@@ -5582,6 +5581,7 @@ dependencies = [
  "openzt2_interface_state",
  "openzt2_ui",
  "openzt2_world_state",
+ "openzt2_zoo_state",
 ]
 
 [[package]]
@@ -5663,6 +5663,7 @@ version = "1.2.1-beta"
 dependencies = [
  "avian3d",
  "bevy",
+ "indexmap",
  "openzt2_game_assets",
  "openzt2_game_data",
  "openzt2_interface_state",

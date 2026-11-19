@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use openzt2_zoo_state::economy::guest_admission_types::AdmissionPrice;
 use openzt2_zoo_state::economy::monthly_finance_types::MonthlyFinanceHistory;
 use openzt2_zoo_state::economy::zoo_cash_types::ZooCash;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_zoo_state::progression::fame_types::Fame;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
@@ -47,7 +47,7 @@ pub(super) struct ScenarioLuaQueryFactSources<'w, 's> {
     zoo_calendar: Option<Res<'w, ZooCalendar>>,
     world_definitions: Res<'w, WorldDefinitions>,
     world_definition_assets: Res<'w, Assets<WorldDefinitionAsset>>,
-    selected_entity: Option<Res<'w, SelectedEntity>>,
+    selected_entity: WorldUiSelection<'w, 's>,
     live_world_entities: ScenarioLuaLiveEntityQuery<'w, 's>,
     scenario_document_assets: Res<'w, Assets<WorldScenarioDocumentAsset>>,
     current_photo_challenge_sets: ScenarioLuaCurrentPhotoChallengeSetQuery<'w, 's>,
@@ -115,10 +115,7 @@ impl ScenarioLuaQueryFactSources<'_, '_> {
             scenario_document_assets: &self.scenario_document_assets,
             current_photo_challenge_sets,
             photo_challenges,
-            selected_entity: self
-                .selected_entity
-                .as_deref()
-                .and_then(|selected| selected.0),
+            selected_entity: self.selected_entity.subject(),
             fence_edges,
             path_tiles,
             edited_terrain,

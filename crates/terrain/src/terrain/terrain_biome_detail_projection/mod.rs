@@ -17,6 +17,7 @@ use crate::terrain::terrain_biome_detail_types::{
     TerrainDetailProjectionState, TerrainDetailRenderRoot,
 };
 use crate::terrain::terrain_change_tracking_types::TerrainDirty;
+use crate::terrain::terrain_sample_change_calculations::TerrainRenderInvalidated;
 use openzt2_zoo_state::terrain::terrain_chunk_presentation_types::TerrainRenderChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
@@ -47,7 +48,17 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
     mut details: Query<(&mut TerrainDetail, &mut Transform, Option<&Children>)>,
     prefab_roots: Query<(), With<TerrainDetailRenderRoot>>,
     changed_chunks: Query<(), Or<(Changed<TerrainDirty>, Changed<TerrainRenderChunk>)>>,
+    mut terrain_changes: MessageReader<TerrainRenderInvalidated>,
 ) {
+    let mut dirty_rectangles = bevy::ecs::entity::EntityHashMap::<IRect>::default();
+    for change in terrain_changes.read() {
+        let bounds =
+            IRect::from_corners(change.region.min.as_ivec2(), change.region.max.as_ivec2());
+        dirty_rectangles
+            .entry(change.chunk)
+            .and_modify(|previous| *previous = previous.union(bounds))
+            .or_insert(bounds);
+    }
     let all_sources_changed = settings.is_changed()
         || terrain_assets.is_changed()
         || definitions.is_changed()
@@ -78,12 +89,12 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         let source_changed = pending
             || projection_state.retained_camera_focus.is_none()
             || all_sources_changed
-            || changed_chunks.contains(entity);
-        if !source_changed
-            && projection_state.retained_camera_focus.is_some_and(|focus| {
-                focus.is_finite() && focus.distance(camera.focus) <= authored_visibility_range_m
-            })
-        {
+            || changed_chunks.contains(entity)
+            || dirty_rectangles.contains_key(&entity);
+        let camera_stable = projection_state.retained_camera_focus.is_some_and(|focus| {
+            focus.is_finite() && focus.distance(camera.focus) <= authored_visibility_range_m
+        });
+        if !source_changed && camera_stable {
             continue;
         }
         let region_m = f32::from(placement.region_size_cm) * 0.01;
@@ -103,14 +114,33 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
                 .entity(entity)
                 .remove::<TerrainBiomeDetailProjectionPending>();
         }
+        let span_m = chunk.spacing_m * f32::from(chunk.side.saturating_sub(1));
+        let regions = (span_m / region_m).ceil() as u32;
+        let region_center = |region: UVec2| {
+            ((region.as_vec2() + Vec2::splat(0.5)) * region_m).min(Vec2::splat(span_m))
+        };
+        let bounds = dirty_rectangles
+            .get(&entity)
+            .filter(|_| camera_stable && !pending && !all_sources_changed && level.is_some())
+            .map(|bounds| {
+                let margin =
+                    Vec2::splat(f32::from(placement.radius_cm) * 0.01 + chunk.spacing_m * 0.5);
+                Rect::from_corners(
+                    bounds.min.as_vec2() * chunk.spacing_m - margin,
+                    bounds.max.as_vec2() * chunk.spacing_m + margin,
+                )
+            });
+        let affected = |region| bounds.is_none_or(|bounds| bounds.contains(region_center(region)));
         let mut retained_detail_entities_by_placement_key = HashMap::new();
         for detail_entity in children
             .into_iter()
             .flat_map(|children| children.iter())
             .filter_map(|child| details.get(child).ok().map(|(detail, ..)| (child, detail)))
         {
-            retained_detail_entities_by_placement_key
-                .insert(detail_entity.1.placement_key, detail_entity.0);
+            if affected(detail_entity.1.placement_region) {
+                retained_detail_entities_by_placement_key
+                    .insert(detail_entity.1.placement_key, detail_entity.0);
+            }
         }
         let (Some(level), Some(asset)) = (level.as_ref(), asset) else {
             for detail_entity in retained_detail_entities_by_placement_key.into_values() {
@@ -119,12 +149,30 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
             projection_state.retained_camera_focus = Some(camera.focus);
             continue;
         };
-        let span_m = chunk.spacing_m * f32::from(chunk.side.saturating_sub(1));
-        let regions = (span_m / region_m).ceil() as u32;
-        for rz in 0..regions {
-            for rx in 0..regions {
-                let center = Vec2::new((rx as f32 + 0.5) * region_m, (rz as f32 + 0.5) * region_m)
-                    .min(Vec2::splat(span_m));
+        let min_region = bounds.map_or(UVec2::ZERO, |bounds| {
+            (bounds.min / region_m - Vec2::ONE)
+                .max(Vec2::ZERO)
+                .as_uvec2()
+        });
+        let max_region = bounds.map_or(UVec2::splat(regions), |bounds| {
+            let mut maximum = (bounds.max / region_m + Vec2::ONE)
+                .max(Vec2::ZERO)
+                .as_uvec2();
+            if bounds.max.x >= span_m {
+                maximum.x = regions;
+            }
+            if bounds.max.y >= span_m {
+                maximum.y = regions;
+            }
+            maximum.min(UVec2::splat(regions))
+        });
+        for rz in min_region.y..max_region.y {
+            for rx in min_region.x..max_region.x {
+                let placement_region = UVec2::new(rx, rz);
+                if !affected(placement_region) {
+                    continue;
+                }
+                let center = region_center(placement_region);
                 let sample_x = (center.x / chunk.spacing_m).round() as usize;
                 let sample_z = (center.y / chunk.spacing_m).round() as usize;
                 let Some(sample) = read_materialized_terrain_sample(
@@ -222,6 +270,7 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
                     };
                     let next = TerrainDetail {
                         placement_key: seed,
+                        placement_region,
                         prefab: prefab_handle,
                         solid_m: f32::from(placement.solid_distance_cm) * 0.01,
                         fade_m: f32::from(placement.fade_distance_cm) * 0.01,
@@ -258,7 +307,9 @@ pub(super) fn project_terrain_biome_details_after_source_or_setting_changes(
         for detail_entity in retained_detail_entities_by_placement_key.into_values() {
             commands.entity(detail_entity).despawn();
         }
-        projection_state.retained_camera_focus = Some(camera.focus);
+        if bounds.is_none() {
+            projection_state.retained_camera_focus = Some(camera.focus);
+        }
     }
 }
 
@@ -291,8 +342,8 @@ pub(super) fn materialize_terrain_biome_detail_render_trees_within_overhead_came
     mut prefab_events: MessageReader<AssetEvent<ScenePrefabAsset>>,
     details: Query<(
         Entity,
-        &TerrainDetail,
-        &Transform,
+        Ref<TerrainDetail>,
+        Ref<Transform>,
         &ChildOf,
         Option<&Children>,
     )>,
@@ -307,17 +358,24 @@ pub(super) fn materialize_terrain_biome_detail_render_trees_within_overhead_came
     prefab_roots: Query<(), With<TerrainDetailRenderRoot>>,
 ) {
     let Ok(camera) = cameras.single() else { return };
-    let prefab_ready = prefab_events.read().any(|event| {
-        matches!(
-            event,
-            AssetEvent::Added { .. } | AssetEvent::LoadedWithDependencies { .. }
-        )
-    });
-    prefab_events.clear();
-    if !camera.is_changed() && !prefab_ready && changed_details.is_empty() {
+    let ready_assets: bevy::platform::collections::HashSet<_> = prefab_events
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id } | AssetEvent::LoadedWithDependencies { id } => Some(id),
+            _ => None,
+        })
+        .collect();
+    if !camera.is_changed() && ready_assets.is_empty() && changed_details.is_empty() {
         return;
     }
     for (entity, detail, transform, parent, children) in &details {
+        if !camera.is_changed()
+            && !detail.is_changed()
+            && !transform.is_changed()
+            && !ready_assets.contains(&detail.prefab.id())
+        {
+            continue;
+        }
         let Ok(chunk) = chunks.get(parent.parent()) else {
             continue;
         };

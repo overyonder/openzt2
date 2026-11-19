@@ -59,6 +59,7 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
     pub(super) scenario: super::scenario_snapshot_section::ScenarioSnapshotApplication<'w, 's>,
     pub(super) placements: super::placement_snapshot_section::PlacementSnapshotEntities<'w, 's>,
     pub(super) placement_models: Res<'w, Assets<bevy::gltf::Gltf>>,
+    pub(super) placement_footprints: Option<Res<'w, openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>>,
     pub(super) placement_readiness: Query<
         'w,
         's,
@@ -66,6 +67,7 @@ pub(in crate::persistence) struct WorldSnapshotApplicationState<'w, 's> {
             &'static PersistentId,
             &'static DefinitionId,
             &'static Transform,
+            Option<&'static openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle>,
             Has<openzt2_zoo_state::placement::placed_object_types::PlacedObjectDefinitionReference>,
             Has<openzt2_zoo_state::donations::donation_opportunity_types::DonationUsePoint>,
         ),

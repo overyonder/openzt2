@@ -1,3 +1,4 @@
+use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged;
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
@@ -67,14 +68,25 @@ fn configured_particle_effects<'a>(
     (suspension, bubbles)
 }
 
+fn changed_asset<A: Asset>(event: &AssetEvent<A>) -> Option<AssetId<A>> {
+    match *event {
+        AssetEvent::Added { id }
+        | AssetEvent::Modified { id }
+        | AssetEvent::LoadedWithDependencies { id }
+        | AssetEvent::Removed { id } => Some(id),
+        AssetEvent::Unused { .. } => None,
+    }
+}
+
 #[derive(SystemParam)]
 pub(in crate::terrain) struct UnderwaterParticleEffectChanges<'w, 's> {
+    membership: MessageReader<'w, 's, TerrainWaterMembershipChanged>,
     terrain: MessageReader<'w, 's, AssetEvent<TerrainAsset>>,
     effects: MessageReader<'w, 's, AssetEvent<ParticleEffectDocumentAsset>>,
     changed_regions: Query<
         'w,
         's,
-        (),
+        Entity,
         Or<(
             Changed<TerrainWaterRegionSource>,
             Changed<TerrainWaterRegionEdit>,
@@ -102,22 +114,42 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
     mut random: ResMut<NativeVisualRandomStream>,
     mut changes: UnderwaterParticleEffectChanges,
 ) {
-    let changed = (changes.terrain.read().count() > 0)
-        | (changes.effects.read().count() > 0)
-        | !changes.changed_regions.is_empty()
-        | (changes.removed_sources.read().count() > 0)
-        | (changes.removed_edits.read().count() > 0)
-        | (changes.reactivated.read().count() > 0)
-        | (changes.removed_indexes.read().count() > 0);
-    if !changed
-        && !phase.is_changed()
-        && !settings.is_changed()
-        && !indexes.iter().any(|index| index.is_changed())
+    let membership: Vec<_> = changes.membership.read().collect();
+    let terrains_changed: bevy::platform::collections::HashSet<_> =
+        changes.terrain.read().filter_map(changed_asset).collect();
+    let effects_changed: bevy::platform::collections::HashSet<_> =
+        changes.effects.read().filter_map(changed_asset).collect();
+    let changed_owners: bevy::ecs::entity::EntityHashSet = changes
+        .changed_regions
+        .iter()
+        .chain(changes.removed_sources.read())
+        .chain(changes.removed_edits.read())
+        .chain(changes.reactivated.read())
+        .collect();
+    let all =
+        phase.is_changed() | settings.is_changed() | (changes.removed_indexes.read().count() > 0);
+    if !all
+        && membership.is_empty()
+        && terrains_changed.is_empty()
+        && effects_changed.is_empty()
+        && changed_owners.is_empty()
     {
         return;
     }
     let quality = water_quality(&settings);
     for (entity, parent, state) in &roots {
+        let owner = parent.parent();
+        if !all
+            && !changed_owners.contains(&owner)
+            && !regions.get(owner).is_some_and(|source| {
+                terrains_changed.contains(&source.terrain().id())
+                    || membership
+                        .iter()
+                        .any(|change| change.affects_region(source.terrain().id(), owner))
+            })
+        {
+            continue;
+        }
         let valid = *phase.get() == GamePhase::InGame
             && state.quality == quality
             && regions.get(parent.parent()).is_some_and(|source| {
@@ -160,12 +192,28 @@ pub(in crate::terrain) fn synchronize_region_underwater_particle_effects(
             continue;
         };
         let (suspension, bubble_effect) = configured_particle_effects(terrain, water, quality);
+        if !all
+            && !changed_owners.contains(&owner)
+            && !terrains_changed.contains(&source.terrain().id())
+            && !membership
+                .iter()
+                .any(|change| change.affects_region(source.terrain().id(), owner))
+            && !suspension
+                .into_iter()
+                .chain(bubble_effect)
+                .any(|handle| effects_changed.contains(&handle.id()))
+        {
+            continue;
+        }
         if region_children.get(owner).is_ok_and(|children| {
-            roots.iter_many(children.iter()).any(|(_, _, state)| {
-                state.quality == quality
-                    && state.suspension_effect.as_ref() == suspension
-                    && state.bubble_effect.as_ref() == bubble_effect
-            })
+            roots
+                .iter_many(children.iter())
+                .flatten()
+                .any(|(_, _, state)| {
+                    state.quality == quality
+                        && state.suspension_effect.as_ref() == suspension
+                        && state.bubble_effect.as_ref() == bubble_effect
+                })
         }) {
             continue;
         }
@@ -305,7 +353,11 @@ pub(in crate::terrain) fn project_region_suspension_volumes(
         )>,
     >,
     mut projected: Query<&mut TerrainWaterSuspensionVolumes>,
+    mut membership: MessageReader<TerrainWaterMembershipChanged>,
+    mut terrain_events: MessageReader<AssetEvent<TerrainAsset>>,
 ) {
+    let membership: Vec<_> = membership.read().collect();
+    let terrain_events: Vec<_> = terrain_events.read().collect();
     for (owner, source) in regions.iter() {
         let Some((terrain, index)) = terrains.get(source.terrain()).zip(
             indexes
@@ -333,7 +385,17 @@ pub(in crate::terrain) fn project_region_suspension_volumes(
             continue;
         }
         let current = projected.get_mut(owner).ok();
-        if current.is_some() && !index.is_changed() && !changed_regions.contains(owner) {
+        if current.is_some()
+            && !changed_regions.contains(owner)
+            && !membership
+                .iter()
+                .any(|change| change.affects_region(source.terrain().id(), owner))
+            && !terrain_events.iter().any(|event| {
+                event.is_added(source.terrain().id())
+                    || event.is_modified(source.terrain().id())
+                    || event.is_loaded_with_dependencies(source.terrain().id())
+            })
+        {
             continue;
         }
         let grid = terrain.canonical_terrain_grid();

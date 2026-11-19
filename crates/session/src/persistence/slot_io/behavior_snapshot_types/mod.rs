@@ -174,7 +174,7 @@ pub(super) struct BehaviorStaffJobSnapshot {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct BehaviorActorSnapshot {
+pub(super) struct BehaviorTaskActorSnapshot {
     pub persistent_identifier: u64,
     pub task: BehaviorTaskSnapshot,
     pub navigation: Option<BehaviorOwnedNavigationSnapshot>,
@@ -208,4 +208,49 @@ pub(super) struct BehaviorTransactionSnapshot {
     pub transaction: AssetId,
     pub cost_override: Option<u32>,
     pub next_transaction: Option<AssetId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BehaviorTargetRetrySnapshot {
+    pub target: BehaviorSnapshotEntityReference,
+    pub failures: u32,
+    pub remaining_updates: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct BehaviorActorRetrySnapshot {
+    pub persistent_identifier: u64,
+    pub retry_delays: Vec<BehaviorTargetRetrySnapshot>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(super) enum BehaviorActorSnapshot {
+    Task(BehaviorTaskActorSnapshot),
+    Retry(BehaviorActorRetrySnapshot),
+}
+
+impl BehaviorActorSnapshot {
+    pub(super) fn sort_key(&self) -> (u64, bool) {
+        match self {
+            Self::Task(record) => (record.persistent_identifier, false),
+            Self::Retry(record) => (record.persistent_identifier, true),
+        }
+    }
+
+    pub(super) fn task_record(&self) -> Option<&BehaviorTaskActorSnapshot> {
+        match self {
+            Self::Task(record) => Some(record),
+            Self::Retry(_) => None,
+        }
+    }
+
+    pub(super) fn retry_record(&self) -> Option<&BehaviorActorRetrySnapshot> {
+        match self {
+            Self::Task(_) => None,
+            Self::Retry(record) => Some(record),
+        }
+    }
 }

@@ -97,7 +97,7 @@ pub(super) fn report_guest_task_progress_changes(
                 })
                 .flatten()
                 .unwrap_or_else(|| format!("{:?}", task.program));
-            (name, task.phase, task.action, task.stack.len())
+            (name, task.phase, task.action, task.depth)
         });
         let hunger = triggers.and_then(|triggers| {
             needs

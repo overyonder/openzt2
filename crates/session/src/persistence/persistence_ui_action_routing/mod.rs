@@ -1,4 +1,7 @@
 //! Profile and save-slot actions from UI documents.
+use openzt2_interface_state::ui::ui_document_lifecycle_contracts::{
+    AuthoredUiDocumentOperation, UiDocumentOperation,
+};
 
 use bevy::{prelude::*, text::EditableText};
 use openzt2_game_data::ui_document::{
@@ -52,7 +55,7 @@ pub(super) fn route_authored_save_dialog_opening_requests(
     control: Option<
         Res<openzt2_world_state::simulation_time::simulation_control_types::SimulationControl>,
     >,
-    mut roles: ResMut<openzt2_interface_state::ui::ui_document_lifecycle_contracts::UiRoleRequests>,
+    mut roles: MessageWriter<AuthoredUiDocumentOperation>,
 ) {
     for activation in activations.read() {
         let Ok((actions, owner)) = nodes.get(activation.node) else {
@@ -68,13 +71,14 @@ pub(super) fn route_authored_save_dialog_opening_requests(
             record.trigger == activation.trigger
                 && record.action == UiPersistenceAction::OpenSaveSlotCatalogueForSaving
         }) {
-            roles.request_preserving_temporary_pause(
-                UiDocumentRole::SaveGame,
-                dialog_owner.owner(lifecycle_owner.parent()),
-                control
+            roles.write(AuthoredUiDocumentOperation {
+                role: UiDocumentRole::SaveGame,
+                owner: dialog_owner.owner(lifecycle_owner.parent()),
+                operation: UiDocumentOperation::Open,
+                transfer_pause: control
                     .as_deref()
                     .is_some_and(|control| control.temporary_ui_pause_is_held()),
-            );
+            });
         }
     }
 }
@@ -84,7 +88,7 @@ pub(super) fn route_authored_persistence_ui_actions_to_domain_requests(
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     persistence_action_nodes: Query<(&UiPersistenceActions, &UiDocumentOwner)>,
     ui_document_roots: Query<(&UiDocumentRoot, &ChildOf)>,
-    selected_rows: Query<(&UiListRow, &UiSelected, &SavedGameSource)>,
+    selected_rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
     lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     mut persistence_action_messages: PersistenceUiActionMessageWriters,
     mut commands: Commands,

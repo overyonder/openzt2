@@ -1,7 +1,5 @@
-use super::authored_globe_camera_framing::transformed_model_bounds;
-use super::authored_globe_model_bounds::UiGlobeModelBounds;
+use super::authored_globe_camera_framing::GlobeSphere;
 use super::authored_globe_presentation_types::UiGlobePrefab;
-use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
 use super::authored_globe_presentation_types::UiGlobeRenderScene;
 use super::authored_globe_rotation_geometry::source_rotation_to_bevy;
 use crate::authored_globe_presentation_types::UiGlobeMarkerAnchor;
@@ -27,12 +25,7 @@ pub(crate) fn project_globe_markers(
         &UiGlobeRenderScene,
         &UiDocumentOwner,
     )>,
-    prefabs: Query<(
-        &UiGlobePrimaryRenderable,
-        &UiGlobeModelBounds,
-        &GlobalTransform,
-    )>,
-    transforms: Query<&GlobalTransform>,
+    spheres: Query<&GlobeSphere>,
     markers: Query<(Entity, &GlobeMarker), Without<WorldChoiceMarkers>>,
 ) {
     if markers.is_empty() {
@@ -41,12 +34,7 @@ pub(crate) fn project_globe_markers(
     let Some((_globe_entity, globe, scene_assets, scene, owner)) = globes.iter().next() else {
         return;
     };
-    let Ok(world_transform) = transforms.get(scene.world) else {
-        return;
-    };
-    let Some((center, radius)) =
-        transformed_model_bounds(&prefabs, scene.world, Some(world_transform))
-    else {
+    let Ok(&GlobeSphere { center, radius }) = spheres.get(scene.world()) else {
         return;
     };
     for (choice_entity, marker) in &markers {
@@ -77,7 +65,7 @@ pub(crate) fn project_globe_markers(
                 Transform::from_translation(center + outward * radius)
                     .with_rotation(marker_rotation),
                 Visibility::Inherited,
-                ChildOf(scene.world),
+                ChildOf(scene.world()),
             ))
             .id();
         if let Some(handle) = scene_assets.dot.clone() {

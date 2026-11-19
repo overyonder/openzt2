@@ -1,5 +1,6 @@
 //! Event-driven habitat regions derived from fence topology and loaded terrain.
 
+mod habitat_fence_inputs;
 mod habitat_membership_and_containment;
 pub mod habitat_region_derivation;
 mod habitat_region_rebuilding;
@@ -14,9 +15,9 @@ use openzt2_world_state::application_schedule::GameSet;
 
 use openzt2_zoo_state::habitat::habitat_types::ContainmentChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
-use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
 use openzt2_zoo_state::habitat::habitat_types::RefreshTerrainDerivedHabitatSummariesWithinTopologyBounds;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatIndex, HabitatTopologyPublication};
 
 pub struct HabitatPlugin;
 
@@ -24,6 +25,10 @@ impl Plugin for HabitatPlugin {
     fn build(&self, application: &mut App) {
         application
             .init_resource::<HabitatIndex>()
+            .init_resource::<habitat_fence_inputs::HabitatFenceLattice>()
+            .add_message::<habitat_fence_inputs::HabitatFenceInputDiscarded>()
+            .add_observer(habitat_fence_inputs::discard_habitat_fence_node)
+            .add_observer(habitat_fence_inputs::discard_habitat_fence_raster)
             .init_resource::<habitat_membership_and_containment::HabitatLocationCells>()
             .add_message::<habitat_membership_and_containment::LostHabitatMembership>()
             .add_observer(habitat_membership_and_containment::retire_empty_habitat_location_cell)
@@ -38,7 +43,9 @@ impl Plugin for HabitatPlugin {
                 (
                     habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
                     habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
+                    habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                 )
                     .chain()
                     .in_set(GameSet::Intent)
@@ -49,11 +56,14 @@ impl Plugin for HabitatPlugin {
                 (
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuild_for_added_topology_nodes,
                     crate::habitat::habitat_region_rebuilding::request_habitat_region_rebuilds_after_topology_changes,
+                    habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                     habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
                 )
                     .chain()
-                    .in_set(FixedGameSet::Cleanup),
+                    .in_set(FixedGameSet::Cleanup)
+                    .in_set(HabitatTopologyPublication),
             )
             .add_systems(
                 Update,
@@ -69,7 +79,9 @@ impl Plugin for HabitatPlugin {
                 OnEnter(GamePhase::InGame),
                 (
                     crate::habitat::habitat_region_rebuilding::request_initial_habitat_region_rebuild_from_loaded_topology,
+                    habitat_fence_inputs::project_changed_habitat_fence_inputs,
                     crate::habitat::habitat_region_rebuilding::rebuild_changed_habitat_regions_from_fence_topology_and_terrain,
+                    habitat_region_rebuilding::link_changed_habitat_boundaries,
                     habitat_membership_and_containment::resolve_changed_habitat_membership_and_containment,
                 ).chain(),
             )

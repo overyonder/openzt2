@@ -1,12 +1,12 @@
-use super::authored_binder_reference_resolution::AuthoredBinderSourcePathIndex;
+use super::authored_binder_reference_resolution::AuthoredBinderSources;
 use super::source_reference_discovery::{
-    AuthoredWorldDefinitionSourceReference,
     authored_biome_automatic_placement_supplement_source_paths,
     authored_hireable_generic_binder_family_variant_source_paths,
     collect_authored_typed_binder_family_references,
     collect_authored_world_definition_source_document_dependency_references,
     ordered_source_document_contains_element_named,
     resolved_world_definition_source_documents_declare_viewing_area_type,
+    AuthoredWorldDefinitionSourceReference,
 };
 use super::unresolved_reference;
 use crate::asset_source::AssetArchives;
@@ -24,13 +24,13 @@ use std::{
 
 pub(super) async fn load_world_definition_source_documents(
     archives: &AssetArchives,
-    binder_source_paths: &AuthoredBinderSourcePathIndex,
+    binder_source_paths: &AuthoredBinderSources,
     context: &mut LoadContext<'_>,
     path: &str,
     primary: OrderedSourceDocument,
-) -> io::Result<(Vec<OrderedSourceDocument>, Option<u64>)> {
+) -> io::Result<(Vec<OrderedSourceDocument>, bool)> {
     let mut documents = vec![primary];
-    let mut binder_source_index_revision = None;
+    let mut uses_binder_sources = false;
     let mut loaded = BTreeSet::from([path.to_owned()]);
     let mut dependencies = BTreeMap::<String, BTreeSet<String>>::new();
     let mut supplements = Vec::<std::path::PathBuf>::new();
@@ -84,7 +84,8 @@ pub(super) async fn load_world_definition_source_documents(
 
     let mut families = collect_authored_typed_binder_family_references(&documents);
     while let Some((from, reference)) = families.pop_first() {
-        let Some((dependency, revision)) = resolve_typed_binder_family_source_path(
+        uses_binder_sources = true;
+        let Some(dependency) = resolve_typed_binder_family_source_path(
             archives,
             binder_source_paths,
             &from,
@@ -93,14 +94,6 @@ pub(super) async fn load_world_definition_source_documents(
         else {
             continue;
         };
-        if let Some(revision) = revision {
-            if binder_source_index_revision.is_some_and(|previous| previous != revision) {
-                return Err(io::Error::other(
-                    "archive revision changed while resolving authored binder families",
-                ));
-            }
-            binder_source_index_revision = Some(revision);
-        }
         let dependency = dependency.to_string_lossy().replace('\\', "/");
         dependencies
             .entry(from)
@@ -134,7 +127,6 @@ pub(super) async fn load_world_definition_source_documents(
     {
         let mut entries = archives
             .resolved_paths()
-            .1
             .iter()
             .filter(|source_path| {
                 source_path
@@ -191,24 +183,16 @@ pub(super) async fn load_world_definition_source_documents(
                 dependency
             }
             AuthoredWorldDefinitionSourceReference::GateCollisionType(actor_type) => {
-                // The context and selected binder remain load dependencies even
-                // when the loader's revision-scoped source-path index is warm.
                 let _ = context
                     .read_asset_bytes("config/gamectxt.xml")
                     .await
                     .map_err(io::Error::other)?;
-                let (dependency, revision) = binder_source_paths
+                uses_binder_sources = true;
+                binder_source_paths
                     .resolve_binder_type_source_path(archives, &from, &actor_type)?
                     .ok_or_else(|| {
                         unresolved_reference(&from, "authored binder type", &actor_type)
-                    })?;
-                if binder_source_index_revision.is_some_and(|previous| previous != revision) {
-                    return Err(io::Error::other(
-                        "archive revision changed while resolving authored binder references",
-                    ));
-                }
-                binder_source_index_revision = Some(revision);
-                dependency
+                    })?
             }
         };
         let dependency = dependency.to_string_lossy().replace('\\', "/");
@@ -230,7 +214,7 @@ pub(super) async fn load_world_definition_source_documents(
     let mut order = Vec::with_capacity(loaded.len());
     dependency_order(path, &dependencies, &mut BTreeSet::new(), &mut order);
     reorder_ordered_source_documents_by_requested_normalized_path_keys_and_last_definition_precedence(&mut documents, &order);
-    Ok((documents, binder_source_index_revision))
+    Ok((documents, uses_binder_sources))
 }
 
 /// A typed-binder family names a binder type, which is usually also the stem
@@ -241,31 +225,16 @@ pub(super) async fn load_world_definition_source_documents(
 /// file. Fall back to file-name resolution when the index has no declaration.
 fn resolve_typed_binder_family_source_path(
     archives: &AssetArchives,
-    binder_source_paths: &AuthoredBinderSourcePathIndex,
+    binder_source_paths: &AuthoredBinderSources,
     from: &str,
     family: &str,
-) -> io::Result<Option<(std::path::PathBuf, Option<u64>)>> {
-    let by_name = archives.resolve_source_reference(Path::new(from), family);
-    let declares_family = by_name.as_ref().is_some_and(|path| {
-        archives.read_source(path).ok().is_some_and(|bytes| {
-            parse_blue_fang_source_document(AssetPath::new(&path.to_string_lossy()), &bytes)
-                .is_ok_and(|document| {
-                    document.root.name.eq_ignore_ascii_case("BFTypedBinder")
-                        && document
-                            .root
-                            .attribute_named_any(&["binderType"])
-                            .is_some_and(|binder_type| binder_type.eq_ignore_ascii_case(family))
-                })
-        })
-    });
-    if !declares_family {
-        if let Some((path, revision)) =
-            binder_source_paths.resolve_binder_type_source_path(archives, from, family)?
-        {
-            return Ok(Some((path, Some(revision))));
-        }
+) -> io::Result<Option<std::path::PathBuf>> {
+    if let Some(declaration) =
+        binder_source_paths.resolve_binder_type_source_path(archives, from, family)?
+    {
+        return Ok(Some(declaration));
     }
-    Ok(by_name.map(|path| (path, None)))
+    Ok(archives.resolve_source_reference(Path::new(from), family))
 }
 
 #[cfg(test)]
@@ -294,21 +263,15 @@ mod tests {
             ],
         )?;
         let (_, archives) = create_bevy_asset_source_for_enabled_z2f_archives(vec![archive])?;
-        let index = AuthoredBinderSourcePathIndex::default();
+        let index = archives.authored_binder_sources();
         let resolve = |family| {
             resolve_typed_binder_family_source_path(&archives, &index, "guests/variant.xml", family)
         };
 
-        assert_eq!(
-            resolve("Guest_Adult")?,
-            Some((
-                "guests/ai/adult.xml".into(),
-                Some(archives.binder_source_version())
-            ))
-        );
+        assert_eq!(resolve("Guest_Adult")?, Some("guests/ai/adult.xml".into()));
         assert_eq!(
             resolve("Guest_Infant")?,
-            Some(("guests/guest_infant.xml".into(), None))
+            Some("guests/guest_infant.xml".into())
         );
         assert_eq!(
             resolve("Guest_Young").unwrap_err().kind(),

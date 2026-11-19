@@ -18,7 +18,7 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
         next_action_tick: 1,
         object: None,
         interaction_slot: Some(0),
-        stack: Default::default(),
+        depth: 0,
     };
     let wait = ActiveQueueWait {
         execution_id: task.execution_id,
@@ -28,17 +28,55 @@ fn queue_deadline_keeps_its_parent_instruction_across_nested_waiting_sets() {
         queue_slot: 0,
         deadline_tick: 90,
     };
-    assert!(wait.still_owns_task(&task));
-    assert!(task.push_return_frame(wait.origin.clone()));
+    let origin = wait.origin.clone();
+    let actor = world.spawn((task.clone(), wait)).id();
+    use bevy::ecs::system::RunSystemOnce;
+    use openzt2_zoo_state::behavior_task_execution_types::{
+        continuations::{
+            BehaviorContinuationFrames, BehaviorContinuationOf, SuspendedBehaviorFrame,
+        },
+        running_actions::{
+            resume_suspended_behavior_instruction, ResumeSuspendedBehaviorInstruction,
+        },
+    };
+    world.add_observer(resume_suspended_behavior_instruction);
+    let owns = move |frames: BehaviorContinuationFrames,
+                     waits: Query<(&ActiveQueueWait, &BehaviorTaskExecutionState)>| {
+        let (wait, task) = waits.get(actor).unwrap();
+        wait.still_owns_task(actor, task, &frames)
+    };
+    assert!(world.run_system_once(owns).unwrap());
+    world.spawn((
+        BehaviorContinuationOf(actor),
+        SuspendedBehaviorFrame(origin.clone()),
+    ));
+    task.depth = 1;
     task.program = AssetId::from_key("waiting");
     task.action = 4;
-    assert!(wait.still_owns_task(&task));
-    wait.restore_wait_instruction(&mut task, 20);
+    *world.get_mut::<BehaviorTaskExecutionState>(actor).unwrap() = task;
+    assert!(world.run_system_once(owns).unwrap());
+    world.trigger(ResumeSuspendedBehaviorInstruction {
+        actor,
+        execution_id: 1,
+        origin: origin.clone(),
+        depth: 0,
+        instruction: origin,
+        tick: 20,
+        advance: false,
+    });
+    world.flush();
+    let task = world.get::<BehaviorTaskExecutionState>(actor).unwrap();
     assert_eq!(task.program, AssetId::from_key("queue"));
     assert_eq!(task.action, 2);
     assert_eq!(task.next_action_tick, 20);
-    assert!(task.stack.is_empty());
-    assert_eq!(wait.deadline_tick, 90);
-    task.action = 3;
-    assert!(!wait.still_owns_task(&task));
+    assert_eq!(task.depth, 0);
+    assert_eq!(
+        world.get::<ActiveQueueWait>(actor).unwrap().deadline_tick,
+        90
+    );
+    world
+        .get_mut::<BehaviorTaskExecutionState>(actor)
+        .unwrap()
+        .action = 3;
+    assert!(!world.run_system_once(owns).unwrap());
 }

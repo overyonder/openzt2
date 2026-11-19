@@ -1,11 +1,11 @@
 use std::collections::BTreeMap;
 
 use openzt2_game_data::{
-    AssetId,
     world_definitions::object_placement::placement_stomp_rules::{
         PlacementStompAction, PlacementStompPolicy, PlacementStompRule, PlacementStompTarget,
         PlacementTargetFacts,
     },
+    AssetId,
 };
 
 use crate::source_document::{

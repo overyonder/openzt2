@@ -87,6 +87,13 @@ impl Plugin for LocomotionPlugin {
             )
             .add_systems(
                 Update,
+                tank_water_navigation_overlay::project_tank_water_onto_navigation_cells
+                    .after(terrain_edit_navigation_refresh::refresh_navigation_graph_after_terrain_restoration)
+                    .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
+                    .run_if(in_state(GamePhase::Loading)),
+            )
+            .add_systems(
+                Update,
                 path_surface_navigation_projection::project_path_surfaces_into_navigation_graph
                     .after(world_navigation_installation::install_terrain_derived_navigation_graph_for_loaded_world)
                     .in_set(openzt2_world_state::application_schedule::GameSet::Intent)
@@ -106,7 +113,8 @@ impl Plugin for LocomotionPlugin {
                     terrain_edit_navigation_refresh::
                         refresh_navigation_graph_and_invalidate_routes_after_terrain_edits,
                     path_surface_navigation_projection::project_path_surfaces_into_navigation_graph,
-                    tank_water_navigation_overlay::project_tank_water_onto_navigation_cells,
+                    tank_water_navigation_overlay::project_tank_water_onto_navigation_cells
+                        .run_if(in_state(GamePhase::InGame)),
                     navigation_agent_initialization::
                         initialize_navigation_agents_with_bounded_runtime_state,
                     navigation_reachability_testing::

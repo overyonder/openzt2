@@ -10,17 +10,25 @@ impl AuthoredTerrainWaterSurfaceEffectPass {
         frustum: &Frustum,
         geometric_wave_state: &NativeTerrainWaterGeometricWaveShaderState,
     ) -> bool {
-        let Some(displacement) = geometric_wave_state
+        self.wave_expanded_world_bounds(geometric_wave_state)
+            .is_none_or(|bounds| frustum.intersects_obb_identity(&bounds))
+    }
+
+    pub fn wave_expanded_world_bounds(
+        &self,
+        geometric_wave_state: &NativeTerrainWaterGeometricWaveShaderState,
+    ) -> Option<Aabb> {
+        let displacement = geometric_wave_state
             .maximum_horizontal_and_vertical_shader_displacement(
                 self.maximum_absolute_input_height,
-            )
-        else {
-            // Do not reject a surface whose supplied wave inputs cannot be bounded.
-            return true;
-        };
+            )?;
+        Some(self.world_bounds(displacement))
+    }
+
+    pub fn world_bounds(&self, displacement: Vec2) -> Aabb {
         let minimum = self.horizontal_minimum - Vec2::splat(displacement.x);
         let maximum = self.horizontal_maximum + Vec2::splat(displacement.x);
-        frustum.intersects_obb_identity(&Aabb::from_min_max(
+        Aabb::from_min_max(
             Vec3::new(
                 minimum.x,
                 self.surface_plane_height - displacement.y,
@@ -31,6 +39,6 @@ impl AuthoredTerrainWaterSurfaceEffectPass {
                 self.surface_plane_height + displacement.y,
                 maximum.y,
             ),
-        ))
+        )
     }
 }

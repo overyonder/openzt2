@@ -3,7 +3,6 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use openzt2_game_data::ui_document::node_property_binding::UiBooleanPropertyBindingSource;
 
 use super::authored_button_runtime_policy::UiButtonPolicy;
-use super::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use super::authored_ui_selection_binding::UiSelectedBinding;
 use super::authored_ui_selection_state::UiSelected;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
@@ -22,100 +21,93 @@ impl UiAuthoredToggleGroupSelectionPolicy {
     }
 }
 
-/// Projects an authored toggle-set press into the presentation-only selected
-/// facts of its direct children.
-///
-/// A selected binding marks the bound domain as authoritative. Camera-view
-/// radios request their authored On action; other bound groups are skipped.
-/// UI never writes a bound member's selected fact speculatively.
-pub(super) fn apply_authored_toggle_group_selection_transitions_from_presses(
-    mut commands: Commands,
-    mut activated: MessageReader<UiNodeActivated>,
+/// Converts an authored Press to an ordered selection transition.
+pub(super) fn transition_pressed_authored_toggles(
+    mut messages: ParamSet<(
+        MessageReader<UiNodeActivated>,
+        MessageWriter<UiNodeActivated>,
+    )>,
     parents: Query<&ChildOf>,
-    groups: Query<&UiAuthoredToggleGroupSelectionPolicy>,
     children: Query<&Children>,
+    groups: Query<&UiAuthoredToggleGroupSelectionPolicy>,
     mut toggles: Query<(
         &mut UiSelected,
+        Option<&UiButtonPolicy>,
         Option<&UiSelectedBinding>,
-        Option<&mut UiPreviousSelection>,
     )>,
 ) {
-    for activation in activated.read() {
-        if activation.trigger != UiTrigger::Press {
-            continue;
-        }
-        let Ok(parent) = parents.get(activation.node) else {
-            continue;
-        };
-        let group_entity = parent.parent();
-        let Ok(policy) = groups.get(group_entity) else {
+    let mut output = Vec::new();
+    for activation in messages
+        .p0()
+        .read()
+        .filter(|event| event.trigger == UiTrigger::Press)
+    {
+        let Ok((selected, button, binding)) = toggles.get(activation.node) else {
             continue;
         };
-        let Ok((selected, binding, _)) = toggles.get(activation.node) else {
-            continue;
+        let mut emit = |node, selected| {
+            output.push(UiNodeActivated {
+                node,
+                source: activation.source,
+                trigger: if selected {
+                    UiTrigger::On
+                } else {
+                    UiTrigger::Off
+                },
+            })
         };
-        if selected.0 && !policy.allow_selected_member_repress {
-            continue;
-        }
-        if let Some(binding) = binding {
-            if !matches!(
-                &binding.0,
-                UiBooleanPropertyBindingSource::OverheadViewSelected
-                    | UiBooleanPropertyBindingSource::FirstPersonViewSelected
-                    | UiBooleanPropertyBindingSource::PhotoViewSelected
-            ) {
+        let group = parents.get(activation.node).ok().and_then(|parent| {
+            Some((
+                groups.get(parent.parent()).ok()?,
+                children.get(parent.parent()).ok()?,
+            ))
+        });
+        if let Some((policy, group)) = group {
+            if selected.0 && !policy.allow_selected_member_repress {
                 continue;
             }
-            // Camera radios request their authored On action. The domain
-            // presenter selects the winner only after the request is accepted.
-            let transition = UiNodeActivated {
-                node: activation.node,
-                source: activation.source,
-                trigger: UiTrigger::On,
-            };
-            commands.queue(move |world: &mut World| {
-                world.write_message(transition);
-            });
-            continue;
-        }
-        let Ok(members) = children.get(group_entity) else {
-            continue;
-        };
-        // Tabs can share presentation containers. Hide the losing tab before
-        // the winning tab shows them, regardless of their authored child order.
-        for member in members
-            .iter()
-            .filter(|member| *member != activation.node)
-            .chain(std::iter::once(activation.node))
-        {
-            let Ok((mut selected, binding, previous)) = toggles.get_mut(member) else {
+            if let Some(binding) = binding {
+                if matches!(
+                    binding.0,
+                    UiBooleanPropertyBindingSource::OverheadViewSelected
+                        | UiBooleanPropertyBindingSource::FirstPersonViewSelected
+                        | UiBooleanPropertyBindingSource::PhotoViewSelected
+                ) {
+                    emit(activation.node, true);
+                }
                 continue;
-            };
-            let bound = binding.is_some();
-            let next = member == activation.node;
-            let repressed =
-                member == activation.node && selected.0 && policy.allow_selected_member_repress;
-            let transitioned = selected.0 != next || repressed;
-            if transitioned && (!bound || member == activation.node) {
-                if !bound {
-                    selected.0 = next;
-                    // This owner emits the transition below. Do not let the
-                    // generic change detector emit it again in query order.
-                    if let Some(mut previous) = previous {
-                        *previous = UiPreviousSelection::from_current_selection(next);
+            }
+            for member in group
+                .iter()
+                .filter(|node| *node != activation.node)
+                .chain(std::iter::once(activation.node))
+            {
+                let Ok((mut selected, _, binding)) = toggles.get_mut(member) else {
+                    continue;
+                };
+                let next = member == activation.node;
+                if (selected.0 != next || next && policy.allow_selected_member_repress)
+                    && (binding.is_none() || next)
+                {
+                    if binding.is_none() {
+                        selected.set_if_neq(UiSelected(next));
+                    }
+                    emit(member, next);
+                }
+            }
+        } else if let Some(button) = button.filter(|button| button.selectable) {
+            let next = button.sticky || !selected.0;
+            if next != selected.0 || selected.0 && button.repress {
+                if binding.is_none() {
+                    if let Ok((mut selected, ..)) = toggles.get_mut(activation.node) {
+                        selected.set_if_neq(UiSelected(next));
                     }
                 }
-                let transition = UiNodeActivated {
-                    node: member,
-                    source: activation.source,
-                    trigger: if next { UiTrigger::On } else { UiTrigger::Off },
-                };
-                commands.queue(move |world: &mut World| {
-                    world.write_message(transition);
-                });
+                emit(activation.node, next);
             }
         }
     }
+    let _ = messages.p1().write_batch(output);
 }
 
 #[cfg(test)]
@@ -126,29 +118,19 @@ mod tests {
     #[test]
     fn switching_to_an_earlier_tab_deactivates_the_old_tab_before_activating_the_new_one() {
         let mut app = App::new();
-        app.add_message::<UiNodeActivated>().add_systems(Update, (
-            apply_authored_toggle_group_selection_transitions_from_presses,
-            super::super::authored_ui_change_activation_dispatch::dispatch_authored_selection_change_activations,
-        ).chain());
+        app.add_message::<UiNodeActivated>()
+            .add_systems(Update, transition_pressed_authored_toggles);
         let group = app
             .world_mut()
             .spawn(UiAuthoredToggleGroupSelectionPolicy::new(false))
             .id();
         let construction = app
             .world_mut()
-            .spawn((
-                UiSelected(false),
-                UiPreviousSelection::from_current_selection(false),
-                ChildOf(group),
-            ))
+            .spawn((UiSelected(false), ChildOf(group)))
             .id();
         let staff = app
             .world_mut()
-            .spawn((
-                UiSelected(true),
-                UiPreviousSelection::from_current_selection(true),
-                ChildOf(group),
-            ))
+            .spawn((UiSelected(true), ChildOf(group)))
             .id();
         app.world_mut().write_message(UiNodeActivated {
             node: construction,
@@ -167,55 +149,5 @@ mod tests {
             transitions,
             vec![(staff, UiTrigger::Off), (construction, UiTrigger::On)]
         );
-    }
-}
-
-/// Applies the authored standalone-toggle transition to its visual selected
-/// fact. A non-sticky toggle always changes state when pressed; `repress`
-/// controls whether an already-selected sticky button may run its activation
-/// again. A non-sticky toggle can always turn off.
-pub(super) fn apply_authored_standalone_toggle_selection_transitions_from_presses(
-    mut commands: Commands,
-    mut activated: MessageReader<UiNodeActivated>,
-    parents: Query<&ChildOf>,
-    groups: Query<(), With<UiAuthoredToggleGroupSelectionPolicy>>,
-    mut buttons: Query<(
-        &UiButtonPolicy,
-        &mut UiSelected,
-        Has<UiSelectedBinding>,
-        Option<&mut UiPreviousSelection>,
-    )>,
-) {
-    for activation in activated.read() {
-        if activation.trigger != UiTrigger::Press {
-            continue;
-        }
-        let Ok((policy, mut selected, bound, previous)) = buttons.get_mut(activation.node) else {
-            continue;
-        };
-        if !policy.selectable
-            || parents
-                .get(activation.node)
-                .is_ok_and(|parent| groups.contains(parent.parent()))
-        {
-            continue;
-        }
-        let next = policy.sticky || !selected.0;
-        if selected.0 != next || (selected.0 && policy.repress) {
-            if !bound {
-                selected.0 = next;
-                if let Some(mut previous) = previous {
-                    *previous = UiPreviousSelection::from_current_selection(next);
-                }
-            }
-            let transition = UiNodeActivated {
-                node: activation.node,
-                source: activation.source,
-                trigger: if next { UiTrigger::On } else { UiTrigger::Off },
-            };
-            commands.queue(move |world: &mut World| {
-                world.write_message(transition);
-            });
-        }
     }
 }

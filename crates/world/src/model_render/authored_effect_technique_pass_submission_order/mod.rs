@@ -1,11 +1,10 @@
 use bevy::core_pipeline::core_3d::Transparent3d;
 use bevy::ecs::entity::EntityHashMap;
-#[cfg(test)]
-use bevy::ecs::system::RunSystemOnce;
 use bevy::extract::extract_instances::ExtractedInstances;
 use bevy::prelude::*;
-use bevy::render::render_phase::PhaseItem;
 use bevy::render::render_phase::ViewSortedRenderPhases;
+use bevy::render::render_phase::{PhaseItem, SortedRenderPhase};
+use bevy::render::view::ExtractedView;
 use openzt2_game_assets::material::runtime::effect_pass_gpu_data::EffectPassMaterial;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTechniquePassSubmissionOrder;
 use openzt2_world_state::model_render::authored_effect_technique_pass_submission_order::AuthoredEffectTransparentRenderStage;
@@ -32,52 +31,89 @@ pub(super) fn project_authored_effect_opaque_base_pass_order(
     }
 }
 
-pub(super) fn sort_authored_effect_invocations_before_bevy_mesh_batch_preparation(
+pub(super) fn sort_transparent_effect_phase(
     orders: Res<
         ExtractedInstances<AuthoredEffectTechniquePassSubmissionOrder, bevy::render::RenderApp>,
     >,
+    layers: Res<
+        ExtractedInstances<
+            super::environment_layer_rendering::EnvironmentPrimitiveLayer,
+            bevy::render::RenderApp,
+        >,
+    >,
+    views: Query<&ExtractedView>,
     mut phases: ResMut<ViewSortedRenderPhases<Transparent3d>>,
     mut invocation_distances: Local<EntityHashMap<(bool, f32)>>,
 ) {
-    for phase in phases.values_mut() {
-        invocation_distances.clear();
-        for item in phase.items.values() {
-            if let Some(order) = orders.get(&item.main_entity()) {
-                order.record_invocation_distance(&mut invocation_distances, item.distance);
-            }
+    for view in &views {
+        let Some(phase) = phases.get_mut(&view.retained_view_entity) else {
+            continue;
+        };
+        // The environment queue uses its own phase and prepares its own draws.
+        // Exclude the duplicate while the stock material queue still targets Transparent3d.
+        phase
+            .items
+            .retain(|_, item| !layers.contains_key(&item.main_entity()));
+        phase.recalculate_sort_keys(view);
+        sort_draws(phase, &orders, &mut invocation_distances);
+    }
+}
+
+fn sort_draws(
+    phase: &mut SortedRenderPhase<Transparent3d>,
+    orders: &ExtractedInstances<
+        AuthoredEffectTechniquePassSubmissionOrder,
+        bevy::render::RenderApp,
+    >,
+    invocation_distances: &mut EntityHashMap<(bool, f32)>,
+) {
+    invocation_distances.clear();
+    for item in phase.items.values() {
+        if let Some(order) = orders.get(&item.main_entity()) {
+            order.record_invocation_distance(invocation_distances, item.distance);
         }
-        phase.items.sort_by(|_, left, _, right| {
-            // Bevy PBR queues PLACEHOLDER as the render entity. Its retained
-            // mesh instances and these ordering records use MainEntity keys.
-            let left_order = orders.get(&left.main_entity());
-            let right_order = orders.get(&right.main_entity());
-            let left_distance = left_order
-                .and_then(|order| order.invocation_distance(&invocation_distances))
-                .unwrap_or((false, left.distance));
-            let right_distance = right_order
-                .and_then(|order| order.invocation_distance(&invocation_distances))
-                .unwrap_or((false, right.distance));
-            // Bevy's signed distances increase toward the camera, so ascending
-            // order is back to front. Group every technique before
-            // Bevy assigns its instance ranges and indirect draw parameters.
-            // Opaque bases must precede depth-writing transparent shells.
-            // Keep every pass of an invocation in the base pass's group.
-            let stage = |order: Option<&AuthoredEffectTechniquePassSubmissionOrder>| {
-                order.map_or(AuthoredEffectTransparentRenderStage::Scene, |order| {
-                    order.render_stage()
-                })
-            };
-            stage(left_order)
-                .cmp(&stage(right_order))
-                .then_with(|| right_distance.0.cmp(&left_distance.0))
-                .then_with(|| left_distance.1.total_cmp(&right_distance.1))
-                .then_with(|| match (left_order, right_order) {
-                    (Some(left), Some(right)) => left.compare_hierarchy_order(right),
-                    (Some(_), None) => std::cmp::Ordering::Less,
-                    (None, Some(_)) => std::cmp::Ordering::Greater,
-                    (None, None) => std::cmp::Ordering::Equal,
-                })
-        });
+    }
+    phase.items.sort_by_cached_key(|_, item| {
+        transparent_draw_sort_key(
+            orders.get(&item.main_entity()),
+            item.distance,
+            invocation_distances,
+        )
+    });
+}
+
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct TransparentDrawSortKey {
+    stage: AuthoredEffectTransparentRenderStage,
+    transparent_base: bool,
+    distance: u32,
+    unauthored: bool,
+    hierarchy_order: Option<(u64, usize, u64, u16)>,
+}
+
+pub(super) fn transparent_draw_sort_key(
+    order: Option<&AuthoredEffectTechniquePassSubmissionOrder>,
+    distance: f32,
+    invocation_distances: &EntityHashMap<(bool, f32)>,
+) -> TransparentDrawSortKey {
+    let (opaque_base, distance) = order
+        .and_then(|order| order.invocation_distance(invocation_distances))
+        .unwrap_or((false, distance));
+    // Map IEEE-754 total order onto an unsigned sort key.
+    let bits = distance.to_bits();
+    let distance = if distance.is_sign_negative() {
+        !bits
+    } else {
+        bits ^ (1 << 31)
+    };
+    TransparentDrawSortKey {
+        stage: order.map_or(AuthoredEffectTransparentRenderStage::Scene, |order| {
+            order.render_stage()
+        }),
+        transparent_base: !opaque_base,
+        distance,
+        unauthored: order.is_none(),
+        hierarchy_order: order.map(AuthoredEffectTechniquePassSubmissionOrder::hierarchy_order),
     }
 }
 
@@ -87,9 +123,7 @@ mod authored_effect_ordering_tests {
     use bevy::core_pipeline::core_3d::TransparentSortingInfo3d;
     use bevy::material::labels::DrawFunctionId;
     use bevy::render::render_phase::PhaseItemExtraIndex;
-    use bevy::render::render_phase::SortedRenderPhase;
     use bevy::render::render_resource::CachedRenderPipelineId;
-    use bevy::render::view::RetainedViewEntity;
 
     #[test]
     fn retained_mesh_placeholders_preserve_effect_stages_and_authored_pass_order() {
@@ -102,7 +136,6 @@ mod authored_effect_ordering_tests {
         let terrain = world.spawn_empty().id();
         let water_base = world.spawn_empty().id();
         let water_overlay = world.spawn_empty().id();
-        let view = RetainedViewEntity::new(world.spawn_empty().id().into(), None, 0);
         let mut orders = ExtractedInstances::<
             AuthoredEffectTechniquePassSubmissionOrder,
             bevy::render::RenderApp,
@@ -176,16 +209,9 @@ mod authored_effect_ordering_tests {
                 indexed: true,
             });
         }
-        let mut phases = ViewSortedRenderPhases::<Transparent3d>::default();
-        phases.insert(view, phase);
-        world.insert_resource(phases);
-        world.insert_resource(orders);
-        assert!(world
-            .run_system_once(sort_authored_effect_invocations_before_bevy_mesh_batch_preparation)
-            .is_ok());
-        let phases = world.resource::<ViewSortedRenderPhases<Transparent3d>>();
+        sort_draws(&mut phase, &orders, &mut EntityHashMap::default());
         assert_eq!(
-            phases[&view]
+            phase
                 .items
                 .values()
                 .map(|item| item.main_entity().id())

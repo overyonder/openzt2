@@ -1,18 +1,17 @@
 //! Applies authored behavior changes to the guest owner's existing need facts.
 
 use bevy::prelude::*;
-use openzt2_game_data::behavior::{
-    action::modification::{BehaviorFact, BehaviorFactModificationOperation},
-    action_record::BehaviorAction,
+use openzt2_game_data::behavior::action::modification::{
+    BehaviorFact, BehaviorFactModificationOperation,
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorFactModifications, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_behavior::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext;
@@ -25,13 +24,20 @@ use openzt2_zoo_state::guests::guest_survey_types::GuestSurveyExperience;
 use super::{guest_simulation_calculations::apply_q16, guest_simulation_types::*};
 
 pub(super) fn apply_authored_guest_behavior_fact_modifications(
-    assets: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,
     price_effect: BehaviorPriceEffectContext,
     satisfaction: Query<(), With<GuestSatisfaction>>,
     mut satisfaction_changes: MessageWriter<AdjustGuestSatisfaction>,
     mut tasks: Query<
-        (Entity, &mut BehaviorTaskExecutionState, &mut GuestRng),
+        (
+            Entity,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorFactModifications,
+            ),
+            &mut GuestRng,
+        ),
         (With<Guest>, Without<PendingBehaviorTaskFailure>),
     >,
     mut needs: Query<
@@ -54,16 +60,14 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
     mut trash_changes: MessageWriter<AdjustFacilityContainedWaste>,
     mut commands: Commands,
 ) {
-    for (actor, mut task, mut random) in &mut tasks {
+    for (actor, (task, instruction, running_action), mut random) in &mut tasks {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::FactModifications(modifications)) = assets
-            .get(&task.document)
-            .and_then(|asset| find_current_behavior_task_action(asset, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let modifications = &running_action.0;
         // Validate the whole action before changing a need or consuming RNG.
         // An unresolved role or unsupported fact must enter the authored failure path.
         if !modifications.iter().all(|modification| {
@@ -285,6 +289,6 @@ pub(super) fn apply_authored_guest_behavior_fact_modifications(
             };
             apply_q16(value, residual, delta);
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

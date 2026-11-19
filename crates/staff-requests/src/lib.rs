@@ -19,7 +19,6 @@ impl Plugin for StaffRequestRuntimePlugin {
             FixedUpdate,
             (
                 threshold_evaluation::bind_staff_request_rows_on_definition_change,
-                threshold_evaluation::reconcile_staff_request_rows_on_definition_revision,
                 threshold_evaluation::evaluate_staff_request_rows,
             )
                 .chain()

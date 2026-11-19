@@ -1,4 +1,10 @@
 use bevy::prelude::*;
+use openzt2_interface_state::immersive_modes::immersive_mode_state_types::{
+    ActiveImmersiveMode, ImmersiveHudSuppression, ImmersiveMode,
+};
+
+#[derive(Component)]
+pub(super) struct UiOverheadOnly;
 
 use super::authored_tree_expansion_and_row_indentation::{
     UiAuthoredTreeExpansion, UiAuthoredTreeHeader, UiAuthoredTreeItem,
@@ -39,20 +45,33 @@ pub(super) fn synchronize_authored_visibility_with_bevy_layout_participation(
             &UiAuthoredLayoutDisplay,
             Option<&ChildOf>,
             Has<UiAuthoredTreeHeader>,
+            Has<UiOverheadOnly>,
             &mut Node,
         ),
-        Changed<Visibility>,
+        Or<(Changed<Visibility>, With<UiOverheadOnly>)>,
     >,
     trees: Query<&UiAuthoredTreeExpansion, With<UiAuthoredTreeItem>>,
+    suppression: Query<(), With<ImmersiveHudSuppression>>,
+    modes: Query<&ActiveImmersiveMode>,
 ) {
-    for (visibility, authored, parent, header, mut node) in &mut nodes {
+    let suppress_hud = !suppression.is_empty()
+        || modes.iter().any(|active| {
+            matches!(
+                active.mode,
+                ImmersiveMode::FirstPerson | ImmersiveMode::SuperStaff
+            )
+        });
+    for (visibility, authored, parent, header, overhead_only, mut node) in &mut nodes {
         let collapsed_tree_content = !header
             && parent.is_some_and(|parent| {
                 trees
                     .get(parent.parent())
                     .is_ok_and(|expanded| !expanded.is_expanded())
             });
-        let display = if matches!(visibility, Visibility::Hidden) || collapsed_tree_content {
+        let display = if matches!(visibility, Visibility::Hidden)
+            || collapsed_tree_content
+            || overhead_only && suppress_hud
+        {
             Display::None
         } else {
             authored.authored_display()

@@ -40,8 +40,7 @@ pub(super) fn write_mod_archive(
     let partial_path = directory.join(format!("{name}.z2f.partial"));
     let write = || -> std::io::Result<()> {
         let mut archive = ZipWriter::new(std::fs::File::create(&partial_path)?);
-        let options =
-            SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
         for (model_path, gltf) in replacements {
             let entry = model_path.with_extension("glb");
             archive.start_file(entry.to_string_lossy().replace('\\', "/"), options)?;
@@ -67,8 +66,14 @@ mod tests {
         let directory = std::env::temp_dir().join(format!("openzt2-mod-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         let replacements = [
-            (PathBuf::from("entities/objects/hut/hut.bfb"), Arc::from(&b"glTF"[..])),
-            (PathBuf::from("entities/objects/bench/bench.z2glb"), Arc::from(&b"glTF"[..])),
+            (
+                PathBuf::from("entities/objects/hut/hut.bfb"),
+                Arc::from(&b"glTF"[..]),
+            ),
+            (
+                PathBuf::from("entities/objects/bench/bench.z2glb"),
+                Arc::from(&b"glTF"[..]),
+            ),
         ];
         let path = write_mod_archive(&directory, "my_huts", &replacements).unwrap();
         let mut archive = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
@@ -76,7 +81,10 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["entities/objects/bench/bench.glb", "entities/objects/hut/hut.glb"]
+            [
+                "entities/objects/bench/bench.glb",
+                "entities/objects/hut/hut.glb"
+            ]
         );
         assert!(archive.by_name("entities/objects/hut/hut.glb").is_ok());
         assert!(write_mod_archive(&directory, "x300_000", &replacements).is_err());

@@ -5,12 +5,31 @@ use openzt2_zoo_state::terrain::{
     terrain_edit_data_types::{TerrainSample, TerrainWaterAffiliation},
     terrain_water_presentation_types::{
         TerrainWaterMembershipIndex, TerrainWaterRegionEdit, TerrainWaterRegionEditDelta,
-        TerrainWaterRegionQuery, TerrainWaterRegionRetired,
+        TerrainWaterRegionQuery,
     },
-    terrain_water_view_state::{TerrainWaterRegionFade, TerrainWaterRegionVisibility},
 };
 
 pub(in crate::terrain) mod splitting;
+
+pub(super) fn current_water_point_owner(
+    point: UVec2,
+    sample: &TerrainSample,
+    membership: &TerrainWaterMembershipIndex,
+    asset: &TerrainAsset,
+    regions: &TerrainWaterRegionQuery,
+) -> Option<Entity> {
+    match sample.water_affiliation {
+        Some(TerrainWaterAffiliation::Edited(owner)) => {
+            let region = regions.get(owner)?;
+            super::super::water_regions::authored_membership::edited_point_accepted(
+                asset, membership, &region, point,
+            )?
+            .then_some(owner)
+        }
+        Some(TerrainWaterAffiliation::SourceRow(_)) => membership.point_owner(point),
+        _ => None,
+    }
+}
 
 pub(in crate::terrain) struct WaterBrushRegionPlan {
     pub(in crate::terrain) owner: Entity,
@@ -36,8 +55,10 @@ impl WaterBrushRegionPlan {
     pub(in crate::terrain) fn accepts_point(
         &self,
         point: UVec2,
+        previous_owner: Option<Entity>,
         membership: &TerrainWaterMembershipIndex,
         asset: &TerrainAsset,
+        regions: &TerrainWaterRegionQuery,
     ) -> bool {
         let Some(state) = self
             .changes
@@ -47,7 +68,7 @@ impl WaterBrushRegionPlan {
                     == if self.merge_owners {
                         self.owner
                     } else {
-                        membership.point_owner(point).unwrap_or(self.owner)
+                        previous_owner.unwrap_or(self.owner)
                     }
             })
             .and_then(|change| change.after.as_ref())
@@ -95,7 +116,8 @@ impl WaterBrushRegionPlan {
                         continue;
                     }
                     if owner.is_some_and(|owner| {
-                        !self.changes.iter().any(|change| change.owner == owner)
+                        regions.get(owner).is_some()
+                            && !self.changes.iter().any(|change| change.owner == owner)
                     }) {
                         return false;
                     }
@@ -171,11 +193,9 @@ impl WaterBrushRegionPlan {
 
 #[allow(clippy::too_many_arguments)]
 pub(in crate::terrain) fn plan_water_brush_region(
-    commands: &mut Commands,
     preview: &TerrainBrushPreview,
     terrain: &Handle<TerrainAsset>,
     asset: &TerrainAsset,
-    map_parent: Entity,
     samples: impl Iterator<Item = (Vec2, TerrainSample)>,
     regions: &TerrainWaterRegionQuery,
     membership: &TerrainWaterMembershipIndex,
@@ -190,11 +210,9 @@ pub(in crate::terrain) fn plan_water_brush_region(
         TerrainBrushKind::AddWater | TerrainBrushKind::RemoveWater
     ) {
         return plan_water_level_change(
-            commands,
             preview,
             terrain,
             asset,
-            map_parent,
             samples,
             regions,
             membership,
@@ -219,7 +237,9 @@ pub(in crate::terrain) fn plan_water_brush_region(
         if point.min_element() < 0.0 {
             continue;
         }
-        let Some(owner) = membership.point_owner(point.as_uvec2()) else {
+        let Some(owner) =
+            current_water_point_owner(point.as_uvec2(), &sample, membership, asset, regions)
+        else {
             continue;
         };
         if f32::from(sample.height_cm) * 0.01 < regions.get(owner)?.surface_height(asset)?
@@ -255,14 +275,7 @@ pub(in crate::terrain) fn plan_water_brush_region(
     }
     let new = candidates.is_empty();
     let owner = if new {
-        commands
-            .spawn((
-                ChildOf(map_parent),
-                TerrainWaterRegionRetired,
-                TerrainWaterRegionFade::default(),
-                TerrainWaterRegionVisibility::default(),
-            ))
-            .id()
+        Entity::PLACEHOLDER
     } else {
         *candidates.iter().max_by_key(|owner| {
             (
@@ -339,11 +352,9 @@ pub(in crate::terrain) fn plan_water_brush_region(
 
 #[allow(clippy::too_many_arguments)]
 fn plan_water_level_change(
-    commands: &mut Commands,
     preview: &TerrainBrushPreview,
     terrain: &Handle<TerrainAsset>,
     asset: &TerrainAsset,
-    map_parent: Entity,
     samples: impl Iterator<Item = (Vec2, TerrainSample)>,
     regions: &TerrainWaterRegionQuery,
     membership: &TerrainWaterMembershipIndex,
@@ -361,7 +372,9 @@ fn plan_water_level_change(
         if let Some(owner) = point
             .cmpge(Vec2::ZERO)
             .all()
-            .then(|| membership.point_owner(point.as_uvec2()))
+            .then(|| {
+                current_water_point_owner(point.as_uvec2(), &sample, membership, asset, regions)
+            })
             .flatten()
         {
             if !owners.contains(&owner) {
@@ -427,14 +440,7 @@ fn plan_water_level_change(
         let sample = dry?.1;
         let (_, channel) =
             super::find_default_water_style_for_terrain_sample(asset, None, &sample)?;
-        let owner = commands
-            .spawn((
-                ChildOf(map_parent),
-                TerrainWaterRegionRetired,
-                TerrainWaterRegionFade::default(),
-                TerrainWaterRegionVisibility::default(),
-            ))
-            .id();
+        let owner = Entity::PLACEHOLDER;
         changes.push(TerrainWaterRegionEditDelta {
             owner,
             before: None,

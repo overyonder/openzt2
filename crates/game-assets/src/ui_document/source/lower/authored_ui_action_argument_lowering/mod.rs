@@ -53,6 +53,10 @@ pub(super) fn target_node(
 pub(super) fn resolve_repeated_target_names_to_nearest_scope(
     nodes: &mut [UiNodeDefinition],
     role: UiDocumentRole,
+    receivers: &BTreeMap<
+        (u32, usize),
+        super::authored_ui_event_collection_lowering::UiActionReceiverPath,
+    >,
 ) {
     let mut named = BTreeMap::<AssetId, Vec<u32>>::new();
     for (index, node) in nodes.iter().enumerate() {
@@ -60,10 +64,6 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
             .entry(UiDocumentRole::node_id(role, &node.name))
             .or_default()
             .push(index as u32);
-    }
-    named.retain(|_, candidates| candidates.len() > 1);
-    if named.is_empty() {
-        return;
     }
     let parent = |nodes: &[UiNodeDefinition], index: u32| {
         nodes
@@ -80,6 +80,14 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
             None => break false,
         }
     };
+    let nearest_in_scope = |actor: u32, candidates: &[u32]| {
+        std::iter::successors(Some(actor), |scope| parent(nodes, *scope)).find_map(|scope| {
+            candidates
+                .iter()
+                .copied()
+                .find(|candidate| encloses(nodes, scope, *candidate))
+        })
+    };
     let mut resolved = Vec::new();
     for (actor, node) in nodes.iter().enumerate() {
         let actor = actor as u32;
@@ -92,18 +100,28 @@ pub(super) fn resolve_repeated_target_names_to_nearest_scope(
             let UiActionRecord::Presentation(record) = record else {
                 continue;
             };
+            let scope = receivers
+                .get(&(actor, record_index))
+                .map_or(actor, |receiver| {
+                    receiver.nodes.iter().fold(
+                        if receiver.from_root { 0 } else { actor },
+                        |scope, node| {
+                            named
+                                .get(node)
+                                .and_then(|candidates| nearest_in_scope(scope, candidates))
+                                .unwrap_or(scope)
+                        },
+                    )
+                });
             let mut action = record.action.clone();
             for (target_index, target) in action.local_node_targets_mut().enumerate() {
-                let Some(candidates) = named.get(&*target) else {
+                let Some(candidates) = named
+                    .get(&*target)
+                    .filter(|candidates| candidates.len() > 1)
+                else {
                     continue;
                 };
-                let nearest = std::iter::successors(Some(actor), |scope| parent(nodes, *scope))
-                    .find_map(|scope| {
-                        candidates
-                            .iter()
-                            .copied()
-                            .find(|candidate| encloses(nodes, scope, *candidate))
-                    });
+                let nearest = nearest_in_scope(scope, candidates);
                 if let Some(nearest) = nearest {
                     resolved.push((
                         actor,

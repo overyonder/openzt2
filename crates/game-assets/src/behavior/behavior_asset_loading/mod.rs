@@ -31,7 +31,10 @@ impl AssetLoader for BehaviorDocumentAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_behavior", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_behavior", skip_all)
+    )]
     async fn load(
         &self,
         source_reader: &mut dyn Reader,

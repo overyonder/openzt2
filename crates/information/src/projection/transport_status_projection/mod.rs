@@ -17,10 +17,11 @@ use openzt2_zoo_state::transport_tours::transport_rider_types::WaitingForTranspo
 use openzt2_zoo_state::transport_tours::transport_topology_types::TransportStation;
 use openzt2_zoo_state::transport_tours::transport_vehicle_types::TransportVehicle;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_transport_status_to_visible_information_panels(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     transport_subjects: Query<(
         Option<&TransportCircuit>,
         Option<&TransportStation>,
@@ -35,13 +36,15 @@ pub(crate) fn project_selected_transport_status_to_visible_information_panels(
     active_world_definitions: Res<WorldDefinitions>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
-        let (circuit, station, vehicle, waiting, rider, tour_score) = transport_subjects
-            .get(information_panel.subject)
-            .unwrap_or_default();
+        let (circuit, station, vehicle, waiting, rider, tour_score) =
+            transport_subjects.get(selection.0).unwrap_or_default();
 
         for (document_owner, property_binding, mut projected_value) in &mut authored_integer_values
         {

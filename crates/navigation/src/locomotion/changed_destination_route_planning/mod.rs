@@ -1,4 +1,6 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 
@@ -6,7 +8,7 @@ use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 use crate::locomotion::fence_navigation_policy::FenceNavigationPolicy;
 use crate::locomotion::pathfinding::{
-    ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS, RouteSearch, advance_route,
+    advance_route, RouteSearch, ITERATIONS_PER_SLICE, LONG_PATH_ITERATIONS,
 };
 use std::collections::{HashSet, VecDeque};
 
@@ -32,6 +34,7 @@ pub(super) struct RouteQueue {
 pub(super) fn plan_routes_for_changed_navigation_destinations(
     mut commands: Commands,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    water: Query<&TankNavigationWater, With<WorldRoot>>,
     fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     mut route_planning_scratch: Local<RouteScratch>,
@@ -68,6 +71,7 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
         Option<&openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples>,
     )>,
 ) {
+    let tank_water = water.single().ok();
     // Invalidate a suspended search even when its next slice cannot run yet.
     if fence_crossing_index.is_changed()
         || active_navigation_graph
@@ -132,6 +136,7 @@ pub(super) fn plan_routes_for_changed_navigation_destinations(
             .and_then(|(navigation_agent, maximum_ground_slope_radians)| {
                 advance_route(
                     terrain_navigation_graph,
+                    tank_water,
                     |from, to| {
                         fence_crossing_index
                             .crossing_fences(from, to)

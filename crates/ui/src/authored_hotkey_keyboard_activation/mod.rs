@@ -51,12 +51,9 @@ impl AuthoredHotkeyGameplayInputOverlap<'_, '_> {
     }
 }
 
-/// A hotkey proxy. It names its receiver by document preorder index and
-/// deliberately has no `UiNodeId`, so node lookups never mistake it for the
-/// receiver itself.
+/// A hotkey proxy parented to its receiver.
 #[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct UiAuthoredHotkeyKeyboardActivationBinding {
-    receiver_index: u32,
     key: KeyCode,
     control_state: UiDocumentHotkeyControlState,
     activates_on_release: bool,
@@ -69,18 +66,13 @@ impl UiAuthoredHotkeyKeyboardActivationBinding {
             && !self.activates_on_release
             && self.control_state != UiDocumentHotkeyControlState::ControlPressed
     }
-    pub(super) fn receiver_index(&self) -> u32 {
-        self.receiver_index
-    }
     pub(super) fn from_projected_authored_hotkey(
-        receiver_index: u32,
         key: KeyCode,
         control_state: UiDocumentHotkeyControlState,
         activates_on_release: bool,
         allows_repeated_input: bool,
     ) -> Self {
         Self {
-            receiver_index,
             key,
             control_state,
             activates_on_release,
@@ -92,11 +84,7 @@ impl UiAuthoredHotkeyKeyboardActivationBinding {
 pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
     keys: Res<ButtonInput<KeyCode>>,
     mut keyboard: MessageReader<KeyboardInput>,
-    bindings: Query<(
-        Entity,
-        &UiAuthoredHotkeyKeyboardActivationBinding,
-        &super::authored_ui_node_projection_components::UiDocumentOwner,
-    )>,
+    bindings: Query<(Entity, &UiAuthoredHotkeyKeyboardActivationBinding, &ChildOf)>,
     context: super::active_authored_ui_context::ActiveAuthoredUiContext,
     mut activated: MessageWriter<UiNodeActivated>,
     focus: Res<InputFocus>,
@@ -116,7 +104,7 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
         {
             continue;
         }
-        for (entity, binding, owner) in &bindings {
+        for (entity, binding, receiver) in &bindings {
             // Escape dismisses one activity. The cancellation receiver selection
             // chooses it for keyboard and controller alike.
             if binding.key != input.key_code || binding.is_cancel_activation() {
@@ -132,12 +120,10 @@ pub(super) fn activate_projected_authored_hotkeys_from_keyboard_input(
             if control_state_matches
                 && input_edge_matches
                 && (binding.allows_repeated_input || !input.repeat)
-                && context.hotkey_receiver_is_eligible(
-                    owner.0,
-                    binding.receiver_index(),
-                    None,
-                    *active_modal.get_or_insert_with(|| context.top_modal()),
-                )
+                && context.visible_and_enabled(receiver.parent())
+                && active_modal
+                    .get_or_insert_with(|| context.top_modal())
+                    .is_none_or(|modal| context.is_in_modal(receiver.parent(), modal))
             {
                 activated.write(UiNodeActivated {
                     source: ActionSource::KeyboardMouse,

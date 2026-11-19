@@ -19,8 +19,8 @@ type NewlyAvailableAnimationController = (
 #[derive(SystemParam)]
 pub(super) struct AnimationJointBindingChanges<'w, 's> {
     renamed_entities: Query<'w, 's, Entity, Changed<Name>>,
-    changed_branches:
-        MessageReader<'w, 's, crate::model_render::model_projection_changes::ModelBranchChanged>,
+    reparented_entities: Query<'w, 's, Entity, Changed<ChildOf>>,
+    detached_entities: RemovedComponents<'w, 's, ChildOf>,
     removed_controllers: RemovedComponents<'w, 's, AnimationPlaybackController>,
     removed_players: RemovedComponents<'w, 's, AnimationPlayer>,
     new_controllers: Query<'w, 's, Entity, NewlyAvailableAnimationController>,
@@ -48,7 +48,8 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
     let mut inherited_blend_poses = None;
     let AnimationJointBindingChanges {
         renamed_entities,
-        changed_branches,
+        reparented_entities,
+        detached_entities,
         removed_controllers,
         removed_players,
         new_controllers,
@@ -58,7 +59,8 @@ pub(super) fn bind_new_named_model_entities_and_new_animation_playback_controlle
     // changed subtrees, once each, rather than scanning settled rigs.
     for named_entity in new_controllers
         .iter()
-        .chain(changed_branches.read().map(|branch| branch.0))
+        .chain(reparented_entities.iter())
+        .chain(detached_entities.read())
         .chain(removed_controllers.read())
         .chain(removed_players.read())
         .flat_map(|root| {
@@ -183,7 +185,6 @@ mod tests {
     #[test]
     fn joint_binding_follows_model_reparenting_renaming_and_detachment() {
         let mut app = App::new();
-        crate::model_render::model_projection_changes::register(&mut app);
         app.add_systems(
             Update,
             bind_new_named_model_entities_and_new_animation_playback_controller_descendants,
@@ -227,7 +228,6 @@ mod tests {
     #[test]
     fn nested_controller_and_late_player_keep_the_nearest_animation_owner() {
         let mut app = App::new();
-        crate::model_render::model_projection_changes::register(&mut app);
         app.add_systems(
             Update,
             bind_new_named_model_entities_and_new_animation_playback_controller_descendants,

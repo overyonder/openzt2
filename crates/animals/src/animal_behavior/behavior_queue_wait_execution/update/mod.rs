@@ -7,13 +7,16 @@ use openzt2_world_state::animation_graph::animation_presentation_relationship_ty
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackState;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
+use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
+use openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    ResumeSuspendedBehaviorInstruction, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
-use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
 use openzt2_zoo_state::locomotion::locomotion_types::Docking;
 
 pub(super) fn update_queue_wait_deadlines_and_service_readiness(
@@ -21,12 +24,16 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
     clock: Res<ZooClock>,
     sources: QueueWaitSources,
     memberships: InteractionContainerMemberships,
-    mut actors: Query<(
+    frames: BehaviorContinuationFrames,
+    actors: Query<(
         Entity,
-        &mut BehaviorTaskExecutionState,
+        &BehaviorTaskExecutionState,
         &ActiveQueueWait,
         Option<&PendingBehaviorTaskFailure>,
-        Option<&PendingBehaviorAnimationClipCompletion>,
+        Option<(
+            &PendingBehaviorAnimationClipCompletion,
+            &RunningBehaviorInstruction,
+        )>,
     )>,
     abandoned_waits: Query<Entity, (With<ActiveQueueWait>, Without<BehaviorTaskExecutionState>)>,
     mut animation_controllers: Query<(
@@ -40,8 +47,8 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
     let Some(definitions) = sources.definitions.get(&sources.definition_assets) else {
         return;
     };
-    for (actor, mut task, wait, failure, pending_animation) in &mut actors {
-        if failure.is_some() || !wait.still_owns_task(&task) {
+    for (actor, task, wait, failure, pending_animation) in &actors {
+        if failure.is_some() || !wait.still_owns_task(actor, task, &frames) {
             commands.entity(actor).remove::<ActiveQueueWait>();
             continue;
         }
@@ -62,31 +69,27 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
         if !ready && object.is_some() && !lost_membership && clock.tick < wait.deadline_tick {
             continue;
         }
-        if let Some(pending) = pending_animation {
-            // Cancel only the clip belonging to the interrupted wait. A newer
-            // presentation request must not be stopped by an older task.
-            let clip = sources
-                .behaviors
-                .get(&task.document)
-                .and_then(|document| {
-                    openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action(
-                        document, &task,
-                    )
-                })
-                .and_then(|action| pending.clip_key(action));
-            if let Some(clip) = clip {
-                for (owner, mut controller) in &mut animation_controllers {
-                    if owner.gameplay_entity == actor
-                        && controller.animation_clip_asset_key == clip
-                        && controller.explicit_clip_request_id == Some(pending.request_id)
-                        && pending.still_owns_exact_task_frame(&task)
-                    {
-                        controller.playback_state = AnimationPlaybackState::Paused;
-                    }
+        if let Some((pending, _)) =
+            pending_animation.filter(|(pending, instruction)| pending.owns(&task, instruction))
+        {
+            for (owner, mut controller) in &mut animation_controllers {
+                if owner.gameplay_entity == actor
+                    && controller.animation_clip_asset_key == pending.clip_key
+                    && controller.explicit_clip_request_id == Some(pending.request_id)
+                {
+                    controller.playback_state = AnimationPlaybackState::Paused;
                 }
             }
         }
-        wait.restore_wait_instruction(&mut task, clock.tick);
+        commands.trigger(ResumeSuspendedBehaviorInstruction {
+            actor,
+            execution_id: wait.execution_id,
+            origin: wait.origin.clone(),
+            depth: wait.stack_depth,
+            instruction: wait.origin.clone(),
+            tick: clock.tick,
+            advance: ready,
+        });
         commands.entity(actor).remove::<(
             ActiveQueueWait,
             PendingBehaviorAnimationClipCompletion,
@@ -95,9 +98,7 @@ pub(super) fn update_queue_wait_deadlines_and_service_readiness(
             Destination,
             Docking,
         )>();
-        if ready {
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
-        } else {
+        if !ready {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
     }

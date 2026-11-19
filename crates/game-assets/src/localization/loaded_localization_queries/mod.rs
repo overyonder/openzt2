@@ -1,10 +1,10 @@
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     localization::{
         LocalizationCatalog, LocalizationDateFormatToken, LocalizationFormatArgument,
         LocalizationFormatError, LocalizationRichContentNode, LocalizationTextPresentation,
     },
+    AssetId,
 };
 
 use super::{

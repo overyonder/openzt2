@@ -22,6 +22,8 @@ pub struct UiGlobePresentationDefinition {
     pub move_seconds: f32,
     pub scream_threshold: f32,
     pub scream_delay_seconds: f32,
+    #[serde(default)]
+    pub scream_audio: AssetId,
     pub dot_highlight_rgba: [u8; 4],
     pub dot_highlight_cursor: AssetId,
     pub biome_models: Vec<UiGlobeBiomeModelDefinition>,

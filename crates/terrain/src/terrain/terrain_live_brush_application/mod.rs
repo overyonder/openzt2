@@ -8,7 +8,9 @@ use crate::terrain::terrain_brush_sample_mutation::prepare_terrain_chunk_sample_
 use crate::terrain::terrain_chunk_index_cleanup::TerrainChunkIdLookup;
 use crate::terrain::terrain_edit_application::apply_validated_terrain_edit_delta_and_publish_changed_region;
 use openzt2_zoo_state::terrain::terrain_brush_interaction_state::ActiveTerrainBrush;
-use openzt2_zoo_state::terrain::terrain_brush_interaction_state::TerrainBrushDab;
+use openzt2_zoo_state::terrain::terrain_brush_interaction_state::{
+    PendingTerrainBrushCommit, TerrainBrushDab, TerrainBrushPath,
+};
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushPreview;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainStroke;
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
@@ -20,6 +22,23 @@ use openzt2_zoo_state::terrain::terrain_edit_types::TerrainEdit;
 use openzt2_zoo_state::terrain::terrain_edit_types::TerrainWaterChanged;
 use openzt2_zoo_state::terrain::terrain_navigation_change_types::TerrainNavigationChanged;
 
+use super::terrain_sample_change_calculations::TerrainRenderInvalidated;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    TerrainWaterRegionEdit, TerrainWaterRegionQuery, TerrainWaterRegionRetired,
+};
+
+#[derive(Event)]
+pub(super) struct ApplyHeldTerrainStroke(TerrainStroke);
+
+pub(super) fn dispatch_held_terrain_strokes(
+    mut commands: Commands,
+    mut strokes: MessageReader<TerrainStroke>,
+) {
+    for &stroke in strokes.read() {
+        commands.trigger(ApplyHeldTerrainStroke(stroke));
+    }
+}
+
 #[derive(Component, Default)]
 pub(super) struct TerrainBrushDraft(pub(super) TerrainEdit);
 
@@ -27,12 +46,18 @@ pub(super) struct TerrainBrushDraft(pub(super) TerrainEdit);
 /// retaining the ordered before/after deltas as one draft undo transaction.
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
+    stroke: On<ApplyHeldTerrainStroke>,
     mut commands: Commands,
-    mut strokes: MessageReader<TerrainStroke>,
     index: Res<TerrainIndex>,
     chunk_ids: Res<TerrainChunkIdLookup>,
     assets: Res<Assets<TerrainAsset>>,
-    water_regions: openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterRegionQuery,
+    mut region_data: ParamSet<(
+        TerrainWaterRegionQuery,
+        Query<(
+            Option<&mut TerrainWaterRegionEdit>,
+            Has<TerrainWaterRegionRetired>,
+        )>,
+    )>,
     water_membership: Query<
         &openzt2_zoo_state::terrain::terrain_water_presentation_types::TerrainWaterMembershipIndex,
     >,
@@ -42,54 +67,100 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
         Option<&mut EditedTerrainSamples>,
         &TerrainChunkId,
     )>,
-    mut previews: Query<&mut TerrainBrushDraft, Or<(With<ActiveTerrainBrush>, With<openzt2_zoo_state::terrain::terrain_brush_interaction_state::PendingTerrainBrushCommit>)>>,
+    mut previews: Query<
+        (
+            &mut TerrainBrushPreview,
+            Option<&mut TerrainBrushPath>,
+            Option<&mut TerrainBrushDraft>,
+            Has<ActiveTerrainBrush>,
+            Has<PendingTerrainBrushCommit>,
+        ),
+        With<ConstructionPreview>,
+    >,
     mut changed: MessageWriter<TerrainChanged>,
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
+    mut render_changed: MessageWriter<TerrainRenderInvalidated>,
     mut missing_membership: Local<Option<(Entity, usize)>>,
 ) {
-    for stroke in strokes.read() {
-        let Ok(mut draft_edit) = previews.get_mut(stroke.preview) else {
-            continue;
-        };
-        let preview = TerrainBrushPreview {
-            center: stroke.center,
-            radius_m: stroke.radius_m,
-            strength_per_s: stroke.strength_per_s,
-            seconds: stroke.seconds,
-            kind: stroke.kind,
-            falloff: stroke.falloff,
-            paint_trees: stroke.paint_trees,
-            paint_foliage: stroke.paint_foliage,
-            paint_rocks: stroke.paint_rocks,
-            automatic_placement_variation: stroke.automatic_placement_variation,
-        };
-        let dab = TerrainBrushDab {
-            center: stroke.center,
-            seconds: stroke.seconds,
-        };
-        if !index.chunk_span_m.is_finite() || index.chunk_span_m <= 0.0 {
-            continue;
+    let stroke = stroke.0;
+    let Ok((mut current, path, draft, active, pending)) = previews.get_mut(stroke.preview) else {
+        return;
+    };
+    if !(stroke.center.is_finite()
+        && stroke.radius_m.is_finite()
+        && stroke.radius_m > 0.0
+        && stroke.strength_per_s.is_finite()
+        && stroke.seconds.is_finite()
+        && stroke.seconds >= 0.0)
+    {
+        return;
+    }
+    let preview = TerrainBrushPreview {
+        center: stroke.center,
+        radius_m: stroke.radius_m,
+        strength_per_s: stroke.strength_per_s,
+        seconds: stroke.seconds,
+        kind: stroke.kind,
+        falloff: stroke.falloff,
+        paint_trees: stroke.paint_trees,
+        paint_foliage: stroke.paint_foliage,
+        paint_rocks: stroke.paint_rocks,
+        automatic_placement_variation: stroke.automatic_placement_variation,
+    };
+    let dab = TerrainBrushDab {
+        center: stroke.center,
+        seconds: stroke.seconds,
+    };
+    let elapsed = current.seconds + stroke.seconds;
+    current.set_if_neq(TerrainBrushPreview {
+        seconds: elapsed,
+        ..preview
+    });
+    let live = draft.is_some() && (active || pending);
+    if !live || stroke.paint_trees || stroke.paint_foliage || stroke.paint_rocks {
+        if let Some(mut path) = path {
+            if let Some(previous) = path
+                .0
+                .last_mut()
+                .filter(|previous| previous.center == dab.center)
+            {
+                previous.seconds += dab.seconds;
+            } else {
+                path.0.push(dab);
+            }
+        } else {
+            commands
+                .entity(stroke.preview)
+                .insert(TerrainBrushPath(vec![dab]));
         }
-        let minimum = stroke.center - Vec2::splat(stroke.radius_m);
-        let maximum = stroke.center + Vec2::splat(stroke.radius_m);
-        let minimum_chunk = ((minimum - index.origin) / index.chunk_span_m)
-            .floor()
-            .as_ivec2();
-        let maximum_chunk = ((maximum - index.origin) / index.chunk_span_m)
-            .floor()
-            .as_ivec2();
-        let mut candidate_entities = Vec::new();
-        for z in minimum_chunk.y..=maximum_chunk.y {
-            for x in minimum_chunk.x..=maximum_chunk.x {
-                if let Some(entity) = index.chunks.get(&IVec2::new(x, z)).copied() {
-                    candidate_entities.push(entity);
-                }
+    }
+    let Some(mut draft_edit) = draft.filter(|_| live) else {
+        return;
+    };
+    let water_regions = region_data.p0();
+    if !index.chunk_span_m.is_finite() || index.chunk_span_m <= 0.0 {
+        return;
+    }
+    let minimum = stroke.center - Vec2::splat(stroke.radius_m);
+    let maximum = stroke.center + Vec2::splat(stroke.radius_m);
+    let minimum_chunk = ((minimum - index.origin) / index.chunk_span_m)
+        .floor()
+        .as_ivec2();
+    let maximum_chunk = ((maximum - index.origin) / index.chunk_span_m)
+        .floor()
+        .as_ivec2();
+    let mut candidate_entities = Vec::new();
+    for z in minimum_chunk.y..=maximum_chunk.y {
+        for x in minimum_chunk.x..=maximum_chunk.x {
+            if let Some(entity) = index.chunks.get(&IVec2::new(x, z)).copied() {
+                candidate_entities.push(entity);
             }
         }
-        candidate_entities.sort_unstable();
+    }
+    candidate_entities.sort_unstable();
 
-        let mut water_surface_height_cm =
+    let mut water_surface_height_cm =
             crate::terrain::terrain_brush_sample_mutation::resolve_painted_water_surface_height_centimetres(
                 &preview,
                 &dab,
@@ -99,143 +170,148 @@ pub(super) fn apply_held_terrain_brush_dabs_and_accumulate_one_draft_edit(
                 }),
             );
 
-        let water_plan = if matches!(
-            preview.kind,
-            openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::PaintWater { .. }
-                | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::AddWater
-                | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::RemoveWater
-        ) {
-            let Some((root, chunk, _, _)) = chunks
-                .iter()
-                .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
-            else {
+    let water_plan = if matches!(
+        preview.kind,
+        openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::PaintWater { .. }
+            | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::AddWater
+            | openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind::RemoveWater
+    ) {
+        let Some((_, chunk, _, _)) = chunks
+            .iter()
+            .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
+        else {
+            return;
+        };
+        let Some(asset) = assets.get(&chunk.asset) else {
+            return;
+        };
+        let Ok(membership) = water_membership.single() else {
+            let count = water_membership.iter().count();
+            if *missing_membership != Some((stroke.preview, count)) {
+                warn!(target: "openzt2_water_brush", preview = ?stroke.preview, membership_indexes = count, "water brush dab rejected: expected one resolved terrain membership index");
+                *missing_membership = Some((stroke.preview, count));
+            }
+            return;
+        };
+        *missing_membership = None;
+        let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _)| {
+                (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
+                    Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
+                }))
+            }).collect();
+        let Some(initial_height) = water_surface_height_cm else {
+            return;
+        };
+        let plan = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(&preview, &chunk.asset, asset, samples.into_iter(), &water_regions, membership, initial_height, dab.seconds);
+        let Some(plan) = plan else {
+            return;
+        };
+        water_surface_height_cm = plan.ground_reference_height_cm(asset);
+        candidate_entities.extend(chunks.iter().filter_map(|(entity, candidate, _, _)| {
+            (candidate.asset == chunk.asset && plan.affects_chunk(candidate, membership))
+                .then_some(entity)
+        }));
+        candidate_entities.sort_unstable();
+        candidate_entities.dedup();
+        Some(plan)
+    } else {
+        None
+    };
+
+    let mut applied_deltas = Vec::with_capacity(candidate_entities.len());
+    for entity in candidate_entities {
+        let delta = {
+            let Ok((_, chunk, edited, persistent)) = chunks.get_mut(entity) else {
                 continue;
             };
             let Some(asset) = assets.get(&chunk.asset) else {
                 continue;
             };
-            let Ok(membership) = water_membership.single() else {
-                let count = water_membership.iter().count();
-                if *missing_membership != Some((stroke.preview, count)) {
-                    warn!(target: "openzt2_water_brush", preview = ?stroke.preview, membership_indexes = count, "water brush dab rejected: expected one resolved terrain membership index");
-                    *missing_membership = Some((stroke.preview, count));
-                }
-                continue;
-            };
-            *missing_membership = None;
-            let samples: Vec<_> = chunks.iter().filter(|(entity, candidate, _, _)| candidate.asset == chunk.asset && candidate_entities.contains(entity)).flat_map(|(_, candidate, edited, _)| {
-                (0..usize::from(candidate.side)).flat_map(move |z| (0..usize::from(candidate.side)).filter_map(move |x| {
-                    Some((candidate.origin + Vec2::new(x as f32, z as f32) * candidate.spacing_m, openzt2_zoo_state::terrain::terrain_sample_grid_queries::read_materialized_terrain_sample(candidate, asset, edited, x, z)?))
-                }))
-            }).collect();
-            let Some(initial_height) = water_surface_height_cm else {
-                continue;
-            };
-            let plan = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(&mut commands, &preview, &chunk.asset, asset, root, samples.into_iter(), &water_regions, membership, initial_height, dab.seconds);
-            let Some(plan) = plan else {
-                continue;
-            };
-            water_surface_height_cm = plan.ground_reference_height_cm(asset);
-            candidate_entities.extend(chunks.iter().filter_map(|(entity, candidate, _, _)| {
-                (candidate.asset == chunk.asset && plan.affects_chunk(candidate, membership))
-                    .then_some(entity)
-            }));
-            candidate_entities.sort_unstable();
-            candidate_entities.dedup();
-            Some(plan)
-        } else {
-            None
+            prepare_terrain_chunk_sample_delta_from_brush_dabs(
+                *persistent,
+                chunk,
+                asset,
+                edited.as_deref(),
+                &preview,
+                core::slice::from_ref(&dab),
+                &[water_surface_height_cm],
+                water_plan
+                    .as_ref()
+                    .zip(water_membership.single().ok())
+                    .map(|(plan, membership)| (plan, &water_regions, membership)),
+            )
         };
-
-        let mut applied_deltas = Vec::with_capacity(candidate_entities.len());
-        for entity in candidate_entities {
-            let delta = {
-                let Ok((_, chunk, edited, persistent)) = chunks.get_mut(entity) else {
-                    continue;
-                };
-                let Some(asset) = assets.get(&chunk.asset) else {
-                    continue;
-                };
-                prepare_terrain_chunk_sample_delta_from_brush_dabs(
-                    *persistent,
-                    chunk,
-                    asset,
-                    edited.as_deref(),
-                    &preview,
-                    core::slice::from_ref(&dab),
-                    &[water_surface_height_cm],
-                    water_plan
-                        .as_ref()
-                        .zip(water_membership.single().ok())
-                        .map(|(plan, membership)| (plan, &water_regions, membership)),
-                )
-            };
-            let Some(delta) = delta else {
-                continue;
-            };
-            applied_deltas.push(delta);
-        }
-        if applied_deltas.is_empty() {
+        let Some(delta) = delta else {
             continue;
-        }
-        let mut owner_changes = water_plan.map_or_else(Vec::new, |plan| plan.changes);
-        if let Ok(membership) = water_membership.single() {
-            let Some(asset) = assets.get(membership.terrain()) else {
-                continue;
-            };
-            let Some((parent, _, _, _)) = chunks.iter().find(|(_, chunk, _, _)| {
-                chunk.source_coord == IVec2::ZERO && chunk.asset.id() == membership.terrain()
-            }) else {
-                continue;
-            };
-            if crate::terrain::terrain_brush_sample_mutation::water_affiliation::splitting::split_disconnected_water_affiliations(
+        };
+        applied_deltas.push(delta);
+    }
+    if applied_deltas.is_empty() {
+        return;
+    }
+    let mut owner_changes = water_plan.map_or_else(Vec::new, |plan| plan.changes);
+    if let Ok(membership) = water_membership.single() {
+        let Some(asset) = assets.get(membership.terrain()) else {
+            return;
+        };
+        let Some((parent, _, _, _)) = chunks.iter().find(|(_, chunk, _, _)| {
+            chunk.source_coord == IVec2::ZERO && chunk.asset.id() == membership.terrain()
+        }) else {
+            return;
+        };
+        if crate::terrain::terrain_brush_sample_mutation::water_affiliation::splitting::split_disconnected_water_affiliations(
                 &mut commands, asset, parent, membership, &water_regions,
                 chunks.iter().map(|(_, chunk, edited, persistent)| (chunk, edited, *persistent)),
                 &mut applied_deltas, &mut owner_changes,
-            ).is_none() { continue; }
-        }
-        for delta in &applied_deltas {
-            let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
-                continue;
-            };
-            apply_validated_terrain_edit_delta_and_publish_changed_region(
-                &mut commands,
-                &mut chunks,
-                &assets,
-                stroke.preview,
-                entity,
-                delta,
-                true,
-                &mut changed,
-                &mut navigation_changed,
-                &mut water_changed,
-            );
-        }
-        crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
-            &mut commands,
-            owner_changes
-                .iter()
-                .map(|delta| (delta.owner, delta.after.clone(), delta.after_active))
-                .collect(),
-        );
-        let owners: bevy::ecs::entity::EntityHashSet =
-            owner_changes.iter().map(|change| change.owner).collect();
-        for owner in owners {
-            if !draft_edit
-                .0
-                .water_regions
-                .iter()
-                .any(|change| change.owner == owner)
-            {
-                commands.spawn((
-                    super::water_regions::edit_retention::WaterRegionRetainedByEdit(owner),
-                    ChildOf(stroke.preview),
-                ));
-            }
-        }
-        draft_edit.0.deltas.extend(applied_deltas);
-        draft_edit.0.water_regions.extend(owner_changes);
+            ).is_none() { return; }
     }
+    let mut pending_overlays = bevy::ecs::entity::EntityHashMap::default();
+    for delta in &applied_deltas {
+        let Some(&entity) = chunk_ids.0.get(&delta.chunk) else {
+            continue;
+        };
+        apply_validated_terrain_edit_delta_and_publish_changed_region(
+            &mut commands,
+            &mut chunks,
+            &assets,
+            stroke.preview,
+            entity,
+            delta,
+            true,
+            &mut changed,
+            &mut navigation_changed,
+            &mut water_changed,
+            &mut render_changed,
+            &mut pending_overlays,
+        );
+    }
+    for (chunk, overlay) in pending_overlays {
+        commands.entity(chunk).insert(overlay);
+    }
+    crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
+        &mut commands,
+        &mut region_data.p1(),
+        owner_changes
+            .iter()
+            .map(|delta| (delta.owner, delta.after.clone(), delta.after_active)),
+    );
+    let owners: bevy::ecs::entity::EntityHashSet =
+        owner_changes.iter().map(|change| change.owner).collect();
+    for owner in owners {
+        if !draft_edit
+            .0
+            .water_regions
+            .iter()
+            .any(|change| change.owner == owner)
+        {
+            commands.spawn((
+                super::water_regions::edit_retention::WaterRegionRetainedByEdit(owner),
+                ChildOf(stroke.preview),
+            ));
+        }
+    }
+    draft_edit.0.deltas.extend(applied_deltas);
+    draft_edit.0.water_regions.extend(owner_changes);
 }
 
 /// A cancelled held stroke never enters history, so restore its ordered
@@ -247,6 +323,10 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     mut previews: Query<(Entity, &mut TerrainBrushDraft), With<ConstructionPreview>>,
     chunk_ids: Res<TerrainChunkIdLookup>,
     assets: Res<Assets<TerrainAsset>>,
+    mut owners: Query<(
+        Option<&mut TerrainWaterRegionEdit>,
+        Has<TerrainWaterRegionRetired>,
+    )>,
     mut chunks: Query<(
         Entity,
         &TerrainChunk,
@@ -256,6 +336,7 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
     mut changed: MessageWriter<TerrainChanged>,
     mut navigation_changed: MessageWriter<TerrainNavigationChanged>,
     mut water_changed: MessageWriter<TerrainWaterChanged>,
+    mut render_changed: MessageWriter<TerrainRenderInvalidated>,
 ) {
     if cancellations.read().next().is_none() {
         return;
@@ -264,12 +345,13 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
         let edit = std::mem::take(&mut draft.0);
         crate::terrain::terrain_edit_application::apply_water_region_edit_changes(
             &mut commands,
+            &mut owners,
             edit.water_regions
                 .iter()
                 .rev()
-                .map(|delta| (delta.owner, delta.before.clone(), delta.before_active))
-                .collect(),
+                .map(|delta| (delta.owner, delta.before.clone(), delta.before_active)),
         );
+        let mut pending_overlays = bevy::ecs::entity::EntityHashMap::default();
         for delta in edit.deltas.iter().rev() {
             let Some(&chunk_entity) = chunk_ids.0.get(&delta.chunk) else {
                 continue;
@@ -285,7 +367,12 @@ pub(super) fn roll_back_cancelled_live_terrain_brush_edit(
                 &mut changed,
                 &mut navigation_changed,
                 &mut water_changed,
+                &mut render_changed,
+                &mut pending_overlays,
             );
+        }
+        for (chunk, overlay) in pending_overlays {
+            commands.entity(chunk).insert(overlay);
         }
     }
 }

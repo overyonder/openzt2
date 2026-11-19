@@ -47,7 +47,6 @@ const AUTHORED_BUY_PANEL_CAMERA_RELATIVE_ANCHOR: Vec3 = Vec3::new(19.5, -7.85, 6
 #[derive(Component)]
 pub struct CataloguePreviewScene {
     definition: AssetId,
-    catalogue_revision: u64,
     scene: Entity,
 }
 
@@ -122,8 +121,7 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
         };
         if definitions.is_some()
             && current.is_some_and(|current| {
-                current.definition == definition
-                    && current.catalogue_revision == active_definitions.catalogue_revision()
+                current.definition == definition && !active_definitions.is_changed()
             })
         {
             continue;
@@ -312,11 +310,9 @@ pub(crate) fn project_selected_catalogue_entry_into_preview_scene(
             image_node.image_mode = NodeImageMode::Stretch;
             commands.entity(node).insert(image_node);
         }
-        commands.entity(node).insert(CataloguePreviewScene {
-            definition,
-            scene,
-            catalogue_revision: active_definitions.catalogue_revision(),
-        });
+        commands
+            .entity(node)
+            .insert(CataloguePreviewScene { definition, scene });
     }
 }
 

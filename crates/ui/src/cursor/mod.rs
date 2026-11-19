@@ -16,7 +16,9 @@ use openzt2_zoo_state::placement::placement_preview_types::PlacementRotationRequ
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 use openzt2_zoo_state::terrain::terrain_brush_types::TerrainBrushKind;
 
-use super::authored_globe_presentation_types::{UiGlobeDrag, UiGlobePresentation};
+use super::authored_globe_presentation_types::{
+    GlobeHoveredMarker, UiGlobeDrag, UiGlobePresentation,
+};
 use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_node_projection_components::UiDocumentRoot;
 use super::projection::ui_document_opening::PendingUiProjection;
@@ -51,6 +53,15 @@ pub(super) struct CursorPresentation<'w, 's> {
             &'static UiGlobeDrag,
         ),
         With<UiGlobePresentation>,
+    >,
+    marker_cursor: Query<
+        'w,
+        's,
+        (
+            &'static GlobeHoveredMarker,
+            &'static UiGlobePresentation,
+            &'static UiDocumentOwner,
+        ),
     >,
     roots: Query<'w, 's, &'static UiDocumentRoot>,
     relocating:
@@ -104,6 +115,20 @@ pub(super) fn present_cursor(
                         )
                     })
                     .flatten()
+            })
+            .or_else(|| {
+                let (hover, globe, owner) = capture
+                    .target
+                    .and_then(|target| sources.marker_cursor.get(target).ok())?;
+                hover.0?;
+                cursor(
+                    &UiCursorStyle(globe.dot_highlight_cursor),
+                    owner,
+                    &sources.roots,
+                    &sources.documents,
+                    &sources.texture_metadata,
+                    scale_factor,
+                )
             })
             .or_else(|| {
                 authored_cursor(

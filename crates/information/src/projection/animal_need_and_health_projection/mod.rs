@@ -29,10 +29,11 @@ use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::WelfareBand;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_live_animal_needs_to_visible_information_panels(
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     animals: Query<
         (
             Ref<Hunger>,
@@ -52,14 +53,18 @@ pub(crate) fn project_live_animal_needs_to_visible_information_panels(
     >,
     mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
 ) {
-    for (panel_entity, panel, visible) in &panels {
+    for (panel_entity, parent, visible) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !visible.get() {
             continue;
         }
-        let Ok(needs) = animals.get(panel.subject) else {
+        let Ok(needs) = animals.get(selection.0) else {
             continue;
         };
-        if !panel.is_changed()
+        if !selection.is_changed()
+            && !visible.is_changed()
             && !needs.0.is_changed()
             && !needs.1.is_changed()
             && !needs.2.is_changed()
@@ -117,7 +122,8 @@ pub(crate) fn project_live_animal_needs_to_visible_information_panels(
 }
 
 pub(crate) fn project_live_animal_health_to_visible_information_panels(
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     animals: Query<
         (
             Ref<Vitality>,
@@ -133,11 +139,14 @@ pub(crate) fn project_live_animal_health_to_visible_information_panels(
     mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
     mut visible_nodes: Query<(&UiDocumentOwner, &UiVisibleBinding, &mut Visibility)>,
 ) {
-    for (panel_entity, panel, inherited) in &panels {
+    for (panel_entity, parent, inherited) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited.get() {
             continue;
         }
-        let Ok(health) = animals.get(panel.subject) else {
+        let Ok(health) = animals.get(selection.0) else {
             continue;
         };
         for (owner, binding, mut value) in &mut values {

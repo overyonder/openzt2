@@ -1,6 +1,6 @@
 use crate::source_document::ui::model::{SourceUiEvent, SourceUiNode};
 use crate::ui_document::source::lower::authored_ui_action_argument_lowering::{
-    cross_document_role, trigger,
+    cross_document_role, target_node, trigger,
 };
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
 use crate::ui_document::source::lower::authored_ui_event_action_lowering;
@@ -29,6 +29,7 @@ pub(super) fn lower_events(
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
     confirmation_scope: Option<&str>,
+    node_index: u32,
 ) -> io::Result<()> {
     for block in &node.events {
         let photo_safari_transition_owns_legacy_first_person_mode_setup = block
@@ -80,7 +81,8 @@ pub(super) fn lower_events(
             if returns_from_options && source_event_hides_its_receiver(event) {
                 continue;
             }
-            flatten_event(
+            let first = output.actions.len();
+            let receiver = flatten_event(
                 trigger(&block.trigger),
                 event,
                 role,
@@ -93,6 +95,11 @@ pub(super) fn lower_events(
                 confirmation_scope,
                 &shown_by_shell,
             )?;
+            if output.actions.len() > first && !receiver.nodes.is_empty() {
+                output
+                    .action_receivers
+                    .insert((node_index, first), receiver);
+            }
         }
     }
     Ok(())
@@ -140,9 +147,15 @@ fn source_event_shows_main_menu_layout(event: &SourceUiEvent) -> bool {
             .is_some_and(|child| child.message == "UI_SHOW")
 }
 
-pub(super) fn flatten_event(
+#[derive(Default)]
+pub(super) struct UiActionReceiverPath {
+    pub(super) from_root: bool,
+    pub(super) nodes: Vec<AssetId>,
+}
+
+pub(super) fn flatten_event<'a>(
     trigger: UiTrigger,
-    event: &SourceUiEvent,
+    event: &'a SourceUiEvent,
     role: UiDocumentRole,
     current: AssetId,
     current_stable_name: &str,
@@ -150,42 +163,74 @@ pub(super) fn flatten_event(
     tree_element: Option<AssetId>,
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
-    scope: Option<&str>,
+    mut confirmation_scope: Option<&'a str>,
     shown_by_shell: &[UiDocumentRole],
-) -> io::Result<()> {
-    if let Some(child) = event
-        .child
-        .as_deref()
-        .filter(|_| matches!(event.message.as_str(), "UI_CHILD" | "UI_ROOT_CHILD"))
-    {
-        return flatten_event(
-            trigger,
-            child,
-            role,
-            current,
-            current_stable_name,
-            scroll_receiver,
-            tree_element,
-            output,
-            input,
-            child
-                .target_child
-                .as_deref()
-                .or(event.target_child.as_deref())
-                .or(scope),
-            shown_by_shell,
-        );
+) -> io::Result<UiActionReceiverPath> {
+    use openzt2_game_data::ui_document::action::presentation::{
+        UiPresentationAction, UiPresentationActionRecord,
+    };
+    let mut receiver = UiActionReceiverPath::default();
+    let mut event = event;
+    let mut foreign = None;
+    while let Some(child) = event.child.as_deref().filter(|_| {
+        matches!(
+            event.message.as_str(),
+            "UI_CHILD" | "UI_ROOT_CHILD" | "UI_SELF"
+        )
+    }) {
+        if event.message == "UI_ROOT_CHILD" {
+            receiver.from_root = true;
+            receiver.nodes.clear();
+            foreign = None;
+        }
+        if matches!(event.message.as_str(), "UI_CHILD" | "UI_ROOT_CHILD") {
+            if let Some(target) = event.target_child.as_deref() {
+                confirmation_scope = Some(target);
+                foreign = foreign.or_else(|| cross_document_role(event, input));
+                receiver.nodes.push(UiDocumentRole::node_id(role, target));
+            }
+        }
+        event = child;
     }
-    if event.message == "UI_SHOW"
-        && cross_document_role(event, input).is_some_and(|role| shown_by_shell.contains(&role))
-    {
-        return Ok(());
+    if matches!(event.message.as_str(), "UI_SHOW" | "UI_HIDE") {
+        if let Some(document_role) = foreign.or_else(|| cross_document_role(event, input)) {
+            let target_name = event.target_child.as_deref().or(event.string.as_deref());
+            let shell_entry =
+                match document_role {
+                    UiDocumentRole::Options => target_name
+                        .is_some_and(|target| target.eq_ignore_ascii_case("Options Layout")),
+                    UiDocumentRole::Downloads => target_name
+                        .is_some_and(|target| target.eq_ignore_ascii_case("Download Layout")),
+                    UiDocumentRole::Globe | UiDocumentRole::MapSelect => {
+                        target_name.is_some_and(|target| {
+                            target.eq_ignore_ascii_case("Freeform Selection Layout")
+                                || target.eq_ignore_ascii_case("Map Selection Layout")
+                        })
+                    }
+                    _ => false,
+                };
+            if event.message != "UI_SHOW"
+                || !(shell_entry && shown_by_shell.contains(&document_role))
+            {
+                output
+                    .actions
+                    .push(UiActionRecord::Presentation(UiPresentationActionRecord {
+                        trigger,
+                        action: UiPresentationAction::SetDocumentNodeVisible {
+                            document_role,
+                            target_node: target_node(event, document_role, current),
+                            visible: event.message == "UI_SHOW",
+                        },
+                    }));
+            }
+            return Ok(receiver);
+        }
     }
-    let scope = event.target_child.as_deref().or(scope);
+    let confirmation_scope = event.target_child.as_deref().or(confirmation_scope);
     let target = if matches!(event.message.as_str(), "UI_EXPAND" | "UI_COLLAPSE") {
         tree_element.unwrap_or(current)
     } else {
-        current
+        receiver.nodes.last().copied().unwrap_or(current)
     };
     if let Some(action) =
         authored_ui_event_action_lowering::lower_authored_ui_event_to_canonical_action(
@@ -197,12 +242,12 @@ pub(super) fn flatten_event(
             scroll_receiver,
             output,
             input,
-            scope,
+            confirmation_scope,
         )?
     {
         output.actions.push(action);
     }
-    Ok(())
+    Ok(receiver)
 }
 
 fn shell_transition_destination(event: &SourceUiEvent) -> Option<UiDocumentRole> {

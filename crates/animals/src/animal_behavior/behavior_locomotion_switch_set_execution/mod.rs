@@ -2,7 +2,11 @@
 //! or current animation graph node.
 
 use bevy::{ecs::system::SystemParam, prelude::*};
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    ResumeSuspendedBehaviorInstruction, RunBehaviorAnimationSwitchSet,
+    RunBehaviorLocomotionSwitchSet, RunningBehaviorInstruction, SelectedBehaviorSet,
+};
 
 use openzt2_game_assets::{
     animation::animation_set_asset_types::AnimationSetAsset,
@@ -18,8 +22,6 @@ use openzt2_world_state::animation_graph::animation_presentation_relationship_ty
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackController;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskReturnFrame;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
@@ -84,8 +86,7 @@ pub(super) struct BehaviorSetLookup<'w> {
 }
 
 /// Enters `program` as a nested set after the current action.
-fn enter_selected_behavior_set(
-    task: &mut BehaviorTaskExecutionState,
+fn select_behavior_set(
     program: AssetId,
     lookup: &BehaviorSetLookup,
     animal_types: &[AssetId],
@@ -96,14 +97,14 @@ fn enter_selected_behavior_set(
     ),
     tick: u64,
     loops: bool,
-) -> bool {
+) -> Option<SelectedBehaviorSet> {
     let (Some(view), Some(catalogue)) = (
         lookup
             .loaded
             .create_declaration_index_view(&lookup.documents),
         lookup.definitions.get(&lookup.definition_assets),
     ) else {
-        return false;
+        return None;
     };
     let Some((document, declaration)) = view.find_behavior_set_location(
         program,
@@ -115,25 +116,16 @@ fn enter_selected_behavior_set(
             animal_types,
         ),
     ) else {
-        return false;
+        return None;
     };
-    // A looping switch returns to itself to select again.
-    let frame = task.create_return_frame_after_action(if loops {
-        task.action
-    } else {
-        task.action.saturating_add(1)
-    });
-    if !task.push_return_frame(frame) {
-        return false;
-    }
-    task.program = program;
-    task.document = document;
-    task.declaration = declaration;
-    task.phase = BehaviorTaskExecutionPhase::Set;
-    task.action = 0;
-    task.repetitions = 0;
-    task.next_action_tick = tick.saturating_add(1);
-    true
+    Some(SelectedBehaviorSet {
+        program,
+        document,
+        declaration,
+        tick,
+        repeat: loops.then_some(0),
+        target: None,
+    })
 }
 
 /// Plays the set authored for the subject's locomotion medium, falling back
@@ -143,10 +135,14 @@ pub(super) fn play_locomotion_medium_behavior_sets(
     lookup: BehaviorSetLookup,
     animal_types: super::behavior_subject_type_resolution::AnimalBehaviorSubjectTypes,
     clock: Res<ZooClock>,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorLocomotionSwitchSet,
+            ),
             Option<&LocomotionMode>,
             Option<&SwimLayer>,
             Option<&SpeciesHandle>,
@@ -156,18 +152,15 @@ pub(super) fn play_locomotion_medium_behavior_sets(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, mut task, mode, layer, species, staff, guest) in &mut actors {
+    for (actor, (task, instruction, running_action), mode, layer, species, staff, guest) in &actors
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::LocomotionSwitchSet(sets)) = lookup
-            .documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-            .cloned()
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let sets = running_action.0.clone();
         let medium = LocomotionMedium::of(mode, layer);
         let Some(program) = medium.select(&sets) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -175,19 +168,19 @@ pub(super) fn play_locomotion_medium_behavior_sets(
         };
         let switch = task.create_return_frame_after_action(task.action);
         let origin = task.create_return_frame_after_action(task.action.saturating_add(1));
-        let depth = task.stack.len();
-        if !enter_selected_behavior_set(
-            &mut task,
+        let depth = task.depth;
+        let Some(selection) = select_behavior_set(
             program,
             &lookup,
             animal_types.borrow_for(actor),
             (species, staff, guest),
             clock.tick,
             false,
-        ) {
+        ) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
-        }
+        };
+        instruction.enter_set(actor, selection, &mut commands);
         if sets.follows_medium_changes {
             commands.entity(actor).insert(MediumFollowingBehaviorSet {
                 execution_id: task.execution_id,
@@ -210,21 +203,22 @@ pub(super) fn play_locomotion_medium_behavior_sets(
 pub(super) fn switch_medium_following_sets_after_medium_changes(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    mut actors: Query<(
+    frames: openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
+    actors: Query<(
         Entity,
         &MediumFollowingBehaviorSet,
-        Option<&mut BehaviorTaskExecutionState>,
+        Option<&BehaviorTaskExecutionState>,
         Option<&LocomotionMode>,
         Option<&SwimLayer>,
         Has<PendingBehaviorTaskFailure>,
     )>,
 ) {
-    for (actor, following, task, mode, layer, failing) in &mut actors {
-        let Some(mut task) = task.filter(|task| {
+    for (actor, following, task, mode, layer, failing) in &actors {
+        let Some(task) = task.filter(|task| {
             !failing
                 && task.execution_id == following.execution_id
-                && task.stack.len() > following.depth
-                && task.is_at_or_nested_under(&following.origin, following.depth)
+                && task.depth > following.depth
+                && frames.owns(actor, task, &following.origin, following.depth)
         }) else {
             commands
                 .entity(actor)
@@ -234,7 +228,15 @@ pub(super) fn switch_medium_following_sets_after_medium_changes(
         if LocomotionMedium::of(mode, layer) == following.medium {
             continue;
         }
-        task.restore_suspended_instruction(&following.switch, following.depth, clock.tick);
+        commands.trigger(ResumeSuspendedBehaviorInstruction {
+            actor,
+            execution_id: task.execution_id,
+            origin: following.origin.clone(),
+            instruction: following.switch.clone(),
+            depth: following.depth,
+            tick: clock.tick,
+            advance: false,
+        });
         commands.entity(actor).remove::<(
             MediumFollowingBehaviorSet,
             Destination,
@@ -259,10 +261,14 @@ pub(super) fn play_animation_node_behavior_sets(
         &AnimationPlaybackController,
         &AnimationGraphPlaybackState,
     )>,
-    mut actors: Query<
+    actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorAnimationSwitchSet,
+            ),
             Option<&SpeciesHandle>,
             Option<&StaffRole>,
             Option<&GuestArchetype>,
@@ -270,18 +276,14 @@ pub(super) fn play_animation_node_behavior_sets(
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
-    for (actor, mut task, species, staff, guest) in &mut actors {
+    for (actor, (task, instruction, running_action), species, staff, guest) in &actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::AnimationSwitchSet(sets)) = lookup
-            .documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-            .cloned()
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let sets = running_action.0.clone();
         let current_node = controllers
             .iter()
             .find(|(owner, _, _)| owner.gameplay_entity == actor)
@@ -300,9 +302,8 @@ pub(super) fn play_animation_node_behavior_sets(
                     .map(|(_, set)| *set)
             })
             .or(sets.default_set);
-        if !program.is_some_and(|program| {
-            enter_selected_behavior_set(
-                &mut task,
+        let Some(selection) = program.and_then(|program| {
+            select_behavior_set(
                 program,
                 &lookup,
                 animal_types.borrow_for(actor),
@@ -310,8 +311,10 @@ pub(super) fn play_animation_node_behavior_sets(
                 clock.tick,
                 sets.loops,
             )
-        }) {
+        }) else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        }
+            continue;
+        };
+        instruction.enter_set(actor, selection, &mut commands);
     }
 }

@@ -1,5 +1,6 @@
 //! Look input for the authored photo camera.
 
+use super::immersive_mode_state_types::ImmersiveCamera;
 use bevy::prelude::*;
 use openzt2_game_data::world_definitions::immersive_mode_policy::ImmersiveModeActionFlags;
 
@@ -23,7 +24,11 @@ pub(super) fn aim_active_free_immersive_camera(
     modal_input: Res<
         openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture,
     >,
-    active_modes: Query<(&ActiveImmersiveMode, Option<&AllowedInteractionActions>)>,
+    active_modes: Query<(
+        &ActiveImmersiveMode,
+        &ImmersiveCamera,
+        Option<&AllowedInteractionActions>,
+    )>,
     cameras: Query<
         (
             &CameraMode,
@@ -40,14 +45,13 @@ pub(super) fn aim_active_free_immersive_camera(
     if modal_input.0.is_some() {
         return;
     }
-    let Ok((active, allowed_actions)) = active_modes.single() else {
+    let Ok((active, camera, allowed_actions)) = active_modes.single() else {
         return;
     };
     if active.mode != ImmersiveMode::Photo {
         return;
     }
-    let Ok((mode, camera_tuning, camera_bounds, camera_transform, photo)) =
-        cameras.get(active.camera)
+    let Ok((mode, camera_tuning, camera_bounds, camera_transform, photo)) = cameras.get(camera.0)
     else {
         return;
     };

@@ -5,7 +5,6 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::staff::staff_employment_types::StaffRole;
-use arrayvec::ArrayVec;
 use bevy::prelude::*;
 
 use super::behavior_set_start_request_types::{PendingBehaviorSet, StartBehaviorSet};
@@ -140,7 +139,7 @@ pub(super) fn resolve_pending_animal_behavior_sets_to_loaded_declarations(
                 next_action_tick: 0,
                 object: None,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             })
             .remove::<(
                 openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore,

@@ -210,22 +210,6 @@ impl Default for GameActionInputBindings {
     }
 }
 
-#[derive(Resource, Debug, Clone, Copy, Default, PartialEq)]
-pub struct PrimaryPointerInputState {
-    pub screen: Vec2,
-    pub pressed: bool,
-    pub just_pressed: bool,
-    pub just_released: bool,
-    /// Final shared pointer movement in logical window pixels this frame.
-    pub delta: Vec2,
-    /// Signed vertical wheel travel reported for the current input frame.
-    pub wheel_y: f32,
-    /// True after the windowing backend has supplied an actual cursor
-    /// position. A zero-initialized resource is not a pointer at the top-left
-    /// edge and must not drive edge scrolling or picking.
-    pub available: bool,
-}
-
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ActiveInputDevice {
     pub source: ActionSource,
@@ -240,5 +224,45 @@ impl Default for ActiveInputDevice {
             source: ActionSource::KeyboardMouse,
             changed_at: Duration::ZERO,
         }
+    }
+}
+
+/// Bevy's active mouse pointer, shared by physical mouse and controller input.
+#[derive(bevy::ecs::system::SystemParam)]
+pub struct MousePointer<'w, 's> {
+    pointers: Query<
+        'w,
+        's,
+        (
+            &'static bevy::picking::pointer::PointerId,
+            Ref<'static, bevy::picking::pointer::PointerLocation>,
+            &'static bevy::picking::pointer::PointerPressState,
+        ),
+    >,
+    window: Query<'w, 's, &'static Window, With<bevy::window::PrimaryWindow>>,
+}
+
+impl MousePointer<'_, '_> {
+    pub fn location(&self) -> Option<&bevy::picking::pointer::Location> {
+        self.pointers
+            .iter()
+            .find(|(id, _, _)| id.is_mouse())
+            .and_then(|(_, location, _)| location.into_inner().location())
+    }
+
+    pub fn physical_position(&self) -> Option<Vec2> {
+        Some(self.location()?.position * self.window.single().ok()?.scale_factor())
+    }
+
+    pub fn primary_is_pressed(&self) -> bool {
+        self.pointers
+            .iter()
+            .any(|(id, _, buttons)| id.is_mouse() && buttons.is_primary_pressed())
+    }
+
+    pub fn location_changed(&self) -> bool {
+        self.pointers
+            .iter()
+            .any(|(id, location, _)| id.is_mouse() && location.is_changed())
     }
 }

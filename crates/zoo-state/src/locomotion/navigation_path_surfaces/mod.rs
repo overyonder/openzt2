@@ -198,11 +198,14 @@ impl TerrainDerivedNavigationGraph {
     pub fn continue_navigation_surface(&self, from: u32, position: Vec3) -> Option<u32> {
         std::iter::once(from)
             .chain(
-                self.iterate_outgoing_navigation_graph_edges(from)
+                self.iterate_outgoing_navigation_graph_edges(from, None)
                     .flat_map(|edge| {
                         std::iter::once(edge.destination_node).chain(
-                            self.iterate_outgoing_navigation_graph_edges(edge.destination_node)
-                                .map(|edge| edge.destination_node),
+                            self.iterate_outgoing_navigation_graph_edges(
+                                edge.destination_node,
+                                None,
+                            )
+                            .map(|edge| edge.destination_node),
                         )
                     }),
             )
@@ -349,7 +352,10 @@ impl TerrainDerivedNavigationGraph {
         connections.sort_unstable();
         connections.dedup();
         for (from, to) in connections {
-            if let Some(edge) = self.derive_navigation_graph_edge(from, to) {
+            if let Some(edge) = self
+                .find_navigation_node(from)
+                .and_then(|source| self.derive_navigation_graph_edge(from, *source, to, None))
+            {
                 self.path_surface_edges.entry(from).or_default().push(edge);
             }
         }
@@ -364,5 +370,9 @@ impl TerrainDerivedNavigationGraph {
 fn path_edge_key(a: Vec3, b: Vec3) -> ([i32; 3], [i32; 3]) {
     let a = a.to_array().map(|value| (value * 100.0).round() as i32);
     let b = b.to_array().map(|value| (value * 100.0).round() as i32);
-    if a <= b { (a, b) } else { (b, a) }
+    if a <= b {
+        (a, b)
+    } else {
+        (b, a)
+    }
 }

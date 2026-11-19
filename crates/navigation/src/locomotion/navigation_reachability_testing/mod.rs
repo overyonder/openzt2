@@ -1,5 +1,7 @@
 use bevy::prelude::*;
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 
 use crate::locomotion::animal_navigation_policy::AnimalNavigationPolicy;
 use crate::locomotion::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
@@ -19,6 +21,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_requests: MessageReader<TestReachability>,
     mut reachability_test_results: MessageWriter<ReachabilityTested>,
     active_navigation_graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    water: Query<&TankNavigationWater, With<WorldRoot>>,
     fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     locomotion_capacity: Option<Res<LocomotionCapacity>>,
     navigation_agents: Query<(
@@ -32,6 +35,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
     mut reachability_test_route: Local<Option<Route>>,
     mut pathfinding_scratch: Local<RouteScratch>,
 ) {
+    let tank_water = water.single().ok();
     let Some(locomotion_capacity) =
         locomotion_capacity.filter(|locomotion_capacity| locomotion_capacity.is_valid())
     else {
@@ -76,6 +80,7 @@ pub(super) fn test_requested_navigation_destination_reachability(
                         .agent_with_authored_collision_limits(navigation_agent, animal_variant)?;
                     plan_route(
                         terrain_derived_navigation_graph,
+                        tank_water,
                         |from, to| {
                             fence_crossing_index
                                 .crossing_fences(from, to)

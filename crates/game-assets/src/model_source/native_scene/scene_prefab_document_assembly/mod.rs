@@ -345,6 +345,7 @@ impl ScenePrefabDocumentAssembler {
                                 near_m: lod.near_m,
                                 far_m: lod.far_m,
                                 active_without_range: lod.active_without_range,
+                                initial_render_tier: None,
                             },
                         )
                     })

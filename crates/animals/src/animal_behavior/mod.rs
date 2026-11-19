@@ -59,6 +59,7 @@ use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition;
 mod behavior_task_phase_transition_execution;
 mod behavior_termination_execution;
 mod behavior_token_execution;
+mod behavior_traversal_execution;
 mod behavior_trick_learning_execution;
 mod behavior_trigger_execution;
 mod behavior_wander_execution;
@@ -87,6 +88,7 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
         behavior_wander_execution::register_wander_execution(application);
         behavior_pursuit_execution::register_pursuit_execution(application);
         behavior_face_target_execution::register_face_target_execution(application);
+        behavior_traversal_execution::register_behavior_traversal_execution(application);
         behavior_target_morph_execution::register_target_morph_execution(application);
         behavior_fence_crossing_execution::register_fence_crossing_execution(application);
         placed_object_virtual_nodes::register_placed_object_virtual_nodes(application);
@@ -118,10 +120,23 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             .init_resource::<openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionSequence>()
             .add_observer(behavior_interaction_container_execution::apply_interaction_container_entry)
             .add_observer(behavior_docking_execution::request_dock_after_container_admission)
+            .add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion)
+            .add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::resume_suspended_behavior_instruction)
             .add_message::<StartBehaviorSet>()
             .add_message::<BehaviorFeedbackDispatched>()
             .add_message::<BehaviorTaskFailed>()
             .add_message::<BehaviorTaskFinished>()
+            .add_message::<openzt2_zoo_state::animal_behavior::behavior_birth_notice_types::BehaviorBirthNotice>()
+            .init_resource::<behavior_script_execution::BehaviorBirthNoticeContext>()
+            .add_systems(
+                FixedUpdate,
+                (
+                    openzt2_zoo_state::behavior_task_execution_types::running_actions::refresh_running_behavior_instructions,
+                    openzt2_zoo_state::behavior_task_execution_types::running_actions::refresh_behavior_instructions_after_document_changes,
+                ).chain()
+                    .in_set(FixedGameSet::Clock)
+                    .run_if(in_state(GamePhase::InGame)),
+            )
             .add_systems(
                 FixedUpdate,
                 behavior_target_placement_execution::invalidate_obsolete_behavior_target_placement_sites
@@ -130,7 +145,10 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             )
             .add_systems(
                 FixedUpdate,
-                behavior_task_phase_transition_execution::begin_behavior_target_candidate_selection_updates
+                (
+                    openzt2_zoo_state::animal_behavior::behavior_target_retry_delays::reap_cleared_behavior_target_retries,
+                    behavior_task_phase_transition_execution::begin_behavior_target_candidate_selection_updates,
+                ).chain()
                     .in_set(FixedGameSet::Clock)
                     .run_if(in_state(GamePhase::InGame)),
             )
@@ -177,28 +195,30 @@ impl Plugin for AnimalBehaviorExecutionPlugin {
             FixedUpdate,
             (
                 behavior_feedback_dispatch_execution::dispatch_current_authored_behavior_feedback_and_advance,
-                behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
+                behavior_head_look_execution::continue_after_authored_head_look_steps,
                 (
+                    behavior_interaction_container_execution::enter_authored_interaction_containers_and_play_selected_behavior_sets,
                     behavior_locomotion_switch_set_execution::play_locomotion_medium_behavior_sets,
                     behavior_locomotion_switch_set_execution::play_animation_node_behavior_sets,
-                )
-                    .chain(),
-                behavior_head_look_execution::continue_after_authored_head_look_steps,
-                behavior_docking_execution::start_current_supported_behavior_docking_actions,
-                behavior_move_execution::start_current_supported_behavior_move_actions,
-                behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
-                behavior_random_animation_execution::start_next_random_behavior_animation,
-                behavior_fact_modification::apply_supported_current_behavior_fact_modifications
-                    .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
-                behavior_trick_learning_execution::apply_current_authored_trick_learning,
-                behavior_show_event_execution::register_current_authored_animal_show_events,
-                behavior_script_execution::execute_authored_behavior_script_actions,
-                behavior_script_execution::remove_settled_behavior_script_transactions,
-                behavior_clothing_delivery::finish_clothing_delivery,
-                behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
-                behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,
+                ).chain(),
+                (
+                    behavior_docking_execution::start_current_supported_behavior_docking_actions,
+                    behavior_move_execution::start_current_supported_behavior_move_actions,
+                    behavior_animation_clip_execution::start_current_behavior_animation_clip_actions,
+                    behavior_random_animation_execution::start_next_random_behavior_animation,
+                ).chain(),
+                (
+                    behavior_fact_modification::apply_supported_current_behavior_fact_modifications
+                        .after(openzt2_zoo_state::maintenance::maintenance_types::FacilityWasteBehaviorModification),
+                    behavior_trick_learning_execution::apply_current_authored_trick_learning,
+                    behavior_show_event_execution::register_current_authored_animal_show_events,
+                    behavior_script_execution::execute_authored_behavior_script_actions,
+                    behavior_script_execution::remove_settled_behavior_script_transactions,
+                    behavior_clothing_delivery::finish_clothing_delivery,
+                    behavior_target_test_execution::find_target_and_enter_success_or_failure_behavior_set,
+                    behavior_target_placement_execution::prepare_and_finish_behavior_target_placements,
+                ).chain(),
             )
-                .chain()
                 .after(
                     behavior_task_phase_transition_execution::advance_behavior_tasks_through_return_failure_completion_and_final_outcome
 ,

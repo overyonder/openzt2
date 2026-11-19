@@ -1,5 +1,5 @@
 use bevy::{
-    camera::primitives::MeshAabb,
+    camera::primitives::Aabb,
     camera::{visibility::RenderLayers, ClearColorConfig, RenderTarget, ScalingMode},
     prelude::*,
     render::render_resource::TextureFormat,
@@ -24,10 +24,10 @@ pub(super) struct FameStarTarget(Vec<Entity>);
 pub(super) struct FameStarScene {
     full: Handle<ScenePrefabAsset>,
     half: Handle<ScenePrefabAsset>,
-    hydrated: bool,
-    framing_root: Option<Entity>,
-    framed: bool,
 }
+#[derive(Component)]
+pub(super) struct UnframedFameStars;
+
 #[derive(Component)]
 pub(super) struct FameStar {
     index: u8,
@@ -75,9 +75,6 @@ pub(super) fn create_fame_star_scenes(
                 FameStarScene {
                     full: server.load("ui/fx/zoofame/star_full.nif#Scene"),
                     half: server.load("ui/fx/zoofame/star_half_full.nif#Scene"),
-                    hydrated: false,
-                    framing_root: None,
-                    framed: false,
                 },
             ))
             .id();
@@ -106,12 +103,9 @@ pub(super) fn create_fame_star_scenes(
 pub(super) fn hydrate_fame_stars(
     mut commands: Commands,
     prefabs: Res<Assets<ScenePrefabAsset>>,
-    mut scenes: Query<(Entity, &mut FameStarScene)>,
+    scenes: Query<(Entity, &FameStarScene)>,
 ) {
-    for (scene, mut state) in &mut scenes {
-        if state.hydrated {
-            continue;
-        }
+    for (scene, state) in &scenes {
         let (Some(full), Some(half)) = (prefabs.get(&state.full), prefabs.get(&state.half)) else {
             continue;
         };
@@ -134,9 +128,6 @@ pub(super) fn hydrate_fame_stars(
                     .id();
                 let (_, renderables, lights) =
                     spawn_prefab_render_tree(&mut commands, prefab, parent, false);
-                if index == 0 && !is_half {
-                    state.framing_root = Some(parent);
-                }
                 for entity in renderables.into_iter().chain(lights) {
                     commands
                         .entity(entity)
@@ -144,14 +135,17 @@ pub(super) fn hydrate_fame_stars(
                 }
             }
         }
-        state.hydrated = true;
+        commands
+            .entity(scene)
+            .remove::<FameStarScene>()
+            .insert(UnframedFameStars);
     }
 }
 
 pub(super) fn present_fame_stars(
     fame: Res<Fame>,
     owners: Query<&InheritedVisibility, With<FameStarTarget>>,
-    scenes: Query<(&FameStarSceneFor, &FameStarScene)>,
+    scenes: Query<(&FameStarSceneFor, Has<UnframedFameStars>)>,
     mut stars: Query<(&FameStar, &mut Visibility, &ChildOf)>,
 ) {
     for (star, mut visibility, parent) in &mut stars {
@@ -163,7 +157,7 @@ pub(super) fn present_fame_stars(
         let full_count = fame.half_stars.min(10) / 2;
         let framing = scenes
             .get(parent.parent())
-            .is_ok_and(|(_, state)| !state.framed)
+            .is_ok_and(|(_, unframed)| unframed)
             && star.index == 0
             && !star.half;
         let filled = if star.half {
@@ -180,18 +174,19 @@ pub(super) fn present_fame_stars(
 }
 
 pub(super) fn frame_fame_star_models(
-    meshes: Res<Assets<Mesh>>,
-    mesh_nodes: Query<(&Mesh3d, &GlobalTransform)>,
+    mut commands: Commands,
+    mesh_nodes: Query<(&Aabb, &GlobalTransform), With<Mesh3d>>,
     children: Query<&Children>,
     transforms: Query<&GlobalTransform>,
-    mut scenes: Query<(Entity, &mut FameStarScene)>,
+    scenes: Query<(Entity, &Children), With<UnframedFameStars>>,
     mut stars: Query<(&FameStar, &mut Transform)>,
 ) {
-    for (scene, mut state) in &mut scenes {
-        if state.framed {
-            continue;
-        }
-        let Some(root) = state.framing_root else {
+    for (scene, scene_children) in &scenes {
+        let Some(root) = scene_children.iter().find(|child| {
+            stars
+                .get(*child)
+                .is_ok_and(|(star, _)| star.index == 0 && !star.half)
+        }) else {
             continue;
         };
         let Ok(parent) = transforms.get(root) else {
@@ -201,8 +196,7 @@ pub(super) fn frame_fame_star_models(
         let bounds = children
             .iter_descendants(root)
             .filter_map(|entity| {
-                let (mesh, transform) = mesh_nodes.get(entity).ok()?;
-                let aabb = meshes.get(&mesh.0)?.get_aabb()?;
+                let (aabb, transform) = mesh_nodes.get(entity).ok()?;
                 Some((
                     inverse * transform.affine(),
                     Vec3::from(aabb.center),
@@ -238,6 +232,6 @@ pub(super) fn frame_fame_star_models(
             }
         }
         debug!(?minimum, ?maximum, "framed authored fame-star models");
-        state.framed = true;
+        commands.entity(scene).remove::<UnframedFameStars>();
     }
 }

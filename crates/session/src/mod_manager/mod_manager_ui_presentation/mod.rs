@@ -1,6 +1,9 @@
 use bevy::{asset::UntypedAssetId, prelude::*};
+use bevy::{
+    picking::{events::PointerPress, hover::DirectlyHovered, pointer::PointerButton},
+    ui::Pressed,
+};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 
@@ -114,7 +117,11 @@ pub(super) fn spawn_mod_manager_overlay_from_asset_archives(
                 BackgroundColor(Color::srgb(0.14, 0.14, 0.17)),
             ));
             if !archive_status.is_required_base_archive {
-                archive_checkbox_row.insert((bevy::ui_widgets::Button, UiInteractionEnabled(true)));
+                archive_checkbox_row.insert((
+                    bevy::ui_widgets::Button,
+                    DirectlyHovered::default(),
+                    UiInteractionEnabled(true),
+                ));
             }
             archive_checkbox_row.with_child((
                 Text::new(format_asset_archive_enabled_state_checkbox_label(
@@ -189,10 +196,8 @@ pub(super) fn apply_mod_manager_visibility_controls(
     phase: Res<State<GamePhase>>,
     reload_state: Res<AssetArchiveReloadState>,
     shell_screens: Query<&ShellScreen>,
-    controls: Query<
-        (&ModManagerOverlayButton, &UiPointerInteraction),
-        Changed<UiPointerInteraction>,
-    >,
+    mut presses: MessageReader<PointerPress>,
+    controls: Query<&ModManagerOverlayButton>,
     mut overlays: Query<&mut ModManagerOverlayRoot>,
 ) {
     if *phase.get() != GamePhase::MainMenu
@@ -201,10 +206,14 @@ pub(super) fn apply_mod_manager_visibility_controls(
             .any(|screen| *screen == ShellScreen::MainMenu)
         || reload_state.is_in_progress()
     {
+        presses.clear();
         return;
     }
-    for (control, interaction) in &controls {
-        if *interaction == UiPointerInteraction::Pressed {
+    for press in presses
+        .read()
+        .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
+    {
+        if let Ok(control) = controls.get(press.entity) {
             if let Ok(mut overlay) = overlays.get_mut(control.overlay) {
                 overlay.is_open = control.open;
             }
@@ -213,15 +222,13 @@ pub(super) fn apply_mod_manager_visibility_controls(
 }
 
 pub(super) fn toggle_selected_asset_archive_enabled_state(
-    asset_archives: Res<AssetArchives>,
+    mut asset_archives: ResMut<AssetArchives>,
     asset_server: Res<AssetServer>,
     phase: Res<State<GamePhase>>,
     mut reload_state: ResMut<AssetArchiveReloadState>,
     shell_screens: Query<&ShellScreen>,
-    changed_archive_checkboxes: Query<
-        (&AssetArchiveEnabledStateCheckbox, &UiPointerInteraction),
-        Changed<UiPointerInteraction>,
-    >,
+    mut presses: MessageReader<PointerPress>,
+    archive_checkboxes: Query<&AssetArchiveEnabledStateCheckbox>,
 ) {
     if *phase.get() != GamePhase::MainMenu
         || !shell_screens
@@ -229,12 +236,16 @@ pub(super) fn toggle_selected_asset_archive_enabled_state(
             .any(|screen| *screen == ShellScreen::MainMenu)
         || reload_state.is_in_progress()
     {
+        presses.clear();
         return;
     }
-    for (archive_checkbox, interaction) in &changed_archive_checkboxes {
-        if *interaction != UiPointerInteraction::Pressed {
+    for press in presses
+        .read()
+        .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
+    {
+        let Ok(archive_checkbox) = archive_checkboxes.get(press.entity) else {
             continue;
-        }
+        };
         let archive_statuses = asset_archives.enabled_archive_statuses();
         let Some(selected_archive_status) =
             archive_statuses.get(archive_checkbox.archive_status_index)
@@ -402,20 +413,21 @@ pub(super) fn synchronize_mod_manager_visibility_and_reload_input_blocking(
 pub(super) fn present_asset_archive_checkbox_interaction_state(
     reload_state: Res<AssetArchiveReloadState>,
     mut archive_checkboxes: Query<
-        (&UiPointerInteraction, &mut BackgroundColor),
+        (&DirectlyHovered, Has<Pressed>, &mut BackgroundColor),
         With<AssetArchiveEnabledStateCheckbox>,
     >,
 ) {
-    for (interaction, mut background) in &mut archive_checkboxes {
-        background.0 = if reload_state.is_in_progress() {
+    for (hovered, pressed, mut background) in &mut archive_checkboxes {
+        let color = if reload_state.is_in_progress() {
             Color::srgb(0.08, 0.08, 0.10)
         } else {
-            match interaction {
-                UiPointerInteraction::Pressed => Color::srgb(0.32, 0.32, 0.38),
-                UiPointerInteraction::Hovered => Color::srgb(0.24, 0.24, 0.30),
-                UiPointerInteraction::None => Color::srgb(0.14, 0.14, 0.17),
+            match (hovered.get(), pressed) {
+                (_, true) => Color::srgb(0.32, 0.32, 0.38),
+                (true, false) => Color::srgb(0.24, 0.24, 0.30),
+                (false, false) => Color::srgb(0.14, 0.14, 0.17),
             }
         };
+        background.set_if_neq(BackgroundColor(color));
     }
 }
 

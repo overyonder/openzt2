@@ -76,6 +76,7 @@ fn route_across_terrain(
     scratch.ensure_capacity(graph.navigation_node_count(), capacity);
     plan_route(
         graph,
+        None,
         |_, _| false,
         |_, _| false,
         &NavAgent {

@@ -1,23 +1,22 @@
 use bevy::prelude::*;
+use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_game_assets::{
-    application_lifecycle::GamePhase, behavior::behavior_asset_types::BehaviorDocumentAsset,
-};
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::{
     application_schedule::FixedGameSet,
     simulation_time::simulation_clock_types::ZooClock,
     world_spawn::{world_entity_crating::WorldEntityIsCrated, world_membership_types::WorldMember},
+};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSendSubjectTrigger, RunningBehaviorInstruction,
 };
 use openzt2_zoo_state::{
     animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
     animal_behavior::behavior_trigger_types::{BehaviorSubjectTrigger, BehaviorTriggerDelivery},
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
-        advance_behavior_task_to_next_action, find_current_behavior_task_action,
         BehaviorTaskExecutionState, PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
     },
 };
@@ -33,12 +32,19 @@ pub(super) fn register_trigger_execution(app: &mut App) {
 }
 
 fn deliver_current_subject_triggers(
+    mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
     mut actors: Query<
-        (Entity, &mut BehaviorTaskExecutionState),
+        (
+            Entity,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorSendSubjectTrigger,
+            ),
+        ),
         (
             With<WorldMember>,
             Without<PendingBehaviorTaskFailure>,
@@ -59,33 +65,33 @@ fn deliver_current_subject_triggers(
     {
         return;
     }
-    for (subject, mut task) in &mut actors {
+    for (subject, (task, instruction, running_action)) in &mut actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::SendSubjectTrigger(trigger)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let trigger = &running_action.0;
         triggers.write(BehaviorSubjectTrigger {
             subject,
             trigger: *trigger,
         });
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(subject, clock.tick, &mut commands);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
     use openzt2_game_data::AssetId;
     use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 
     #[test]
     fn trigger_delivery_advances_once_and_keeps_the_following_instruction_for_the_next_tick() {
         let mut app = App::new();
+        app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
         app.init_resource::<Assets<BehaviorDocumentAsset>>()
             .init_resource::<Assets<WorldDefinitionAsset>>()
             .insert_resource(ZooClock {
@@ -126,7 +132,7 @@ mod tests {
                 repetitions: 0,
                 next_action_tick: 0,
                 interaction_slot: None,
-                stack: Default::default(),
+                depth: 0,
             })
             .id();
         app.world_mut().entity_mut(actor).insert((

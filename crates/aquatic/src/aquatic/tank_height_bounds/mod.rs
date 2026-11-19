@@ -1,11 +1,14 @@
-use bevy::ecs::system::SystemParam;
+use std::collections::BTreeMap;
+
+use bevy::ecs::{relationship::RelationshipTarget, system::SystemParam};
+use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankWallTopHeight;
 use openzt2_zoo_state::aquatic::tank_geometry_edit_types::{TankHeightBounds, TankWallHeightEdit};
 use openzt2_zoo_state::aquatic::tank_wall_ground_sampling::TankWallGroundSampling;
-use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
+use openzt2_zoo_state::habitat::habitat_types::{HabitatFenceIncidences, HabitatRegion};
 use openzt2_zoo_state::topology::topology_graph_types::{
     FenceEdge, PathTile, TopologyGrid, TopologyNode,
 };
@@ -14,6 +17,50 @@ use openzt2_zoo_state::topology::topology_grid_geometry::calculate_adjacent_topo
 use super::tank_geometry_rules::TankGeometryLimits;
 
 const ELEVATED_PATH_CLEARANCE_OVER_TANK_WALL_M: f32 = 4.0;
+
+/// Ordered path elevations above each horizontal topology cell.
+#[derive(Resource, Default)]
+pub(super) struct TankPathClearance(HashMap<IVec2, BTreeMap<i32, usize>>);
+
+pub(super) fn record_path_clearance(
+    inserted: On<Insert<PathTile>>,
+    tiles: Query<&PathTile>,
+    mut clearance: ResMut<TankPathClearance>,
+) {
+    let Ok(path) = tiles.get(inserted.entity) else {
+        return;
+    };
+    if path.cell.z != 0 {
+        *clearance
+            .0
+            .entry(path.cell.xy())
+            .or_default()
+            .entry(path.cell.z)
+            .or_default() += 1;
+    }
+}
+
+pub(super) fn discard_path_clearance(
+    discarded: On<Discard<PathTile>>,
+    tiles: Query<&PathTile>,
+    mut clearance: ResMut<TankPathClearance>,
+) {
+    let Ok(path) = tiles.get(discarded.entity) else {
+        return;
+    };
+    let Some(column) = clearance.0.get_mut(&path.cell.xy()) else {
+        return;
+    };
+    if let Some(count) = column.get_mut(&path.cell.z) {
+        *count -= 1;
+        if *count == 0 {
+            column.remove(&path.cell.z);
+        }
+    }
+    if column.is_empty() {
+        clearance.0.remove(&path.cell.xy());
+    }
+}
 
 #[derive(SystemParam)]
 pub(super) struct TankHeightBoundsQueries<'w, 's> {
@@ -27,7 +74,9 @@ pub(super) struct TankHeightBoundsQueries<'w, 's> {
         ),
     >,
     nodes: Query<'w, 's, &'static TopologyNode>,
-    paths: Query<'w, 's, &'static PathTile>,
+    clearance: Res<'w, TankPathClearance>,
+    fence_habitats: Query<'w, 's, &'static HabitatFenceIncidences>,
+    incidence_habitats: Query<'w, 's, &'static ChildOf>,
     grid: Res<'w, TopologyGrid>,
     show_stages: Query<
         'w,
@@ -63,10 +112,14 @@ impl TankHeightBoundsQueries<'_, '_> {
                         + limits.default_wall_height_m,
                 );
             }
-            for path in &self.paths {
-                if path.cell.z != 0 && cells.iter().any(|cell| cell.xy() == path.cell.xy()) {
-                    maximum =
-                        maximum.min(path.cell.z as f32 - ELEVATED_PATH_CLEARANCE_OVER_TANK_WALL_M);
+            for cell in &cells {
+                if let Some((&height, _)) = self
+                    .clearance
+                    .0
+                    .get(&cell.xy())
+                    .and_then(BTreeMap::first_key_value)
+                {
+                    maximum = maximum.min(height as f32 - ELEVATED_PATH_CLEARANCE_OVER_TANK_WALL_M);
                 }
             }
             let before = top.map_or(highest + limits.default_wall_height_m, |top| top.0);
@@ -85,18 +138,27 @@ impl TankHeightBoundsQueries<'_, '_> {
     pub(super) fn include_adjacent_tank_water_in_wall_minima(
         &self,
         walls: &mut [TankWallHeightEdit],
-        adjacent_region: &HabitatRegion,
-        water_height: f32,
+        region: &HabitatRegion,
         limits: TankGeometryLimits,
+        adjacent_water_height: impl Fn(Entity) -> Option<f32>,
     ) {
-        for entity in adjacent_region.boundary_fence_entities.iter() {
-            let Ok((_, id, _)) = self.fences.get(*entity) else {
+        for fence in region.boundary_fence_entities.iter().copied() {
+            let (Ok((_, id, _)), Ok(incidences)) =
+                (self.fences.get(fence), self.fence_habitats.get(fence))
+            else {
                 continue;
             };
-            if let Ok(index) = walls.binary_search_by_key(&id.0, |wall| wall.id.0) {
-                walls[index].minimum = walls[index]
-                    .minimum
-                    .max(water_height + limits.water_offset_m);
+            let Ok(index) = walls.binary_search_by_key(&id.0, |wall| wall.id.0) else {
+                continue;
+            };
+            for habitat in self
+                .incidence_habitats
+                .iter_many(incidences.iter())
+                .flatten()
+            {
+                if let Some(height) = adjacent_water_height(habitat.parent()) {
+                    walls[index].minimum = walls[index].minimum.max(height + limits.water_offset_m);
+                }
             }
         }
     }

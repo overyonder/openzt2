@@ -231,6 +231,7 @@ pub(in crate::ui_document::source) fn lower_ui_document(
     super::authored_ui_action_argument_lowering::resolve_repeated_target_names_to_nearest_scope(
         &mut output.nodes,
         input.role,
+        &output.action_receivers,
     );
     super::authored_ui_node_tree_lowering::complete_hover_reveal_leave_actions(&mut output.nodes);
 

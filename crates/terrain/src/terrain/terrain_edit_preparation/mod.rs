@@ -148,7 +148,7 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 | TerrainBrushKind::AddWater
                 | TerrainBrushKind::RemoveWater
         ) {
-            let Some((root, chunk, _, _)) = chunks
+            let Some((_, chunk, _, _)) = chunks
                 .iter()
                 .find(|(_, chunk, _, _)| chunk.source_coord == IVec2::ZERO)
             else {
@@ -184,7 +184,7 @@ pub(super) fn prepare_terrain_sample_deltas_for_construction_transactions(
                 });
                 continue;
             };
-            let Some(plan) = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(&mut commands, preview, &chunk.asset, asset, root, samples.into_iter(), &water_regions, membership, initial_height, dabs.iter().map(|dab| dab.seconds).sum()) else {
+            let Some(plan) = crate::terrain::terrain_brush_sample_mutation::water_affiliation::plan_water_brush_region(preview, &chunk.asset, asset, samples.into_iter(), &water_regions, membership, initial_height, dabs.iter().map(|dab| dab.seconds).sum()) else {
                 rejected.write(TerrainEditPreparationRejected { transaction: request.transaction, reason: PlacementFailure::OutsideMap });
                 continue;
             };

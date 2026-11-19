@@ -1,6 +1,9 @@
 use super::*;
 use openzt2_game_data::AssetId;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
+use openzt2_zoo_state::animal_behavior::behavior_synchronized_set_types::{
+    SynchronizedBehaviorOperation, SynchronizedBehaviorPartner, SynchronizedBehaviorSubject,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskFailed;
@@ -9,6 +12,7 @@ use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure
 
 fn paired_tasks() -> (App, Entity, Entity) {
     let mut app = App::new();
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::resume_suspended_behavior_instruction);
     app.insert_resource(ZooClock {
         fractional_tick: Default::default(),
         tick: 20,
@@ -31,29 +35,21 @@ fn paired_tasks() -> (App, Entity, Entity) {
         next_action_tick: 0,
         object: None,
         interaction_slot: Some(0),
-        stack: Default::default(),
+        depth: 0,
     };
     let origin = task.create_return_frame_after_action(3);
-    let actor = app
-        .world_mut()
-        .spawn((
-            task,
-            SynchronizedBehaviorOwner {
-                execution_id: 1,
-                target_execution_id: 2,
-                target,
-                origin,
-                depth: 0,
-                target_outcome: None,
-            },
-        ))
-        .id();
-    app.world_mut()
-        .entity_mut(target)
-        .insert(SynchronizedBehaviorParticipant {
-            owner: actor,
-            execution_id: 2,
-        });
+    let actor = app.world_mut().spawn(task).id();
+    app.world_mut().spawn((
+        SynchronizedBehaviorSubject(actor),
+        SynchronizedBehaviorPartner(target),
+        SynchronizedBehaviorOperation {
+            execution_id: 1,
+            target_execution_id: 2,
+            origin,
+            depth: 0,
+            target_outcome: None,
+        },
+    ));
     (app, actor, target)
 }
 

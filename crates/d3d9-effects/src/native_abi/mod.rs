@@ -111,6 +111,7 @@ unsafe extern "C" {
     pub(crate) fn openzt2_effect_open_parameter_scratch(
         effect: *const NativeEffect,
     ) -> *mut NativeEffect;
+    pub(crate) fn openzt2_effect_reset_parameter_scratch(scratch: *mut NativeEffect);
     pub(crate) fn openzt2_effect_transform_dependency_count(
         effect: *const NativeEffect,
         technique: u32,
@@ -153,7 +154,7 @@ unsafe extern "C" {
     );
     pub(crate) fn openzt2_effect_evaluate_transform(
         program: *const NativeEffect,
-        scratch: *const NativeEffect,
+        scratch: *mut NativeEffect,
         technique: u32,
         pass: u32,
         index: u32,

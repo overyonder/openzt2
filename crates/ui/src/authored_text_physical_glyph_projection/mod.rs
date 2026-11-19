@@ -7,14 +7,16 @@ use bevy::{
 };
 
 use super::{
-    authored_ui_canvas_scaling_and_clipping::UiCanvasMetrics,
+    authored_ui_canvas_scaling_and_clipping::{UiCanvasMembership, UiCanvasMetrics},
     authored_ui_text_layout_presentation::{UiPhysicalFontSize, UiSingleLineTextAlignment},
 };
 
 /// Preserve system-font aspect when the authored canvas stretches. Bevy owns
 /// shaping, glyph atlases and drawing; node regions and images stay unchanged.
 pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
-    hierarchy: Extract<Query<(Option<&UiCanvasMetrics>, Option<&ChildOf>)>>,
+    parents: Extract<Query<&ChildOf>>,
+    canvas_members: Extract<Query<&UiCanvasMembership>>,
+    canvases: Extract<Query<&UiCanvasMetrics>>,
     text_nodes: Extract<
         Query<
             (
@@ -39,24 +41,21 @@ pub(super) fn preserve_authored_font_aspect_in_extracted_text_draws(
         // owner's transparent fallback, so it follows the owner's geometry.
         let Some((node, stack, transform, layout, single_line)) =
             text_nodes.get(entity).ok().or_else(|| {
-                let (_, parent) = hierarchy.get(entity).ok()?;
+                let parent = parents.get(entity).ok()?;
                 text_nodes
-                    .get(parent?.parent())
+                    .get(parent.parent())
                     .ok()
                     .filter(|owner| owner.4.is_some())
             })
         else {
             continue;
         };
-        let metrics = std::iter::successors(Some(entity), |entity| {
-            hierarchy
-                .get(*entity)
-                .ok()
-                .and_then(|(_, parent)| parent)
-                .map(ChildOf::parent)
-        })
-        .find_map(|node| hierarchy.get(node).ok().and_then(|(metrics, _)| metrics));
-        let Some(metrics) = metrics.filter(|metrics| metrics.has_extent()) else {
+        let Some(metrics) = canvas_members
+            .get(entity)
+            .ok()
+            .and_then(|membership| canvases.get(membership.0).ok())
+            .filter(|metrics| metrics.has_extent())
+        else {
             continue;
         };
         let alignment = match layout.justify {

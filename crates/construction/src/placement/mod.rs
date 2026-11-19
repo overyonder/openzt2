@@ -1,6 +1,7 @@
 //! Authored object placement over loaded definitions and precise ECS indexes.
 
 mod behavior_target_placement_application;
+mod biome_automatic_object_placement_edit_preparation;
 mod ground_path_placement_stomp;
 mod object_placement_edit_application;
 mod object_placement_edit_direction;
@@ -39,8 +40,10 @@ use crate::placement::object_placement_request_routing::cancel_all_active_object
 use crate::placement::object_placement_request_routing::route_placed_object_removal_requests_to_construction;
 use crate::placement::object_placement_request_routing::route_valid_object_placement_requests_to_construction;
 use crate::placement::placed_object_footprint_occupancy_index_synchronization::hydrate_placed_object_placement_components;
-use crate::placement::placed_object_footprint_occupancy_index_synchronization::rebuild_placed_object_footprint_occupancy_index;
 use crate::placement::placed_object_footprint_occupancy_index_synchronization::synchronize_physics_moved_object_footprints_with_occupancy_index;
+use crate::placement::placed_object_footprint_occupancy_index_synchronization::{
+    remove_indexed_placement_footprint, synchronize_placed_footprints,
+};
 use crate::placement::placed_object_removal_edit_preparation::prepare_placed_object_removal_edit;
 use crate::placement::placed_object_terrain_support_reconciliation::reconcile_static_placed_object_support_after_terrain_changes;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
@@ -58,6 +61,7 @@ use openzt2_zoo_state::placement::placement_transaction_types::RemovePlacedObjec
 use avian3d::prelude::PhysicsSystems;
 use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
+use openzt2_game_assets::world_definitions::WorldDefinitionPublicationSet;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
 use openzt2_zoo_state::construction::FixedConstructionPreparedDomainEditMaterializationSet;
@@ -74,7 +78,6 @@ impl Plugin for ObjectPlacementPlugin {
             FixedUpdate,
             crate::placement::behavior_target_placement_application::apply_behavior_target_placements
                 .in_set(FixedGameSet::Act)
-                .after(rebuild_placed_object_footprint_occupancy_index)
                 .before(FixedConstructionSet::Apply)
                 .run_if(in_state(GamePhase::InGame)),
         );
@@ -83,8 +86,7 @@ impl Plugin for ObjectPlacementPlugin {
                 FixedUpdate,
                 placed_object_destruction::ruin_destroyed_placed_objects
                     .in_set(FixedGameSet::Act)
-                    .after(rebuild_placed_object_footprint_occupancy_index)
-                    .before(FixedConstructionSet::Apply)
+                        .before(FixedConstructionSet::Apply)
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
@@ -101,6 +103,8 @@ impl Plugin for ObjectPlacementPlugin {
         app.init_resource::<PlacedObjectFootprintOccupancyIndex>()
             .init_resource::<ObjectPlacementCellCollectionScratch>()
             .add_message::<EvaluateObjectPlacementPreviewRequest>()
+            .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
+            .add_observer(remove_indexed_placement_footprint)
             .add_message::<CommitObjectPlacementPreviewRequest>()
             .add_message::<RemovePlacedObjectRequest>()
             .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
@@ -118,7 +122,7 @@ impl Plugin for ObjectPlacementPlugin {
                     route_placed_object_removal_requests_to_construction,
                     cancel_all_active_object_relocations,
                     create_active_object_placement_preview,
-                    hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
+                    biome_automatic_object_placement_edit_preparation::hydrate_biome_automatic_placement_state_onto_world_and_terrain_brush_previews,
                     hydrate_object_placement_preview_prefab_render_tree,
                     apply_authored_initial_animal_placement_preview_animation_repetition_policy,
                     hydrate_object_placement_preview_materials_from_ui_document,
@@ -139,19 +143,21 @@ impl Plugin for ObjectPlacementPlugin {
                     .run_if(in_state(GamePhase::InGame)),
             )
             .add_systems(
-                Update,
+                PreUpdate,
                 (
                     hydrate_placed_object_placement_components,
-                    rebuild_placed_object_footprint_occupancy_index,
+                    synchronize_placed_footprints,
                 )
                     .chain()
-                    .in_set(GameSet::Intent),
+                    .after(WorldDefinitionPublicationSet)
+                    .after(scene_placement_footprint_indexing::index_scene_placement_footprints),
             )
             .add_systems(
                 FixedUpdate,
                 (
                     prepare_object_placement_or_relocation_edit,
                     prepare_placed_object_removal_edit,
+                    biome_automatic_object_placement_edit_preparation::prepare_biome_automatic_object_placement_edits,
                 )
                     .in_set(FixedConstructionSet::Prepare)
                     .after(

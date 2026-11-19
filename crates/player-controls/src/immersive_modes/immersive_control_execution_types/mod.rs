@@ -27,14 +27,3 @@ pub(crate) struct FirstPersonViewAngles {
     pub(crate) yaw: f32,
     pub(crate) pitch: f32,
 }
-
-use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveMode;
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PendingImmersiveEntry {
-    pub(crate) mode: ImmersiveMode,
-    pub(crate) subject: Option<Entity>,
-    pub(crate) failure: Option<
-        openzt2_interface_state::immersive_modes::immersive_mode_message_types::ModeEntryFailure,
-    >,
-}

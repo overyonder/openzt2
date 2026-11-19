@@ -6,13 +6,12 @@ use super::{
     behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation,
 };
 use bevy::prelude::*;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_playback::animation_playback_controller_types::AnimationPlaybackRepetitionPolicy;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorRandomAnimation, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
@@ -20,12 +19,15 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
 
 pub(super) fn start_next_random_behavior_animation(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     clock: Res<ZooClock>,
     mut actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorRandomAnimation,
+            ),
             Option<&mut GuestRng>,
             Option<&mut BehaviorRandomStream>,
         ),
@@ -36,21 +38,21 @@ pub(super) fn start_next_random_behavior_animation(
     >,
     mut requests: MessageWriter<AnimationClipPlaybackRequest>,
 ) {
-    for (actor, mut task, mut guest_random, mut behavior_random) in &mut actors {
+    for (actor, (task, instruction, running_action), mut guest_random, mut behavior_random) in
+        &mut actors
+    {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::RandomAnimation {
+        if !instruction.is_current(task) {
+            continue;
+        }
+        let RunBehaviorRandomAnimation {
             weighted_clips,
             minimum_plays,
             maximum_plays,
             looping,
-        }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
-            continue;
-        };
+        } = running_action;
         let Some(random) = guest_random
             .as_deref_mut()
             .map(|rng| &mut rng.0)
@@ -59,12 +61,13 @@ pub(super) fn start_next_random_behavior_animation(
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
+        let mut repetitions = task.repetitions;
         match select_next_authored_random_choice(
             weighted_clips,
             *minimum_plays,
             *maximum_plays,
             *looping,
-            &mut task.repetitions,
+            &mut repetitions,
             random,
         ) {
             Ok(Some(index)) => {
@@ -78,16 +81,20 @@ pub(super) fn start_next_random_behavior_animation(
                 commands
                     .entity(actor)
                     .insert(PendingBehaviorAnimationClipCompletion {
-                        execution_id: task.execution_id,
+                        instruction: instruction.id(),
                         request_id: request_id.id,
-                        origin: task.create_return_frame_after_action(task.action),
-                        stack_depth: task.stack.len(),
+                        clip_key: weighted_clips[index].0.clone(),
                         target: task.target,
-                        random_choice: Some(index),
+                        repeats: true,
                     });
-                task.next_action_tick = clock.tick.saturating_add(1);
+                instruction.repeat_at(
+                    actor,
+                    clock.tick.saturating_add(1),
+                    repetitions,
+                    &mut commands,
+                );
             }
-            Ok(None) => advance_behavior_task_to_next_action(&mut task, clock.tick),
+            Ok(None) => instruction.complete(actor, clock.tick, &mut commands),
             Err(()) => mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands),
         }
     }

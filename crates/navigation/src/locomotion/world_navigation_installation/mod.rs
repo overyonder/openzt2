@@ -8,6 +8,7 @@ use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 
 use crate::locomotion::terrain_edit_navigation_refresh::refresh_terrain_derived_navigation_graph_cells_from_changed_terrain_samples;
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::locomotion::locomotion_types::ActiveTerrainDerivedNavigationGraph;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 use openzt2_zoo_state::locomotion::locomotion_types::LocomotionCapacity;
@@ -28,12 +29,13 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     mut commands: Commands,
     mut terrain_asset_events: MessageReader<AssetEvent<TerrainAsset>>,
     terrain_assets: Res<Assets<TerrainAsset>>,
-    loaded_world_terrain_sources: Query<
+    mut loaded_world_terrain_sources: Query<
         (
             Entity,
             &SelectedWorldTerrainAssetHandle,
             &WorldTerrainHorizontalBounds,
             Has<TerrainDerivedNavigationGraphInstalled>,
+            Option<&mut TankNavigationWater>,
         ),
         With<WorldRoot>,
     >,
@@ -41,8 +43,8 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     mut active_routes: Query<(&mut Route, &mut Destination)>,
 ) {
-    let Ok((world_root_entity, world_terrain, world_bounds, navigation_graph_installed)) =
-        loaded_world_terrain_sources.single()
+    let Ok((world_root_entity, world_terrain, world_bounds, navigation_graph_installed, water)) =
+        loaded_world_terrain_sources.single_mut()
     else {
         for _ in terrain_asset_events.read() {}
         return;
@@ -120,6 +122,13 @@ pub(super) fn install_terrain_derived_navigation_graph_for_loaded_world(
             route.clear();
             destination.set_changed();
         }
+    }
+    let next_water =
+        TankNavigationWater::new(terrain_derived_navigation_graph.navigation_nodes.len());
+    if let Some(mut water) = water {
+        *water = next_water;
+    } else {
+        commands.entity(world_root_entity).insert(next_water);
     }
     commands.insert_resource(ActiveTerrainDerivedNavigationGraph::new(
         terrain_derived_navigation_graph,

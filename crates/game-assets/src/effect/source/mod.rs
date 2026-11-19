@@ -114,31 +114,15 @@ fn lower_parsed_particle_system_document_to_effect_document(
         if emitter_nodes.is_empty() {
             continue;
         }
-        let renderer_nodes =
-            particle_system_source_children_named(simulator_node, "renderer").collect::<Vec<_>>();
-        let primary_renderer_node = renderer_nodes.first().copied().ok_or_else(|| {
-            particle_system_source_conversion_failure(
+        let renderers = particle_system_source_children_named(simulator_node, "renderer")
+            .map(|node| lower_particle_system_renderer_node(&particle_system_asset_path, node))
+            .collect::<Result<Vec<_>, _>>()?;
+        if renderers.is_empty() {
+            return Err(particle_system_source_conversion_failure(
                 &particle_system_asset_path,
                 describe_particle_system_source_node(simulator_node),
                 "simulator has no renderer",
-            )
-        })?;
-        let (material_asset_path, renderer_modifier) = lower_particle_system_renderer_node(
-            &particle_system_asset_path,
-            primary_renderer_node,
-        )?;
-        for additional_renderer_node in renderer_nodes.iter().skip(1) {
-            let additional_renderer = lower_particle_system_renderer_node(
-                &particle_system_asset_path,
-                additional_renderer_node,
-            )?;
-            if additional_renderer != (material_asset_path.clone(), renderer_modifier.clone()) {
-                return Err(particle_system_source_conversion_failure(
-                    &particle_system_asset_path,
-                    describe_particle_system_source_node(simulator_node),
-                    "simulator has heterogeneous renderers",
-                ));
-            }
+            ));
         }
         let shared_effect_modifiers =
             particle_system_source_children_named(simulator_node, "modifier")
@@ -158,7 +142,6 @@ fn lower_parsed_particle_system_document_to_effect_document(
             let mut effect_modifiers =
                 lower_particle_system_emitter_intrinsic_modifiers(emitter_node)?;
             effect_modifiers.extend(shared_effect_modifiers.iter().cloned());
-            effect_modifiers.push(renderer_modifier.clone());
             effect_modifiers.push(EffectModifier::DieWhenEmpty {
                 enabled: die_when_empty_is_enabled,
             });
@@ -188,7 +171,7 @@ fn lower_parsed_particle_system_document_to_effect_document(
                 spawn: spawn_policy,
                 clock: EffectClock::Presentation,
                 shape: emitter_shape,
-                material: material_asset_path.clone(),
+                renderers: renderers.clone(),
                 modifiers: effect_modifiers,
             });
         }

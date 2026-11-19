@@ -8,7 +8,6 @@ use openzt2_game_assets::localization::{
 };
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiEconomyActions;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
@@ -40,14 +39,9 @@ pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
     admissions_open: Res<ZooAdmissionsOpen>,
     documents: Res<Assets<UiDocumentAsset>>,
     roots: Query<&UiDocumentRoot>,
-    mut toggles: Query<(
-        Ref<UiEconomyActions>,
-        &UiDocumentOwner,
-        &mut UiSelected,
-        &mut UiPreviousSelection,
-    )>,
+    mut toggles: Query<(Ref<UiEconomyActions>, &UiDocumentOwner, &mut UiSelected)>,
 ) {
-    for (actions, owner, mut selected, mut previous) in &mut toggles {
+    for (actions, owner, mut selected) in &mut toggles {
         if !admissions_open.is_changed() && !documents.is_changed() && !actions.is_changed() {
             continue;
         }
@@ -77,7 +71,6 @@ pub(super) fn project_zoo_admissions_state_into_authored_toggle_selection(
         if selected.0 != next {
             selected.0 = next;
             // Presentation changes must not dispatch the button's policy action.
-            previous.synchronize_with_non_authored_selection_change(next);
         }
     }
 }

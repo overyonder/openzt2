@@ -8,7 +8,6 @@ pub(super) mod default_ui_camera_routing;
 pub(super) mod ground_fitted_free_camera_initialization;
 pub(super) mod mouse_look_cursor_projection;
 pub(super) mod overhead_camera_advancement;
-pub(super) mod overhead_camera_return_without_snapshot;
 pub(super) mod overhead_camera_zoom_policy;
 pub mod pointer_ray_projection;
 pub(super) mod subject_camera_following;

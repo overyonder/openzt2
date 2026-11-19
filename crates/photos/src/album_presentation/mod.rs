@@ -6,7 +6,7 @@ use openzt2_interface_state::photos::photo_album_types::PhotoAlbumOrder;
 use openzt2_interface_state::photos::photo_capture_types::Photo;
 
 use openzt2_game_data::ui_document::{
-    action::{UiActionRecord, photography::UiPhotoAction, presentation::UiPresentationAction},
+    action::{photography::UiPhotoAction, presentation::UiPresentationAction, UiActionRecord},
     node::*,
     node_property_binding::*,
     widget_live_collection::UiWidgetLiveCollectionSource,
@@ -22,7 +22,6 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::SetUiListRowCount;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListPolicy;
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiListRow;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_ui::authored_ui_image_content_binding::UiImageBinding;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -37,9 +36,10 @@ use super::album_operations::{
     photo_rank_for_album_display_slot,
 };
 use super::photo_album_types::{
-    ActivePhotoAlbum, EnlargedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS, PHOTO_CAMERA_ROLL_CAPACITY,
-    PhotoAlbumCapacityPages, PhotoAlbumChoiceRow, PhotoAlbumPage, PhotoCameraRoll,
-    PhotoCameraRollRow, PhotoMove, PhotoMoveTarget, PresentedPhotoCount, SelectedAlbumPhoto,
+    ActivePhotoAlbum, EnlargedAlbumPhoto, PhotoAlbumCapacityPages, PhotoAlbumChoiceRow,
+    PhotoAlbumPage, PhotoCameraRoll, PhotoCameraRollRow, PhotoMove, PhotoMoveTarget,
+    PresentedPhotoCount, SelectedAlbumPhoto, INITIAL_PHOTO_ALBUM_SPREADS,
+    PHOTO_CAMERA_ROLL_CAPACITY,
 };
 use super::photo_capture_types::PhotoCaptionSubject;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPhotoActions;
@@ -48,7 +48,7 @@ use openzt2_interface_state::ui::authored_ui_action_projection_components::UiPre
 /// Sizes the camera-roll and album-choice lists.
 pub(super) fn request_authored_photo_camera_roll_and_album_choice_row_counts(
     lists: Query<(Entity, &UiListPolicy)>,
-    rows: Query<&UiListRow>,
+    rows: Query<&ChildOf, With<UiListRow>>,
     albums: Query<(Entity, Has<PhotoCameraRoll>), With<PhotoAlbum>>,
     photos: Query<&AlbumMember, With<Photo>>,
     mut row_counts: MessageWriter<SetUiListRowCount>,
@@ -63,7 +63,7 @@ pub(super) fn request_authored_photo_camera_roll_and_album_choice_row_counts(
             _ => continue,
         }
         .min(usize::from(u16::MAX)) as u16;
-        let current = rows.iter().filter(|row| row.list == list).count() as u16;
+        let current = rows.iter().filter(|parent| parent.parent() == list).count() as u16;
         if current != expected {
             row_counts.write(SetUiListRowCount {
                 list,
@@ -81,6 +81,7 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
     rows: Query<(
         Entity,
         &UiListRow,
+        &ChildOf,
         Option<&PhotoCameraRollRow>,
         Option<&PhotoAlbumChoiceRow>,
     )>,
@@ -102,7 +103,6 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
         Option<&mut ImageNode>,
         Option<&mut Text>,
         Option<&mut UiSelected>,
-        Option<&mut UiPreviousSelection>,
     )>,
 ) {
     let camera_roll = albums.iter().find(|row| row.6.is_some()).map(|row| row.0);
@@ -112,8 +112,8 @@ pub(super) fn present_photo_camera_roll_and_album_choices_in_authored_rows(
     let album_choices =
         ordered_photo_album_entities(albums.iter().filter(|row| row.6.is_none()).map(|row| row.0));
     let exposure_image_node = openzt2_game_data::AssetId::from_key("ui/role/fragment/node/button");
-    for (row_entity, list_row, camera_row, album_row) in &rows {
-        let Ok(policy) = lists.get(list_row.list) else {
+    for (row_entity, list_row, parent, camera_row, album_row) in &rows {
+        let Ok(policy) = lists.get(parent.parent()) else {
             continue;
         };
         match policy.source {
@@ -191,7 +191,6 @@ mod tests {
                 Option<&mut ImageNode>,
                 Option<&mut Text>,
                 Option<&mut UiSelected>,
-                Option<&mut UiPreviousSelection>,
             )>| {
                 present_photo_storage_row_descendants(
                     &mut commands,
@@ -227,12 +226,9 @@ fn present_photo_storage_row_descendants(
         Option<&mut ImageNode>,
         Option<&mut Text>,
         Option<&mut UiSelected>,
-        Option<&mut UiPreviousSelection>,
     )>,
 ) {
-    if let Ok((node_id, image_node, text_node, selected_node, previous_selection)) =
-        projected_nodes.get_mut(entity)
-    {
+    if let Ok((node_id, image_node, text_node, selected_node)) = projected_nodes.get_mut(entity) {
         if image.is_some_and(|(_, expected)| node_id.id == expected) {
             if let Some((image, _)) = image {
                 if let Some(mut image_node) = image_node {
@@ -258,9 +254,6 @@ fn present_photo_storage_row_descendants(
         if let Some(mut selected_node) = selected_node {
             if selected_node.0 != selected {
                 selected_node.0 = selected;
-                if let Some(mut previous) = previous_selection {
-                    previous.synchronize_with_non_authored_selection_change(selected);
-                }
             }
         }
     }

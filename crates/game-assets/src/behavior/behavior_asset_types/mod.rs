@@ -61,8 +61,7 @@ pub(super) struct BehaviorDeclarationLocation {
 
 #[derive(Resource, Default)]
 pub struct LoadedBehaviorDocumentCollection {
-    pub(super) archive_revision: Option<u64>,
-    pub(super) indexed_archive_revision: Option<u64>,
+    pub(super) index_ready: bool,
     pub(super) behavior_document_assets: Vec<Handle<BehaviorDocumentAsset>>,
     pub(super) behavior_sets_by_identifier: BTreeMap<AssetId, Vec<BehaviorDeclarationLocation>>,
     pub(super) behavior_tasks_by_unique_identifier:

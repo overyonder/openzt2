@@ -42,3 +42,14 @@ pub(in crate::model_source) fn netimmerse_geometry_virtual_path(
         document.source_path.as_str()
     )
 }
+
+pub(in crate::model_source) fn netimmerse_geometry_skin_variant_path(
+    document: &NetImmerseNifDocument,
+    block_index: u32,
+    ordinal: u16,
+) -> String {
+    format!(
+        "{}/bone_lod/{ordinal}",
+        netimmerse_geometry_virtual_path(document, block_index),
+    )
+}

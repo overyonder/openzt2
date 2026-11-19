@@ -39,7 +39,7 @@ use super::{
 use crate::ui_document::source::lower::authored_ui_document_lowering::ADOPTION_SLOT_ROW_DOCUMENT;
 
 pub(super) fn construct_selected_ui_role_and_fragment_document_lowering_inputs(
-    mut source_documents: BTreeMap<String, SourceUiDocument>,
+    source_documents: BTreeMap<String, SourceUiDocument>,
     all_named_templates: &BTreeMap<String, SourceUiNode>,
     reusable_row_template_names: &BTreeSet<String>,
     authored_image_selections: &[AuthoredUiImageSelection],

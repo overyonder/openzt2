@@ -23,7 +23,7 @@ pub(super) fn apply_authored_information_selection_action(
             let renamed_entity = if matches!(authored_action, UiInformationAction::RenameZoo) {
                 targets.zoo_roots.single().ok()
             } else {
-                targets.selected_entity.0
+                targets.selected_entity.subject()
             };
             if let (Some(selected_entity), Ok(authored_text)) = (
                 renamed_entity,
@@ -81,7 +81,7 @@ fn select_next_matching_animal_and_follow_with_zoo_camera(
     animal_matches: impl Fn(Option<&Disease>, Option<&Rampaging>) -> bool,
 ) {
     let Some(selected_animal) = select_next_matching_animal_in_entity_order(
-        targets.selected_entity.0,
+        targets.selected_entity.subject(),
         action_source,
         &targets.inspectable_animal_health,
         animal_matches,

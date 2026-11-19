@@ -89,6 +89,7 @@ pub(super) fn expose_animals_to_authored_diseases(
                                 .flatten()
                                 .copied(),
                         )
+                        .flatten()
                         .any(|held| held.name == disease.token)
                     && world.qualifies(*animal, facts, disease)
             })
@@ -245,7 +246,7 @@ pub(super) fn clear_authored_disease_tokens_when_cured(
     let Ok(children) = token_owners.get(cured.entity) else {
         return;
     };
-    for (token, held) in tokens.iter_many(children.into_iter().copied()) {
+    for (token, held) in tokens.iter_many(children.into_iter().copied()).flatten() {
         if disease.clear_tokens.contains(&held.name) {
             commands.entity(token).despawn();
         }

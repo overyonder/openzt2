@@ -1,10 +1,16 @@
 use bevy::prelude::*;
 use openzt2_game_assets::{
+    graphics_settings_presets::{
+        GraphicsDetailPreset, GraphicsSettingsPresetSource, GraphicsSettingsPresets,
+    },
     graphics_settings_types::{GraphicsSettings, ReplaceGraphicsSettingsRequest},
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::ui_document::{
-    action::information::{InformationSettingAction, UiInformationAction},
+    action::{
+        information::{InformationSettingAction, UiInformationAction},
+        UiTrigger,
+    },
     document::UiDocumentRole,
 };
 use openzt2_interface_state::{
@@ -21,7 +27,6 @@ use openzt2_interface_state::{
         authored_ui_selection_state::UiSelected,
     },
 };
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 
 pub(super) fn initialize_projected_options_settings_drafts(
     mut commands: Commands,
@@ -59,6 +64,8 @@ pub(super) fn apply_authored_options_setting_edits(
     mut drafts: Query<&mut OptionsScreenDisplayGraphicsAndOnlineMessageDraft>,
     accepted_display: Res<DisplaySettings>,
     accepted_graphics: Res<GraphicsSettings>,
+    preset_source: Res<GraphicsSettingsPresetSource>,
+    presets: Res<Assets<GraphicsSettingsPresets>>,
     mut online: ResMut<OnlineMessagePolicy>,
     mut replace_display: MessageWriter<ReplaceDisplaySettingsRequest>,
     mut replace_graphics: MessageWriter<ReplaceGraphicsSettingsRequest>,
@@ -94,17 +101,18 @@ pub(super) fn apply_authored_options_setting_edits(
                         dirty_graphics: false,
                     });
                 }
-                InformationSettingAction::HighestDetail => {
-                    draft.graphics = GraphicsSettings::default();
-                    draft.dirty_graphics = true;
-                }
-                InformationSettingAction::HighDetail => {
-                    draft.graphics = GraphicsSettings::from_source_high_detail_preset();
-                    draft.dirty_graphics = true;
-                }
-                InformationSettingAction::MediumDetail => {
-                    draft.graphics = GraphicsSettings::from_source_medium_detail_preset();
-                    draft.dirty_graphics = true;
+                InformationSettingAction::HighestDetail
+                | InformationSettingAction::HighDetail
+                | InformationSettingAction::MediumDetail => {
+                    if let Some((presets, preset)) =
+                        preset_source.get(&presets).zip(detail_preset(setting))
+                    {
+                        let graphics = presets.settings(preset, draft.graphics.multisample_count);
+                        if draft.graphics != graphics {
+                            draft.graphics = graphics;
+                            draft.dirty_graphics = true;
+                        }
+                    }
                 }
                 InformationSettingAction::Fullscreen => {
                     draft.display.mode = DisplayMode::BorderlessFullscreen;
@@ -185,20 +193,28 @@ pub(super) fn apply_authored_mouse_look_settings(
 
 pub(super) fn project_options_draft_into_radio_buttons(
     documents: Res<Assets<UiDocumentAsset>>,
+    preset_source: Res<GraphicsSettingsPresetSource>,
+    preset_assets: Res<Assets<GraphicsSettingsPresets>>,
     roots: Query<&UiDocumentRoot>,
     drafts: Query<Ref<OptionsScreenDisplayGraphicsAndOnlineMessageDraft>>,
+    mut activated: MessageWriter<UiNodeActivated>,
     mut controls: Query<(
+        Entity,
         Ref<UiInformationActions>,
         &UiDocumentOwner,
         &mut UiSelected,
-        Option<&mut UiPreviousSelection>,
     )>,
 ) {
-    for (actions, owner, mut selected, previous) in &mut controls {
+    let presets = preset_source.get(&preset_assets);
+    for (node, actions, owner, mut selected) in &mut controls {
         let Ok(draft) = drafts.get(owner.0) else {
             continue;
         };
-        if !draft.is_changed() && !actions.is_added() {
+        if !draft.is_changed()
+            && !actions.is_added()
+            && !preset_source.is_changed()
+            && !preset_assets.is_changed()
+        {
             continue;
         }
         let Some(document) = roots
@@ -220,13 +236,22 @@ pub(super) fn project_options_draft_into_radio_buttons(
         if matches!(setting, InformationSettingAction::FreeMouseLook(_)) {
             continue;
         }
-        let next = information_setting_matches_current_draft(setting, &draft);
-        selected.set_if_neq(UiSelected(next));
-        // The selected custom preset reveals its authored detail panels.
-        if let Some(mut previous) =
-            previous.filter(|_| !(next && *setting == InformationSettingAction::CustomDetail))
+        if presets.is_none()
+            && (detail_preset(setting).is_some()
+                || *setting == InformationSettingAction::CustomDetail)
         {
-            previous.synchronize_with_non_authored_selection_change(next);
+            continue;
+        }
+        let next = information_setting_matches_current_draft(setting, &draft, presets);
+        if selected.set_if_neq(UiSelected(next))
+            && next
+            && *setting == InformationSettingAction::CustomDetail
+        {
+            activated.write(UiNodeActivated {
+                source: openzt2_interface_state::input::input_types::ActionSource::System,
+                node,
+                trigger: UiTrigger::On,
+            });
         }
     }
 }
@@ -244,18 +269,13 @@ pub(super) fn project_current_camera_mouse_look_into_controls(
     >,
     mut removed_mouse_look: RemovedComponents<CameraMouseLook>,
     mut removed_cameras: RemovedComponents<ZooCamera>,
-    mut controls: Query<(
-        Ref<UiInformationActions>,
-        &UiDocumentOwner,
-        &mut UiSelected,
-        Option<&mut UiPreviousSelection>,
-    )>,
+    mut controls: Query<(Ref<UiInformationActions>, &UiDocumentOwner, &mut UiSelected)>,
 ) {
     let changed = !changed_cameras.is_empty()
         | (removed_mouse_look.read().count() > 0)
         | (removed_cameras.read().count() > 0);
     let enabled = cameras.iter().next().unwrap_or(true);
-    for (actions, owner, mut selected, previous) in &mut controls {
+    for (actions, owner, mut selected) in &mut controls {
         if !changed && !actions.is_added() {
             continue;
         }
@@ -279,31 +299,40 @@ pub(super) fn project_current_camera_mouse_look_into_controls(
         };
         let next = enabled == expected;
         selected.set_if_neq(UiSelected(next));
-        if let Some(mut previous) = previous {
-            previous.synchronize_with_non_authored_selection_change(next);
-        }
+    }
+}
+
+fn detail_preset(setting: &InformationSettingAction) -> Option<GraphicsDetailPreset> {
+    match setting {
+        InformationSettingAction::HighestDetail => Some(GraphicsDetailPreset::Highest),
+        InformationSettingAction::HighDetail => Some(GraphicsDetailPreset::High),
+        InformationSettingAction::MediumDetail => Some(GraphicsDetailPreset::Medium),
+        _ => None,
     }
 }
 
 fn information_setting_matches_current_draft(
     authored_setting: &InformationSettingAction,
     draft_settings: &OptionsScreenDisplayGraphicsAndOnlineMessageDraft,
+    presets: Option<&GraphicsSettingsPresets>,
 ) -> bool {
+    let matches_preset = |preset| {
+        presets.is_some_and(|presets| {
+            draft_settings.graphics
+                == presets.settings(preset, draft_settings.graphics.multisample_count)
+        })
+    };
     match authored_setting {
-        InformationSettingAction::HighestDetail => {
-            draft_settings.graphics == GraphicsSettings::default()
-        }
-        InformationSettingAction::HighDetail => {
-            draft_settings.graphics == GraphicsSettings::from_source_high_detail_preset()
-        }
-        InformationSettingAction::MediumDetail => {
-            draft_settings.graphics == GraphicsSettings::from_source_medium_detail_preset()
-        }
-        InformationSettingAction::CustomDetail => {
-            draft_settings.graphics != GraphicsSettings::default()
-                && draft_settings.graphics != GraphicsSettings::from_source_high_detail_preset()
-                && draft_settings.graphics != GraphicsSettings::from_source_medium_detail_preset()
-        }
+        InformationSettingAction::HighestDetail => matches_preset(GraphicsDetailPreset::Highest),
+        InformationSettingAction::HighDetail => matches_preset(GraphicsDetailPreset::High),
+        InformationSettingAction::MediumDetail => matches_preset(GraphicsDetailPreset::Medium),
+        InformationSettingAction::CustomDetail => ![
+            GraphicsDetailPreset::Highest,
+            GraphicsDetailPreset::High,
+            GraphicsDetailPreset::Medium,
+        ]
+        .into_iter()
+        .any(matches_preset),
         InformationSettingAction::Fullscreen => {
             draft_settings.display.mode == DisplayMode::BorderlessFullscreen
         }

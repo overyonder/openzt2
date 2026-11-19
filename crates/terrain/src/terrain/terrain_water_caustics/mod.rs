@@ -53,16 +53,12 @@ pub(super) fn bind_caustic_camera_projection(
     camera_to_source_world: Mat4,
     buffers: &mut Assets<ShaderBuffer>,
 ) -> std::io::Result<bool> {
-    let mut all_bound = true;
-    for (semantic, matrix) in ["CameraToCaustic0", "CameraToCaustic1", "CameraToHeight"]
-        .into_iter()
-        .zip(world_projection)
-    {
-        all_bound &= pass.bind_fixed_function_matrix_effect_semantic(
-            semantic,
-            matrix * camera_to_source_world,
-        )?;
-    }
+    let [bottom, top, height] = world_projection.map(|matrix| matrix * camera_to_source_world);
+    let all_bound = pass.bind_fixed_function_matrix_effect_semantics(&[
+        ("CameraToCaustic0", bottom),
+        ("CameraToCaustic1", top),
+        ("CameraToHeight", height),
+    ])?;
     if all_bound {
         pass.write_changed_fixed_function_transforms_to_persistent_buffer(buffers);
     }

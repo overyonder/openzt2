@@ -2,11 +2,11 @@ use std::collections::BTreeMap;
 
 use bevy::{audio::AudioSource, prelude::*};
 use openzt2_game_data::{
-    AssetId,
     audio::{
         AudioAmbientPolicy, AudioCrowdPolicy, AudioCue, AudioDocument, AudioMixerPolicy,
         AudioSoundscapeAllowedEntities, AudioSoundscapeContent, AudioStage, AudioWaterPolicy,
     },
+    AssetId,
 };
 
 #[derive(Asset, TypePath, Debug)]
@@ -87,6 +87,8 @@ pub(super) struct AudioCatalogueSource {
     pub(super) biomes: BTreeMap<String, AssetId>,
 }
 
+pub(super) type RankedAudioRows = BTreeMap<(usize, usize), (Handle<AudioAsset>, usize)>;
+
 #[derive(Resource, Default)]
 pub struct AudioAssets {
     pub(super) discovered: bool,
@@ -94,6 +96,8 @@ pub struct AudioAssets {
     pub(super) pending: std::collections::BTreeSet<bevy::asset::AssetId<AudioAsset>>,
     pub(super) affected_keys: std::collections::BTreeSet<AudioRowKey>,
     pub(super) biome_directories: BTreeMap<String, AssetId>,
+    pub(super) biome_sources_changed: bool,
+    pub(super) row_sources: BTreeMap<AudioRowKey, RankedAudioRows>,
     pub(super) winners: BTreeMap<AudioRowKey, (Handle<AudioAsset>, usize)>,
 }
 

@@ -13,10 +13,11 @@ use openzt2_zoo_state::economy::facility_economy_types::OperatingSinceDay;
 use openzt2_zoo_state::economy::facility_economy_types::Price;
 use openzt2_zoo_state::economy::facility_economy_types::ServiceFacility;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_selected_facility_status_to_visible_information_panels(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     zoo_clock: Res<ZooClock>,
     facility_subjects: Query<(
         Option<&Price>,
@@ -34,12 +35,15 @@ pub(crate) fn project_selected_facility_status_to_visible_information_panels(
         Option<&mut Text>,
     )>,
 ) {
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
         let Ok((price, facility, inventory, upkeep, profit, opened, donations)) =
-            facility_subjects.get(information_panel.subject)
+            facility_subjects.get(selection.0)
         else {
             continue;
         };
@@ -134,9 +138,10 @@ mod tests {
             project_selected_facility_status_to_visible_information_panels,
         );
         let subject = app.world_mut().spawn(MonthlyUpkeep(Money(5000))).id();
+        let owner = app.world_mut().spawn(SelectedSubject(subject)).id();
         let panel = app
             .world_mut()
-            .spawn((InfoPanel { subject }, InheritedVisibility::VISIBLE))
+            .spawn((InfoPanel, ChildOf(owner), InheritedVisibility::VISIBLE))
             .id();
         let text = app
             .world_mut()

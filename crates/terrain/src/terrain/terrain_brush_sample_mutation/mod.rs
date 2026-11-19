@@ -188,6 +188,9 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                     source_index as u32 % asset.canonical_terrain_grid().width,
                     source_index as u32 / asset.canonical_terrain_grid().width,
                 );
+                let previous_owner = water_affiliation::current_water_point_owner(
+                    point, &original, membership, asset, regions,
+                );
                 if result != original
                     && result.water_style != 0
                     && (matches!(preview.kind, TerrainBrushKind::PaintWater { .. })
@@ -201,13 +204,15 @@ pub(super) fn prepare_terrain_chunk_sample_delta_from_brush_dabs(
                         .filter(|owner| *owner != plan.owner)
                         .and_then(|owner| regions.get(owner)?.surface_height(asset))
                         .is_some_and(|plane| f32::from(original.height_cm) * 0.01 >= plane);
-                    if !previous_above_plane && plan.accepts_point(point, membership, asset) {
+                    if !previous_above_plane
+                        && plan.accepts_point(point, previous_owner, membership, asset, regions)
+                    {
                         result.water_affiliation = Some(openzt2_zoo_state::terrain::terrain_edit_data_types::TerrainWaterAffiliation::Edited(plan.owner));
                     } else {
                         result = original;
                     }
                 }
-                plan.update_sample(&mut result, membership.point_owner(point));
+                plan.update_sample(&mut result, previous_owner);
             }
             any_changed |= result != original;
             before.push(original);

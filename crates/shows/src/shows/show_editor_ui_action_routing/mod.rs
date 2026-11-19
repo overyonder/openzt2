@@ -5,7 +5,7 @@ use openzt2_game_data::ui_document::action::animal_shows::UiShowAction;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::EnterImmersiveMode;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ImmersiveMode;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
@@ -46,7 +46,7 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
     mut commands: Commands,
     mut activations: MessageReader<UiNodeActivated>,
     documents: Res<Assets<UiDocumentAsset>>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     inputs: AuthoredShowEditorActionRoutingInputs,
     mut enter_show_edit: MessageWriter<EnterImmersiveMode>,
 ) {
@@ -72,9 +72,11 @@ pub(super) fn route_authored_show_editor_actions_into_selection_and_immersive_mo
             continue;
         };
         let controller = parent.map_or(document_owner.0, ChildOf::parent);
-        let selected_stage = selected_entity.0.filter(|entity| stages.contains(*entity));
+        let selected_stage = selected_entity
+            .subject()
+            .filter(|entity| stages.contains(*entity));
         let selected_schedule_row = selected_entity
-            .0
+            .subject()
             .filter(|entity| schedule_rows.contains(*entity));
 
         for authored_action in authored_actions.authored_action_records(document) {

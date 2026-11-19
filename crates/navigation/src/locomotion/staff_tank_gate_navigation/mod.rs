@@ -8,6 +8,7 @@ use openzt2_game_assets::{
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
+use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::{
     animation_graph::{
         animation_graph_playback_message_types::{
@@ -22,10 +23,11 @@ use openzt2_world_state::{
         animation_playback_controller_types::{
             AnimationPlaybackController, AnimationPlaybackRepetitionPolicy,
         },
-        locomotion_root_motion::{ConsumedLocomotionRootMotion, clip_motion_velocity},
+        locomotion_root_motion::{clip_motion_velocity, ConsumedLocomotionRootMotion},
     },
     world_spawn::world_membership_types::WorldMember,
 };
+use openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater;
 use openzt2_zoo_state::{
     aquatic::aquatic_simulation_types::{Tank, TankGeometry},
     behavior_task_execution_types::{
@@ -48,9 +50,37 @@ use openzt2_zoo_state::{
     },
 };
 
-use openzt2_zoo_state::staff::staff_tank_gate_types::{
-    StaffTankGateJourney, StaffTankGateResume, StaffTankGateStage,
+use openzt2_zoo_state::{
+    behavior_task_execution_types::running_actions::{
+        BehaviorInstructionId, RunningBehaviorInstruction,
+    },
+    staff::staff_tank_gate_types::StaffTankGateStage,
 };
+
+#[derive(Component)]
+pub(super) struct TankGateJourney {
+    instruction: BehaviorInstructionId,
+    gate: Entity,
+    goal: Destination,
+    docking: Option<Docking>,
+    approach_request: u64,
+    entry: Vec3,
+    exit: Vec3,
+    wall_height: f32,
+    stage: StaffTankGateStage,
+    clip_request: Option<usize>,
+    clip_completed: bool,
+    failed: bool,
+    previous_body: Option<RigidBody>,
+}
+
+#[derive(Component)]
+pub(super) struct TankGateResume {
+    instruction: BehaviorInstructionId,
+    goal: Destination,
+    docking: Option<Docking>,
+    body: Option<RigidBody>,
+}
 
 use super::fence_navigation_crossing_types::FenceNavigationCrossingIndex;
 
@@ -58,17 +88,14 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
     mut commands: Commands,
     actors: Query<(
         Entity,
-        &StaffTankGateResume,
-        Option<&BehaviorTaskExecutionState>,
+        &TankGateResume,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     )>,
 ) {
     for (actor, resume, task) in &actors {
-        commands.entity(actor).remove::<StaffTankGateResume>();
-        if task.is_some_and(|task| {
-            task.execution_id == resume.execution_id
-                && task.stack.len() == resume.depth
-                && task.is_at_or_nested_under(&resume.origin, resume.depth)
-        }) {
+        commands.entity(actor).remove::<TankGateResume>();
+        if task.is_some_and(|(task, step)| resume.instruction == step.id() && step.is_current(task))
+        {
             commands.entity(actor).insert(resume.goal);
             if let Some(docking) = resume.docking {
                 commands.entity(actor).insert(docking);
@@ -87,6 +114,7 @@ pub(super) fn resume_completed_staff_tank_gate_journeys(
 pub(super) fn begin_staff_tank_gate_journeys(
     mut commands: Commands,
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
+    water: Query<&TankNavigationWater, With<WorldRoot>>,
     capacity: Option<Res<LocomotionCapacity>>,
     fence_crossing_index: Res<FenceNavigationCrossingIndex>,
     fences: FenceNavigationPolicy,
@@ -104,7 +132,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
             &GlobalTransform,
             &NavAgent,
             Option<&LocomotionMode>,
-            &BehaviorTaskExecutionState,
+            (&BehaviorTaskExecutionState, &RunningBehaviorInstruction),
             &WorldMember,
             &mut Destination,
             &mut Route,
@@ -112,13 +140,14 @@ pub(super) fn begin_staff_tank_gate_journeys(
         ),
         (
             With<Staff>,
-            Without<StaffTankGateJourney>,
+            Without<TankGateJourney>,
             Without<PendingBehaviorTaskFailure>,
             Without<openzt2_zoo_state::behavior_task_execution_types::BehaviorEvasionSteering>,
         ),
     >,
     mut failures: MessageWriter<NavigationFailed>,
 ) {
+    let tank_water = water.single().ok();
     let (Some(graph), Some(capacity)) = (graph, capacity.filter(|capacity| capacity.is_valid()))
     else {
         return;
@@ -128,9 +157,12 @@ pub(super) fn begin_staff_tank_gate_journeys(
         navigation.navigation_node_count(),
         capacity.max_route_points,
     );
-    for (actor, transform, agent, mode, task, world, mut destination, mut route, docking) in
+    for (actor, transform, agent, mode, (task, step), world, mut destination, mut route, docking) in
         &mut actors
     {
+        if !step.is_current(task) {
+            continue;
+        }
         let position = transform.translation();
         let source_tank = locate_habitat_at_world_position(&habitats, position.xz(), *grid)
             .filter(|tank| tanks.contains(*tank));
@@ -222,6 +254,7 @@ pub(super) fn begin_staff_tank_gate_journeys(
             second.y = second_y;
             if plan_route(
                 navigation,
+                tank_water,
                 |from, to| {
                     fence_crossing_index
                         .crossing_fences(from, to)
@@ -283,10 +316,8 @@ pub(super) fn begin_staff_tank_gate_journeys(
         route.clear();
         commands
             .entity(actor)
-            .insert(StaffTankGateJourney {
-                execution_id: task.execution_id,
-                origin: task.create_return_frame_after_action(task.action),
-                depth: task.stack.len(),
+            .insert(TankGateJourney {
+                instruction: step.id(),
                 gate,
                 goal,
                 docking: docking.copied(),
@@ -309,7 +340,7 @@ pub(super) fn receive_staff_tank_gate_events(
     mut failures: MessageReader<NavigationFailed>,
     mut completed: MessageReader<AnimationCompleted>,
     mut rejected: MessageReader<AnimationClipPlaybackRequestRejected>,
-    mut journeys: Query<&mut StaffTankGateJourney>,
+    mut journeys: Query<&mut TankGateJourney>,
 ) {
     for event in arrivals.read() {
         if let Ok(mut journey) = journeys.get_mut(event.entity) {
@@ -364,10 +395,10 @@ pub(super) fn execute_staff_tank_gate_journeys(
         &mut Transform,
         &GlobalTransform,
         Option<&mut Velocity>,
-        Option<&BehaviorTaskExecutionState>,
+        Option<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
         Option<&Destination>,
         Has<PendingBehaviorTaskFailure>,
-        &mut StaffTankGateJourney,
+        &mut TankGateJourney,
         Option<&RigidBody>,
         Option<&mut LinearVelocity>,
     )>,
@@ -399,10 +430,8 @@ pub(super) fn execute_staff_tank_gate_journeys(
     ) in &mut actors
     {
         let owns = !failing
-            && task.is_some_and(|task| {
-                task.execution_id == journey.execution_id
-                    && task.stack.len() == journey.depth
-                    && task.is_at_or_nested_under(&journey.origin, journey.depth)
+            && task.is_some_and(|(task, step)| {
+                journey.instruction == step.id() && step.is_current(task)
             })
             && destination
                 .is_none_or(|destination| destination.request_id == journey.approach_request);
@@ -414,7 +443,7 @@ pub(super) fn execute_staff_tank_gate_journeys(
                 });
             }
             commands.entity(actor).remove::<(
-                StaffTankGateJourney,
+                TankGateJourney,
                 StaffClimbingTankGate,
                 BehaviorHeldAnimationClip,
             )>();
@@ -486,16 +515,14 @@ pub(super) fn execute_staff_tank_gate_journeys(
                     transform.translation = journey.exit;
                     commands
                         .entity(actor)
-                        .insert(StaffTankGateResume {
-                            execution_id: journey.execution_id,
-                            origin: journey.origin.clone(),
-                            depth: journey.depth,
+                        .insert(TankGateResume {
+                            instruction: journey.instruction,
                             goal: journey.goal,
                             docking: journey.docking,
                             body: journey.previous_body,
                         })
                         .remove::<(
-                            StaffTankGateJourney,
+                            TankGateJourney,
                             StaffClimbingTankGate,
                             BehaviorHeldAnimationClip,
                         )>();
@@ -618,16 +645,14 @@ pub(super) fn execute_staff_tank_gate_journeys(
                         .remove::<ConsumedLocomotionRootMotion>();
                     commands
                         .entity(actor)
-                        .insert(StaffTankGateResume {
-                            execution_id: journey.execution_id,
-                            origin: journey.origin.clone(),
-                            depth: journey.depth,
+                        .insert(TankGateResume {
+                            instruction: journey.instruction,
                             goal: journey.goal,
                             docking: journey.docking,
                             body: journey.previous_body,
                         })
                         .remove::<(
-                            StaffTankGateJourney,
+                            TankGateJourney,
                             StaffClimbingTankGate,
                             BehaviorHeldAnimationClip,
                         )>();

@@ -13,7 +13,7 @@ use openzt2_interface_state::{
     input::input_types::{ActionRequest, ActionSource, GameAction},
     ui::{
         authored_ui_node_projection_components::{UiDocumentOwner, UiDocumentRoot, UiNodeId},
-        ui_document_lifecycle_contracts::{InGameUiOwner, UiRoleRequests},
+        ui_document_lifecycle_contracts::{InGameUiOwner, ShowUiRole},
     },
 };
 use openzt2_ui::animation::UiShowHideAnimation;
@@ -147,7 +147,7 @@ pub(super) fn apply_scenario_ui_commands(
     mut requests: MessageReader<ScenarioUiCommand>,
     mut pending: ResMut<PendingScenarioUi>,
     mut continuation: ResMut<ScenarioContinuation>,
-    mut roles: ResMut<UiRoleRequests>,
+    mut roles: MessageWriter<ShowUiRole>,
     owners: Query<Entity, With<InGameUiOwner>>,
     roots: Query<(Entity, &UiDocumentRoot)>,
     added_nodes: Query<(&UiNodeId, &UiDocumentOwner), Added<UiNodeId>>,
@@ -162,7 +162,6 @@ pub(super) fn apply_scenario_ui_commands(
             openzt2_zoo_state::progression::unlock_types::ApplyCatalogueDefinitionUnlockRequest,
         >,
     ),
-    mut ring: ResMut<TutorialRingTimer>,
     mut animations: Query<(
         Entity,
         &UiNodeId,
@@ -418,15 +417,6 @@ pub(super) fn apply_scenario_ui_commands(
         if matches!(operation, NodeOperation::MeasureText) {
             continue;
         }
-        if path
-            .last()
-            .is_some_and(|name| name.eq_ignore_ascii_case("ring timer"))
-        {
-            if let NodeOperation::Selected(active) = operation {
-                ring.active = active;
-            }
-            continue;
-        }
         let role = role_for(&path);
         let target = roots.iter().find_map(|(entity, root)| {
             let document = documents.get(&root.document)?.canonical_ui_document();
@@ -454,7 +444,7 @@ pub(super) fn apply_scenario_ui_commands(
                 // goal panel. The tutorial's own layout is always present.
                 match (&operation, role) {
                     (_, UiDocumentRole::Tutorial) | (NodeOperation::Visible(true), _) => {
-                        roles.request(role, owner);
+                        roles.write(ShowUiRole { role, owner });
                     }
                     (NodeOperation::Visible(false), _) => continue,
                     _ => {}

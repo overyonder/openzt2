@@ -7,6 +7,7 @@ pub mod texture_coordinate_animation;
 pub mod d3d9_shader_and_vertex_layout_mapping;
 pub mod effect_pass_bevy_pipeline_specialization;
 pub mod effect_pass_material_asset_construction;
+pub mod effect_pass_stencil_reference;
 pub mod effect_pass_uniform_bind_group_preparation;
 pub mod evaluated_d3d9_pass_state;
 pub mod evaluated_d3d9_sampler_state;
@@ -41,6 +42,7 @@ pub(super) fn register_effect_pass_material_asset_and_fixed_function_shader(appl
                 .in_set(texture_coordinate_animation::TextureCoordinateAnimationSet),
         )
         .add_systems(Startup, initialize_fixed_function_world_light_buffer);
+    effect_pass_stencil_reference::register(application);
 }
 
 fn initialize_fixed_function_world_light_buffer(mut buffers: ResMut<Assets<ShaderBuffer>>) {

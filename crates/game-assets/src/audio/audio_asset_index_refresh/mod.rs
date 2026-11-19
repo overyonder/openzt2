@@ -10,9 +10,14 @@ use bevy::{
 };
 use openzt2_game_data::audio::VARIANT_CUE_REFERENCE;
 
-use crate::asset_source::{ArchiveCatalogue, AssetArchives};
+use crate::asset_source::{
+    archive_entry_asset_path::{archive_entry_asset_path, archive_entry_asset_source_path},
+    ArchiveCatalogue, AssetArchives,
+};
 
-use super::audio_asset_types::{AudioAsset, AudioAssets, AudioCatalogueSource, AudioRowKey};
+use super::audio_asset_types::{
+    AudioAsset, AudioAssets, AudioCatalogueSource, AudioRowKey, RankedAudioRows,
+};
 
 fn path_belongs_to_audio_document_family(path: &Path) -> bool {
     let path = path
@@ -54,60 +59,41 @@ pub(super) fn discover_audio_catalogue_sources(
     for entry in sources.iter() {
         let path = &entry.normalized_asset_path;
         let rank = (entry.archive_priority_index, entry.zip_entry_ordinal);
-        let new_source = !old_sources.contains_key(path);
-        let mut source = old_sources.remove(path).map_or_else(
-            || AudioCatalogueSource {
-                handle: server.load::<AudioAsset>(path.clone()),
-                rank,
-                rows: BTreeMap::new(),
-                biomes: BTreeMap::new(),
-            },
-            |mut existing| {
-                if existing.rank != rank {
-                    index.affected_keys.extend(existing.rows.keys().copied());
-                    existing.rank = rank;
-                    existing.rows.clear();
-                    existing.biomes.clear();
-                }
-                existing
-            },
-        );
-        let winner_changed = previous.as_ref().is_some_and(|previous| {
-            previous
-                .iter()
-                .any(|old| old.normalized_asset_path == *path && old != entry)
-        });
-        if winner_changed
-            || !matches!(
-                server.get_load_state(source.handle.id()),
-                Some(LoadState::Loaded | LoadState::Failed(_))
-            )
-        {
-            index.pending.insert(source.handle.id());
-        }
-        if new_source && !index.pending.contains(&source.handle.id()) {
-            if let Some(asset) = loaded_audio_document(&source, &assets, &server) {
-                let directory_biome = path
-                    .parent()
-                    .and_then(Path::to_str)
-                    .and_then(|directory| index.biome_directories.get(directory).copied());
-                source.rows = audio_document_rows(asset, directory_biome);
-                source
-                    .biomes
-                    .extend(asset.document.soundscape_biomes.iter().map(|biome| {
-                        (
-                            biome.directory.trim_end_matches('/').to_ascii_lowercase(),
-                            biome.biome,
-                        )
-                    }));
-                index.affected_keys.extend(source.rows.keys().copied());
+        if old_sources.get(path).is_some_and(|old| old.rank == rank) {
+            if let Some(source) = old_sources.remove(path) {
+                index.sources.insert(path.clone(), source);
             }
+            continue;
+        }
+        if let Some(old) = old_sources.remove(path) {
+            forget_audio_source(index, old);
+        }
+        let handle = server.load::<AudioAsset>(archive_entry_asset_path(entry));
+        let mut source = AudioCatalogueSource {
+            handle,
+            rank,
+            rows: BTreeMap::new(),
+            biomes: BTreeMap::new(),
+        };
+        if let Some(asset) = loaded_audio_document(&source, &assets, &server) {
+            let biome = path
+                .parent()
+                .and_then(Path::to_str)
+                .and_then(|directory| index.biome_directories.get(directory).copied());
+            source.rows = audio_document_rows(asset, biome);
+            source.biomes = audio_document_biome_directories(asset);
+            index.biome_sources_changed |= !source.biomes.is_empty();
+            add_audio_rows(&mut index.row_sources, &mut index.affected_keys, &source);
+        } else if !matches!(
+            server.get_load_state(source.handle.id()),
+            Some(LoadState::Failed(_))
+        ) {
+            index.pending.insert(source.handle.id());
         }
         index.sources.insert(path.clone(), source);
     }
     for source in old_sources.into_values() {
-        index.pending.remove(&source.handle.id());
-        index.affected_keys.extend(source.rows.into_keys());
+        forget_audio_source(index, source);
     }
     index.discovered = true;
     *previous = Some(sources);
@@ -128,28 +114,38 @@ pub(super) fn publish_loaded_audio_rows(
             }
             AssetEvent::LoadedWithDependencies { .. } | AssetEvent::Unused { .. } => continue,
         };
-        if let Some(path) = server.get_path(id) {
-            if index
-                .sources
-                .get(path.path())
-                .is_some_and(|source| source.handle.id() == id)
-            {
-                index.pending.remove(&id);
-                changed_paths.insert(path.path().to_owned());
-            }
+        let Some((path, _, _)) = server
+            .get_path(id)
+            .and_then(|path| archive_entry_asset_source_path(path.path()))
+        else {
+            continue;
+        };
+        if index
+            .sources
+            .get(&path)
+            .is_some_and(|source| source.handle.id() == id)
+        {
+            index.pending.remove(&id);
+            changed_paths.insert(path);
         }
     }
     for failure in failures.read() {
+        let Some((path, _, _)) = archive_entry_asset_source_path(failure.path.path()) else {
+            continue;
+        };
         if index
             .sources
-            .get(failure.path.path())
+            .get(&path)
             .is_some_and(|source| source.handle.id() == failure.id)
         {
             index.pending.remove(&failure.id);
-            changed_paths.insert(failure.path.path().to_owned());
+            changed_paths.insert(path);
         }
     }
-    if changed_paths.is_empty() && index.affected_keys.is_empty() {
+    if changed_paths.is_empty()
+        && !index.biome_sources_changed
+        && (index.affected_keys.is_empty() || !index.pending.is_empty())
+    {
         return;
     }
     let index = &mut *index;
@@ -157,53 +153,50 @@ pub(super) fn publish_loaded_audio_rows(
         let Some(source) = index.sources.get_mut(path) else {
             continue;
         };
-        source.biomes.clear();
-        if let Some(asset) = loaded_audio_document(source, &assets, &server) {
-            source
-                .biomes
-                .extend(asset.document.soundscape_biomes.iter().map(|biome| {
-                    (
-                        biome.directory.trim_end_matches('/').to_ascii_lowercase(),
-                        biome.biome,
-                    )
-                }));
+        let biomes = loaded_audio_document(source, &assets, &server)
+            .map_or_else(BTreeMap::new, audio_document_biome_directories);
+        if source.biomes != biomes {
+            source.biomes = biomes;
+            index.biome_sources_changed = true;
         }
     }
-    let biome_directories = index
-        .sources
-        .values()
-        .flat_map(|source| {
-            source
-                .biomes
-                .iter()
-                .map(|(path, biome)| (path, (source.rank, *biome)))
-        })
-        .fold(BTreeMap::new(), |mut directories, (path, row)| {
-            let winner = directories.entry(path).or_insert(row);
-            if winner.0 <= row.0 {
-                *winner = row;
-            }
-            directories
-        })
-        .into_iter()
-        .map(|(path, (_, biome))| (path.clone(), biome))
-        .collect::<BTreeMap<_, _>>();
-    if biome_directories != index.biome_directories {
-        changed_paths.extend(index.sources.iter().filter_map(|(path, source)| {
-            let directory = path.parent()?.to_str()?;
-            (biome_directories.get(directory) != index.biome_directories.get(directory)
-                && !index.pending.contains(&source.handle.id())
-                && loaded_audio_document(source, &assets, &server)
-                    .is_some_and(|asset| !asset.document.soundscape_contents.is_empty()))
-            .then(|| path.clone())
-        }));
-        index.biome_directories = biome_directories;
+    if std::mem::take(&mut index.biome_sources_changed) {
+        let biome_directories = index
+            .sources
+            .values()
+            .flat_map(|source| {
+                source
+                    .biomes
+                    .iter()
+                    .map(|(path, biome)| (path, (source.rank, *biome)))
+            })
+            .fold(BTreeMap::new(), |mut directories, (path, row)| {
+                let winner = directories.entry(path).or_insert(row);
+                if winner.0 <= row.0 {
+                    *winner = row;
+                }
+                directories
+            })
+            .into_iter()
+            .map(|(path, (_, biome))| (path.clone(), biome))
+            .collect::<BTreeMap<_, _>>();
+        if biome_directories != index.biome_directories {
+            changed_paths.extend(index.sources.iter().filter_map(|(path, source)| {
+                let directory = path.parent()?.to_str()?;
+                (biome_directories.get(directory) != index.biome_directories.get(directory)
+                    && !index.pending.contains(&source.handle.id())
+                    && loaded_audio_document(source, &assets, &server)
+                        .is_some_and(|asset| !asset.document.soundscape_contents.is_empty()))
+                .then(|| path.clone())
+            }));
+            index.biome_directories = biome_directories;
+        }
     }
     for path in &changed_paths {
         let Some(source) = index.sources.get_mut(path) else {
             continue;
         };
-        index.affected_keys.extend(source.rows.keys().copied());
+        remove_audio_rows(&mut index.row_sources, &mut index.affected_keys, source);
         let directory_biome = path
             .parent()
             .and_then(Path::to_str)
@@ -212,19 +205,18 @@ pub(super) fn publish_loaded_audio_rows(
             .map_or_else(BTreeMap::new, |asset| {
                 audio_document_rows(asset, directory_biome)
             });
-        index.affected_keys.extend(source.rows.keys().copied());
+        add_audio_rows(&mut index.row_sources, &mut index.affected_keys, source);
     }
     if !index.pending.is_empty() {
         return;
     }
     for key in std::mem::take(&mut index.affected_keys) {
-        if let Some((source, row)) = index
-            .sources
-            .values()
-            .filter_map(|source| Some((source, *source.rows.get(&key)?)))
-            .max_by_key(|(source, _)| source.rank)
+        if let Some((_, row)) = index
+            .row_sources
+            .get(&key)
+            .and_then(BTreeMap::last_key_value)
         {
-            index.winners.insert(key, (source.handle.clone(), row));
+            index.winners.insert(key, row.clone());
         } else {
             index.winners.remove(&key);
         }
@@ -252,6 +244,44 @@ pub(super) fn publish_loaded_audio_rows(
     }
 }
 
+fn forget_audio_source(index: &mut AudioAssets, source: AudioCatalogueSource) {
+    index.biome_sources_changed |= !source.biomes.is_empty();
+    index.pending.remove(&source.handle.id());
+    remove_audio_rows(&mut index.row_sources, &mut index.affected_keys, &source);
+}
+
+fn add_audio_rows(
+    row_sources: &mut BTreeMap<AudioRowKey, RankedAudioRows>,
+    affected_keys: &mut BTreeSet<AudioRowKey>,
+    source: &AudioCatalogueSource,
+) {
+    for (&key, &row) in &source.rows {
+        row_sources
+            .entry(key)
+            .or_default()
+            .insert(source.rank, (source.handle.clone(), row));
+        affected_keys.insert(key);
+    }
+}
+
+fn remove_audio_rows(
+    row_sources: &mut BTreeMap<AudioRowKey, RankedAudioRows>,
+    affected_keys: &mut BTreeSet<AudioRowKey>,
+    source: &AudioCatalogueSource,
+) {
+    for key in source.rows.keys() {
+        if let std::collections::btree_map::Entry::Occupied(mut candidates) =
+            row_sources.entry(*key)
+        {
+            candidates.get_mut().remove(&source.rank);
+            if candidates.get().is_empty() {
+                candidates.remove();
+            }
+        }
+        affected_keys.insert(*key);
+    }
+}
+
 fn loaded_audio_document<'a>(
     source: &AudioCatalogueSource,
     assets: &'a Assets<AudioAsset>,
@@ -264,6 +294,22 @@ fn loaded_audio_document<'a>(
         return None;
     }
     assets.get(&source.handle)
+}
+
+fn audio_document_biome_directories(
+    asset: &AudioAsset,
+) -> BTreeMap<String, openzt2_game_data::AssetId> {
+    asset
+        .document
+        .soundscape_biomes
+        .iter()
+        .map(|biome| {
+            (
+                biome.directory.trim_end_matches('/').to_ascii_lowercase(),
+                biome.biome,
+            )
+        })
+        .collect()
 }
 
 fn audio_document_rows(

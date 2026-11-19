@@ -49,21 +49,20 @@ use openzt2_world_state::world_spawn::world_unloading::UnloadWorld;
 
 fn recovery_app() -> (App, Entity) {
     let (mut app, root) = loading_app();
-    app.init_asset::<TerrainAsset>()
-        .add_systems(
-            Update,
-            (
-                unload_requested_worlds_and_their_members,
-                accept_queued_world_load_after_required_assets_resolve
-                    .run_if(in_state(GamePhase::Loading)),
-                initialize_simulation_time_from_selected_world.run_if(in_state(GamePhase::Loading)),
-                complete_or_fail_finished_world_hydration
-                    .in_set(WorldLoadCompletionSet)
-                    .run_if(in_state(GamePhase::Loading)),
-            )
-                .chain()
-                .in_set(GameSet::Intent),
-        );
+    app.init_asset::<TerrainAsset>().add_systems(
+        Update,
+        (
+            unload_requested_worlds_and_their_members,
+            accept_queued_world_load_after_required_assets_resolve
+                .run_if(in_state(GamePhase::Loading)),
+            initialize_simulation_time_from_selected_world.run_if(in_state(GamePhase::Loading)),
+            complete_or_fail_finished_world_hydration
+                .in_set(WorldLoadCompletionSet)
+                .run_if(in_state(GamePhase::Loading)),
+        )
+            .chain()
+            .in_set(GameSet::Intent),
+    );
     (app, root)
 }
 
@@ -269,6 +268,7 @@ fn pending_catalogue_waits_then_accepts_the_same_ordinary_request() {
         .resource_mut::<Assets<WorldScenarioDocumentAsset>>()
         .insert(handle.id(), fixture_start_document())
         .unwrap();
+    app.update();
     app.update();
     let replacement = app
         .world_mut()

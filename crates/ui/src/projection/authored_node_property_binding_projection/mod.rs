@@ -4,7 +4,6 @@ use openzt2_game_data::ui_document::node_property_binding::UiImagePropertyBindin
 use openzt2_game_data::ui_document::node_property_binding::UiIntegerPropertyBindingSource;
 use openzt2_game_data::ui_document::node_property_binding::UiNodePropertyBinding;
 
-use crate::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use crate::authored_ui_image_content_binding::UiImageBinding;
 use crate::authored_ui_interaction_enabled_binding::UiEnabledBinding;
 use crate::authored_ui_presentation_slot_bindings::UiShellPresentationBinding;
@@ -79,11 +78,9 @@ pub(super) fn insert_authored_node_property_bindings(
             }
             UiNodePropertyBinding::SelectionState(source) => {
                 let selected = matches!(source, UiBooleanPropertyBindingSource::Constant(true));
-                commands.entity(entity).insert((
-                    UiSelectedBinding(source),
-                    UiSelected(selected),
-                    UiPreviousSelection::from_current_selection(selected),
-                ));
+                commands
+                    .entity(entity)
+                    .insert((UiSelectedBinding(source), UiSelected(selected)));
             }
             UiNodePropertyBinding::TranquilizerHeadsUpDisplaySlot(binding) => {
                 commands

@@ -6,6 +6,9 @@ use openzt2_game_data::world_definitions::object_placement::{
     FootprintCell, FootprintCellFlags, PlaceableDefinition,
 };
 
+#[derive(Message, Clone, Copy)]
+pub struct ScenePlacementFootprintChanged(pub AssetId<ScenePrefabAsset>);
+
 #[derive(Resource, Default)]
 pub struct ScenePlacementFootprints(HashMap<AssetId<ScenePrefabAsset>, SceneFootprintSource>);
 

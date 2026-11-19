@@ -1,4 +1,6 @@
 //! Native exposure dragging routed through the album's authored controls.
+use bevy::picking::pointer::{PointerAction, PointerButton, PointerInput};
+use openzt2_interface_state::input::input_types::MousePointer;
 use openzt2_interface_state::photos::photo_album_types::PhotoAlbum;
 
 use openzt2_game_data::ui_document::action::UiTrigger;
@@ -23,7 +25,8 @@ use super::photo_album_types::{
 /// dispatches the hovered selection's action on release. Reuse those same
 /// authored controls so their enable/disable and overlay actions also execute.
 pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    pointer: MousePointer,
+    mut pointer_inputs: MessageReader<PointerInput>,
     active_input: Res<ActiveInputDevice>,
     capture: Res<UiPointerCapture>,
     parents: Query<&ChildOf>,
@@ -45,10 +48,24 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
     mut activations: MessageWriter<UiNodeActivated>,
     mut commands: Commands,
 ) {
+    let mut primary_just_pressed = false;
+    let mut primary_just_released = false;
+    let mut pointer_delta = Vec2::ZERO;
+    for input in pointer_inputs
+        .read()
+        .filter(|input| input.pointer_id.is_mouse())
+    {
+        primary_just_pressed |= input.button_just_pressed(PointerButton::Primary);
+        primary_just_released |= input.button_just_released(PointerButton::Primary);
+        if let PointerAction::Move { delta } = input.action {
+            pointer_delta += delta;
+        }
+    }
+    let primary_pressed = pointer.primary_is_pressed();
     let Ok((album, dragging, moving)) = albums.single() else {
         return;
     };
-    if primary_pointer.just_pressed {
+    if primary_just_pressed {
         *pressed_photo = capture.target.and_then(|target| {
             std::iter::successors(Some(target), |entity| {
                 parents.get(*entity).ok().map(ChildOf::parent)
@@ -56,10 +73,10 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
             .find_map(|entity| exposures.get(entity).ok().map(|row| row.0))
         });
     }
-    if primary_pointer.just_released {
+    if primary_just_released {
         *pressed_photo = None;
     }
-    if dragging && primary_pointer.just_released {
+    if dragging && primary_just_released {
         commands.entity(album).remove::<PhotoPointerDrag>();
         let target = capture.target.and_then(|target| {
             std::iter::successors(Some(target), |entity| {
@@ -123,7 +140,7 @@ pub(super) fn route_photo_exposure_pointer_drag_to_authored_album_controls(
         }
         return;
     }
-    if dragging || moving || !primary_pointer.pressed || primary_pointer.delta == Vec2::ZERO {
+    if dragging || moving || !primary_pressed || pointer_delta == Vec2::ZERO {
         return;
     }
     let (Some(photo), Ok(camera_roll)) = (*pressed_photo, camera_rolls.single()) else {

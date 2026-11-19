@@ -5,7 +5,7 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 
-use zip::{ZipWriter, write::SimpleFileOptions};
+use zip::{write::SimpleFileOptions, ZipWriter};
 
 use crate::{ArchiveSet, ResolvedAssetChange, ResolvedAssetChangeKind};
 
@@ -101,11 +101,9 @@ fn later_archive_wins_then_disable_and_reenable_restore_the_overlay() -> std::io
         archives.read_resolved_archive_entry(previous_winner, 4)?,
         b"last"
     );
-    assert!(
-        archives
-            .read_resolved_archive_entry(previous_winner, 3)
-            .is_err()
-    );
+    assert!(archives
+        .read_resolved_archive_entry(previous_winner, 3)
+        .is_err());
 
     let restored = archives.set_archive_enabled(2, true)?;
     assert_eq!(archives.read(Path::new("ui/layout/menu.xml"))?, b"last");
@@ -149,8 +147,8 @@ fn unresolved_qualified_source_reference_uses_its_unique_basename() -> std::io::
 }
 
 #[test]
-fn extensionless_model_texture_reference_selects_an_image_instead_of_same_named_source_document()
--> std::io::Result<()> {
+fn extensionless_model_texture_reference_selects_an_image_instead_of_same_named_source_document(
+) -> std::io::Result<()> {
     let directory = TestDirectory::new()?;
     let base = directory.archive(
         "x300_000.z2f",

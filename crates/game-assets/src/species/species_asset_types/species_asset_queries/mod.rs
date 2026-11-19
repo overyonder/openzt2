@@ -1,57 +1,66 @@
-use super::{SpeciesAsset, SpeciesAssets, SpeciesView, normalized_species_model_path};
+use super::{
+    normalized_species_model_path, SpeciesAsset, SpeciesAssets, SpeciesDocumentRow, SpeciesView,
+};
 use bevy::prelude::*;
 use openzt2_game_data::{
-    AssetId,
     species::{Species, SpeciesVariant, SpeciesVariantBinding},
+    AssetId,
 };
 
 impl SpeciesAssets {
-    /// Pending catalogue batches must finish before a missing saved species is an error.
     pub fn catalogue_load_is_pending(&self, _server: &AssetServer) -> bool {
-        !self.discovered || self.dirty
+        !self.discovered || self.source_set_changed
     }
 
     pub fn get<'a>(&'a self, assets: &'a Assets<SpeciesAsset>) -> Option<SpeciesView<'a>> {
-        (!self.loaded_handles.is_empty()).then_some(SpeciesView {
-            handles: &self.loaded_handles,
-            by_species: &self.by_species,
-            by_variant: &self.by_variant,
-            variants_by_species: &self.variants_by_species,
-            variant_by_model_path: &self.variant_by_model_path,
-            animation_set_owners: &self.animation_set_owners,
+        (!self.source_set_changed && !self.loaded_handles.is_empty()).then_some(SpeciesView {
+            index: self,
             assets,
         })
     }
 }
 
 impl<'a> SpeciesView<'a> {
-    pub(super) fn documents(self) -> impl Iterator<Item = &'a SpeciesAsset> {
-        self.handles
-            .iter()
-            .rev()
-            .filter_map(|handle| self.assets.get(handle))
+    fn document(self, index: usize) -> Option<&'a SpeciesAsset> {
+        self.assets.get(self.index.loaded_handles.get(index)?)
+    }
+
+    fn variant_at(self, row: SpeciesDocumentRow) -> Option<&'a SpeciesVariantBinding> {
+        self.document(row.document)?
+            .document
+            .variants
+            .get(row.index)
     }
 
     pub fn find(self, id: AssetId) -> Option<&'a Species> {
-        self.assets
-            .get(self.by_species.get(&id)?)?
+        let row = self.index.by_species.get(&id)?;
+        let species = self
+            .document(row.document)?
             .document
             .species
-            .iter()
-            .find(|species| species.id == id)
+            .get(row.index)?;
+        (species.id == id).then_some(species)
     }
 
     pub fn species(self) -> impl Iterator<Item = &'a Species> {
-        self.documents()
+        self.index
+            .loaded_handles
+            .iter()
+            .rev()
+            .filter_map(|handle| self.assets.get(handle))
             .flat_map(|asset| asset.document.species.iter())
     }
 
     pub fn variants(self, species: AssetId) -> impl Iterator<Item = &'a SpeciesVariant> {
-        self.variants_by_species
+        self.index
+            .variants_by_species
             .get(&species)
             .into_iter()
-            .flatten()
-            .filter_map(move |id| self.find_variant(*id))
+            .flat_map(|rows| rows.iter())
+            .filter_map(move |location| {
+                let binding = self.variant_at(location.row)?;
+                (binding.species == species).then_some(&binding.variant)
+            })
     }
 
     pub fn find_variant(self, id: AssetId) -> Option<&'a SpeciesVariant> {
@@ -59,17 +68,8 @@ impl<'a> SpeciesView<'a> {
     }
 
     pub fn find_variant_binding(self, id: AssetId) -> Option<&'a SpeciesVariantBinding> {
-        let declaration = self.by_variant.get(&id)?;
-        let binding = self
-            .assets
-            .get(&declaration.document)?
-            .document
-            .variants
-            .get(declaration.index)?;
-        if binding.species != declaration.species || binding.variant.id != id {
-            return None;
-        }
-        Some(binding)
+        let binding = self.variant_at(self.index.by_variant.get(&id)?.row)?;
+        (binding.variant.id == id).then_some(binding)
     }
 
     pub fn find_variant_with_species(
@@ -80,19 +80,11 @@ impl<'a> SpeciesView<'a> {
         Some((self.find(binding.species)?, &binding.variant))
     }
 
-    /// Archive paths are case-insensitive: actor manifests and the resolved
-    /// archive entry can spell the same model with different casing, so the
-    /// paths compare by text rather than by their hashed identities.
     pub fn find_variant_by_model_path(self, model_path: &str) -> Option<&'a SpeciesVariant> {
-        let model_path = normalized_species_model_path(model_path);
-        let location = self.variant_by_model_path.get(&model_path)?;
+        let key = normalized_species_model_path(model_path);
         let variant = &self
-            .assets
-            .get(&location.document)?
-            .document
-            .variants
-            .get(location.index)?
+            .variant_at(self.index.variant_by_model_path.get(&key)?.row)?
             .variant;
-        (normalized_species_model_path(&variant.model) == model_path).then_some(variant)
+        (normalized_species_model_path(&variant.model) == key).then_some(variant)
     }
 }

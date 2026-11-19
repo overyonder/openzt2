@@ -3,12 +3,15 @@ use bevy::{
     prelude::*,
     ui::Val2,
 };
+use bevy::{
+    picking::{events::PointerPress, hover::DirectlyHovered, pointer::PointerButton},
+    ui::Pressed,
+};
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
     ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset,
 };
 use openzt2_game_data::ui_document::action::construction::UiConstructionAction;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 use openzt2_interface_state::{
     input::input_types::{ActionRequest, ActionSource, GameAction},
     ui::{
@@ -59,19 +62,21 @@ impl Plugin for RedoButtonPlugin {
 
 fn toggle(
     mut enabled: ResMut<RedoButtonEnabled>,
-    mut checkboxes: Query<
-        (&UiPointerInteraction, &mut Text),
-        (With<RedoButtonCheckbox>, Changed<UiPointerInteraction>),
-    >,
+    mut presses: MessageReader<PointerPress>,
+    mut checkboxes: Query<&mut Text, With<RedoButtonCheckbox>>,
 ) {
-    for (interaction, mut label) in &mut checkboxes {
-        if *interaction == UiPointerInteraction::Pressed {
-            enabled.0 = !enabled.0;
-            label.0 = format!(
-                "[{}] Redo button (built-in)",
-                if enabled.0 { 'x' } else { ' ' }
-            );
+    for press in presses.read() {
+        if !press.pointer.id.is_mouse() || press.button != PointerButton::Primary {
+            continue;
         }
+        let Ok(mut label) = checkboxes.get_mut(press.entity) else {
+            continue;
+        };
+        enabled.0 = !enabled.0;
+        label.0 = format!(
+            "[{}] Redo button (built-in)",
+            if enabled.0 { 'x' } else { ' ' }
+        );
     }
 }
 
@@ -114,6 +119,7 @@ fn attach(
             ChildOf(parent.parent()),
             ZIndex(z.0 + 1),
             bevy::ui_widgets::Button,
+            DirectlyHovered::default(),
             UiInteractionEnabled(false),
             Visibility::Hidden,
             ImageNode::new(load_embedded_asset!(&*assets, "button.png")),
@@ -135,7 +141,8 @@ fn update(
     mut buttons: Query<(
         Entity,
         &RedoButton,
-        &UiPointerInteraction,
+        &DirectlyHovered,
+        Has<Pressed>,
         &mut Node,
         &mut Visibility,
         &mut ImageNode,
@@ -143,7 +150,7 @@ fn update(
     )>,
 ) {
     let available = history.entries.get(history.cursor).is_some();
-    for (entity, button, interaction, mut node, mut visibility, mut image, mut interactive) in
+    for (entity, button, hovered, pressed, mut node, mut visibility, mut image, mut interactive) in
         &mut buttons
     {
         let Ok((undo_layout, undo_visibility)) = undo_controls.get(button.undo) else {
@@ -159,11 +166,11 @@ fn update(
             Visibility::Hidden
         });
         interactive.set_if_neq(UiInteractionEnabled(available && enabled.0));
-        let x = match (available, interaction) {
-            (false, _) => 64.0,
-            (true, UiPointerInteraction::None) => 0.0,
-            (true, UiPointerInteraction::Hovered) => 128.0,
-            (true, UiPointerInteraction::Pressed) => 192.0,
+        let x = match (available, hovered.get(), pressed) {
+            (false, _, _) => 64.0,
+            (true, false, false) => 0.0,
+            (true, true, false) => 128.0,
+            (true, _, true) => 192.0,
         };
         let rect = Some(Rect::new(x, 0.0, x + 64.0, 64.0));
         if image.rect != rect {
@@ -173,16 +180,17 @@ fn update(
 }
 
 fn activate(
-    buttons: Query<
-        (&UiPointerInteraction, &UiInteractionEnabled),
-        (With<RedoButton>, Changed<UiPointerInteraction>),
-    >,
+    mut presses: MessageReader<PointerPress>,
+    buttons: Query<&UiInteractionEnabled, With<RedoButton>>,
     mut actions: MessageWriter<ActionRequest>,
 ) {
-    if buttons
-        .iter()
-        .any(|(interaction, enabled)| enabled.0 && *interaction == UiPointerInteraction::Pressed)
-    {
+    let pressed = presses.read().any(|press| {
+        press.pointer.id.is_mouse()
+            && press.button == PointerButton::Primary
+            && buttons.get(press.entity).is_ok_and(|enabled| enabled.0)
+    });
+    presses.clear();
+    if pressed {
         actions.write(ActionRequest {
             action: GameAction::Redo,
             source: ActionSource::System,

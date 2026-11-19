@@ -1,6 +1,6 @@
 use super::authored_globe_model_bounds::UiGlobeModelBounds;
 use super::authored_globe_presentation_types::UiGlobeCamera;
-use super::authored_globe_presentation_types::UiGlobePrimaryRenderable;
+use super::authored_globe_presentation_types::UiGlobePrimaryModels;
 use super::authored_globe_presentation_types::UiGlobeRenderScene;
 use super::authored_globe_presentation_types::UiGlobeSceneOwner;
 use crate::authored_globe_presentation_types::UiGlobePresentation;
@@ -68,12 +68,72 @@ pub(crate) fn update_globe_camera_viewports(
     }
 }
 
-pub(crate) fn frame_globe_cameras(
-    prefabs: Query<(
-        &UiGlobePrimaryRenderable,
-        &UiGlobeModelBounds,
+#[derive(Component, Clone, Copy, PartialEq)]
+pub(super) struct GlobeSphere {
+    pub(super) center: Vec3,
+    pub(super) radius: f32,
+}
+
+pub(super) fn cache_globe_spheres(
+    mut commands: Commands,
+    mut worlds: Query<(
+        Entity,
+        Ref<UiGlobePrimaryModels>,
         &GlobalTransform,
+        Option<&mut GlobeSphere>,
     )>,
+    models: Query<(Ref<UiGlobeModelBounds>, Ref<Transform>, &GlobalTransform)>,
+) {
+    for (world, parts, transform, current) in &mut worlds {
+        if current.is_some()
+            && !parts.is_changed()
+            && !parts.iter().any(|part| {
+                models
+                    .get(part)
+                    .is_ok_and(|(bounds, pose, _)| bounds.is_changed() || pose.is_changed())
+            })
+        {
+            continue;
+        }
+        let inverse = transform.affine().inverse();
+        let bounds = parts
+            .iter()
+            .filter_map(|part| models.get(part).ok())
+            .map(|(bounds, _, transform)| {
+                let transform = inverse * transform.affine();
+                let scale = transform
+                    .to_scale_rotation_translation()
+                    .0
+                    .abs()
+                    .max_element();
+                let center = transform.transform_point3((bounds.minimum + bounds.maximum) * 0.5);
+                let radius =
+                    ((bounds.maximum - bounds.minimum).max_element() * 0.5 * scale).max(0.001);
+                GlobeSphere { center, radius }
+            })
+            .reduce(|first, next| GlobeSphere {
+                center: first.center,
+                radius: first
+                    .radius
+                    .max(first.center.distance(next.center) + next.radius),
+            });
+        match (current, bounds) {
+            (Some(mut current), Some(bounds)) => {
+                current.set_if_neq(bounds);
+            }
+            (None, Some(bounds)) => {
+                commands.entity(world).insert(bounds);
+            }
+            (Some(_), None) => {
+                commands.entity(world).remove::<GlobeSphere>();
+            }
+            (None, None) => {}
+        }
+    }
+}
+
+pub(crate) fn frame_globe_cameras(
+    spheres: Query<(Ref<GlobeSphere>, &GlobalTransform)>,
     scenes: Query<&UiGlobeRenderScene>,
     mut cameras: Query<(&UiGlobeSceneOwner, &mut Transform), With<UiGlobeCamera>>,
 ) {
@@ -81,45 +141,13 @@ pub(crate) fn frame_globe_cameras(
         let Ok(scene) = scenes.get(owner.0) else {
             continue;
         };
-        let Some((center, radius)) = transformed_model_bounds(&prefabs, scene.world, None) else {
+        let Ok((sphere, world)) = spheres.get(scene.world()) else {
             continue;
         };
-        let distance = radius / (std::f32::consts::FRAC_PI_8.tan()) * 1.1;
+        let center = world.transform_point(sphere.center);
+        let distance = sphere.radius / std::f32::consts::FRAC_PI_8.tan() * 1.1;
         let pose =
             Transform::from_translation(center + Vec3::Z * distance).looking_at(center, Vec3::Y);
         transform.set_if_neq(pose);
     }
-}
-
-pub(super) fn transformed_model_bounds(
-    prefabs: &Query<(
-        &UiGlobePrimaryRenderable,
-        &UiGlobeModelBounds,
-        &GlobalTransform,
-    )>,
-    globe_world: Entity,
-    relative_to: Option<&GlobalTransform>,
-) -> Option<(Vec3, f32)> {
-    prefabs
-        .iter()
-        .filter(|(owner, _, _)| owner.0 == globe_world)
-        .map(|(_, bounds, transform)| {
-            let transform = transform.affine();
-            let transform =
-                relative_to.map_or(transform, |parent| parent.affine().inverse() * transform);
-            let scale = transform
-                .to_scale_rotation_translation()
-                .0
-                .abs()
-                .max_element();
-            let center = transform.transform_point3((bounds.minimum + bounds.maximum) * 0.5);
-            let radius = ((bounds.maximum - bounds.minimum).max_element() * 0.5 * scale).max(0.001);
-            (center, radius)
-        })
-        .reduce(|(center, radius), (other_center, other_radius)| {
-            (
-                center,
-                radius.max(center.distance(other_center) + other_radius),
-            )
-        })
 }

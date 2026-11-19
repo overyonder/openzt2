@@ -3,12 +3,9 @@
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_game_assets::animation::animation_set_asset_types::AnimationSetAsset;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAsset;
 use openzt2_game_assets::species::species_asset_types::SpeciesAssets;
-use openzt2_game_data::behavior::{
-    action::wander::BehaviorGroundLocomotionSpeed, action_record::BehaviorAction,
-};
+use openzt2_game_data::behavior::action::wander::BehaviorGroundLocomotionSpeed;
 use openzt2_world_state::animation_graph::animation_graph_playback_message_types::AnimationClipPlaybackRequest;
 use openzt2_world_state::animation_graph::animation_graph_transition_operations::select_preferred_animation_clip_from_graph_node;
 use openzt2_world_state::animation_playback::animation_joint_target_types::AnimationJointTarget;
@@ -21,7 +18,7 @@ use openzt2_zoo_state::animal_lifecycle::types::Animal;
 use openzt2_zoo_state::animal_lifecycle::types::AnimalVariant;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
+    running_actions::BehaviorLocomotionIntent, PendingBehaviorTaskFailure,
 };
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
@@ -53,8 +50,7 @@ pub(super) fn project_animal_animation_motion_to_navigation(
     mut commands: Commands,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
-    behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
-    behavior_tasks: Query<&BehaviorTaskExecutionState, Without<PendingBehaviorTaskFailure>>,
+    locomotion_intents: Query<&BehaviorLocomotionIntent, Without<PendingBehaviorTaskFailure>>,
     docking_poses: Query<
         (),
         With<openzt2_zoo_state::behavior_task_execution_types::SamplingBehaviorDockPose>,
@@ -175,23 +171,10 @@ pub(super) fn project_animal_animation_motion_to_navigation(
             );
             continue;
         };
-        let movement = behavior_tasks
+        let movement = locomotion_intents
             .get(animal_entity)
             .ok()
-            .and_then(|task| {
-                behavior_documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, task))
-            })
-            .and_then(|action| match action {
-                BehaviorAction::Wander(wander) => Some(wander.locomotion_speed),
-                BehaviorAction::Pursuit(pursuit) => Some(pursuit.locomotion_speed),
-                BehaviorAction::Evasion(evasion) => Some(evasion.locomotion_speed),
-                BehaviorAction::Move(movement) => {
-                    Some(movement.locomotion_speed.unwrap_or_default())
-                }
-                _ => None,
-            })
+            .map(|intent| intent.0)
             .filter(|speed| *speed != BehaviorGroundLocomotionSpeed::Stop);
         let water = variant
             .surface_water_locomotion

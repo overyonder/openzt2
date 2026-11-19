@@ -4,9 +4,10 @@ use bevy::gltf::Gltf;
 use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::placed_object_types::IndexedObjectPlacementCells;
 
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::placement::object_placement_validation::object_placement_stomp_action;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;
@@ -70,6 +71,7 @@ pub(super) fn apply_prepared_object_placement_edits(
         &mut Transform,
         &mut PlacedObjectFootprintOccupancy,
     )>,
+    mut indexed_cells: Query<&mut IndexedObjectPlacementCells>,
     policy: Res<ConstructionPlacementPolicy>,
     mut tool: ResMut<ConstructionTool>,
     mut object_placed: MessageWriter<ObjectPlacementCommitted>,
@@ -119,6 +121,7 @@ pub(super) fn apply_prepared_object_placement_edits(
                             &prefabs,
                             &models,
                             &mut placed,
+                            &mut indexed_cells,
                             &mut pending_created_definitions,
                             policy.repeat_placement,
                             &mut tool,
@@ -148,6 +151,7 @@ pub(super) fn apply_prepared_object_placement_edits(
                             &prefabs,
                             &models,
                             &mut placed,
+                            &mut indexed_cells,
                             &mut pending_created_definitions,
                             policy.repeat_placement,
                             &mut tool,
@@ -331,6 +335,7 @@ fn apply_prepared_object_placement_mutation(
         &mut Transform,
         &mut PlacedObjectFootprintOccupancy,
     )>,
+    indexed_cells: &mut Query<&mut IndexedObjectPlacementCells>,
     pending_created_definitions: &mut HashMap<Entity, AssetId>,
     repeat_placement: bool,
     tool: &mut ConstructionTool,
@@ -345,6 +350,7 @@ fn apply_prepared_object_placement_mutation(
             placement,
             scratch,
             footprints,
+            indexed_cells,
             placed,
         );
         if accepted && request.application == EditApplication::InitialCommit {

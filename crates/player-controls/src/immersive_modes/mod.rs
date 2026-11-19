@@ -1,10 +1,8 @@
-mod active_immersive_mode_lifecycle;
+pub(crate) mod admission;
 mod animal_care_control_types;
 mod animal_health_ui_action_routing;
-mod extinct_animal_mode_entry_execution;
 mod first_person_mode_control_execution;
 mod first_person_mode_control_operations;
-mod first_person_mode_entry_execution;
 mod first_person_view_angle_integration;
 #[cfg(test)]
 mod first_person_view_angle_integration_tests;
@@ -14,11 +12,11 @@ mod guest_view_navigation_marker_projection;
 #[cfg(test)]
 mod guest_view_navigation_marker_projection_tests;
 mod guest_view_navigation_marker_types;
-mod hud_visibility_policy_execution;
 pub(crate) mod immersive_control_execution_types;
+mod session_lifecycle;
 use openzt2_interface_state::immersive_modes::immersive_mode_control_types;
 mod immersive_mode_entry_and_policy_operations;
-mod immersive_mode_entry_reservation;
+pub(crate) mod immersive_mode_entry_reservation;
 mod immersive_mode_entry_ui_action_routing;
 mod immersive_mode_input_policy_operations;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types;
@@ -27,11 +25,8 @@ use openzt2_interface_state::immersive_modes::immersive_mode_state_types;
 mod interaction_cursor_presentation;
 mod interaction_prefab_presentation;
 mod photo_mode_control_execution;
-mod photo_mode_entry_execution;
 mod show_edit_mode_control_execution;
-mod show_edit_mode_entry_execution;
 mod super_staff_avatar_start_position_search;
-mod super_staff_mode_entry;
 mod tranquilizer_control_execution;
 
 use bevy::prelude::*;
@@ -53,6 +48,7 @@ pub(crate) struct ImmersiveModeTransitions;
 
 impl Plugin for ImmersiveModesPlugin {
     fn build(&self, app: &mut App) {
+        session_lifecycle::register(app);
         app.add_message::<EnterImmersiveMode>()
             .add_message::<ExitImmersiveMode>()
             .add_message::<ImmersiveModeRejected>()
@@ -65,19 +61,20 @@ impl Plugin for ImmersiveModesPlugin {
                 Update,
                 (
                     immersive_mode_entry_reservation::reserve_one_pending_immersive_mode_entry_from_valid_controller_request,
-                    first_person_mode_entry_execution::enter_guest_view_for_pending_guest_subject,
-                    first_person_mode_entry_execution::enter_first_person_mode_for_pending_navigable_subject,
-                    super_staff_mode_entry::enter_pending_super_staff_mode,
-                    extinct_animal_mode_entry_execution::enter_fossil_search_for_pending_unexhausted_recovery_site,
-                    extinct_animal_mode_entry_execution::enter_fossil_assembly_for_pending_fossil_set_assembly,
-                    photo_mode_entry_execution::enter_photo_mode_when_readback_is_available_and_idle,
-                    show_edit_mode_entry_execution::enter_show_edit_for_pending_stage_with_information_panel,
-                    immersive_mode_entry_reservation::reject_and_remove_uncommitted_pending_immersive_mode_entries,
+                    (
+                        admission::validate_guest,
+                        admission::validate_first_person,
+                        admission::validate_staff,
+                        admission::validate_search,
+                        admission::validate_assembly,
+                        admission::validate_photo,
+                        admission::validate_show,
+                    ),
+                    admission::admit_validated_mode,
                     immersive_mode_entry_ui_action_routing::route_authored_immersive_mode_entry_actions_from_activated_ui_nodes,
                     animal_health_ui_action_routing::route_animal_health_tool_actions_from_activated_ui_nodes,
                     tranquilizer_control_execution::initialize_tranquilizer_tool_from_active_world_definitions,
-                    active_immersive_mode_lifecycle::request_immersive_mode_exit_when_subject_or_tool_is_removed,
-                    active_immersive_mode_lifecycle::apply_requested_immersive_mode_exit_and_remove_owned_state,
+                    session_lifecycle::exit_requested_session,
                     immersive_mode_entry_ui_action_routing::retire_inactive_first_person_training,
                 )
                     .chain()
@@ -121,7 +118,6 @@ impl Plugin for ImmersiveModesPlugin {
             .add_systems(
                 Update,
                 (
-                    hud_visibility_policy_execution::hide_ingame_hud_while_requested_immersive_mode_is_active_and_restore_visibility,
                     interaction_cursor_presentation::project_changed_immersive_mode_cursor_images,
                     interaction_cursor_presentation::move_immersive_mode_cursor_visual_to_current_pointer_position,
                     interaction_prefab_presentation::create_world_prefab_visual_when_immersive_mode_prefab_is_ready,
@@ -129,14 +125,6 @@ impl Plugin for ImmersiveModesPlugin {
                     .chain()
                     .in_set(GameSet::Presentation)
                     .run_if(in_state(GamePhase::InGame)),
-            )
-            .add_systems(
-                OnExit(GamePhase::InGame),
-                (
-                    active_immersive_mode_lifecycle::remove_active_immersive_mode_state_when_leaving_gameplay,
-                    hud_visibility_policy_execution::restore_ingame_hud_visibility_when_leaving_gameplay,
-                )
-                    .chain(),
             );
     }
 }

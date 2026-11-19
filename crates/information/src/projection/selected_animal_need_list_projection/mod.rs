@@ -25,17 +25,22 @@ use openzt2_zoo_state::animal_welfare::types::Thirst;
 use openzt2_zoo_state::animal_welfare::types::MAX_NEED_Q16;
 use openzt2_zoo_state::animal_welfare::types::Q16_ONE;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{
+    InfoPanel, SelectedSubject, SelectionChanged,
+};
 
 const BASIC_ANIMAL_NEED_ROW_COUNT: u16 = 5;
 const ADVANCED_ANIMAL_NEED_ROW_COUNT: u16 = 4;
 
 pub(crate) fn request_selected_animal_need_list_row_counts(
     lists: Query<(Entity, Ref<UiListPolicy>, &UiDocumentOwner)>,
-    information_panels: Query<Ref<InfoPanel>>,
+    information_panels: Query<&ChildOf, With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
+    mut selection_changes: MessageReader<SelectionChanged>,
     animals: Query<(), With<Animal>>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
 ) {
+    let selection_changed = selection_changes.read().count() != 0;
     for (list_entity, list_policy, document_owner) in &lists {
         let row_count = match list_policy.source {
             UiWidgetLiveCollectionSource::SelectedAnimalBasicNeeds => BASIC_ANIMAL_NEED_ROW_COUNT,
@@ -44,15 +49,19 @@ pub(crate) fn request_selected_animal_need_list_row_counts(
             }
             _ => continue,
         };
-        let Ok(information_panel) = information_panels.get(document_owner.0) else {
+        let Ok(parent) = information_panels.get(document_owner.0) else {
             continue;
         };
-        if !list_policy.is_added() && !information_panel.is_changed() {
+        let selection = selections.get(parent.parent()).ok();
+        if !list_policy.is_changed()
+            && !selection_changed
+            && !selection.as_ref().is_some_and(Ref::is_changed)
+        {
             continue;
         }
         row_count_requests.write(SetUiListRowCount {
             list: list_entity,
-            count: if animals.get(information_panel.subject).is_ok() {
+            count: if selection.is_some_and(|selection| animals.contains(selection.0)) {
                 row_count
             } else {
                 0
@@ -66,7 +75,8 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
-    information_panels: Query<&InfoPanel>,
+    information_panels: Query<&ChildOf, With<InfoPanel>>,
+    selections: Query<&SelectedSubject>,
     animals: Query<
         (
             &SpeciesHandle,
@@ -82,7 +92,7 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
         ),
         With<Animal>,
     >,
-    rows: Query<(Entity, &UiListRow)>,
+    rows: Query<(Entity, &UiListRow, &ChildOf)>,
     mut multi_icons: Query<(&UiDocumentOwner, &mut UiValue), With<UiMultiIconPolicy>>,
     mut foreground_layouts: Query<(Entity, &Name, &UiDocumentOwner, &mut Node)>,
     mut foreground_visuals: Query<(&ChildOf, &mut ImageNode), With<UiVisualLayer>>,
@@ -90,14 +100,18 @@ pub(crate) fn project_selected_animal_needs_to_authored_list_rows(
     let Some(species_view) = species_index.get(&species_assets) else {
         return;
     };
-    for (row_entity, row) in &rows {
-        let Ok((list_policy, document_owner)) = lists.get(row.list) else {
+    for (row_entity, row, parent) in &rows {
+        let Ok((list_policy, document_owner)) = lists.get(parent.parent()) else {
             continue;
         };
-        let Ok(information_panel) = information_panels.get(document_owner.0) else {
+        let Some(subject) = information_panels
+            .get(document_owner.0)
+            .ok()
+            .and_then(|parent| selections.get(parent.parent()).ok())
+        else {
             continue;
         };
-        let Ok(animal_needs) = animals.get(information_panel.subject) else {
+        let Ok(animal_needs) = animals.get(subject.0) else {
             continue;
         };
         let Some((need_kind, authored_icon_index, wellness_q16)) =

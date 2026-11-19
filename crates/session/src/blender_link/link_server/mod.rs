@@ -111,9 +111,13 @@ fn answer_connection(stream: TcpStream, requests: &Sender<LinkRequest>) -> std::
     let mut reader = BufReader::new(stream.try_clone()?);
     let response = match read_http_request(&mut reader) {
         Ok(HttpRequest::JsonRpc(body)) => answer_json_rpc(&body, requests),
-        Ok(HttpRequest::Model { model, glb }) => {
-            forward(requests, &Value::Null, "replace_model", json!({ "model": model }), glb)
-        }
+        Ok(HttpRequest::Model { model, glb }) => forward(
+            requests,
+            &Value::Null,
+            "replace_model",
+            json!({ "model": model }),
+            glb,
+        ),
         Err(status) => return write_http_response(stream, status, ""),
     };
     write_http_response(stream, "200 OK", &response.to_string())
@@ -282,7 +286,9 @@ mod tests {
     #[test]
     fn accepts_json_and_models_and_refuses_browser_requests() {
         assert_eq!(
-            read("POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"),
+            read(
+                "POST / HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+            ),
             Ok(HttpRequest::JsonRpc(b"{}".to_vec()))
         );
         assert_eq!(
@@ -304,6 +310,9 @@ mod tests {
             read("POST /model/a.bfb HTTP/1.1\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"),
             Err("415 Unsupported Media Type")
         );
-        assert_eq!(read("GET / HTTP/1.1\r\n\r\n"), Err("405 Method Not Allowed"));
+        assert_eq!(
+            read("GET / HTTP/1.1\r\n\r\n"),
+            Err("405 Method Not Allowed")
+        );
     }
 }

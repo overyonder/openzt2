@@ -7,13 +7,14 @@ use openzt2_game_data::ui_document::action::camera::UiCameraSignedAxisDirection;
 use bevy::picking::pointer::{PointerId, PointerLocation};
 use bevy::prelude::*;
 
-use crate::immersive_modes::immersive_control_execution_types::PendingImmersiveEntry;
+use crate::immersive_modes::admission::ModeReservation;
+use crate::immersive_modes::immersive_mode_entry_reservation::DeferredImmersiveSwitch;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::EnterImmersiveMode;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::ExitImmersiveMode;
 use openzt2_interface_state::immersive_modes::immersive_mode_message_types::ModeExitReason;
 use openzt2_interface_state::immersive_modes::immersive_mode_state_types::ActiveImmersiveMode;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
@@ -41,7 +42,7 @@ pub(super) fn route_camera_ui_actions(
     pointers: Query<(&PointerId, &PointerLocation)>,
     world_bounds: Query<&WorldTerrainHorizontalBounds>,
     roots: Query<&UiDocumentRoot>,
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
     selected_transforms: Query<&GlobalTransform>,
     mut cameras: Query<
         (
@@ -57,10 +58,15 @@ pub(super) fn route_camera_ui_actions(
     mut restore_mode: MessageWriter<RestoreCameraMode>,
     mut commands: Commands,
     mode_owners: Query<
-        (Entity, Has<ActiveImmersiveMode>),
+        (
+            Entity,
+            Option<&ActiveImmersiveMode>,
+            Has<StaffAssignmentMode>,
+        ),
         Or<(
             With<ActiveImmersiveMode>,
-            With<PendingImmersiveEntry>,
+            With<ModeReservation>,
+            With<DeferredImmersiveSwitch>,
             With<StaffAssignmentMode>,
         )>,
     >,
@@ -92,7 +98,7 @@ pub(super) fn route_camera_ui_actions(
                     return_to_overhead = true;
                 }
                 UiCameraAction::StartFollowingSelectedEntity => {
-                    if let Some(subject) = selected.0 {
+                    if let Some(subject) = selected.subject() {
                         for (_, definition, _, _) in &mut cameras {
                             set_mode.write(SetCameraMode {
                                 mode: CameraMode::Follow(subject),
@@ -131,7 +137,7 @@ pub(super) fn route_camera_ui_actions(
                 }
                 UiCameraAction::FocusCameraOnSelectedEntity => {
                     if let Some(world) = selected
-                        .0
+                        .subject()
                         .and_then(|entity| selected_transforms.get(entity).ok())
                     {
                         focus.write(FocusCamera {
@@ -175,7 +181,7 @@ pub(super) fn route_camera_ui_actions(
                     });
                 }
                 UiCameraAction::EnterFirstPersonCameraForSelectedEntity => {
-                    if let Some(subject) = selected.0 {
+                    if let Some(subject) = selected.subject() {
                         for (_, definition, _, _) in &mut cameras {
                             set_mode.write(SetCameraMode {
                                 mode: CameraMode::FirstPerson(subject),
@@ -235,23 +241,25 @@ pub(super) fn route_camera_ui_actions(
     }
     if return_to_overhead {
         pending_entries.clear();
-        // mode_overhead leaves the first-person/staff branch of
-        // modes.xml, including an entry that has not committed yet.
-        // Active tools still release their state through their owner.
-        for (controller, active) in &mode_owners {
-            commands
-                .entity(controller)
-                .remove::<(PendingImmersiveEntry, StaffAssignmentMode)>();
-            if active {
+        let mut session_restores = false;
+        for (controller, active, staff_assignment) in &mode_owners {
+            if let Some(active) = active {
+                session_restores |= active.restore_camera_on_exit;
                 exit_modes.write(ExitImmersiveMode {
                     controller,
                     reason: ModeExitReason::Cancelled,
                 });
+            } else if staff_assignment {
+                commands.entity(controller).remove::<StaffAssignmentMode>();
+            } else {
+                commands.entity(controller).despawn();
             }
         }
-        restore_mode.write(RestoreCameraMode {
-            transition_seconds: None,
-        });
+        if !session_restores {
+            restore_mode.write(RestoreCameraMode {
+                transition_seconds: None,
+            });
+        }
     }
 }
 

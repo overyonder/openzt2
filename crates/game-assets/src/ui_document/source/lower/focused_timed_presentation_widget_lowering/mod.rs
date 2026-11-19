@@ -9,7 +9,7 @@ use openzt2_game_data::ui_document::action::presentation::{
 };
 use openzt2_game_data::ui_document::action::{UiActionRecord, UiTrigger};
 use openzt2_game_data::ui_document::document::UiDocumentRole;
-use openzt2_game_data::ui_document::timed_presentation::UiTimedEventRecord;
+use openzt2_game_data::ui_document::timed_presentation::{UiTimedEventAction, UiTimedEventRecord};
 use openzt2_game_data::ui_document::widget::UiWidgetRecord;
 use openzt2_game_data::AssetId;
 use std::io;
@@ -33,13 +33,6 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
 ) -> io::Result<UiWidgetRecord> {
-    if matches!(name, Some("Buy_Vehicle_Pulser" | "Buy Upgrade Pulser")) {
-        if let Some(pulser) =
-            lower_authored_button_pulser_to_canonical_widget_record(events, role, input)?
-        {
-            return Ok(pulser);
-        }
-    }
     let mut actions = Vec::with_capacity(events.len());
     let mut due_ms = 0u32;
     for timed in events {
@@ -50,8 +43,17 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
             )?)
             .ok_or_else(|| invalid_at(input, "timed UI sequence duration overflow"))?;
         let event = &timed.event;
-        let script = (event.message == "ZT_RUN_SCRIPT")
-            .then_some(event.string.as_deref())
+        let mut message = event;
+        while let Some(child) = message.child.as_deref().filter(|_| {
+            matches!(
+                message.message.as_str(),
+                "UI_CHILD" | "UI_ROOT_CHILD" | "UI_SELF"
+            )
+        }) {
+            message = child;
+        }
+        let script = (message.message == "ZT_RUN_SCRIPT")
+            .then_some(message.string.as_deref())
             .flatten();
         let words = script.map(|script| script.split_ascii_whitespace().collect::<Vec<_>>());
         if let Some(
@@ -63,21 +65,17 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
                 .map_err(|_| invalid_at(input, "replacement text requires an integer"))?;
             actions.push(UiTimedEventRecord {
                 due_ms,
-                action: UiActionRecord::Presentation(UiPresentationActionRecord {
-                    trigger: UiTrigger::Press,
-                    action: UiPresentationAction::FormatTargetNodeLocalizedInteger {
-                        target_node: UiDocumentRole::node_id(role, node),
-                        localization_key: AssetId::from_key(localization),
-                        value,
+                action: UiTimedEventAction::Ui(UiActionRecord::Presentation(
+                    UiPresentationActionRecord {
+                        trigger: UiTrigger::Press,
+                        action: UiPresentationAction::FormatTargetNodeLocalizedInteger {
+                            target_node: UiDocumentRole::node_id(role, node),
+                            localization_key: AssetId::from_key(localization),
+                            value,
+                        },
                     },
-                }),
+                )),
             });
-            continue;
-        }
-        // The scenario owns the recurring tutorial ring callback and its clock.
-        if matches!(name, Some("ring timer"))
-            && script.is_some_and(|script| script.ends_with(" updateTutorialRing"))
-        {
             continue;
         }
         let first_action = output.actions.len();
@@ -94,51 +92,40 @@ pub(super) fn lower_source_ui_timed_events_to_canonical_focused_presentation_wid
             None,
             &[],
         )?;
+        if output.actions.len() == first_action {
+            if let Some(script) = script {
+                actions.push(UiTimedEventRecord {
+                    due_ms,
+                    action: UiTimedEventAction::ScenarioScript(script.to_owned()),
+                });
+            }
+        }
         for action in output.actions.drain(first_action..) {
-            actions.push(UiTimedEventRecord { due_ms, action });
+            actions.push(UiTimedEventRecord {
+                due_ms,
+                action: UiTimedEventAction::Ui(action),
+            });
         }
     }
-    Ok(UiWidgetRecord::TimedSequence { events: actions })
-}
-
-fn lower_authored_button_pulser_to_canonical_widget_record(
-    events: &[SourceUiTimedEvent],
-    role: UiDocumentRole,
-    input: &AuthoredUiDocument,
-) -> io::Result<Option<UiWidgetRecord>> {
-    if events.len() != 3
-        || events[0].event.message != "UI_CHILD"
-        || events[0].delay_seconds != 0.0
-        || events[0]
-            .event
-            .child
-            .as_deref()
-            .map(|event| event.message.as_str())
-            != Some("UI_HIDE")
-        || events[1].event.message != "UI_CHILD"
-        || events[1].event.target_child != events[0].event.target_child
-        || events[1]
-            .event
-            .child
-            .as_deref()
-            .map(|event| event.message.as_str())
-            != Some("UI_SHOW")
-        || events[2].event.message != "UI_ACTIVATE_ON"
-    {
-        return Ok(None);
-    }
-    Ok(Some(UiWidgetRecord::ButtonPulser {
-        target: UiDocumentRole::node_id(
-            role,
-            events[0].event.target_child.as_deref().unwrap_or_default(),
-        ),
-        hidden_ms: convert_authored_presentation_delay_seconds_to_milliseconds(
-            events[1].delay_seconds,
-            input,
-        )?,
-        visible_ms: convert_authored_presentation_delay_seconds_to_milliseconds(
-            events[2].delay_seconds,
-            input,
-        )?,
-    }))
+    // A self-restarting visibility sequence is an ambient UI effect. Script
+    // sequences and an otherwise empty self-restart wait for explicit activation.
+    let starts_active = actions.iter().any(|entry| {
+        matches!(
+            &entry.action,
+            UiTimedEventAction::Ui(UiActionRecord::Presentation(UiPresentationActionRecord {
+                action: UiPresentationAction::SetTargetNodeVisible { .. }
+                    | UiPresentationAction::SetDocumentNodeVisible { .. },
+                ..
+            }))
+        )
+    }) && events.last().is_some_and(|event| {
+        event.event.message == "UI_ACTIVATE_ON"
+            && event.event.target_child.is_none()
+            && event.event.string.is_none()
+            && event.event.value.is_none()
+    });
+    Ok(UiWidgetRecord::TimedSequence {
+        events: actions,
+        starts_active,
+    })
 }

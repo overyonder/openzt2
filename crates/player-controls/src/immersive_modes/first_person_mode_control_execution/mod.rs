@@ -1,3 +1,4 @@
+use super::immersive_mode_state_types::{ImmersiveCamera, ImmersiveSubject};
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
 
@@ -32,7 +33,8 @@ pub(super) fn apply_guest_view_look_and_navigation_controls(
     time: Res<Time<Real>>,
     active_modes: Query<(
         Entity,
-        &ActiveImmersiveMode,
+        &ImmersiveCamera,
+        Option<&ImmersiveSubject>,
         Option<&AllowedInteractionActions>,
     )>,
     mut view_angles: Query<&mut FirstPersonViewAngles, With<GuestViewControl>>,
@@ -40,14 +42,14 @@ pub(super) fn apply_guest_view_look_and_navigation_controls(
     mut controlled_subjects: Query<(&ControlledEntity, &mut DirectLocomotion)>,
     mut exit_requests: MessageWriter<ExitImmersiveMode>,
 ) {
-    let Ok((controller_entity, active_mode, allowed_actions)) = active_modes.single() else {
+    let Ok((controller_entity, camera, subject, allowed_actions)) = active_modes.single() else {
         return;
     };
     if modal_input.0.is_some() {
         action_requests.clear();
         apply_allowed_navigation_axes_to_directly_controlled_subject(
             &crate::input::input_execution_types::DeviceControlAxes::default(),
-            active_mode,
+            subject.map(|subject| subject.0),
             allowed_actions,
             controller_entity,
             0.0,
@@ -59,7 +61,7 @@ pub(super) fn apply_guest_view_look_and_navigation_controls(
         &mut action_requests,
         &control_axes,
         time.delta_secs(),
-        active_mode,
+        camera.0,
         allowed_actions,
         controller_entity,
         active_input.source,
@@ -69,7 +71,7 @@ pub(super) fn apply_guest_view_look_and_navigation_controls(
     );
     apply_allowed_navigation_axes_to_directly_controlled_subject(
         &control_axes,
-        active_mode,
+        subject.map(|subject| subject.0),
         allowed_actions,
         controller_entity,
         view_angles.single().map_or(0.0, |angles| angles.yaw),
@@ -87,7 +89,8 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
     time: Res<Time<Real>>,
     active_modes: Query<(
         Entity,
-        &ActiveImmersiveMode,
+        &ImmersiveCamera,
+        Option<&ImmersiveSubject>,
         Option<&AllowedInteractionActions>,
     )>,
     mut view_angles: Query<&mut FirstPersonViewAngles, With<FirstPersonControl>>,
@@ -95,14 +98,14 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
     mut controlled_subjects: Query<(&ControlledEntity, &mut DirectLocomotion)>,
     mut exit_requests: MessageWriter<ExitImmersiveMode>,
 ) {
-    let Ok((controller_entity, active_mode, allowed_actions)) = active_modes.single() else {
+    let Ok((controller_entity, camera, subject, allowed_actions)) = active_modes.single() else {
         return;
     };
     if modal_input.0.is_some() {
         action_requests.clear();
         apply_allowed_navigation_axes_to_directly_controlled_subject(
             &crate::input::input_execution_types::DeviceControlAxes::default(),
-            active_mode,
+            subject.map(|subject| subject.0),
             allowed_actions,
             controller_entity,
             0.0,
@@ -114,7 +117,7 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
         &mut action_requests,
         &control_axes,
         time.delta_secs(),
-        active_mode,
+        camera.0,
         allowed_actions,
         controller_entity,
         active_input.source,
@@ -124,7 +127,7 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
     );
     apply_allowed_navigation_axes_to_directly_controlled_subject(
         &control_axes,
-        active_mode,
+        subject.map(|subject| subject.0),
         allowed_actions,
         controller_entity,
         view_angles.single().map_or(0.0, |angles| angles.yaw),
@@ -133,7 +136,7 @@ pub(super) fn apply_first_person_look_and_navigation_controls(
 }
 
 pub(super) fn update_subject_relative_first_person_camera_transform(
-    active_modes: Query<&ActiveImmersiveMode>,
+    active_modes: Query<(&ActiveImmersiveMode, &ImmersiveSubject, &ImmersiveCamera)>,
     view_angles: Query<&FirstPersonViewAngles>,
     // A ridden vehicle drives itself, so it has no `ControlledEntity`.
     controlled_subjects: Query<
@@ -147,7 +150,7 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
 ) {
-    let Ok(active_mode) = active_modes.single() else {
+    let Ok((active_mode, subject, camera)) = active_modes.single() else {
         return;
     };
     if !matches!(
@@ -160,10 +163,8 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
     ) {
         return;
     }
-    let (Some(subject_entity), Some(world_definitions)) = (
-        active_mode.subject,
-        active_world_definitions.get(&world_definition_assets),
-    ) else {
+    let subject_entity = subject.0;
+    let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
     };
     let (
@@ -171,7 +172,7 @@ pub(super) fn update_subject_relative_first_person_camera_transform(
         Ok((mut camera_transform, CameraMode::FirstPerson(camera_subject_entity))),
     ) = (
         controlled_subjects.get(subject_entity),
-        zoo_cameras.get_mut(active_mode.camera),
+        zoo_cameras.get_mut(camera.0),
     )
     else {
         return;

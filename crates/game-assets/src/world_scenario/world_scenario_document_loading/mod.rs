@@ -16,7 +16,12 @@ use super::{
 };
 
 use crate::{
-    asset_source::AssetArchives,
+    asset_source::{
+        archive_entry_asset_path::{
+            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
+        },
+        AssetArchives,
+    },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -40,7 +45,10 @@ impl AssetLoader for WorldScenarioDocumentLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_world_scenario", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_world_scenario", skip_all)
+    )]
     async fn load(
         &self,
         reader: &mut dyn Reader,
@@ -49,7 +57,13 @@ impl AssetLoader for WorldScenarioDocumentLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let path = context.path().path().to_string_lossy().replace('\\', "/");
+        let asset_path = context.path().path();
+        let source_path = archive_entry_asset_source_path(asset_path).map(|(path, _, _)| path);
+        let path = source_path
+            .as_deref()
+            .unwrap_or(asset_path)
+            .to_string_lossy()
+            .replace('\\', "/");
         let source_documents = vec![
             parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
                 .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?,
@@ -84,22 +98,32 @@ impl AssetLoader for WorldScenarioDocumentLoader {
         };
         let mut campaign_scenarios = Vec::new();
         if source.root.name.rsplit(':').next() == Some("BFCampaign") {
-            for entry in source.root.element_children() {
-                let reference = entry.attribute("scenario").ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("{path} campaign entry has no scenario path"),
-                    )
-                })?;
+            for entry in source
+                .root
+                .element_children()
+                .filter(|entry| entry.name.rsplit(':').next() == Some("entry"))
+            {
+                let Some(reference) = entry.attribute("scenario") else {
+                    continue;
+                };
+                // A missing goal settles as an independent failed load. Keep
+                // the campaign and its other goal bindings available.
                 let resolved = self
                     .archives
                     .resolve_source_reference(Path::new(&path), reference)
-                    .ok_or_else(|| {
-                        io::Error::new(
-                            io::ErrorKind::NotFound,
-                            format!("{path} references missing scenario document {reference}"),
-                        )
-                    })?;
+                    .unwrap_or_else(|| {
+                        let mut candidate =
+                            z2f::paths::normalize_asset_path_for_case_insensitive_archive_lookup(
+                                Path::new(reference),
+                            );
+                        if candidate.extension().is_none() {
+                            candidate.set_extension("xml");
+                        }
+                        if candidate.components().count() == 1 {
+                            return Path::new(&path).with_file_name(&candidate);
+                        }
+                        candidate
+                    });
                 let id = AssetId::from_key(entry.attribute("key").ok_or_else(|| {
                     io::Error::new(
                         io::ErrorKind::InvalidData,
@@ -150,7 +174,7 @@ impl AssetLoader for WorldScenarioDocumentLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml", "zt2"]
+        &["xml", "zt2", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }
 

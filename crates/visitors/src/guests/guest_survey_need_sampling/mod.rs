@@ -1,5 +1,4 @@
 use bevy::prelude::*;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
@@ -16,8 +15,8 @@ use openzt2_zoo_state::{
     animal_behavior::behavior_set_start_request_types::PendingBehaviorSet,
     animal_health::types::{Dead, Frozen, Tranquilized},
     behavior_task_execution_types::{
-        find_current_behavior_task_action, BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
-        SynchronizedBehaviorParticipant,
+        running_actions::RunningBehaviorInstruction, BehaviorTaskExecutionState,
+        PendingBehaviorTaskFailure, SynchronizedBehaviorParticipant,
     },
 };
 
@@ -54,11 +53,11 @@ pub(super) fn sample_current_guest_need_observations(
     time: Res<Time<Fixed>>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active: Res<WorldDefinitions>,
-    behavior_documents: Res<Assets<BehaviorDocumentAsset>>,
     survey: Option<ResMut<GuestSurvey>>,
     thinking_guests: Query<
         (
             Option<&BehaviorTaskExecutionState>,
+            Option<&RunningBehaviorInstruction>,
             Has<PendingBehaviorTaskFailure>,
         ),
         (
@@ -124,15 +123,11 @@ pub(super) fn sample_current_guest_need_observations(
         mut experience,
     ) in &mut guests
     {
-        let Ok((task, pending_failure)) = thinking_guests.get(entity) else {
+        let Ok((task, instruction, pending_failure)) = thinking_guests.get(entity) else {
             continue;
         };
         if task.is_some_and(|task| {
-            pending_failure
-                || behavior_documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, task))
-                    .is_none()
+            pending_failure || instruction.is_none_or(|instruction| !instruction.is_current(task))
         }) {
             continue;
         }
@@ -244,7 +239,6 @@ mod tests {
         })
         .collect();
         app.init_resource::<Assets<WorldDefinitionAsset>>()
-            .init_resource::<Assets<BehaviorDocumentAsset>>()
             .insert_resource(Time::<Fixed>::from_hz(10.0))
             .insert_resource(GuestSurvey {
                 critical_need_countdown_seconds: 5.0,

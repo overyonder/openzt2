@@ -1,11 +1,11 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorFactModifications, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::locomotion::locomotion_types::CaffeineMode;
 mod consumable_compatibility;
-use openzt2_game_data::behavior::{
-    action::modification::{
-        BehaviorFact, BehaviorFactModification, BehaviorFactModificationOperation,
-    },
-    action_record::BehaviorAction,
+use openzt2_game_data::behavior::action::modification::{
+    BehaviorFact, BehaviorFactModification, BehaviorFactModificationOperation,
 };
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
@@ -29,9 +29,6 @@ use openzt2_zoo_state::feeding::container_quantity::apply_authored_container_qua
 use openzt2_zoo_state::feeding::container_quantity::DrinkContainer;
 use openzt2_zoo_state::feeding::container_quantity::FoodContainer;
 use openzt2_zoo_state::staff::staff_employment_types::Staff;
-use openzt2_zoo_state::staff::staff_job_completion_rules::behavior_fact_modification_is_owned_by_terminal_maintenance_system;
-use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
-use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 
 use openzt2_zoo_state::guests::guest_simulation_types::{
     AdjustGuestSatisfaction, GuestAttacked, GuestDeparturePoints,
@@ -40,8 +37,6 @@ use openzt2_zoo_state::guests::guest_simulation_types::{
 use super::behavior_entity_role_resolution::resolve_behavior_entity_role_to_live_entity;
 use super::behavior_random_stream_state::BehaviorRandomStream;
 use super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 #[derive(SystemParam)]
@@ -59,11 +54,72 @@ pub(super) struct BehaviorFactModificationMessageWriters<'w> {
     hygiene: MessageWriter<'w, AdjustHygiene>,
     freeze_animal: MessageWriter<'w, FreezeAnimal>,
     thaw_animal: MessageWriter<'w, ThawAnimal>,
-    water_dirt: MessageWriter<
-        'w,
-        openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt,
-    >,
     guest_satisfaction: MessageWriter<'w, AdjustGuestSatisfaction>,
+}
+
+use openzt2_zoo_state::{
+    animal_health::types::Dead,
+    aquatic::aquatic_simulation_types::{
+        AquaticAnimal, Tank, TankGeometry, WaterFilter, WaterQuality,
+    },
+    habitat::habitat_types::{Containment, HabitatMember},
+    maintenance::maintenance_types::{AdjustFacilityContainedWaste, FacilityContainedWaste},
+    staff::staff_job_types::TankCleaningRequestSite,
+};
+
+#[derive(SystemParam)]
+pub(super) struct MaintenanceFacts<'w, 's> {
+    tanks: Query<'w, 's, (&'static TankGeometry, &'static mut WaterQuality), With<Tank>>,
+    sites: Query<'w, 's, &'static TankCleaningRequestSite>,
+    residents: Query<
+        'w,
+        's,
+        (&'static HabitatMember, &'static Containment),
+        (With<AquaticAnimal>, With<Animal>, Without<Dead>),
+    >,
+    filters: Query<'w, 's, &'static mut WaterFilter>,
+    trash: Query<'w, 's, &'static FacilityContainedWaste>,
+    trash_changes: MessageWriter<'w, AdjustFacilityContainedWaste>,
+}
+
+impl MaintenanceFacts<'_, '_> {
+    fn tank(&self, recipient: Entity) -> Option<Entity> {
+        let tank = if let Ok(site) = self.sites.get(recipient) {
+            site.tank
+        } else if let Ok((member, containment)) = self.residents.get(recipient) {
+            if !containment.is_contained {
+                return None;
+            }
+            member.habitat_entity
+        } else {
+            recipient
+        };
+        self.tanks.contains(tank).then_some(tank)
+    }
+
+    fn write_water(
+        &mut self,
+        recipient: Entity,
+        operation: BehaviorFactModificationOperation,
+        value_q16: i32,
+    ) {
+        let tank = self.tank(recipient).expect("validated tank recipient");
+        let (geometry, mut quality) = self.tanks.get_mut(tank).expect("validated tank");
+        let next = match operation {
+            BehaviorFactModificationOperation::Clear => 1000,
+            BehaviorFactModificationOperation::Add => {
+                let dirt = if geometry.volume > 0.0 {
+                    (value_q16 as f32 / 65_536.0 / geometry.volume * 1000.0)
+                        .round()
+                        .clamp(0.0, 1000.0) as u16
+                } else {
+                    0
+                };
+                quality.0.min(1000).saturating_sub(dirt)
+            }
+        };
+        quality.set_if_neq(WaterQuality(next));
+    }
 }
 
 pub(super) fn apply_supported_current_behavior_fact_modifications(
@@ -72,9 +128,12 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     mut tasks: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorFactModifications,
+            ),
             Option<&mut BehaviorRandomStream>,
-            Option<&CurrentJob>,
         ),
         Or<(With<Animal>, With<Staff>)>,
     >,
@@ -85,46 +144,21 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
     pregnancies: Query<(), With<Pregnancy>>,
     mates: Query<&Mate>,
     caffeine_modes: Query<&CaffeineMode>,
-    jobs: Query<&StaffJob>,
+    mut maintenance: MaintenanceFacts,
+    price_effect: openzt2_zoo_state::economy::price_effect::BehaviorPriceEffectContext,
     compatibility: consumable_compatibility::AnimalConsumableCompatibility,
     // A rampaging animal's attack scares its guest off (`AttackGuest_Rampage`).
     mut guests: Query<&mut GuestDeparturePoints>,
     mut commands: Commands,
 ) {
-    for (entity, mut task, mut random, current_job) in &mut tasks {
+    for (entity, (task, instruction, running_action), mut random) in &mut tasks {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::FactModifications(modifications)) = assets
-            .get(&task.document)
-            .and_then(|asset| find_current_behavior_task_action(asset, &task))
-        else {
-            continue;
-        };
-        let current_staff_job_kind =
-            current_job.and_then(|current_job| jobs.get(current_job.job).ok().map(|job| job.kind));
-        let action_has_terminal_maintenance_owner = modifications.iter().any(|modification| {
-            behavior_fact_modification_is_owned_by_terminal_maintenance_system(
-                modification,
-                current_staff_job_kind,
-            )
-        });
-        let action_is_entirely_terminal_maintenance = !modifications.is_empty()
-            && modifications.iter().all(|modification| {
-                behavior_fact_modification_is_owned_by_terminal_maintenance_system(
-                    modification,
-                    current_staff_job_kind,
-                )
-            });
-        if action_has_terminal_maintenance_owner && !action_is_entirely_terminal_maintenance {
-            mark_behavior_task_for_failure_and_stop_navigation(entity, &mut commands);
+        if !instruction.is_current(task) {
             continue;
         }
-        if action_is_entirely_terminal_maintenance {
-            // Leave these actions for the existing staff completion owner in Act;
-            // this shared executor must not advance maintenance-owned work.
-            continue;
-        }
+        let modifications = &running_action.0;
         if !modifications.iter().all(|modification| {
             let Some(affected_entity) = resolve_behavior_entity_role_to_live_entity(
                 modification.affected_entity_role,
@@ -133,6 +167,14 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
             ) else {
                 return false;
             };
+            let scalar_supported = price_effect.sample(modification.modification_value, task.target, |_| 0).is_some();
+            match modification.modified_fact {
+                BehaviorFact::WaterDirtiness => return scalar_supported && maintenance.tank(affected_entity).is_some(),
+                BehaviorFact::FilterDirtiness => return scalar_supported && maintenance.filters.contains(affected_entity),
+                BehaviorFact::TrashLevel => return maintenance.trash.contains(affected_entity)
+                    && (scalar_supported || modification.modification_operation == BehaviorFactModificationOperation::Clear),
+                _ => {}
+            }
             if animals.contains(entity) && modification.modified_fact == BehaviorFact::FoodLevel {
                 use openzt2_game_data::world_definitions::world_objects::WorldObjectContainerContent;
                 let source = food_containers.get(affected_entity).ok().map(|(_, food)| {
@@ -178,15 +220,20 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 task.target,
             )
             .expect("modification roles were checked before application");
-            let value_q16 = modification
-                .modification_value
-                .sample_q16(|count| {
-                    random
-                        .as_deref_mut()
-                        .and_then(|random| random.range_u32(count))
-                        .unwrap_or(0)
-                })
-                .expect("context-free scalar was validated before application");
+            let value_q16 = if modification.modified_fact == BehaviorFact::TrashLevel
+                && modification.modification_operation == BehaviorFactModificationOperation::Clear
+            {
+                0
+            } else {
+                price_effect
+                    .sample(modification.modification_value, task.target, |count| {
+                        random
+                            .as_deref_mut()
+                            .and_then(|random| random.range_u32(count))
+                            .unwrap_or(0)
+                    })
+                    .expect("scalar context was validated before application")
+            };
             // Authored needs measure deprivation on 0..100; welfare messages
             // adjust wellness on 0..1000, as in species need initialization.
             let wellness_delta_q16 = value_q16.saturating_mul(-10);
@@ -200,12 +247,28 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                     });
                 }
                 BehaviorFact::WaterDirtiness => {
-                    modification_messages.water_dirt.write(
-                        openzt2_zoo_state::aquatic::aquatic_simulation_types::AddAquaticWaterDirt {
-                            animal,
-                            amount: value_q16 as f32 / 65536.0,
-                        },
-                    );
+                    maintenance.write_water(animal, modification.modification_operation, value_q16);
+                }
+                BehaviorFact::FilterDirtiness => {
+                    let mut filter = maintenance
+                        .filters
+                        .get_mut(animal)
+                        .expect("validated water filter");
+                    filter.dirt_percent = match modification.modification_operation {
+                        BehaviorFactModificationOperation::Clear => 0.0,
+                        BehaviorFactModificationOperation::Add => {
+                            (filter.dirt_percent + value_q16 as f32 / 65_536.0).clamp(0.0, 100.0)
+                        }
+                    };
+                }
+                BehaviorFact::TrashLevel => {
+                    maintenance
+                        .trash_changes
+                        .write(AdjustFacilityContainedWaste {
+                            facility: animal,
+                            operation: modification.modification_operation,
+                            delta_q16: value_q16,
+                        });
                 }
                 BehaviorFact::Reproduction => {
                     modification_messages
@@ -377,7 +440,7 @@ pub(super) fn apply_supported_current_behavior_fact_modifications(
                 }
             };
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(entity, clock.tick, &mut commands);
     }
 }
 
@@ -425,7 +488,6 @@ fn behavior_fact_modification_has_runtime_owner(
             | BehaviorFact::Health
             | BehaviorFact::Hygiene
             | BehaviorFact::Frozen
-            | BehaviorFact::WaterDirtiness
     )
 }
 

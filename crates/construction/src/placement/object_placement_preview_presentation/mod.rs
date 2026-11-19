@@ -1,11 +1,13 @@
 //! Builds authored placement decals and projects preview validity onto visuals.
 
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::ui_document::document::*;
 use openzt2_game_data::world_definitions::object_placement::FootprintCell;
 use openzt2_game_data::world_definitions::object_placement::FootprintCellFlags;
-use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::placement::object_placement_geometry::{
+    ScenePlacementFootprintChanged, ScenePlacementFootprints,
+};
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
@@ -117,19 +119,11 @@ pub(super) fn hydrate_object_placement_preview_materials_from_ui_document(
         if let (Some(footprint_valid), Some(footprint_invalid), grid_cardinal, grid_diagonal) =
             authored_material_handles
         {
-            let [
-                Some(small_cardinal),
-                Some(medium_cardinal),
-                Some(large_cardinal),
-            ] = grid_cardinal
+            let [Some(small_cardinal), Some(medium_cardinal), Some(large_cardinal)] = grid_cardinal
             else {
                 continue;
             };
-            let [
-                Some(small_diagonal),
-                Some(medium_diagonal),
-                Some(large_diagonal),
-            ] = grid_diagonal
+            let [Some(small_diagonal), Some(medium_diagonal), Some(large_diagonal)] = grid_diagonal
             else {
                 continue;
             };
@@ -259,18 +253,23 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
     footprints: Res<ScenePlacementFootprints>,
+    mut scene_changes: MessageReader<ScenePlacementFootprintChanged>,
     mut previews: Query<(
         Entity,
-        &ConstructionPreview,
-        &ObjectPlacementPreviewMaterials,
-        Option<&ObjectPlacementPrefabSource>,
-        &Visibility,
+        Ref<ConstructionPreview>,
+        Ref<ObjectPlacementPreviewMaterials>,
+        Option<Ref<ObjectPlacementPrefabSource>>,
+        Ref<Visibility>,
         Option<&mut ObjectPlacementPreviewVisualState>,
     )>,
     decals: Query<(Entity, &ObjectPlacementPreviewOwner), With<ObjectPlacementPreviewDecal>>,
     mut terrain: PreviewDecalTerrain,
     arrow_nodes: DockArrowNodes,
 ) {
+    let changed_scenes = scene_changes
+        .read()
+        .map(|change| change.0)
+        .collect::<bevy::platform::collections::HashSet<_>>();
     let Some(catalogue) = active_definitions.get(&definitions) else {
         return;
     };
@@ -286,6 +285,18 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             }
             continue;
         }
+        if state.as_deref().is_some_and(|state| !state.arrow_pending)
+            && !terrain_changed
+            && !active_definitions.is_changed()
+            && !visibility.is_changed()
+            && !preview.is_changed()
+            && !materials.is_changed()
+            && !prefab.as_ref().is_some_and(|source| {
+                source.is_changed() || changed_scenes.contains(&source.0.id())
+            })
+        {
+            continue;
+        }
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
         else {
             continue;
@@ -296,7 +307,7 @@ pub(super) fn rebuild_object_placement_preview_footprint_and_grid_decals(
             continue;
         };
         let valid = matches!(preview.validity, PlacementValidity::Valid { .. });
-        let geometry = footprints.resolve(definition, prefab.map(|source| &source.0));
+        let geometry = footprints.resolve(definition, prefab.as_deref().map(|source| &source.0));
         let footprint = geometry.cells(turns);
         let grid_size = match calculate_occupied_footprint_maximum_axis_span(footprint) {
             ..=2 => 0,

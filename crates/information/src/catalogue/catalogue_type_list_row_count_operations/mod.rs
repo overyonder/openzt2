@@ -114,11 +114,8 @@ pub(crate) fn request_visible_catalogue_type_list_row_counts(
     )>,
     mut removed_type_list_filters: RemovedComponents<TypeListFilter>,
     mut row_count_requests: MessageWriter<SetUiListRowCount>,
-    mut previous_catalogue_revision: Local<u64>,
 ) {
-    let world_definitions_changed =
-        *previous_catalogue_revision != active_world_definitions.catalogue_revision();
-    *previous_catalogue_revision = active_world_definitions.catalogue_revision();
+    let world_definitions_changed = active_world_definitions.is_changed();
     let removed_type_list_filters = removed_type_list_filters.read().collect::<Vec<_>>();
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;

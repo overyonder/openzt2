@@ -1,10 +1,11 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
+use openzt2_interface_state::input::input_types::MousePointer;
 
 use openzt2_game_assets::world_definitions::{
     world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
     world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
 };
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -42,8 +43,9 @@ pub(super) fn update_tank_geometry_gesture(
         Res<ConstructionPlacementPolicy>,
         Res<Time>,
     ),
-    (pointer, ui, modal): (
-        Res<PrimaryPointerInputState>,
+    (pointer, mut pointer_inputs, ui, modal): (
+        MousePointer,
+        MessageReader<PointerInput>,
         Res<UiPointerCapture>,
         Res<AuthoredModalInputCapture>,
     ),
@@ -75,6 +77,16 @@ pub(super) fn update_tank_geometry_gesture(
         MessageWriter<CommitConstruction>,
     ),
 ) {
+    let mut primary_just_pressed = false;
+    let mut primary_just_released = false;
+    for input in pointer_inputs
+        .read()
+        .filter(|input| input.pointer_id.is_mouse())
+    {
+        primary_just_pressed |= input.button_just_pressed(PointerButton::Primary);
+        primary_just_released |= input.button_just_released(PointerButton::Primary);
+    }
+    let primary_pressed = pointer.primary_is_pressed();
     let cancelled = cancellations.read().count() != 0;
     let supported = *tool == ConstructionTool::TankEdit;
     let rules = active_definitions
@@ -97,11 +109,11 @@ pub(super) fn update_tank_geometry_gesture(
         if gesture.pending {
             return;
         }
-        if gesture.kind != policy.tank_edit || (!pointer.pressed && !pointer.just_released) {
+        if gesture.kind != policy.tank_edit || (!primary_pressed && !primary_just_released) {
             commands.entity(entity).despawn();
             return;
         }
-        if pointer.pressed {
+        if primary_pressed {
             let seconds = time.delta_secs();
             if seconds.is_finite() && seconds > 0.0 {
                 let (direction, millimetres_per_second) = match gesture.kind {
@@ -121,7 +133,7 @@ pub(super) fn update_tank_geometry_gesture(
         } else {
             PlacementValidity::Invalid(PlacementFailure::InvalidHabitat)
         };
-        if pointer.just_released {
+        if primary_just_released {
             if matches!(preview.validity, PlacementValidity::Valid { .. }) {
                 gesture.pending = true;
                 commits.write(CommitConstruction { preview: entity });
@@ -131,7 +143,7 @@ pub(super) fn update_tank_geometry_gesture(
         }
         return;
     }
-    if !previews.is_empty() || !pointer.just_pressed || !pointer.pressed {
+    if !previews.is_empty() || !primary_just_pressed || !primary_pressed {
         return;
     }
     let (Ok(cursor), Ok(root)) = (cursors.single(), roots.single()) else {
@@ -167,18 +179,16 @@ pub(super) fn update_tank_geometry_gesture(
     let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
         return;
     };
-    for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {
-        if adjacent_member.root == member.root
-            && tank_habitat_seed_cell(adjacent_region) != Some(seed_cell)
-        {
-            height_queries.include_adjacent_tank_water_in_wall_minima(
-                &mut wall_heights,
-                adjacent_region,
-                adjacent_geometry.water_height,
-                limits,
-            );
-        }
-    }
+    height_queries.include_adjacent_tank_water_in_wall_minima(
+        &mut wall_heights,
+        region,
+        limits,
+        |entity| {
+            let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
+            (world.root == member.root && tank_habitat_seed_cell(adjacent) != Some(seed_cell))
+                .then_some(geometry.water_height)
+        },
+    );
     commands.spawn((
         TankGeometryEdit {
             seed_cell,

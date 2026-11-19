@@ -232,11 +232,7 @@ pub(crate) fn spawn_arriving_guests(params: GuestArrivalParams) {
         }
     }
     seen_species.sort_unstable_by(|a, b| a.0.cmp(&b.0));
-    let cap = policy.maximum_guests_base.saturating_add(
-        policy
-            .maximum_guests_per_half_star
-            .saturating_mul(u32::from(fame.half_stars)),
-    );
+    let cap = policy.maximum_guests_at_fame(fame.half_stars);
     let scheduled_count = if scheduled_due && policy.enabled && population < cap && {
         let probability = guest_spawn_probability(
             policy,

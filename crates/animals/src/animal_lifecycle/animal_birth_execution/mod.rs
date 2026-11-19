@@ -1,8 +1,14 @@
 use bevy::prelude::*;
-use openzt2_game_data::{behavior::action_record::BehaviorAction, species::LifeStage};
+#[cfg(test)]
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+#[cfg(test)]
+use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_game_data::species::LifeStage;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSpawnChild, RunningBehaviorInstruction,
+};
 
 use openzt2_game_assets::{
-    behavior::behavior_asset_types::BehaviorDocumentAsset,
     species::species_asset_types::{SpeciesAsset, SpeciesAssets},
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
@@ -15,7 +21,6 @@ use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_zoo_state::animal_behavior::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    advance_behavior_task_to_next_action, find_current_behavior_task_action,
     BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
 use openzt2_zoo_state::habitat::habitat_types::HabitatMember;
@@ -34,7 +39,6 @@ use super::{
 pub(super) fn spawn_children_for_authored_births(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     species_assets: Res<Assets<SpeciesAsset>>,
     species_index: Res<SpeciesAssets>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
@@ -43,7 +47,11 @@ pub(super) fn spawn_children_for_authored_births(
     mut mothers: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorSpawnChild,
+            ),
             &mut BehaviorRandomStream,
             &SpeciesHandle,
             &WorldMember,
@@ -64,19 +72,25 @@ pub(super) fn spawn_children_for_authored_births(
     ) else {
         return;
     };
-    for (mother, mut task, mut random, species, world, transform, habitat, pregnancy, mate) in
-        &mut mothers
+    for (
+        mother,
+        (task, instruction, running_action),
+        mut random,
+        species,
+        world,
+        transform,
+        habitat,
+        pregnancy,
+        mate,
+    ) in &mut mothers
     {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let Some(BehaviorAction::SpawnChild { entity, pose }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-            .cloned()
-        else {
+        if !instruction.is_current(task) {
             continue;
-        };
+        }
+        let &RunBehaviorSpawnChild { entity, pose } = running_action;
         let child = species_index.find(species.species).and_then(|definition| {
             resolve_species_and_variant_to_animal_spawn_components(
                 species_index,
@@ -120,7 +134,7 @@ pub(super) fn spawn_children_for_authored_births(
             clock.tick,
         );
         births.write(AnimalBorn { child });
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(mother, clock.tick, &mut commands);
     }
 }
 

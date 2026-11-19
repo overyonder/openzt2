@@ -8,5 +8,6 @@ mod authored_node_property_binding_projection;
 mod authored_node_visual_projection;
 mod authored_text_projection;
 mod authored_widget_projection;
+mod document_asset_readiness;
 
 pub(super) mod ui_document_opening;

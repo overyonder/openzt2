@@ -14,7 +14,6 @@ use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types:
 use openzt2_interface_state::ui::authored_reusable_list_and_table_runtime_types::UiTablePolicy;
 use openzt2_ui::authored_tooltip_presentation::UiLongTooltipKey;
 use openzt2_ui::authored_tooltip_presentation::UiShortTooltipKey;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
@@ -51,7 +50,6 @@ pub(crate) fn apply_authored_adoption_catalogue_tab_initialization(
         &UiDocumentOwner,
         &mut Visibility,
         Option<&mut UiSelected>,
-        Option<&mut UiPreviousSelection>,
     )>,
     mut activations: MessageWriter<UiNodeActivated>,
 ) {
@@ -68,9 +66,7 @@ pub(crate) fn apply_authored_adoption_catalogue_tab_initialization(
         {
             continue;
         }
-        for (entity, name, node_document_owner, mut visibility, selected, previous_selection) in
-            &mut authored_nodes
-        {
+        for (entity, name, node_document_owner, mut visibility, selected) in &mut authored_nodes {
             if node_document_owner.0 != list_document_owner.0 {
                 continue;
             }
@@ -91,9 +87,6 @@ pub(crate) fn apply_authored_adoption_catalogue_tab_initialization(
             }
             // This owner decides which transition runs; keep the generic
             // selection-change dispatcher from replaying the winning tab's On.
-            if let Some(mut previous_selection) = previous_selection {
-                previous_selection.synchronize_with_non_authored_selection_change(active);
-            }
             if !active {
                 activations.write(UiNodeActivated {
                     source: ActionSource::System,
@@ -208,7 +201,7 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         (Entity, Option<&mut ImageNode>, Option<&UiSourceRect>),
         (With<UiVisualLayer>, Without<UiListRow>),
     >,
-    adoption_rows: Query<Ref<UiListRow>>,
+    adoption_rows: Query<(Ref<UiListRow>, Ref<ChildOf>)>,
     mut adoption_offer_icons: Query<
         (
             Entity,
@@ -218,7 +211,6 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
             Option<&mut ImageNode>,
             Option<&mut UiInteractionEnabled>,
             Option<&mut UiSelected>,
-            Option<&mut UiPreviousSelection>,
             Option<&UiShortTooltipKey>,
             Option<&UiLongTooltipKey>,
             &mut Visibility,
@@ -228,7 +220,9 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
 ) {
     let catalogue_content_changed =
         world_definition_assets.is_changed() || active_world_definitions.is_changed();
-    let adoption_rows_changed = adoption_rows.iter().any(|row| row.is_changed());
+    let adoption_rows_changed = adoption_rows
+        .iter()
+        .any(|(row, parent)| row.is_changed() || parent.is_changed());
     let selected_gender_changed = selected_genders.iter().any(|gender| gender.is_changed());
     let Some(world_definitions) = active_world_definitions.get(&world_definition_assets) else {
         return;
@@ -256,16 +250,15 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         icon_image,
         interaction_enabled,
         selected,
-        previous_selection,
         short_tooltip,
         long_tooltip,
         mut visibility,
     ) in &mut adoption_offer_icons
     {
-        let Ok(row) = adoption_rows.get(row_document_owner.0) else {
+        let Ok((row, parent)) = adoption_rows.get(row_document_owner.0) else {
             continue;
         };
-        let Ok((table_policy, document_owner)) = adoption_lists.get(row.list) else {
+        let Ok((table_policy, document_owner)) = adoption_lists.get(parent.parent()) else {
             continue;
         };
         if *table_policy != UiTablePolicy::AdoptionList {
@@ -345,9 +338,6 @@ pub(crate) fn project_adoption_catalogue_entries_to_authored_rows(
         let is_selected = selected_catalogue_entry.0 == Some(offer.species());
         if let Some(mut selected) = selected {
             selected.0 = is_selected;
-        }
-        if let Some(mut previous_selection) = previous_selection {
-            previous_selection.synchronize_with_non_authored_selection_change(is_selected);
         }
 
         let species_identifier = offer.species();
@@ -457,7 +447,7 @@ fn bind_texture_to_authored_adoption_offer_icon_visual_descendants(
 pub(crate) fn choose_species_from_activated_adoption_list_row(
     mut ui_node_activations: MessageReader<UiNodeActivated>,
     adoption_rows: Query<&AdoptionRowEntry>,
-    list_rows: Query<&UiListRow>,
+    list_rows: Query<&ChildOf, With<UiListRow>>,
     adoption_lists: Query<(&UiTablePolicy, &UiDocumentOwner)>,
     selected_genders: Query<&AnimalCatalogueGender>,
     parent_entities: Query<&ChildOf>,
@@ -478,7 +468,7 @@ pub(crate) fn choose_species_from_activated_adoption_list_row(
         };
         let Some((_, document_owner)) = ancestors()
             .find_map(|entity| list_rows.get(entity).ok())
-            .and_then(|row| adoption_lists.get(row.list).ok())
+            .and_then(|parent| adoption_lists.get(parent.parent()).ok())
             .filter(|(policy, _)| **policy == UiTablePolicy::AdoptionList)
         else {
             continue;

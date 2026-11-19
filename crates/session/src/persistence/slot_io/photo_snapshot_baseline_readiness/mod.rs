@@ -12,7 +12,7 @@ use openzt2_game_assets::{
 };
 use openzt2_interface_state::photos::photo_album_types::DefaultPhotoAlbumStorageInitializedForWorld;
 use openzt2_interface_state::photos::photo_album_types::DEFAULT_PHOTO_ALBUM_NAME_KEY;
-use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengesInitializedForScenarioRevision;
+use openzt2_interface_state::photos::photo_challenge_types::PhotoChallengeCatalogueBound;
 use openzt2_world_state::world_spawn::persistent_id_types::PersistentIdAllocator;
 use openzt2_world_state::world_spawn::world_load_completion_marker::WorldLoadCompleted;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
@@ -30,7 +30,7 @@ pub(super) struct PhotoSnapshotBaselineReadiness<'w, 's> {
         'w,
         's,
         (
-            Option<&'static PhotoChallengesInitializedForScenarioRevision>,
+            Option<&'static PhotoChallengeCatalogueBound>,
             Option<&'static DefaultPhotoAlbumStorageInitializedForWorld>,
         ),
         (With<WorldRoot>, With<WorldLoadCompleted>),
@@ -92,9 +92,6 @@ impl PhotoSnapshotBaselineReadiness<'_, '_> {
         if storage.is_none() && allocator.next() == u64::MAX {
             return Err(WorldSnapshotPersistenceFailure::CapacityExceeded);
         }
-        Ok(storage.is_some()
-            && self.scenarios.revision().is_some_and(|revision| {
-                challenges.is_some_and(|initialized| initialized.matches_revision(revision))
-            }))
+        Ok(storage.is_some() && challenges.is_some())
     }
 }

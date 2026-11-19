@@ -1,3 +1,4 @@
+use super::immersive_mode_state_types::ImmersiveSubject;
 use bevy::prelude::*;
 
 use openzt2_interface_state::input::input_types::ActionRequest;
@@ -8,7 +9,6 @@ use super::immersive_mode_input_policy_operations::interaction_action_flags_allo
 use super::immersive_mode_input_policy_operations::request_cancelled_immersive_mode_exit;
 use super::immersive_mode_message_types::ExitImmersiveMode;
 use super::immersive_mode_policy_types::AllowedInteractionActions;
-use super::immersive_mode_state_types::ActiveImmersiveMode;
 use super::immersive_mode_state_types::EquippedInteractionTool;
 use crate::immersive_modes::immersive_control_execution_types::FossilAssemblyControl;
 use crate::immersive_modes::immersive_control_execution_types::FossilSearchControl;
@@ -20,7 +20,7 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
     >,
     active_modes: Query<(
         Entity,
-        &ActiveImmersiveMode,
+        Option<&ImmersiveSubject>,
         Option<&AllowedInteractionActions>,
     )>,
     fossil_search_controls: Query<&EquippedInteractionTool, With<FossilSearchControl>>,
@@ -31,7 +31,7 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
         action_requests.clear();
         return;
     }
-    let Ok((controller_entity, active_mode, allowed_actions)) = active_modes.single() else {
+    let Ok((controller_entity, subject, allowed_actions)) = active_modes.single() else {
         return;
     };
     if fossil_search_controls.is_empty() {
@@ -46,7 +46,7 @@ pub(super) fn discover_fossil_or_cancel_active_fossil_search_mode(
         }
         match action_request.action {
             GameAction::Confirm => {
-                if let Some(fossil_site_entity) = active_mode.subject {
+                if let Some(fossil_site_entity) = subject.map(|subject| subject.0) {
                     fossil_discovery_requests.write(DiscoverFossilAtSiteRequest {
                         fossil_site: fossil_site_entity,
                         interaction_tool: controller_entity,
@@ -68,7 +68,7 @@ pub(super) fn cancel_active_fossil_assembly_mode(
     >,
     active_modes: Query<(
         Entity,
-        &ActiveImmersiveMode,
+        Option<&ImmersiveSubject>,
         Option<&AllowedInteractionActions>,
     )>,
     fossil_assembly_controls: Query<&EquippedInteractionTool, With<FossilAssemblyControl>>,
@@ -78,10 +78,10 @@ pub(super) fn cancel_active_fossil_assembly_mode(
         action_requests.clear();
         return;
     }
-    let Ok((controller_entity, active_mode, allowed_actions)) = active_modes.single() else {
+    let Ok((controller_entity, subject, allowed_actions)) = active_modes.single() else {
         return;
     };
-    if fossil_assembly_controls.is_empty() || active_mode.subject.is_none() {
+    if fossil_assembly_controls.is_empty() || subject.map(|subject| subject.0).is_none() {
         return;
     }
     for action_request in action_requests.read() {

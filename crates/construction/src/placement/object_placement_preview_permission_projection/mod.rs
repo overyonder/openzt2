@@ -393,7 +393,7 @@ pub(super) fn project_authoritative_facts_onto_object_placement_previews(
             // Moving a placed object is free, so only purchases need the cash.
             affordable: relocation.is_some()
                 || unlimited_cash.is_some()
-                || cash.0.0 >= definition.price_cents,
+                || cash.0 .0 >= definition.price_cents,
             topology_valid,
             headroom_valid,
             surface_valid,

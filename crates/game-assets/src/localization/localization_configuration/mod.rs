@@ -4,7 +4,7 @@ use std::{
 };
 
 use bevy::{
-    asset::{AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetLoader, LoadContext},
     prelude::*,
 };
 use openzt2_game_data::AssetId;
@@ -125,5 +125,11 @@ impl AssetLoader for LocalizationConfigurationLoader {
             }
         }
         Ok(configuration)
+    }
+    fn extensions(&self) -> &[&str] {
+        &[
+            "xml",
+            crate::asset_source::archive_entry_asset_path::ARCHIVE_ENTRY_ASSET_EXTENSION,
+        ]
     }
 }

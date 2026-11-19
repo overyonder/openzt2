@@ -2,6 +2,7 @@ use crate::terrain::terrain_water_shoreline_geometry::projection::PreparedTerrai
 use crate::terrain::terrain_water_shoreline_geometry::ConstructedTerrainShorelineMeshGroup;
 use bevy::camera::visibility::NoFrustumCulling;
 use bevy::camera::visibility::RenderLayers;
+use bevy::ecs::relationship::RelationshipTarget;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use openzt2_game_assets::graphics_settings_types::GraphicsEffectQuality;
@@ -18,8 +19,13 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 };
 use openzt2_zoo_state::terrain::terrain_water_renderer_types::TERRAIN_WATER_RENDER_LAYER;
 use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::TerrainWaterShorelinePresentation;
-use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::TerrainWaterShorelineSurface;
+use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::{
+    TerrainShorelineDraws, TerrainShorelineRegion, TerrainWaterShorelineSurface,
+};
 use openzt2_zoo_state::terrain::terrain_water_underwater_particle_types::TerrainWaterRegionLight;
+
+#[derive(Component)]
+pub(super) struct TerrainShorelineMeshSlot(usize);
 
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
@@ -31,6 +37,14 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
     mut effect_passes: ResMut<Assets<EffectPassMaterial>>,
     mut uniform_buffers: ResMut<Assets<ShaderBuffer>>,
     mut meshes: ResMut<Assets<Mesh>>,
+    owners: Query<&TerrainShorelineDraws>,
+    mut existing: Query<(
+        &ChildOf,
+        &TerrainShorelineMeshSlot,
+        &mut TerrainWaterShorelineSurface,
+        &mut Mesh3d,
+        &mut MeshMaterial3d<EffectPassMaterial>,
+    )>,
     mut prepared: Query<(
         Entity,
         &TerrainWaterShorelinePresentation,
@@ -43,9 +57,6 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
         let Some(source) = regions.get(owner) else {
             continue;
         };
-        if prepared.groups.is_empty() {
-            continue;
-        }
         let Some(terrain) = terrain_assets.get(source.terrain()) else {
             continue;
         };
@@ -56,12 +67,30 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
             continue;
         };
         let shore = configuration.surface_material.configuration.shore.as_ref();
+        let draws: bevy::platform::collections::HashMap<_, _> = owners
+            .get(owner)
+            .ok()
+            .into_iter()
+            .flat_map(RelationshipTarget::iter)
+            .filter_map(|draw| {
+                let (parent, slot, ..) = existing.get(draw).ok()?;
+                Some(((parent.parent(), slot.0), draw))
+            })
+            .collect();
+        for (key, &entity) in &draws {
+            if !prepared.slots.contains(key) {
+                commands.entity(entity).try_despawn();
+            }
+        }
         let mut retry = Vec::new();
-        for (parent, group) in std::mem::take(&mut prepared.groups) {
-            if let Err(group) = spawn_authored_terrain_shoreline_mesh_group(
+        for (parent, slot, group) in std::mem::take(&mut prepared.groups) {
+            if let Err(group) = project_authored_terrain_shoreline_mesh_group(
                 &mut commands,
                 parent,
                 owner,
+                slot,
+                draws.get(&(parent, slot)).copied(),
+                &mut existing,
                 group,
                 terrain,
                 graphics.effects,
@@ -74,10 +103,16 @@ pub(super) fn submit_prepared_terrain_shoreline_mesh_groups(
                 Some(light.raw_base_rgba().truncate()),
                 shore,
             ) {
-                retry.push((parent, group));
+                retry.push((parent, slot, group));
             }
         }
-        prepared.groups = retry;
+        if retry.is_empty() {
+            commands
+                .entity(owner)
+                .remove::<PreparedTerrainShorelineMeshGroups>();
+        } else {
+            prepared.groups = retry;
+        }
     }
 }
 
@@ -118,10 +153,19 @@ pub(super) fn initialize_terrain_shoreline_material_animation(
 
 /// Returns the unsubmitted geometry while any material dependency is unavailable.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_authored_terrain_shoreline_mesh_group(
+fn project_authored_terrain_shoreline_mesh_group(
     commands: &mut Commands,
     parent: Entity,
     material_owner: Entity,
+    slot: usize,
+    previous: Option<Entity>,
+    existing: &mut Query<(
+        &ChildOf,
+        &TerrainShorelineMeshSlot,
+        &mut TerrainWaterShorelineSurface,
+        &mut Mesh3d,
+        &mut MeshMaterial3d<EffectPassMaterial>,
+    )>,
     group: ConstructedTerrainShorelineMeshGroup,
     terrain: &TerrainAsset,
     quality: GraphicsEffectQuality,
@@ -152,16 +196,29 @@ pub(super) fn spawn_authored_terrain_shoreline_mesh_group(
     }
     bind_shoreline_material_values(&mut pass, shore, presentation, active_environment_colour);
     wave_state.bind_wave_channels_to_effect_pass(group.surface_plane_height, &mut pass);
+    pass.retain_authored_draw_order();
     pass.recreate_uniform_buffers_for_runtime_material(uniform_buffers);
+    let next = TerrainWaterShorelineSurface {
+        biome_index: group.biome_index,
+        surface_plane_height: group.surface_plane_height,
+    };
+    let mesh = meshes.add(group.mesh);
+    let material = effect_passes.add(pass);
+    if let Some(previous) = previous {
+        if let Ok((_, _, mut surface, mut geometry, mut handle)) = existing.get_mut(previous) {
+            surface.set_if_neq(next);
+            geometry.0 = mesh;
+            handle.0 = material;
+            return Ok(previous);
+        }
+    }
     let entity = commands
         .spawn((
-            TerrainWaterShorelineSurface {
-                material_owner,
-                biome_index: group.biome_index,
-                surface_plane_height: group.surface_plane_height,
-            },
-            Mesh3d(meshes.add(group.mesh)),
-            MeshMaterial3d(effect_passes.add(pass)),
+            next,
+            TerrainShorelineRegion(material_owner),
+            TerrainShorelineMeshSlot(slot),
+            Mesh3d(mesh),
+            MeshMaterial3d(material),
             NoFrustumCulling,
             Transform::IDENTITY,
             Visibility::Inherited,
@@ -208,7 +265,7 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
         &TerrainWaterRegionLight,
     )>,
     mut surfaces: Query<(
-        &TerrainWaterShorelineSurface,
+        &TerrainShorelineRegion,
         &MeshMaterial3d<EffectPassMaterial>,
         &mut Visibility,
     )>,
@@ -216,11 +273,11 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
     mut uniform_buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
     for (surface, handle, mut visibility) in &mut surfaces {
-        let Ok((presentation, waves, light)) = materials.get(surface.material_owner) else {
+        let Ok((presentation, waves, light)) = materials.get(surface.0) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        let Some(source) = regions.get(surface.material_owner) else {
+        let Some(source) = regions.get(surface.0) else {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
@@ -252,18 +309,6 @@ pub(super) fn update_terrain_shoreline_material_animation_bindings(
         waves.bind_wave_channels_to_effect_pass(height, &mut pass);
         pass.write_programmable_float_registers_to_persistent_buffers(&mut uniform_buffers);
         visibility.set_if_neq(Visibility::Inherited);
-    }
-}
-
-pub(super) fn despawn_terrain_shoreline_surfaces_without_material_owners(
-    mut commands: Commands,
-    owners: TerrainWaterRegionQuery,
-    surfaces: Query<(Entity, &TerrainWaterShorelineSurface)>,
-) {
-    for (entity, surface) in &surfaces {
-        if owners.get(surface.material_owner).is_none() {
-            commands.entity(entity).despawn();
-        }
     }
 }
 

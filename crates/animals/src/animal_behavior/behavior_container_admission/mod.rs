@@ -1,26 +1,27 @@
 use bevy::prelude::*;
 use openzt2_zoo_state::behavior_task_execution_types::{
-    BehaviorTaskExecutionState, BehaviorTaskReturnFrame, PendingBehaviorTaskFailure,
+    running_actions::{BehaviorInstructionId, RunningBehaviorInstruction},
+    BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
 };
 
 pub(super) struct BehaviorAdmissionInstruction {
     actor: Entity,
-    execution_id: u64,
+    instruction: BehaviorInstructionId,
     target: Option<Entity>,
     due_tick: u64,
-    frame: BehaviorTaskReturnFrame,
-    depth: usize,
 }
 
 impl BehaviorAdmissionInstruction {
-    pub(super) fn new(actor: Entity, task: &BehaviorTaskExecutionState) -> Self {
+    pub(super) fn new(
+        actor: Entity,
+        task: &BehaviorTaskExecutionState,
+        instruction: &RunningBehaviorInstruction,
+    ) -> Self {
         Self {
             actor,
-            execution_id: task.execution_id,
+            instruction: instruction.id(),
             target: task.target(),
             due_tick: task.next_action_tick,
-            frame: task.create_return_frame_after_action(task.action),
-            depth: task.stack.len(),
         }
     }
 
@@ -31,11 +32,13 @@ impl BehaviorAdmissionInstruction {
             && world
                 .get::<BehaviorTaskExecutionState>(self.actor)
                 .is_some_and(|task| {
-                    task.execution_id == self.execution_id
-                        && task.target() == self.target
+                    task.target() == self.target
                         && task.next_action_tick == self.due_tick
-                        && task.stack.len() == self.depth
-                        && task.is_at_or_nested_under(&self.frame, self.depth)
+                        && world
+                            .get::<RunningBehaviorInstruction>(self.actor)
+                            .is_some_and(|instruction| {
+                                instruction.id() == self.instruction && instruction.is_current(task)
+                            })
                 })
     }
 }

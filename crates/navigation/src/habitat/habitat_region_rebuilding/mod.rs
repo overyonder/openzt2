@@ -1,5 +1,8 @@
-use bevy::prelude::*;
-use openzt2_game_data::world_definitions::fences_and_gates::FenceTraversalBlockingFlags;
+use bevy::{
+    ecs::entity::EntityHashSet,
+    prelude::*,
+    tasks::{ComputeTaskPool, TaskPool},
+};
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -7,37 +10,61 @@ use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainIndex;
-use openzt2_zoo_state::topology::gate_operation_types::Gate;
 use openzt2_zoo_state::topology::topology_edit_types::TopologyChanged;
-use openzt2_zoo_state::topology::topology_graph_types::FenceEdge;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyGrid;
 use openzt2_zoo_state::topology::topology_graph_types::TopologyNode;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 
-use crate::habitat::habitat_region_derivation::HabitatFenceSegment;
+use super::habitat_fence_inputs::{HabitatBoundaryRaster, HabitatFenceLattice};
 use crate::habitat::habitat_region_derivation::{
-    derive_enclosed_habitats_from_cardinal_boundaries,
-    expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries,
+    connected_cardinal_fence_components, derive_enclosed_habitats,
 };
 use crate::habitat::habitat_terrain_summary_calculation::calculate_habitat_terrain_summary_from_topology_cells;
 use crate::habitat::habitat_terrain_summary_refresh::derive_dominant_habitat_climate;
 use crate::habitat::habitat_terrain_summary_refresh::read_terrain_fact_for_topology_cell;
 use openzt2_zoo_state::habitat::habitat_topology_cell_queries::sorted_topology_cells_contain_cell;
-use openzt2_zoo_state::habitat::habitat_topology_cell_queries::topology_cells_overlap_inclusive_bounds;
-use openzt2_zoo_state::habitat::habitat_types::Habitat;
 use openzt2_zoo_state::habitat::habitat_types::HabitatChanged;
 use openzt2_zoo_state::habitat::habitat_types::HabitatClimate;
 use openzt2_zoo_state::habitat::habitat_types::HabitatIndex;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
 use openzt2_zoo_state::habitat::habitat_types::HabitatSummary;
 use openzt2_zoo_state::habitat::habitat_types::RebuildHabitatRegionsWithinTopologyBounds;
+use openzt2_zoo_state::habitat::habitat_types::{Habitat, HabitatBoundaryFence};
+
+pub(super) fn link_changed_habitat_boundaries(
+    mut commands: Commands,
+    habitats: Query<(Entity, &HabitatRegion, Option<&Children>), Changed<HabitatRegion>>,
+    edges: Query<&HabitatBoundaryFence>,
+) {
+    for (habitat, region, children) in &habitats {
+        let mut desired: bevy::ecs::entity::EntityHashSet =
+            region.boundary_fence_entities.iter().copied().collect();
+        for edge in children.into_iter().flat_map(|children| children.iter()) {
+            if let Ok(fence) = edges.get(edge) {
+                if !desired.remove(&fence.0) {
+                    commands.entity(edge).try_despawn();
+                }
+            }
+        }
+        for fence in desired {
+            commands.spawn((ChildOf(habitat), HabitatBoundaryFence(fence)));
+        }
+    }
+}
+
+#[derive(Component)]
+pub(super) struct HabitatTopologyProjected;
 
 /// Seeds the first regional rebuild from topology already hydrated with the map.
 pub(super) fn request_initial_habitat_region_rebuild_from_loaded_topology(
     topology_nodes: Query<&TopologyNode>,
+    published: Query<(), (With<WorldRoot>, With<HabitatTopologyProjected>)>,
     mut habitat_rebuild_requests: MessageWriter<RebuildHabitatRegionsWithinTopologyBounds>,
 ) {
+    if !published.is_empty() {
+        return;
+    }
     let Some(topology_bounds) = calculate_topology_cell_bounds(topology_nodes.iter()) else {
         return;
     };
@@ -75,8 +102,8 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     terrain_assets: Res<Assets<TerrainAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    fence_edges: Query<(Entity, &FenceEdge, Option<&Gate>)>,
-    topology_nodes: Query<&TopologyNode>,
+    fence_lattice: Res<HabitatFenceLattice>,
+    rasters: Query<&HabitatBoundaryRaster>,
     terrain_chunks: Query<(&TerrainChunk, Option<&EditedTerrainSamples>)>,
     world_roots: Query<Entity, With<WorldRoot>>,
     mut existing_habitats: Query<
@@ -99,8 +126,6 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
     debug!(
         ?changed_topology_bounds,
         roots = world_roots.iter().count(),
-        nodes = topology_nodes.iter().count(),
-        fences = fence_edges.iter().count(),
         "requested habitat rebuild"
     );
     let Ok(world_root) = world_roots.single() else {
@@ -111,115 +136,108 @@ pub(super) fn rebuild_changed_habitat_regions_from_fence_topology_and_terrain(
         return;
     };
 
-    let mut fence_segments = Vec::with_capacity(fence_edges.iter().len());
-    for (fence_entity, fence_edge, gate) in &fence_edges {
-        let (Ok(first_node), Ok(second_node)) = (
-            topology_nodes.get(fence_edge.a),
-            topology_nodes.get(fence_edge.b),
-        ) else {
-            continue;
-        };
-        let definition = world_definitions.find_fence(fence_edge.definition);
-        let blocks_animals = definition.is_some_and(|definition| {
-            definition
-                .blocks
-                .contains_all(FenceTraversalBlockingFlags::ANIMAL)
-        });
-        let open_gate_passes_animals = gate.is_some_and(|gate| gate.open)
-            && world_definitions
-                .find_gate_fence(fence_edge.definition)
-                .is_none_or(|definition| {
-                    definition
-                        .gate_policy
-                        .open_passage_types
-                        .as_ref()
-                        .is_none_or(|exceptions| {
-                            exceptions.iter().any(|exception| {
-                                exception
-                                    .traversal_types
-                                    .contains_all(FenceTraversalBlockingFlags::ANIMAL)
-                            })
-                        })
-                });
-        let boundary_is_breached = !blocks_animals || open_gate_passes_animals;
-        if boundary_is_breached {
-            info!(target: "openzt2_gameplay_journey", ?fence_entity,
-                definition = ?fence_edge.definition,
-                blocks = ?definition.map(|definition| definition.blocks),
-                ?gate, "habitat boundary fence is breached");
-        }
-        fence_segments.push(HabitatFenceSegment {
-            fence_entity,
-            first_topology_node: first_node.cell.truncate(),
-            second_topology_node: second_node.cell.truncate(),
-            boundary_is_breached,
-        });
-    }
-    // A replaced habitat is despawned unless re-derived, so every existing
-    // habitat the change touches must be re-derived from its own boundary
-    // fences, even when they lie outside the change. Widen the rebuild until
-    // it covers each touched habitat and each region derived within it.
-    let mut rebuild_topology_bounds = changed_topology_bounds;
-    let cardinal_boundaries =
-        expand_authored_fence_segments_into_cardinal_habitat_grid_boundaries(&fence_segments);
-    let (derived_regions, affected_existing_habitats) = loop {
-        let derived_regions = derive_enclosed_habitats_from_cardinal_boundaries(
-            &cardinal_boundaries,
-            rebuild_topology_bounds,
-        );
-        debug!(
-            segments = fence_segments.len(),
-            regions = derived_regions.len(),
-            "derived enclosed habitat regions"
-        );
-        let affected_topology_bounds = IRect::from_corners(
-            rebuild_topology_bounds.min - IVec2::ONE,
-            rebuild_topology_bounds.max + IVec2::ONE,
-        );
-        let mut affected_existing_habitats = Vec::new();
-        for (habitat_entity, habitat_region, ..) in &existing_habitats {
-            if topology_cells_overlap_inclusive_bounds(
-                &habitat_region.topology_cells,
-                affected_topology_bounds,
-            ) || derived_regions.iter().any(|derived_region| {
-                derived_region.topology_cells.iter().any(|topology_cell| {
-                    sorted_topology_cells_contain_cell(
-                        &habitat_region.topology_cells,
-                        *topology_cell,
-                    )
-                })
-            }) {
-                affected_existing_habitats
-                    .push((habitat_entity, habitat_region.topology_cells.as_ref()));
+    let mut affected = EntityHashSet::default();
+    let mut visited_fences = EntityHashSet::default();
+    let mut loaded_fences = Vec::new();
+    let mut bounds = changed_topology_bounds;
+    // Expand using existing habitat interiors and connected fence footprints.
+    // No fence geometry is derived while finding the affected components.
+    loop {
+        let before = bounds;
+        let nearby = IRect::from_corners(bounds.min - IVec2::ONE, bounds.max + IVec2::ONE);
+        for y in nearby.min.y..=nearby.max.y {
+            for x in nearby.min.x..=nearby.max.x {
+                let Some(habitat) = habitat_index.habitat_for_topology_cell(IVec2::new(x, y))
+                else {
+                    continue;
+                };
+                if affected.insert(habitat) {
+                    if let Ok((_, region, ..)) = existing_habitats.get(habitat) {
+                        if let Some(footprint) = calculate_topology_cell_bounds_of_cells(
+                            region.topology_cells.iter().copied(),
+                        ) {
+                            bounds = bounds.union(IRect::from_corners(
+                                footprint.min,
+                                footprint.max + IVec2::ONE,
+                            ));
+                        }
+                    }
+                }
             }
         }
-        // Boundary fence nodes lie on the far corners of their region's cells.
-        let covering_topology_bounds = affected_existing_habitats
-            .iter()
-            .map(|(_, topology_cells)| *topology_cells)
-            .chain(
-                derived_regions
-                    .iter()
-                    .map(|derived_region| derived_region.topology_cells.as_slice()),
-            )
-            .filter_map(|topology_cells| {
-                calculate_topology_cell_bounds_of_cells(topology_cells.iter().copied())
-            })
-            .fold(rebuild_topology_bounds, |bounds, region_bounds| {
-                IRect::from_corners(
-                    bounds.min.min(region_bounds.min),
-                    bounds.max.max(region_bounds.max + IVec2::ONE),
-                )
-            });
-        if covering_topology_bounds == rebuild_topology_bounds {
-            break (derived_regions, affected_existing_habitats);
+        let rectangle = bounds;
+        let mut frontier = Vec::new();
+        for y in rectangle.min.y..=rectangle.max.y {
+            for x in rectangle.min.x..=rectangle.max.x {
+                frontier.extend(
+                    fence_lattice
+                        .at(IVec2::new(x, y))
+                        .filter(|fence| visited_fences.insert(*fence)),
+                );
+            }
         }
-        rebuild_topology_bounds = covering_topology_bounds;
-    };
-    let mut affected_existing_habitats = affected_existing_habitats
+        while let Some(fence) = frontier.pop() {
+            let Ok(raster) = rasters.get(fence) else {
+                continue;
+            };
+            for piece in &raster.0 {
+                for node in [piece.first_topology_node, piece.second_topology_node] {
+                    bounds = bounds.union_point(node);
+                    frontier.extend(
+                        fence_lattice
+                            .at(node)
+                            .filter(|fence| visited_fences.insert(*fence)),
+                    );
+                }
+                loaded_fences.push(*piece);
+            }
+        }
+        if bounds == before {
+            break;
+        }
+    }
+    let components = connected_cardinal_fence_components(&loaded_fences);
+    // Nested or overlapping boundary components must share an outside flood.
+    // Disjoint bounds can be solved independently without altering cell order.
+    let mut groups: Vec<(IRect, Vec<_>)> = Vec::new();
+    for component in components {
+        let mut bounds = component.bounds;
+        let mut segments = component.segments;
+        let mut cursor = 0;
+        while cursor < groups.len() {
+            let (other, _) = &groups[cursor];
+            if bounds.min.cmple(other.max).all() && bounds.max.cmpge(other.min).all() {
+                let (other, moved) = groups.remove(cursor);
+                bounds = bounds.union(other);
+                segments.extend(moved);
+                cursor = 0;
+            } else {
+                cursor += 1;
+            }
+        }
+        groups.push((bounds, segments));
+    }
+    let mut derived_regions: Vec<_> = ComputeTaskPool::get_or_init(TaskPool::default)
+        .scope(|scope| {
+            for (_, segments) in groups {
+                scope.spawn(async move { derive_enclosed_habitats(&segments) });
+            }
+        })
         .into_iter()
-        .map(|(entity, cells)| (entity, cells.to_vec().into_boxed_slice()))
+        .flatten()
+        .collect();
+    derived_regions
+        .sort_unstable_by_key(|region| region.topology_cells.first().map(|cell| (cell.x, cell.y)));
+    let mut affected_existing_habitats = affected
+        .into_iter()
+        .filter_map(|entity| {
+            let (_, region, ..) = existing_habitats.get(entity).ok()?;
+            Some((entity, region.topology_cells.clone()))
+        })
         .collect::<Vec<_>>();
+    commands
+        .entity(world_root)
+        .insert_if_new(HabitatTopologyProjected);
     affected_existing_habitats.sort_unstable_by_key(|(entity, _)| entity.to_bits());
     let mut reused_existing_habitats = vec![false; affected_existing_habitats.len()];
 

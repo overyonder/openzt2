@@ -11,7 +11,10 @@ use openzt2_game_data::ui_document::{
     document::UiDocument, node_layout::UiNodeRegionMetric, widget::UiWidgetRecord,
 };
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
+use openzt2_interface_state::ui::{
+    authored_ui_activation_contracts::RunAuthoredTimedScenarioScript,
+    authored_ui_node_projection_components::UiDocumentRoot,
+};
 use openzt2_zoo_state::scenario::scenario_session_types::SelectedScenarioDocument;
 use std::cell::RefCell;
 
@@ -81,15 +84,6 @@ pub(super) enum NodeOperation {
     MeasureText,
 }
 
-/// `ZTUITimedEvents "ring timer"` runs `updateTutorialRing` every 20 ms while it
-/// is active, paused or not.
-#[derive(Resource, Default)]
-pub(super) struct TutorialRingTimer {
-    active: bool,
-    elapsed_seconds: f32,
-}
-
-const TUTORIAL_RING_INTERVAL_SECONDS: f32 = 0.02;
 /// Marks a path step naming a document node by index, for unnamed children.
 const INDEX_PATH_STEP: char = '\u{1}';
 const REFERENCE_PATH_SEPARATOR: char = '\u{2}';
@@ -104,16 +98,13 @@ pub(super) fn register(app: &mut App) {
     app.add_message::<ScenarioUiCommand>()
         .init_resource::<ScenarioContinuation>()
         .init_resource::<presentation::PendingScenarioUi>()
-        .init_resource::<TutorialRingTimer>()
         .init_resource::<openzt2_interface_state::information::catalogue_types::ScenarioDisabledCatalogueDefinitions>()
         .add_systems(
             Update,
             (
+                run_authored_timed_scenario_scripts,
                 presentation::apply_scenario_ui_commands,
                 presentation::fit_animation_heights_to_text,
-                // After applying, so an update can't follow the script's own
-                // `UI_HIDE` and turn the finished ring back on.
-                run_tutorial_ring_timer,
             )
                 .chain()
                 .in_set(openzt2_interface_state::ui::UiSet::DomainProjection)
@@ -121,9 +112,8 @@ pub(super) fn register(app: &mut App) {
         )
         .add_systems(
             OnExit(GamePhase::InGame),
-            |mut continuation: ResMut<ScenarioContinuation>, mut ring: ResMut<TutorialRingTimer>| {
+            |mut continuation: ResMut<ScenarioContinuation>| {
                 continuation.scenario = None;
-                *ring = default();
             },
         )
         .add_systems(OnExit(GamePhase::InGame), presentation::clear_scenario_ui);
@@ -419,8 +409,7 @@ fn locate_ui_node<'a>(
             lineage_visible: inherited.get(),
             selected: selected.is_some_and(|selected| selected.0),
             enabled: enabled.is_none_or(|enabled| enabled.0),
-            highlighted: interaction
-                .is_some_and(|interaction| *interaction != UiPointerInteraction::None),
+            highlighted: interaction.is_some_and(|hovered| hovered.get()),
             size: if computed_size.min_element() > 0.0 {
                 computed_size.to_array()
             } else {
@@ -822,11 +811,9 @@ fn install_node_methods<'scope, 'env: 'scope>(
     Ok(())
 }
 
-/// Drives `updateTutorialRing` in the VM of the tutorial that started the ring.
-#[allow(clippy::too_many_arguments)]
-fn run_tutorial_ring_timer(
-    mut timer: ResMut<TutorialRingTimer>,
-    time: Res<Time<Real>>,
+fn run_authored_timed_scenario_scripts(
+    mut requests: MessageReader<RunAuthoredTimedScenarioScript>,
+    roots: Query<(), With<UiDocumentRoot>>,
     selected: Option<Res<SelectedScenarioDocument>>,
     scenario_assets: Res<Assets<WorldScenarioDocumentAsset>>,
     scripts: Res<Assets<LuaScriptAsset>>,
@@ -835,45 +822,58 @@ fn run_tutorial_ring_timer(
     fact_sources: ScenarioLuaQueryFactSources,
     mut ui: MessageWriter<ScenarioUiCommand>,
 ) {
-    if !timer.active {
-        return;
-    }
-    timer.elapsed_seconds += time.delta_secs();
-    if timer.elapsed_seconds < TUTORIAL_RING_INTERVAL_SECONDS {
-        return;
-    }
-    timer.elapsed_seconds = 0.0;
     let Some(selected) = selected else {
+        requests.clear();
         return;
     };
     let Some(asset) = scenario_assets.get(&selected.0) else {
+        requests.clear();
         return;
     };
-    let Some(binding) = asset
-        .document
-        .scenario_script_bindings
-        .iter()
-        .find(|binding| binding.script.to_ascii_lowercase().contains("tutorial"))
-    else {
-        return;
-    };
-    match execute_loaded_scenario_lua_script_entry(
-        &mut runtime,
-        &selected,
-        &scenario_assets,
-        &scripts,
-        &script_index,
-        binding,
-        "updateTutorialRing",
-        fact_sources.borrow_scenario_lua_query_facts(),
-    ) {
-        Ok(result) => {
-            if let Some(failure) = result.failure {
-                error!(%failure, "tutorial ring update failed");
-            }
-            ui.write_batch(result.ui);
+    for request in requests.read() {
+        if !roots.contains(request.document_root) {
+            continue;
         }
-        Err(failure) => error!(%failure, "tutorial ring update failed"),
+        let mut words = request.command.split_ascii_whitespace();
+        let (Some("global"), Some(path), Some(entry), None) =
+            (words.next(), words.next(), words.next(), words.next())
+        else {
+            warn!(command = %request.command, "unsupported timed scenario script command");
+            continue;
+        };
+        let path = path.replace('\\', "/");
+        let Some(binding) = asset
+            .document
+            .scenario_script_bindings
+            .iter()
+            .find(|binding| {
+                binding.script.eq_ignore_ascii_case(&path)
+                    || asset
+                        .script(binding)
+                        .is_some_and(|(resolved, _)| resolved.eq_ignore_ascii_case(&path))
+            })
+        else {
+            warn!(%path, "timed UI script is not bound to the active scenario");
+            continue;
+        };
+        match execute_loaded_scenario_lua_script_entry(
+            &mut runtime,
+            &selected,
+            &scenario_assets,
+            &scripts,
+            &script_index,
+            binding,
+            entry,
+            fact_sources.borrow_scenario_lua_query_facts(),
+        ) {
+            Ok(result) => {
+                if let Some(failure) = result.failure {
+                    error!(%failure, %entry, "timed scenario script failed");
+                }
+                ui.write_batch(result.ui);
+            }
+            Err(failure) => error!(%failure, %entry, "timed scenario script failed"),
+        }
     }
 }
 

@@ -208,6 +208,9 @@ pub struct PrefabLod {
     pub near_m: f32,
     pub far_m: f32,
     pub active_without_range: bool,
+    /// Initial tier for discrete LOD groups with no distance thresholds.
+    #[serde(default)]
+    pub initial_render_tier: Option<u16>,
 }
 
 #[derive(serde::Deserialize, serde::Serialize, Clone, Copy, Debug, PartialEq, Eq)]

@@ -23,9 +23,12 @@ pub fn add_placement_persistence_test_systems(app: &mut App) {
         .init_resource::<ObjectPlacementCellCollectionScratch>()
         .init_resource::<ConstructionTool>()
         .add_message::<ObjectPlacementCommitted>()
+        .init_resource::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints>()
+        .add_message::<openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged>()
+        .add_observer(super::placed_object_footprint_occupancy_index_synchronization::remove_indexed_placement_footprint)
         .add_systems(Update, (
             super::placed_object_footprint_occupancy_index_synchronization::hydrate_placed_object_placement_components,
-            super::placed_object_footprint_occupancy_index_synchronization::rebuild_placed_object_footprint_occupancy_index,
+            super::placed_object_footprint_occupancy_index_synchronization::synchronize_placed_footprints,
         ).chain());
 }
 

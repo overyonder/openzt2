@@ -10,7 +10,7 @@ use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObjec
 #[derive(Component, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ModelRenderingSuppressed;
 
-#[derive(Component)]
+#[derive(Component, Default)]
 #[require(Transform, Visibility)]
 pub(crate) struct ModelRenderVisibilityGate;
 

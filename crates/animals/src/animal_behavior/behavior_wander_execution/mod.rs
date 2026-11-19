@@ -1,15 +1,13 @@
 use bevy::prelude::*;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    behavior::behavior_asset_types::BehaviorDocumentAsset,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::behavior::{
-    action::wander::{BehaviorGroundLocomotionSpeed, BehaviorWanderAction},
-    action_record::BehaviorAction,
+use openzt2_game_data::behavior::action::wander::{
+    BehaviorGroundLocomotionSpeed, BehaviorWanderAction,
 };
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_world_state::world_spawn::world_membership_types::{DefinitionId, WorldMember};
@@ -17,13 +15,13 @@ use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
 use openzt2_zoo_state::animal_health::types::{Dead, Tranquilized};
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorEvasion, RunBehaviorWander, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::{
     animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
     animal_lifecycle::types::Animal,
-    behavior_task_execution_types::{
-        advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
-    },
+    behavior_task_execution_types::{BehaviorTaskExecutionState, PendingBehaviorTaskFailure},
     habitat::{
         habitat_membership_and_containment::locate_habitat_at_world_position,
         habitat_types::HabitatIndex,
@@ -83,7 +81,6 @@ fn finish_wander_navigation_requests(
 fn execute_current_wander_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     graph: Option<Res<ActiveTerrainDerivedNavigationGraph>>,
@@ -105,7 +102,10 @@ fn execute_current_wander_actions(
         (
             Entity,
             &GlobalTransform,
-            Option<&mut BehaviorTaskExecutionState>,
+            (
+                Option<&BehaviorTaskExecutionState>,
+                Option<(&RunningBehaviorInstruction, &RunBehaviorWander)>,
+            ),
             &mut BehaviorRandomStream,
             Option<&NavAgent>,
             Option<&LocomotionMode>,
@@ -119,13 +119,16 @@ fn execute_current_wander_actions(
             Has<openzt2_zoo_state::animal_health::types::Escaped>,
             Option<&mut StaffSubmergedDepth>,
         ),
-        Or<(With<Animal>, With<Staff>)>,
+        (
+            Or<(With<Animal>, With<Staff>)>,
+            Or<(With<RunBehaviorWander>, With<BehaviorWanderNavigation>)>,
+        ),
     >,
 ) {
     for (
         actor,
         transform,
-        task,
+        (task, running),
         mut random,
         agent,
         mode,
@@ -140,11 +143,14 @@ fn execute_current_wander_actions(
         mut submerged_depth,
     ) in &mut animals
     {
-        let mut task = task;
         let mut wandering = wandering;
         let immobilized = crated || tranquilized || dead;
         if wandering.as_ref().is_some_and(|wandering| {
-            failing || immobilized || task.as_ref().is_none_or(|task| !wandering.owns(task))
+            failing
+                || immobilized
+                || task.zip(running).is_none_or(|(task, (instruction, _))| {
+                    wandering.instruction != instruction.id() || !instruction.is_current(task)
+                })
         }) {
             if wandering.as_ref().is_some_and(|wandering| {
                 destination
@@ -158,20 +164,19 @@ fn execute_current_wander_actions(
             wandering = None;
             submerged_depth = None;
         }
-        let Some(task) = task
-            .as_deref_mut()
-            .filter(|task| !failing && !immobilized && task.next_action_tick <= clock.tick)
+        let Some(task) =
+            task.filter(|task| !failing && !immobilized && task.next_action_tick <= clock.tick)
         else {
             continue;
         };
-        let Some(BehaviorAction::Wander(action)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task))
+        let Some((instruction, running)) =
+            running.filter(|(instruction, _)| instruction.is_current(task))
         else {
             continue;
         };
+        let action = &running.0;
         if action.maximum_duration.is_zero() {
-            advance_behavior_task_to_next_action(task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
             continue;
         }
         if wandering
@@ -187,7 +192,7 @@ fn execute_current_wander_actions(
             commands
                 .entity(actor)
                 .remove::<(BehaviorWanderNavigation, StaffSubmergedDepth)>();
-            advance_behavior_task_to_next_action(task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
             continue;
         }
         let Some(definitions) = definitions.get(&definition_assets) else {
@@ -207,9 +212,7 @@ fn execute_current_wander_actions(
                     clock.tick,
                 );
                 commands.entity(actor).insert(BehaviorWanderNavigation {
-                    execution_id: task.execution_id,
-                    origin: task.create_return_frame_after_action(task.action),
-                    depth: task.stack.len(),
+                    instruction: instruction.id(),
                     until_tick,
                     request_id: None,
                 });
@@ -384,9 +387,7 @@ fn execute_current_wander_actions(
                 clock.tick,
             );
             commands.entity(actor).insert(BehaviorWanderNavigation {
-                execution_id: task.execution_id,
-                origin: task.create_return_frame_after_action(task.action),
-                depth: task.stack.len(),
+                instruction: instruction.id(),
                 until_tick,
                 request_id: Some(request_id),
             });
@@ -414,7 +415,6 @@ fn draw_wander_until_tick(
 fn execute_current_evasion_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     mut sequence: ResMut<NavigationRequestSequence>,
@@ -427,7 +427,8 @@ fn execute_current_evasion_actions(
         (
             Entity,
             &GlobalTransform,
-            Option<&mut BehaviorTaskExecutionState>,
+            Option<&BehaviorTaskExecutionState>,
+            Option<(&RunningBehaviorInstruction, &RunBehaviorEvasion)>,
             Option<&mut Destination>,
             Option<&BehaviorEvasionNavigation>,
             Option<&mut BehaviorEvasionSteering>,
@@ -437,7 +438,14 @@ fn execute_current_evasion_actions(
             Has<Tranquilized>,
             Has<Dead>,
         ),
-        Or<(With<Animal>, With<Staff>)>,
+        (
+            Or<(With<Animal>, With<Staff>)>,
+            Or<(
+                With<RunBehaviorEvasion>,
+                With<BehaviorEvasionNavigation>,
+                With<BehaviorEvasionSteering>,
+            )>,
+        ),
     >,
 ) {
     let definitions = definitions.get(&definition_assets);
@@ -445,6 +453,7 @@ fn execute_current_evasion_actions(
         actor,
         transform,
         task,
+        running,
         mut destination,
         evading,
         mut steering,
@@ -456,8 +465,12 @@ fn execute_current_evasion_actions(
     ) in &mut actors
     {
         let immobilized = failing || crated || tranquilized || dead;
-        let current = evading
-            .filter(|evading| !immobilized && task.as_ref().is_some_and(|task| evading.owns(task)));
+        let current = evading.filter(|evading| {
+            !immobilized
+                && task.zip(running).is_some_and(|(task, (instruction, _))| {
+                    evading.instruction == instruction.id() && instruction.is_current(task)
+                })
+        });
         if evading.is_some() && current.is_none() {
             if evading.is_some_and(|evading| {
                 destination
@@ -472,20 +485,19 @@ fn execute_current_evasion_actions(
                 .remove::<(BehaviorEvasionNavigation, BehaviorEvasionSteering)>();
             steering = None;
         }
-        let Some(mut task) =
-            task.filter(|task| !immobilized && task.next_action_tick <= clock.tick)
+        let Some(task) = task.filter(|task| !immobilized && task.next_action_tick <= clock.tick)
         else {
             continue;
         };
         let Some(definitions) = definitions else {
             continue;
         };
-        let Some(BehaviorAction::Evasion(action)) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
+        let Some((instruction, running)) =
+            running.filter(|(instruction, _)| instruction.is_current(task))
         else {
             continue;
         };
+        let action = &running.0;
         let position = transform.translation();
         let mut target_direction = Vec2::ZERO;
         let mut target_near = false;
@@ -550,7 +562,7 @@ fn execute_current_evasion_actions(
             if timed_out && action.fail_on_timeout {
                 super::behavior_task_failure_transition::mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             } else {
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                instruction.complete(actor, clock.tick, &mut commands);
             }
             continue;
         }
@@ -594,9 +606,7 @@ fn execute_current_evasion_actions(
                 .saturating_mul(u128::from(definitions.timing().fixed_hz))
                 .div_ceil(1_000_000_000);
             commands.entity(actor).insert(BehaviorEvasionNavigation {
-                execution_id: task.execution_id,
-                origin: task.create_return_frame_after_action(task.action),
-                depth: task.stack.len(),
+                instruction: instruction.id(),
                 until_tick: clock
                     .tick
                     .saturating_add(u64::try_from(ticks).unwrap_or(u64::MAX)),

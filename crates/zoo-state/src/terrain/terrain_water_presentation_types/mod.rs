@@ -177,6 +177,12 @@ impl TerrainWaterRegionSource {
     }
 }
 
+pub type TerrainWaterSupportLimits = bevy::platform::collections::HashMap<u32, [f32; 2]>;
+
+pub fn unconstrained_terrain_water_height() -> [f32; 2] {
+    [-1000.0, 1000.0]
+}
+
 /// Derived spatial index; removed when terrain edits invalidate its source.
 #[derive(Component, Debug, Clone)]
 pub struct TerrainWaterMembershipIndex {
@@ -188,9 +194,9 @@ pub struct TerrainWaterMembershipIndex {
     has_water_sides: bool,
     regions: Box<[TerrainWaterRegionSpatialIndex]>,
     empty_selector_topology: bool,
-    selector_projection: Box<[Option<[u8; 4]>]>,
-    fence_probes: Box<[[Box<[[Vec2; 2]]>; 8]]>,
-    height_support_limits: Arc<[[f32; 2]]>,
+    selector_projection: Arc<[Option<[u8; 4]>]>,
+    fence_probes: Arc<[[Box<[[Vec2; 2]]>; 8]]>,
+    height_support_limits: Arc<TerrainWaterSupportLimits>,
     tank_minimum_depth: Option<f32>,
     edited_point_heights: Option<Box<[f32]>>,
 }
@@ -273,7 +279,6 @@ impl TerrainWaterMembershipIndex {
                 TerrainWaterRegionSpatialIndex::new(owner, points, width, height)
             })
             .collect();
-        let point_count = point_owners.len();
         Some(Self {
             terrain,
             width,
@@ -283,12 +288,11 @@ impl TerrainWaterMembershipIndex {
             side_owners,
             regions,
             empty_selector_topology,
-            selector_projection: vec![empty_selector_topology.then_some([0; 4]); tiles]
-                .into_boxed_slice(),
+            selector_projection: vec![empty_selector_topology.then_some([0; 4]); tiles].into(),
             fence_probes: (0..tiles)
                 .map(|_| std::array::from_fn(|_| Box::default()))
                 .collect(),
-            height_support_limits: vec![[-1000.0, 1000.0]; point_count].into(),
+            height_support_limits: Arc::default(),
             tank_minimum_depth: None,
             edited_point_heights: None,
         })
@@ -310,7 +314,7 @@ impl TerrainWaterMembershipIndex {
         if projection.len() != self.side_owners.len() {
             return None;
         }
-        self.selector_projection = projection;
+        self.selector_projection = projection.into();
         Some(self)
     }
 
@@ -322,7 +326,7 @@ impl TerrainWaterMembershipIndex {
         if probes.len() != self.side_owners.len() {
             return None;
         }
-        self.fence_probes = probes;
+        self.fence_probes = probes.into();
         Some(self)
     }
 
@@ -330,15 +334,26 @@ impl TerrainWaterMembershipIndex {
         self.fence_probes.as_ref() == probes
     }
 
-    pub fn with_height_support_limits(mut self, limits: Arc<[[f32; 2]]>) -> Option<Self> {
-        if limits.len() != self.point_owners.len() {
+    pub fn replace_selector_geometry(
+        &mut self,
+        projection: Arc<[Option<[u8; 4]>]>,
+        probes: Arc<[[Box<[[Vec2; 2]]>; 8]]>,
+        empty_topology: bool,
+    ) -> Option<()> {
+        if projection.len() != self.side_owners.len() || probes.len() != self.side_owners.len() {
             return None;
         }
-        self.height_support_limits = limits;
-        Some(self)
+        self.selector_projection = projection;
+        self.fence_probes = probes;
+        self.empty_selector_topology = empty_topology;
+        Some(())
     }
 
-    pub fn height_support_limits_match(&self, limits: &Arc<[[f32; 2]]>) -> bool {
+    pub fn replace_height_support_limits(&mut self, limits: Arc<TerrainWaterSupportLimits>) {
+        self.height_support_limits = limits;
+    }
+
+    pub fn height_support_limits_match(&self, limits: &Arc<TerrainWaterSupportLimits>) -> bool {
         Arc::ptr_eq(&self.height_support_limits, limits)
             || self.height_support_limits.as_ref() == limits.as_ref()
     }
@@ -362,9 +377,12 @@ impl TerrainWaterMembershipIndex {
         if point.x >= self.width || point.y >= self.height {
             return false;
         }
-        let index = (point.y * self.width + point.x) as usize;
+        let index = point.y * self.width + point.x;
         Self::height_limits_support_water_interval(
-            self.height_support_limits[index],
+            self.height_support_limits
+                .get(&index)
+                .copied()
+                .unwrap_or_else(unconstrained_terrain_water_height),
             point,
             low,
             high,
@@ -429,8 +447,7 @@ impl TerrainWaterMembershipIndex {
         points: impl IntoIterator<Item = (UVec2, Option<Entity>, f32)>,
         terrain: &TerrainAsset,
     ) -> Option<Vec<UVec2>> {
-        let width = self.width;
-        let heights = match &mut self.edited_point_heights {
+        let _ = match &mut self.edited_point_heights {
             Some(heights) => heights,
             heights @ None => {
                 let grid = terrain.canonical_terrain_grid();
@@ -447,6 +464,29 @@ impl TerrainWaterMembershipIndex {
                 )
             }
         };
+        self.update_points(
+            points
+                .into_iter()
+                .map(|(point, owner, height)| (point, owner, Some(height))),
+        )
+    }
+
+    pub fn set_authored_points(
+        &mut self,
+        points: impl IntoIterator<Item = (UVec2, Option<Entity>)>,
+    ) -> Option<Vec<UVec2>> {
+        self.update_points(
+            points
+                .into_iter()
+                .map(|(point, owner)| (point, owner, None)),
+        )
+    }
+
+    fn update_points(
+        &mut self,
+        points: impl IntoIterator<Item = (UVec2, Option<Entity>, Option<f32>)>,
+    ) -> Option<Vec<UVec2>> {
+        let width = self.width;
         let mut changed = Vec::new();
         let mut lost = std::collections::BTreeSet::new();
         let mut gained = std::collections::BTreeMap::<Entity, Vec<UVec2>>::new();
@@ -456,11 +496,15 @@ impl TerrainWaterMembershipIndex {
             }
             let index = (point.y * width + point.x) as usize;
             let before = self.point_owners[index];
-            if before == owner && heights[index].to_bits() == height.to_bits() {
+            let mut height_changed = false;
+            if let (Some(height), Some(heights)) = (height, &mut self.edited_point_heights) {
+                height_changed = heights[index].to_bits() != height.to_bits();
+                heights[index] = height;
+            }
+            if before == owner && !height_changed {
                 continue;
             }
             changed.push(point);
-            heights[index] = height;
             if before != owner {
                 self.point_owners[index] = owner;
                 lost.extend(before);
@@ -545,6 +589,27 @@ impl TerrainWaterMembershipIndex {
             }
         }
         Some(changed)
+    }
+
+    /// Includes owners of slope tiles that can sample this point or a
+    /// neighboring tile while projecting shoreline and suspension geometry.
+    pub fn collect_owners_near_point(
+        &self,
+        point: UVec2,
+        owners: &mut bevy::ecs::entity::EntityHashSet,
+    ) {
+        owners.extend(self.point_owner(point));
+        let tile = (point / 4).as_ivec2();
+        for y in -2..=1 {
+            for x in -2..=1 {
+                let tile = tile + IVec2::new(x, y);
+                if tile.min_element() >= 0 {
+                    if let Some(sides) = self.side_owners(tile.as_uvec2()) {
+                        owners.extend(sides.iter().flatten().copied());
+                    }
+                }
+            }
+        }
     }
 
     /// Replaces one slope tile's side owners, returning whether they changed.

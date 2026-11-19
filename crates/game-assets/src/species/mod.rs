@@ -29,16 +29,15 @@ impl Plugin for SpeciesAssetPlugin {
             .add_systems(
                 PreUpdate,
                 (
-                    discover_species_catalogue_sources,
-                    index_loaded_species_assets_by_species_and_variant_identifier,
-                )
-                    .chain()
-                    .after(bevy::asset::AssetTrackingSystems)
-                    .run_if(
+                    discover_species_catalogue_sources.run_if(
                         in_state(GamePhase::Loading)
                             .or_else(in_state(GamePhase::InGame))
                             .or_else(any_with_component::<WorldAssetPreparation>),
                     ),
+                    index_loaded_species_assets_by_species_and_variant_identifier,
+                )
+                    .chain()
+                    .after(bevy::asset::AssetTrackingSystems),
             );
     }
 }

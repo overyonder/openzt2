@@ -256,6 +256,10 @@ pub(super) fn placement_hydration_complete(
     definitions: WorldDefinitionsView<'_>,
     definition: AssetId,
     transform: &Transform,
+    scene: Option<&Handle<ScenePrefabAsset>>,
+    scene_footprints: Option<
+        &openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints,
+    >,
     has_grid_placement: bool,
     has_donation_dock: bool,
 ) -> bool {
@@ -265,8 +269,11 @@ pub(super) fn placement_hydration_complete(
     let Some(object) = definitions.find_object(definition) else {
         return false;
     };
+    let geometry = scene_footprints.map_or(placeable.into(), |footprints| {
+        footprints.resolve(placeable, scene)
+    });
     let grid_pose = openzt2_zoo_state::placement::object_placement_validation::calculate_authored_object_placement_eighth_turns(placeable, transform)
-        .and_then(|turns| openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin(placeable, transform, turns));
+        .and_then(|turns| openzt2_zoo_state::placement::object_placement_validation::calculate_object_placement_footprint_origin(geometry, transform, turns));
     // Canonical placement hydration projects only authored grid orientations.
     (grid_pose.is_none() || has_grid_placement)
         && (!object

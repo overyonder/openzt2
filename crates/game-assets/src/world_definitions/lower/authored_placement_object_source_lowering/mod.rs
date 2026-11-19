@@ -31,11 +31,11 @@ use crate::source_document::resolved_source_record_index::{BindError, RecordView
 use crate::source_document::source_document_semantic_name::{
     canonicalize_source_document_record_key, source_document_names_are_semantically_equal,
 };
-use openzt2_game_data::AssetId;
 use openzt2_game_data::world_definitions::world_objects::{
     WaterFilterPolicy, WorldObjectAffordanceFlags, WorldObjectDefinition, WorldObjectPropertyFlags,
     WorldObjectRealPhysicsWaterImpactDefinition,
 };
+use openzt2_game_data::AssetId;
 use std::collections::BTreeMap;
 
 /// Uses the mainObj scene for spawning. Purchase controls also add a catalogue entry.

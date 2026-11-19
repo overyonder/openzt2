@@ -48,6 +48,10 @@ struct openzt2_effect
     int parameter_scratch;
     int execution_validated;
     const struct openzt2_effect *scratch_source;
+    float *preshader_registers;
+    unsigned int preshader_register_capacity;
+    void *preshader_temps;
+    size_t preshader_temp_capacity;
 };
 
 static void set_effect_error(struct openzt2_effect *owner, const char *message)
@@ -218,6 +222,8 @@ void openzt2_effect_close(struct openzt2_effect *owner)
         for (int i = 0; i < owner->effect->param_count; ++i)
             free(owner->effect->params[i].value.values);
         free(owner->effect->params);
+        free(owner->preshader_registers);
+        free(owner->preshader_temps);
         free(owner->effect);
         free(owner);
         return;
@@ -282,6 +288,18 @@ struct openzt2_effect *openzt2_effect_open_parameter_scratch(const struct openzt
         }
     }
     return scratch;
+}
+
+void openzt2_effect_reset_parameter_scratch(struct openzt2_effect *scratch)
+{
+    const MOJOSHADER_effect *program = scratch->scratch_source->effect;
+    for (int i = 0; i < program->param_count; ++i)
+    {
+        const MOJOSHADER_effectValue *source = &program->params[i].value;
+        if (source->value_count)
+            memcpy(scratch->effect->params[i].value.values, source->values,
+                   source->value_count * effect_value_storage_element_size(source));
+    }
 }
 
 static int fixed_state_parameter(const struct openzt2_effect *owner,
@@ -393,8 +411,29 @@ void openzt2_effect_parameter_layout(const struct openzt2_effect *owner, unsigne
     layout[3] = value->value_count;
 }
 
+static void *allocate_preshader_temps(int bytes, void *userdata)
+{
+    struct openzt2_effect *scratch = userdata;
+    if ((size_t)bytes > scratch->preshader_temp_capacity)
+    {
+        void *temps = realloc(scratch->preshader_temps, (size_t)bytes);
+        if (!temps)
+            return NULL;
+        scratch->preshader_temps = temps;
+        scratch->preshader_temp_capacity = (size_t)bytes;
+    }
+    return scratch->preshader_temps;
+}
+
+static void release_preshader_temps(void *pointer, void *userdata)
+{
+    /* The retained evaluation keeps its temporary registers for the next call. */
+    (void)pointer;
+    (void)userdata;
+}
+
 int openzt2_effect_evaluate_transform(const struct openzt2_effect *program,
-                                      const struct openzt2_effect *scratch, unsigned int technique,
+                                      struct openzt2_effect *scratch, unsigned int technique,
                                       unsigned int pass, unsigned int index, float *output)
 {
     if (!program->execution_validated || scratch->scratch_source != program
@@ -411,9 +450,16 @@ int openzt2_effect_evaluate_transform(const struct openzt2_effect *program,
     if (state->preshader)
     {
         const MOJOSHADER_preshader *preshader = state->preshader;
-        float *registers = calloc(preshader->register_count, 4 * sizeof(float));
-        if (!registers && preshader->register_count)
-            return -1;
+        if (preshader->register_count > scratch->preshader_register_capacity)
+        {
+            float *registers = realloc(scratch->preshader_registers,
+                                       (size_t)preshader->register_count * 4 * sizeof(float));
+            if (!registers)
+                return -1;
+            scratch->preshader_registers = registers;
+            scratch->preshader_register_capacity = preshader->register_count;
+        }
+        float *registers = scratch->preshader_registers;
         if (preshader->register_count)
             memcpy(registers, preshader->registers,
                    (size_t)preshader->register_count * 4 * sizeof(float));
@@ -435,8 +481,11 @@ int openzt2_effect_evaluate_transform(const struct openzt2_effect *program,
                     destination[component] = (float)parameter->valuesI[component];
             }
         }
-        const int evaluated = MOJOSHADER_evaluatePreshader(preshader, registers, output);
-        free(registers);
+        MOJOSHADER_preshader evaluation = *preshader;
+        evaluation.malloc = allocate_preshader_temps;
+        evaluation.free = release_preshader_temps;
+        evaluation.malloc_data = scratch;
+        const int evaluated = MOJOSHADER_evaluatePreshader(&evaluation, registers, output);
         if (!evaluated)
             return -1;
     }

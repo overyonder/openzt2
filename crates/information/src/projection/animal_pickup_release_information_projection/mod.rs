@@ -34,7 +34,7 @@ use openzt2_zoo_state::animal_lifecycle::types::ReleaseRestricted;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 
 use super::text_replacement_operations::replace_projected_ui_text_if_changed;
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn authored_multi_icon_key_for_conservation_status(
     conservation_status: ConservationStatus,
@@ -56,7 +56,8 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     ui_document_roots: Query<&UiDocumentRoot>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     relocating: Query<
         (),
         With<openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject>,
@@ -94,7 +95,10 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
     let Some(species_index) = active_species.get(&species_assets) else {
         return;
     };
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
@@ -107,7 +111,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             is_rampaging,
             is_dead,
             crate_link,
-        )) = animals.get(information_panel.subject)
+        )) = animals.get(selection.0)
         else {
             continue;
         };
@@ -196,9 +200,7 @@ pub(crate) fn project_selected_animal_pickup_release_and_conservation_controls(
             let enabled = match &enabled_binding.0 {
                 UiBooleanPropertyBindingSource::AnimalPickupEnabled => pickup_should_be_enabled,
                 UiBooleanPropertyBindingSource::SelectedEntityCrated => {
-                    is_crated
-                        && !relocating
-                            .contains(crate_link.map_or(information_panel.subject, |link| link.0))
+                    is_crated && !relocating.contains(crate_link.map_or(selection.0, |link| link.0))
                 }
                 _ => continue,
             };

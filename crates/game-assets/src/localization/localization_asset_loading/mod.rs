@@ -1,5 +1,5 @@
 use bevy::{
-    asset::{AssetApp, AssetLoader, LoadContext, io::Reader},
+    asset::{io::Reader, AssetApp, AssetLoader, LoadContext},
     prelude::*,
 };
 
@@ -10,8 +10,13 @@ use super::{
     localization_asset_types::LocalizationAsset,
     localization_configuration::{LocalizationConfiguration, LocalizationConfigurationLoader},
 };
-use crate::source_document::{
-    blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+use crate::{
+    asset_source::archive_entry_asset_path::{
+        archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
+    },
+    source_document::{
+        blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
+    },
 };
 
 #[derive(Default, TypePath)]
@@ -30,9 +35,12 @@ impl AssetLoader for LocalizationAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let source_path = load_context.path().path().to_string_lossy();
-        let source_document = parse_blue_fang_source_document(AssetPath::new(&source_path), &bytes)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        let asset_path = load_context.path().path();
+        let archive_path = archive_entry_asset_source_path(asset_path).map(|(path, _, _)| path);
+        let source_path = archive_path.as_deref().unwrap_or(asset_path);
+        let source_document =
+            parse_blue_fang_source_document(AssetPath::new(&source_path.to_string_lossy()), &bytes)
+                .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
 
         let mut entries = std::collections::BTreeMap::new();
         for entry in lower_blue_fang_localization_entries(&source_document)? {
@@ -40,9 +48,7 @@ impl AssetLoader for LocalizationAssetLoader {
         }
         Ok(LocalizationAsset::from_localization_catalog(
             LocalizationCatalog {
-                locale_identifier: load_context
-                    .path()
-                    .path()
+                locale_identifier: source_path
                     .parent()
                     .and_then(std::path::Path::file_name)
                     .map_or_else(String::new, |locale| locale.to_string_lossy().into_owned()),
@@ -53,7 +59,7 @@ impl AssetLoader for LocalizationAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml"]
+        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }
 

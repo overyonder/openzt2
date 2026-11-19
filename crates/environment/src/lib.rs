@@ -26,6 +26,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 use self::weather_types::{
     SetWeather, WeatherChanged, WeatherRequestApplied, WeatherRequestRejected, WeatherWelfareDue,
@@ -43,8 +44,11 @@ impl Plugin for EnvironmentPlugin {
             .add_message::<WeatherRequestRejected>()
             .add_message::<WeatherChanged>()
             .add_message::<WeatherWelfareDue>()
+            .add_message::<ZooTickAdvanced>()
             .add_observer(environment_fog_attachment::remove_camera_fog_when_environment_is_unlinked)
+            .add_message::<sky_vertex_color_interpolation::SkyPrimitiveTreeChanged>()
             .add_observer(sky_vertex_color_interpolation::unlink_removed_sky_vertex_color_mesh)
+            .add_observer(sky_vertex_color_interpolation::invalidate_discarded_sky_tree_parent)
             .add_systems(
                 Update,
                 world_environment_initialization::initialize_world_environment_from_loaded_scenario_and_definitions
@@ -63,6 +67,7 @@ impl Plugin for EnvironmentPlugin {
                 (
                     sky_vertex_color_interpolation::retain_sky_vertex_color_keyframe_models,
                     sky_vertex_color_interpolation::link_first_sky_vertex_color_primitive,
+                    sky_vertex_color_interpolation::resolve_sky_vertex_color_meshes,
                     sky_vertex_color_interpolation::interpolate_sky_model_vertex_colors,
                 )
                     .chain()
@@ -81,6 +86,8 @@ impl Plugin for EnvironmentPlugin {
                 (
                     daylight_environment_presentation::sample_environment_daylight_fraction,
                     daylight_environment_presentation::sample_authored_object_ambient_light
+                        .after(daylight_environment_presentation::sample_authored_environment_visual_curves),
+                    daylight_environment_presentation::sample_authored_environment_visual_curves
                         .after(daylight_environment_presentation::sample_environment_daylight_fraction),
                     authored_wind_shader_presentation::advance_authored_wind_shader_presentation_state,
                     environment_presentation_hydration::hydrate_bevy_renderer_entities_for_new_world_environment,
@@ -89,9 +96,10 @@ impl Plugin for EnvironmentPlugin {
                     environment_fog_attachment::attach_neutral_environment_fog_to_new_zoo_cameras,
                     daylight_environment_presentation::project_current_daylight_weather_and_sky_into_bevy_renderer
                         .after(daylight_environment_presentation::sample_authored_object_ambient_light)
+                        .after(daylight_environment_presentation::sample_authored_environment_visual_curves)
                         .after(environment_visual_construction::attach_environment_sun_visuals_to_loaded_animation_joints),
                     underwater_environment_presentation::update_region_water_light_samples
-                        .after(daylight_environment_presentation::sample_environment_daylight_fraction),
+                        .after(daylight_environment_presentation::sample_authored_environment_visual_curves),
                     underwater_environment_presentation::current::update_water_region_currents
                         .after(authored_wind_shader_presentation::advance_authored_wind_shader_presentation_state),
                     underwater_environment_presentation::project_resolved_camera_distance_fog
@@ -113,7 +121,7 @@ impl Plugin for EnvironmentPlugin {
                 (
                     weather_transition_lifecycle::advance_automatic_and_requested_weather_transitions
                         .after(FixedGameSet::Clock)
-                        .run_if(resource_changed::<openzt2_world_state::simulation_time::simulation_clock_types::ZooClock>),
+                        .run_if(on_message::<ZooTickAdvanced>),
                     weather_animal_welfare::apply_current_weather_welfare_adjustment_to_zoo_animals
                         .after(weather_transition_lifecycle::advance_automatic_and_requested_weather_transitions),
                     ambient_animal_lifecycle::spawn_eligible_ambient_animals_from_authored_environment_spawners,

@@ -12,6 +12,17 @@ pub struct HabitatRegion {
     pub boundary_fence_entities: Box<[Entity]>,
 }
 
+#[derive(Component)]
+#[relationship(relationship_target = HabitatFenceIncidences)]
+pub struct HabitatBoundaryFence(pub Entity);
+
+#[derive(Component)]
+#[relationship_target(relationship = HabitatBoundaryFence, linked_spawn)]
+pub struct HabitatFenceIncidences(Vec<Entity>);
+
+#[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct HabitatTopologyPublication;
+
 #[derive(Component, Debug, Clone, PartialEq)]
 pub struct HabitatSummary {
     pub land_area_square_metres: f32,

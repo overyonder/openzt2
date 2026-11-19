@@ -1,7 +1,6 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::localization::localization_asset_types::LocalizationAsset;
 use openzt2_game_assets::localization::localization_precedence_index::LocalizationPrecedenceIndex;
@@ -45,7 +44,6 @@ pub(super) struct WorldSelectionPresentation<'w, 's> {
     pub(super) images: Query<'w, 's, &'static mut ImageNode>,
     pub(super) focusable: Query<'w, 's, &'static mut UiFocusable>,
     pub(super) enabled: Query<'w, 's, &'static mut UiInteractionEnabled>,
-    pub(super) interactions: Query<'w, 's, &'static mut UiPointerInteraction>,
 }
 
 #[derive(SystemParam)]

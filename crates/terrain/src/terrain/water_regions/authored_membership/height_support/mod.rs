@@ -1,4 +1,4 @@
-use bevy::ecs::system::SystemParam;
+use bevy::{ecs::{entity::EntityHashSet, system::SystemParam}};
 use bevy::prelude::*;
 use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
@@ -7,7 +7,12 @@ use openzt2_game_data::world_definitions::transportation_and_tours::Transportati
 use openzt2_world_state::world_spawn::world_membership_types::DefinitionId;
 use openzt2_zoo_state::aquatic::aquatic_simulation_types::TankGeometry;
 use openzt2_zoo_state::habitat::habitat_types::HabitatRegion;
+use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
+    unconstrained_terrain_water_height, TerrainWaterSupportLimits,
+};
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_world_state::world_spawn::prefab_source_asset_handle::PrefabSourceAssetHandle;
 use openzt2_zoo_state::topology::topology_graph_types::{FenceEdge, PathTile, TileSurface, TopologyGrid, TopologyNode};
 use openzt2_zoo_state::transport_tours::transport_topology_types::TrackSegment;
 
@@ -20,13 +25,31 @@ pub(in crate::terrain) struct TerrainHeightSupports<'w, 's> {
     nodes: Query<'w, 's, &'static TopologyNode>,
     tracks: Query<'w, 's, &'static TrackSegment>,
     objects: Query<'w, 's, &'static DefinitionId>,
+    scene_sources: Query<'w, 's, Ref<'static, PrefabSourceAssetHandle>>,
+    scene_footprints: Option<Res<'w, ScenePlacementFootprints>>,
     parents: Query<'w, 's, &'static ChildOf>,
     transforms: TransformHelper<'w, 's>,
 }
 
 impl TerrainHeightSupports<'_, '_> {
-    fn endpoint_owner(&self, mut entity: Entity) -> Option<(Entity, &DefinitionId)> {
+    pub(super) fn scene_geometry_changed(&self, dependencies: &EntityHashSet) -> bool {
+        self.scene_footprints
+            .as_ref()
+            .is_some_and(|footprints| footprints.is_changed())
+            || dependencies.iter().any(|entity| {
+                self.scene_sources
+                    .get(*entity)
+                    .is_ok_and(|source| source.is_changed())
+            })
+    }
+
+    fn endpoint_owner(
+        &self,
+        mut entity: Entity,
+        dependencies: &mut EntityHashSet,
+    ) -> Option<(Entity, &DefinitionId)> {
         loop {
+            dependencies.insert(entity);
             if let Ok(definition) = self.objects.get(entity) {
                 return Some((entity, definition));
             }
@@ -37,33 +60,44 @@ impl TerrainHeightSupports<'_, '_> {
     pub(super) fn sky_supports(
         &self,
         definitions: WorldDefinitionsView<'_>,
-    ) -> Option<Vec<(Entity, openzt2_game_data::AssetId, Option<Transform>)>> {
+    ) -> super::TerrainWaterSkySupports {
+        let mut dependencies = EntityHashSet::default();
         let mut owners = Vec::new();
         for track in &self.tracks {
-            if definitions.find_track(track.definition)?.kind == TransportationTrackKind::Sky {
-                owners.extend([track.from, track.to].into_iter().filter_map(|endpoint| {
-                    let (entity, definition) = self.endpoint_owner(endpoint)?;
-                    Some((entity, definition.0))
-                }));
+            let Some(definition) = definitions.find_track(track.definition) else {
+                return super::TerrainWaterSkySupports {
+                    dependencies,
+                    supports: None,
+                };
+            };
+            if definition.kind != TransportationTrackKind::Sky {
+                continue;
             }
+            owners.extend([track.from, track.to].into_iter().filter_map(|endpoint| {
+                let (entity, definition) = self.endpoint_owner(endpoint, &mut dependencies)?;
+                Some((entity, definition.0))
+            }));
         }
         owners.sort_unstable_by_key(|(entity, _)| *entity);
         owners.dedup_by_key(|(entity, _)| *entity);
-        Some(
-            owners
-                .into_iter()
-                .map(|(entity, definition)| {
-                    (
-                        entity,
-                        definition,
-                        self.transforms
-                            .compute_global_transform(entity)
-                            .ok()
-                            .map(|value| value.compute_transform()),
-                    )
-                })
-                .collect(),
-        )
+        let supports = owners
+            .into_iter()
+            .map(|(entity, definition)| {
+                dependencies.extend(self.parents.iter_ancestors::<ChildOf>(entity));
+                (
+                    entity,
+                    definition,
+                    self.transforms
+                        .compute_global_transform(entity)
+                        .ok()
+                        .map(|value| value.compute_transform()),
+                )
+            })
+            .collect();
+        super::TerrainWaterSkySupports {
+            dependencies,
+            supports: Some(supports),
+        }
     }
 
     pub(super) fn point_limits(
@@ -72,10 +106,10 @@ impl TerrainHeightSupports<'_, '_> {
         definitions: WorldDefinitionsView<'_>,
         topology: &TopologyGrid,
         sky_supports: &[(Entity, openzt2_game_data::AssetId, Option<Transform>)],
-    ) -> Option<Box<[[f32; 2]]>> {
+    ) -> Option<TerrainWaterSupportLimits> {
         let grid = asset.canonical_terrain_grid();
         let spacing = grid.units.cell_size_metres;
-        let mut limits = vec![[-1000.0_f32, 1000.0_f32]; grid.samples.len()];
+        let mut limits = TerrainWaterSupportLimits::default();
         for (path, surface) in &self.paths {
             let definition = definitions.find_path(path.definition)?;
             if !definition.elevated {
@@ -115,7 +149,9 @@ impl TerrainHeightSupports<'_, '_> {
                         if cross.iter().all(|value| *value >= 0.0)
                             || cross.iter().all(|value| *value <= 0.0)
                         {
-                            let bounds = &mut limits[(y * grid.width + x) as usize];
+                            let bounds = limits
+                                .entry(y * grid.width + x)
+                                .or_insert_with(unconstrained_terrain_water_height);
                             bounds[1] = bounds[1].min(cap);
                         }
                     }
@@ -153,11 +189,18 @@ impl TerrainHeightSupports<'_, '_> {
             }
         }
         let mut cells = Vec::new();
-        for (_, definition, transform) in sky_supports {
+        for (entity, definition, transform) in sky_supports {
             let definition = definitions.find_placeable(*definition)?;
             let transform = transform.as_ref()?;
+            let source = self.scene_sources.get(*entity).ok();
+            let geometry = self
+                .scene_footprints
+                .as_ref()
+                .map_or(definition.into(), |footprints| {
+                    footprints.resolve(definition, source.as_ref().map(|source| &source.0))
+                });
             for cell in
-                collect_occupied_placement_cells_for_transform(definition, transform, &mut cells)?
+                collect_occupied_placement_cells_for_transform(geometry, transform, &mut cells)?
             {
                 apply_rectangle(
                     &mut limits,
@@ -169,7 +212,7 @@ impl TerrainHeightSupports<'_, '_> {
                 );
             }
         }
-        Some(limits.into_boxed_slice())
+        Some(limits)
     }
 }
 
@@ -192,7 +235,7 @@ fn point_rectangle(
 }
 
 fn apply_rectangle(
-    limits: &mut [[f32; 2]],
+    limits: &mut TerrainWaterSupportLimits,
     asset: &TerrainAsset,
     minimum: Vec2,
     maximum: Vec2,
@@ -210,7 +253,9 @@ fn apply_rectangle(
     };
     for y in minimum.y..=maximum.y {
         for x in minimum.x..=maximum.x {
-            let bounds = &mut limits[(y * grid.width + x) as usize];
+            let bounds = limits
+                .entry(y * grid.width + x)
+                .or_insert_with(unconstrained_terrain_water_height);
             bounds[0] = bounds[0].max(lower);
             bounds[1] = bounds[1].min(upper);
         }

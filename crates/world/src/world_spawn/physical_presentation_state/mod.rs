@@ -39,7 +39,13 @@ pub(super) struct PhysicalPresentationChildOf(pub(super) Entity);
 
 #[derive(Component)]
 #[relationship_target(relationship = PhysicalPresentationChildOf, linked_spawn)]
-pub(super) struct ActivePhysicalPresentationChild(pub(super) Entity);
+pub(super) struct ActivePhysicalPresentationChild(Entity);
+
+impl ActivePhysicalPresentationChild {
+    pub(super) fn entity(&self) -> Entity {
+        self.0
+    }
+}
 
 pub(super) fn apply_physical_presentation_requests(
     mut commands: Commands,

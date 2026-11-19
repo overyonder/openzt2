@@ -1,10 +1,11 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::animal_shows::{UiShowAction, UiShowPlatformUpgrade};
+use openzt2_interface_state::information::entity_selection_types::SelectionChanged;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_focus_state::UiFocusable;
 use openzt2_interface_state::ui::authored_ui_interaction_enabled_state::UiInteractionEnabled;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
@@ -24,7 +25,8 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
     documents: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
+    mut selection_changes: MessageReader<SelectionChanged>,
     cash: Res<openzt2_zoo_state::economy::zoo_cash_types::ZooCash>,
     unlimited_cash: Option<Res<openzt2_zoo_state::economy::zoo_cash_types::UnlimitedZooCash>>,
     roots: Query<(Ref<UiDocumentRoot>, Option<Ref<ChildOf>>)>,
@@ -42,10 +44,11 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
         Option<&mut UiFocusable>,
     )>,
 ) {
+    let selection_changed = selection_changes.read().count() != 0;
     let projection_inputs_changed = documents.is_changed()
         || world_definition_assets.is_changed()
         || active_world_definitions.is_changed()
-        || selected_entity.is_changed()
+        || selection_changed
         || cash.is_changed()
         || unlimited_cash
             .as_ref()
@@ -70,7 +73,9 @@ pub(super) fn project_show_platform_upgrade_selection_and_purchase_availability_
         };
         let controller = parent.as_deref().map_or(owner.0, ChildOf::parent);
         let selected_upgrade = controllers.get(controller).ok().map(|value| *value);
-        let stage = selected_entity.0.filter(|entity| stages.contains(*entity));
+        let stage = selected_entity
+            .subject()
+            .filter(|entity| stages.contains(*entity));
         let records = range.authored_action_records(document);
         for record in records {
             match &record.action {

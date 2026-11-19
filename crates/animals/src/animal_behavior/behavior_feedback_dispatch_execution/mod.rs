@@ -1,29 +1,33 @@
 use bevy::prelude::*;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorFeedback, RunningBehaviorInstruction,
+};
 
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorFeedbackDispatched;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 
 pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
-    behavior_document_assets: Res<Assets<BehaviorDocumentAsset>>,
+    mut commands: Commands,
     simulation_clock: Res<ZooClock>,
-    mut behavior_tasks: Query<(Entity, &mut BehaviorTaskExecutionState)>,
+    mut behavior_tasks: Query<(
+        Entity,
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &RunBehaviorFeedback,
+        ),
+    )>,
     mut dispatched_feedback: MessageWriter<BehaviorFeedbackDispatched>,
 ) {
-    for (actor, mut behavior_task) in &mut behavior_tasks {
+    for (actor, (behavior_task, instruction, running_action)) in &mut behavior_tasks {
         if behavior_task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        let Some(BehaviorAction::Feedback(feedback)) = behavior_document_assets
-            .get(&behavior_task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &behavior_task))
-        else {
+        if !instruction.is_current(behavior_task) {
             continue;
-        };
+        }
+        let feedback = &running_action.0;
         let dispatch = BehaviorFeedbackDispatched {
             actor,
             document: behavior_task.document.clone(),
@@ -41,6 +45,6 @@ pub(super) fn dispatch_current_authored_behavior_feedback_and_advance(
             "dispatched authored behavior feedback"
         );
         dispatched_feedback.write(dispatch);
-        advance_behavior_task_to_next_action(&mut behavior_task, simulation_clock.tick);
+        instruction.complete(actor, simulation_clock.tick, &mut commands);
     }
 }

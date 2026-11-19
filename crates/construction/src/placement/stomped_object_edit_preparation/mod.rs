@@ -9,12 +9,8 @@ use openzt2_world_state::world_spawn::{
     persistent_id_types::PersistentId, prefab_source_asset_handle::PrefabSourceAssetHandle,
 };
 use openzt2_zoo_state::placement::{
-    object_placement_definition_queries::{
-        collect_occupied_placement_cells_for_origin_and_quarter_turns, resolve_object_placeable_definition,
-    },
-    object_placement_geometry::ScenePlacementFootprints,
     object_placement_validation::object_placement_stomp_action,
-    placed_object_types::{PlacedObjectDefinitionReference, PlacedObjectFootprintOccupancy},
+    placed_object_types::{IndexedObjectPlacementCells, PlacedObjectDefinitionReference},
     placement_occupancy_index::PlacedObjectFootprintOccupancyIndex,
     placement_transaction_types::{PreparedObjectPlacementEditMutationKind, PreparedObjectPlacementMutation},
 };
@@ -23,19 +19,40 @@ pub(super) type StompablePlacedObject = (
     &'static PersistentId,
     &'static PlacedObjectDefinitionReference,
     &'static Transform,
-    &'static PlacedObjectFootprintOccupancy,
+    &'static IndexedObjectPlacementCells,
     &'static PrefabSourceAssetHandle,
 );
+
+pub(super) fn object_stomp_prevents_placement_at_cell(
+    cell: IVec2,
+    definition: &PlaceableDefinition,
+    catalogue: WorldDefinitionsView<'_>,
+    placement: &PlacedObjectFootprintOccupancyIndex,
+    targets: &Query<StompablePlacedObject>,
+    ignored: impl Fn(Entity) -> bool,
+) -> bool {
+    placement.entities_occupying_cell(cell).any(|entity| {
+        if ignored(entity) {
+            return false;
+        }
+        let Ok((_, target, _, cells, _)) = targets.get(entity) else {
+            return true;
+        };
+        match object_placement_stomp_action(definition, catalogue, Some(target.definition)) {
+            PlacementStompAction::Allow => false,
+            PlacementStompAction::Prevent => true,
+            PlacementStompAction::Delete => !cells.0.contains(&cell),
+        }
+    })
+}
 
 pub(super) fn prepare_stomped_object_removals(
     cells: &[IVec2],
     definition: &PlaceableDefinition,
     catalogue: WorldDefinitionsView<'_>,
-    footprints: &ScenePlacementFootprints,
     placement: &PlacedObjectFootprintOccupancyIndex,
     targets: &Query<StompablePlacedObject>,
     ignored: impl Fn(Entity) -> bool,
-    scratch: &mut Vec<IVec2>,
 ) -> Option<Vec<PreparedObjectPlacementMutation>> {
     let overlapping = cells
         .iter()
@@ -44,27 +61,19 @@ pub(super) fn prepare_stomped_object_removals(
         .collect::<BTreeSet<_>>();
     let mut removals = Vec::new();
     for entity in overlapping {
-        let Ok((id, target, transform, occupancy, prefab)) = targets.get(entity) else {
+        let Ok((id, target, transform, cells, prefab)) = targets.get(entity) else {
             return None;
         };
-        if object_placement_stomp_action(definition, catalogue, Some(target.definition))
-            != PlacementStompAction::Delete
-        {
-            continue;
+        match object_placement_stomp_action(definition, catalogue, Some(target.definition)) {
+            PlacementStompAction::Allow => continue,
+            PlacementStompAction::Prevent => return None,
+            PlacementStompAction::Delete => {}
         }
-        let target_definition = resolve_object_placeable_definition(catalogue, target.definition)?;
-        let target_geometry = footprints.resolve(target_definition, Some(&prefab.0));
-        let cells = collect_occupied_placement_cells_for_origin_and_quarter_turns(
-            target_geometry.cells(occupancy.eighth_turns),
-            occupancy.origin,
-            occupancy.eighth_turns / 2,
-            scratch,
-        )?;
         removals.push(PreparedObjectPlacementMutation {
             entity: *id,
             definition: target.definition,
             transform: *transform,
-            cells: cells.to_vec().into_boxed_slice(),
+            cells: cells.0.clone(),
             previous_transform: None,
             previous_cells: Box::new([]),
             mutation: PreparedObjectPlacementEditMutationKind::Remove,

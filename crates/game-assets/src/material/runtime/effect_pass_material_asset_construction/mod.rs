@@ -62,6 +62,7 @@ pub(in crate::material) fn create_effect_pass_material_assets_from_evaluated_tec
                 index,
                 texture_coordinate_animations,
                 reflection_projections,
+                technique.evaluated_passes.len() == 1,
             )
         })
         .collect()
@@ -75,15 +76,17 @@ fn translated_shader_asset(
     registers: &[GpuSemanticRegisters],
     instance_index: Option<InstanceIndexInput>,
     forward_instance_index: bool,
+    sampler_biases: Option<&[f32; 8]>,
     path: String,
 ) -> io::Result<Shader> {
-    if registers.is_empty() && !forward_instance_index {
+    let sampler_biases = sampler_biases.filter(|biases| biases.iter().any(|&bias| bias != 0.0));
+    if registers.is_empty() && !forward_instance_index && sampler_biases.is_none() {
         return Ok(Shader::from_spirv(
             shader.spirv_bytecode,
             format!("{path}.spv"),
         ));
     }
-    let source = rewrite_translated_shader_with_gpu_semantic_registers(
+    let mut source = rewrite_translated_shader_with_gpu_semantic_registers(
         &shader.spirv_bytecode,
         uniform_binding,
         &shader.uniform_register_upload_order[0],
@@ -92,6 +95,13 @@ fn translated_shader_asset(
         forward_instance_index,
     )
     .map_err(|error| io::Error::new(error.kind(), format!("{path}: {error}")))?;
+    if let Some(biases) = sampler_biases {
+        super::gpu_semantic_shader_registers::apply_translated_sampler_biases(
+            &mut source,
+            EFFECT_SHADER_BINDING_LAYOUT,
+            biases,
+        )?;
+    }
     Ok(Shader::from_wesl(source, format!("{path}.wesl")))
 }
 
@@ -110,6 +120,7 @@ fn create_effect_pass_material_asset(
         [super::texture_coordinate_animation::TextureCoordinateAnimation],
     >,
     reflection_projections: &[(usize, usize, [f32; 16])],
+    standalone_pass: bool,
 ) -> io::Result<Handle<EffectPassMaterial>> {
     let (vertex, fragment) = match (
         state.vertex_shader.as_deref(),
@@ -255,6 +266,7 @@ fn create_effect_pass_material_asset(
                 &vertex_gpu_registers,
                 Some(InstanceIndexInput::VertexBuiltin),
                 forward_instance_index,
+                None,
                 format!("{}#{label}", context.path()),
             )?;
             context.add_labeled_asset(label, asset)
@@ -280,12 +292,21 @@ fn create_effect_pass_material_asset(
                     FORWARDED_INSTANCE_INDEX_LOCATION,
                 )),
                 false,
+                Some(&state.samplers.map(|sampler| sampler.lod_bias())),
                 format!("{}#{label}", context.path()),
             )?;
             context.add_labeled_asset(label, asset)
         }
     };
     let blend = state.blend()?;
+    let (depth_write_enabled, depth_compare) = state.effective_depth_state();
+    let (stencil, stencil_reference) = state.effective_stencil();
+    let independent_opaque = standalone_pass
+        && blend.is_none()
+        && depth_write_enabled
+        && depth_compare == bevy::render::render_resource::CompareFunction::Greater
+        && state.color_writes == bevy::render::render_resource::ColorWrites::ALL
+        && stencil == Default::default();
     let dynamic_texture_semantics = std::array::from_fn(|stage| {
         state.textures[stage].as_ref().and_then(|parameter_name| {
             parameter_descriptions
@@ -613,8 +634,11 @@ fn create_effect_pass_material_asset(
             fragment_entry_point: fragment_entry,
             cull_face: state.cull,
             polygon_mode: state.polygon,
-            depth_write_enabled: state.effective_depth_state().0,
-            depth_compare: state.effective_depth_state().1,
+            depth_write_enabled,
+            depth_compare,
+            stencil,
+            stencil_reference,
+            independent_opaque,
             blend_state: blend,
             color_writes: state.color_writes,
         },

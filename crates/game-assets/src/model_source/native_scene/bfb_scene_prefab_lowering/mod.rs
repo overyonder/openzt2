@@ -154,6 +154,7 @@ pub(in super::super) fn lower_blue_fang_scene_prefab(
                     near_m: 0.0,
                     far_m: 0.0,
                     active_without_range: ordinal == 0,
+                    initial_render_tier: Some(0),
                 },
             );
         }

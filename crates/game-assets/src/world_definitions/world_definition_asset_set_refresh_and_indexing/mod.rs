@@ -3,22 +3,32 @@ pub mod game_context_binder_directory_loading;
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
-use bevy::{asset::AssetLoadFailedEvent, prelude::*};
-use openzt2_game_data::{AssetId, world_definitions::document::WorldDefinitionDocument};
+use bevy::{
+    asset::{AssetLoadFailedEvent, LoadState},
+    prelude::*,
+};
+use openzt2_game_data::{world_definitions::document::WorldDefinitionDocument, AssetId};
 
-use crate::asset_source::AssetArchives;
+use crate::asset_source::{
+    archive_entry_asset_path::{archive_entry_asset_path, archive_entry_asset_source_path},
+    ArchiveCatalogue, AssetArchives,
+};
 
 use super::{
     ground_path_surface_images::GROUND_PATH_SURFACE_IMAGE_EXTENSION,
     world_definition_asset_set_state_and_borrowing_queries::{
-        DefinitionKind, SingletonKind, WorldDefinitions, kind_range,
+        kind_range, DefinitionKind, SingletonKind, WorldDefinitions,
     },
     world_definition_document_asset_and_demand_loaded_dependency_paths::{
-        AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS, WorldDefinitionAsset,
+        WorldDefinitionAsset, AUTHORED_GROUND_PATH_SURFACE_MASK_SOURCE_PATHS,
     },
-    world_definition_load_queue::request_world_definition_handles_without_per_asset_frame_waits,
+    world_definition_load_queue::{
+        request_world_definition_handles_without_per_asset_frame_waits,
+        MAXIMUM_ACTIVE_DEFINITION_LOADS,
+    },
 };
 
 pub(crate) fn world_definition_source_path(
@@ -110,31 +120,62 @@ pub(crate) fn world_definition_source_path(
     )
 }
 
+#[derive(Default)]
+pub(super) struct WorldDefinitionDiscovery {
+    sources: Option<Arc<[z2f::ResolvedArchiveEntry]>>,
+    supplements: Option<Arc<[z2f::ResolvedArchiveEntry]>>,
+}
+
 pub(super) fn discover_world_definition_catalogue_sources(
     archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
-    mut previous_sources: Local<Option<std::sync::Arc<[z2f::ResolvedArchiveEntry]>>>,
+    mut previous: Local<WorldDefinitionDiscovery>,
 ) {
-    if !archives.is_changed() && previous_sources.is_some() {
+    if !archives.is_changed() && previous.sources.is_some() {
         return;
     }
-    let (binder_version, sources) = archives.world_definition_sources();
-    if previous_sources
+    let (binder_sources, sources) = archives.world_definition_sources();
+    let supplements = archives.catalogue_sources(ArchiveCatalogue::WorldDefinitionSupplements);
+    let changed_sources = previous
+        .sources
         .as_ref()
-        .is_some_and(|previous| std::sync::Arc::ptr_eq(previous, &sources))
-    {
+        .is_none_or(|old| !Arc::ptr_eq(old, &sources));
+    let changed_supplements = previous
+        .supplements
+        .as_ref()
+        .is_none_or(|old| !Arc::ptr_eq(old, &supplements));
+    if !changed_sources && !changed_supplements {
         return;
     }
+    let paths_changed_under = |old: &[z2f::ResolvedArchiveEntry],
+                               new: &[z2f::ResolvedArchiveEntry],
+                               directory: &str| {
+        let within =
+            |entry: &&z2f::ResolvedArchiveEntry| entry.normalized_asset_path.starts_with(directory);
+        old.iter().filter(within).ne(new.iter().filter(within))
+    };
+    let zoopedia_changed = previous.sources.as_ref().is_some_and(|old| {
+        changed_sources && paths_changed_under(old, &sources, "ui/zoopedia/entries")
+    });
+    let changed_supplement = |path| {
+        changed_supplements
+            && previous
+                .supplements
+                .as_ref()
+                .is_some_and(|old| paths_changed_under(old, &supplements, path))
+    };
+    let adoption_changed = changed_supplement("xpinfo");
+    let biome_changed = changed_supplement("biomes/autoplacement");
+    let show_timer_changed = changed_supplement("config/ztshowtimermanager.xml");
     if definitions.server.is_none() {
         definitions.server = Some(server.clone());
     }
     let mut paths = sources
         .iter()
-        .map(|entry| entry.normalized_asset_path.clone())
+        .map(|entry| &entry.normalized_asset_path)
         .collect::<Vec<_>>();
-    *previous_sources = Some(sources);
     let additive_zoopedia_entry_collection_owner_path = paths
         .iter()
         .filter(|path| {
@@ -155,7 +196,7 @@ pub(super) fn discover_world_definition_catalogue_sources(
             .replace('\\', "/")
             .to_ascii_lowercase()
             .starts_with("ui/zoopedia/entries/")
-            || additive_zoopedia_entry_collection_owner_path.as_ref() == Some(path)
+            || additive_zoopedia_entry_collection_owner_path == Some(*path)
     });
     paths.sort_by_key(|path| {
         let path = path
@@ -170,39 +211,49 @@ pub(super) fn discover_world_definition_catalogue_sources(
             2
         }
     });
-    for (identifier, asset) in assets.iter() {
-        if !asset
-            .authored_binder_source_index_revision
-            .is_some_and(|loaded_revision| loaded_revision != binder_version)
-            || !matches!(
-                server.get_load_state(identifier),
-                Some(bevy::asset::LoadState::Loaded)
+    let routed_paths = sources
+        .iter()
+        .map(|source| {
+            (
+                &source.normalized_asset_path,
+                archive_entry_asset_path(source),
             )
-        {
-            continue;
-        }
-        let Some(handle) = server.get_id_handle(identifier) else {
+        })
+        .collect::<BTreeMap<_, _>>();
+    let paths = paths
+        .into_iter()
+        .filter_map(|path| routed_paths.get(path).cloned())
+        .collect::<Vec<_>>();
+    let wanted = paths.iter().map(PathBuf::as_path).collect::<BTreeSet<_>>();
+    let binder_inputs_changed = definitions
+        .binder_sources
+        .as_ref()
+        .is_some_and(|previous| !std::sync::Arc::ptr_eq(previous, &binder_sources));
+    let mut reload_queue = std::mem::take(&mut definitions.reload_queue);
+    reload_queue.retain(|_, path| wanted.contains(path.path()));
+    for handle in &definitions.handles {
+        let id = handle.id();
+        let Some(path) = handle.path().filter(|path| wanted.contains(path.path())) else {
             continue;
         };
-        if let Some(path) = handle.path().filter(|path| {
-            paths
-                .iter()
-                .any(|candidate| candidate.as_path() == path.path())
-        }) {
-            // New, removed or replaced unselected binders can change uniqueness
-            // without a watcher event for any registered file dependency.
-            server.reload(path.clone());
-            if !definitions
-                .handles
-                .iter()
-                .any(|previous| previous.id() == identifier)
-            {
-                definitions.handles.push(handle);
-            }
+        let Some((source, _, _)) = archive_entry_asset_source_path(path.path()) else {
+            continue;
+        };
+        let binder_changed = binder_inputs_changed
+            && (assets
+                .get(id)
+                .is_some_and(|asset| asset.authored_binder_sources.is_some())
+                || definitions.failed.contains(&id));
+        let supplements_changed = (zoopedia_changed && source.starts_with("ui/zoopedia/entries"))
+            || (adoption_changed && source == Path::new("config/adoption.xml"))
+            || (biome_changed && source.parent() == Some(Path::new("biomes")))
+            || (show_timer_changed
+                && matches!(source.to_str(), Some("ai/ztai.xml" | "ai/staffmgr.xml")));
+        if binder_changed || supplements_changed {
+            reload_queue.insert(id, path.clone());
         }
     }
-    // Keep old handles alive until the replacement queue acquires its handles,
-    // including while Bevy's asynchronous reload requests begin.
+    definitions.reload_queue = reload_queue;
     definitions.complete = false;
     definitions.total_loads = paths.len();
     definitions.completed_loads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -213,66 +264,115 @@ pub(super) fn discover_world_definition_catalogue_sources(
             std::sync::Arc::clone(&definitions.completed_loads),
         ),
     );
-    definitions.binder_source_version = binder_version;
-    definitions.dirty = true;
+    definitions.binder_sources = Some(binder_sources);
+    previous.sources = Some(sources);
+    previous.supplements = Some(supplements);
 }
 
 pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_kind(
+    archives: Res<AssetArchives>,
     server: Res<AssetServer>,
     assets: Res<Assets<WorldDefinitionAsset>>,
     mut load_failures: MessageReader<AssetLoadFailedEvent<WorldDefinitionAsset>>,
     mut events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
     mut definitions: ResMut<WorldDefinitions>,
 ) {
-    let mut binder_consumer_failed = false;
-    for failure in load_failures.read() {
-        binder_consumer_failed |= assets
-            .get(failure.id)
-            .is_some_and(|asset| asset.authored_binder_source_index_revision.is_some());
-    }
-    let mut changed = false;
-    for event in events.read() {
-        match *event {
-            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
-                changed |= definitions.handles.iter().any(|handle| handle.id() == id);
-            }
-            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => {}
-        }
-    }
-    if definitions.dirty {
-        if let Some(task) = definitions.loading_task.as_mut() {
-            let Some(handles) = bevy::tasks::block_on(futures_lite::future::poll_once(task)) else {
-                return;
-            };
+    let mut discovery_finished = false;
+    if let Some(task) = definitions.bypass_change_detection().loading_task.as_mut() {
+        if let Some(handles) = bevy::tasks::block_on(futures_lite::future::poll_once(task)) {
+            let definitions = definitions.bypass_change_detection();
             definitions.handles = handles;
             definitions.loading_task = None;
+            let sources = definitions
+                .handles
+                .iter()
+                .map(Handle::id)
+                .collect::<BTreeSet<_>>();
+            definitions.failed.retain(|id| sources.contains(id));
+            definitions.pending.retain(|id| sources.contains(id));
+            definitions.reloading.retain(|id| sources.contains(id));
+            for &id in &sources {
+                if definitions.reloading.contains(&id) {
+                    continue;
+                }
+                match server.get_load_state(id) {
+                    Some(LoadState::Failed(_)) if !definitions.pending.contains(&id) => {
+                        definitions.failed.insert(id);
+                    }
+                    Some(LoadState::Loaded) if assets.contains(id) => {}
+                    _ => {
+                        definitions.pending.insert(id);
+                    }
+                }
+            }
+            definitions.source_ids = sources;
+            discovery_finished = true;
         }
-        // A load guard completes before Bevy necessarily inserts its asset
-        // into the main world. Index only once those insertions have landed.
-        if definitions.handles.iter().any(|handle| {
-            !matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
-            )
-        }) {
-            return;
+    }
+    let mut settled = BTreeSet::new();
+    for event in events.read() {
+        let id = match *event {
+            AssetEvent::Added { id } | AssetEvent::Modified { id } | AssetEvent::Removed { id } => {
+                id
+            }
+            AssetEvent::Unused { .. } | AssetEvent::LoadedWithDependencies { .. } => continue,
+        };
+        if definitions.source_ids.contains(&id) {
+            let current = assets
+                .get(id)
+                .and_then(|asset| asset.authored_binder_sources.as_ref())
+                .zip(definitions.binder_sources.as_ref())
+                .is_none_or(|(loaded, expected)| std::sync::Arc::ptr_eq(loaded, expected));
+            if current {
+                settled.insert(id);
+            }
         }
-        if definitions.handles.iter().any(|handle| {
-            !matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Failed(_))
-            ) && assets.get(handle).is_some_and(|asset| {
-                asset
-                    .authored_binder_source_index_revision
-                    .is_some_and(|revision| revision != definitions.binder_source_version)
-            })
-        }) {
-            // A cached load guard can finish before reload starts. Publication
-            // of the current binder-index revision, or failure, is required.
-            return;
+    }
+    let mut failed = BTreeSet::new();
+    for failure in load_failures.read() {
+        if definitions.source_ids.contains(&failure.id) {
+            failed.insert(failure.id);
         }
-    } else if !changed && !binder_consumer_failed {
+    }
+    let changed = discovery_finished || !settled.is_empty() || !failed.is_empty();
+    if !changed {
         return;
+    }
+    {
+        let loading = definitions.bypass_change_detection();
+        for id in settled {
+            loading.pending.remove(&id);
+            loading.reloading.remove(&id);
+            loading.failed.remove(&id);
+        }
+        for id in failed {
+            loading.pending.remove(&id);
+            loading.reloading.remove(&id);
+            loading.failed.insert(id);
+        }
+    }
+    if definitions.loading_task.is_some() || !definitions.pending.is_empty() {
+        return;
+    }
+
+    {
+        let loading = definitions.bypass_change_detection();
+        while loading.reloading.len() < MAXIMUM_ACTIVE_DEFINITION_LOADS {
+            let Some((id, path)) = loading.reload_queue.pop_first() else {
+                break;
+            };
+            if loading.reloading.contains(&id) {
+                loading.reload_queue.insert(id, path);
+                break;
+            }
+            if loading.source_ids.contains(&id) {
+                loading.reloading.insert(id);
+                server.reload(path);
+            }
+        }
+        if !loading.reloading.is_empty() {
+            return;
+        }
     }
 
     let mut records = BTreeMap::new();
@@ -281,14 +381,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         let Some(asset) = assets.get(handle) else {
             continue;
         };
-        if asset.authored_binder_source_index_revision.is_some()
-            && matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Failed(_))
-            )
-        {
-            // Bevy retains the previous asset on reload failure; an ambiguous
-            // binder resolution must not leave its old definitions selectable.
+        if definitions.failed.contains(&handle.id()) {
             continue;
         }
         index_world_definition_document_records_and_singletons(
@@ -343,6 +436,17 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
             .or_default()
             .push(*identifier);
     }
+    let current_source_order = definitions
+        .handles
+        .iter()
+        .filter_map(|handle| {
+            let (path, _, _) = archive_entry_asset_source_path(handle.path()?.path())?;
+            Some((
+                handle.id(),
+                archives.first_enabled_archive_entry_order(&path)?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
     let mut catalogue_authored_purchase_order = records
         .range(kind_range(DefinitionKind::Catalogue))
         .enumerate()
@@ -359,7 +463,16 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
                             *id,
                             entry.authored_purchase_sort_key.as_str(),
                             entry.authored_purchase_sort_fallback_type_name.as_str(),
-                            entry.authored_type_registry_source_order,
+                            current_source_order.get(&handle.id()).map_or(
+                                entry.authored_type_registry_source_order,
+                                |[archive, ordinal]| {
+                                    [
+                                        *archive,
+                                        *ordinal,
+                                        entry.authored_type_registry_source_order[2],
+                                    ]
+                                },
+                            ),
                         )
                     })
             })
@@ -386,13 +499,20 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
         .map(|path| path.width_cm / 2)
         .min()
         .unwrap_or_default();
-    definitions.handles.retain(|handle| {
-        retained.contains(&handle.id())
-            || !matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Loaded | bevy::asset::LoadState::Failed(_))
-            )
-    });
+    let maximum_ground_path_width_cm = records
+        .range(kind_range(DefinitionKind::Path))
+        .filter_map(|((_, id), handle)| {
+            assets
+                .get(handle)?
+                .document
+                .paths
+                .iter()
+                .find(|path| path.id == *id)
+        })
+        .filter(|path| !path.elevated)
+        .map(|path| path.width_cm)
+        .max()
+        .unwrap_or_default();
     definitions.fame_documents = definitions
         .handles
         .iter()
@@ -411,14 +531,7 @@ pub(super) fn index_loaded_world_definition_assets_by_identifier_and_singleton_k
     definitions.unlock_definition_identifiers_by_target = unlock_definition_identifiers_by_target;
     definitions.catalogue_authored_purchase_order = catalogue_authored_purchase_order;
     definitions.topology_cell_size_cm = topology_cell_size_cm;
-    definitions.pending_assets = definitions.handles.iter().any(|handle| {
-        assets.get(handle).is_none()
-            && !matches!(
-                server.get_load_state(handle.id()),
-                Some(bevy::asset::LoadState::Failed(_))
-            )
-    });
-    definitions.dirty = false;
+    definitions.maximum_ground_path_width_cm = maximum_ground_path_width_cm;
     definitions.complete = true;
     refresh_ground_path_surface_image_dependencies(&mut definitions, &assets, &server);
 }

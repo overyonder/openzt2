@@ -2,7 +2,10 @@ use bevy::prelude::*;
 use bevy_hanabi::{ParticleAliveCount, ParticleSpawnBatch, ParticleSpawnPoint};
 use openzt2_game_data::{particle::particle_emission_point::ParticleEmissionPoint, AssetId};
 
-use super::{effect_runtime_types::PendingEffectInstance, ParticleEffectDocumentAsset};
+use super::{
+    effect_runtime_types::{ParticleEffectGraphReady, PendingEffectInstance},
+    ParticleEffectDocumentAsset,
+};
 
 #[derive(Component)]
 pub struct ParticleEffectPointEmitter {
@@ -81,11 +84,11 @@ pub(crate) fn prepare_explicit_particle_emitters(
     }
 }
 
-pub(crate) fn upload_explicit_particle_emission_points(
+pub(super) fn upload_explicit_particle_emission_points(
     mut requests: MessageReader<AppendParticleEffectPoints>,
     mut emitters: Query<(
         &mut ParticleEffectPointEmitter,
-        Option<&bevy_hanabi::CompiledParticleEffect>,
+        Has<ParticleEffectGraphReady>,
         Option<&mut ParticleSpawnBatch>,
         Option<&mut bevy_hanabi::EffectSpawner>,
         Option<&mut bevy_hanabi::EffectParticleSizeScale>,
@@ -96,7 +99,7 @@ pub(crate) fn upload_explicit_particle_emission_points(
             emitter.queued_points.extend_from_slice(&request.points);
         }
     }
-    for (mut emitter, compiled, batch, spawner, size_scale) in &mut emitters {
+    for (mut emitter, ready, batch, spawner, size_scale) in &mut emitters {
         if let Some(mut size_scale) = size_scale {
             size_scale.0 = emitter.size_scale;
         }
@@ -105,7 +108,7 @@ pub(crate) fn upload_explicit_particle_emission_points(
         };
         batch.points.clear();
         spawner.spawn_count = 0;
-        if !compiled.is_some_and(|compiled| compiled.is_ready()) {
+        if !ready {
             continue;
         }
         if !emitter.queued_points.is_empty() || emitter.pending_manual_count > 0 {

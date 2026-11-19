@@ -6,7 +6,12 @@ use bevy::{
 };
 
 use crate::{
-    asset_source::AssetArchives,
+    asset_source::{
+        archive_entry_asset_path::{
+            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
+        },
+        AssetArchives,
+    },
     {
         source_document::{
             blue_fang_actor_manifest_model_and_scene_resolution_index::BlueFangActorManifestModelAndSceneResolutionIndex,
@@ -50,7 +55,13 @@ impl AssetLoader for SpeciesAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let path = context.path().path().to_string_lossy().replace('\\', "/");
+        let asset_path = context.path().path();
+        let source_path = archive_entry_asset_source_path(asset_path).map(|(path, _, _)| path);
+        let path = source_path
+            .as_deref()
+            .unwrap_or(asset_path)
+            .to_string_lossy()
+            .replace('\\', "/");
         let mut documents = Vec::<OrderedSourceDocument>::new();
         let mut actor_manifest_resolution_index =
             BlueFangActorManifestModelAndSceneResolutionIndex::default();
@@ -146,7 +157,7 @@ impl AssetLoader for SpeciesAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml"]
+        &["xml", ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }
 

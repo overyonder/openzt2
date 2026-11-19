@@ -18,7 +18,9 @@ pub struct WorldScenarios {
     pub(super) discovered: bool,
     pub(super) discovery_changed: bool,
     pub(super) pending: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
+    pub(super) required_ids: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
     pub(super) failed: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
+    pub(super) source_ids: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
     pub(super) published_dependencies: BTreeSet<bevy::asset::AssetId<WorldScenarioDocumentAsset>>,
     pub(super) handles: Vec<Handle<WorldScenarioDocumentAsset>>,
     pub(super) locations: BTreeMap<AssetId, Handle<WorldScenarioDocumentAsset>>,
@@ -37,6 +39,7 @@ pub struct WorldScenarios {
 impl WorldScenarios {
     #[cfg(any(test, feature = "testing"))]
     pub fn queue_test_document(&mut self, handle: Handle<WorldScenarioDocumentAsset>) {
+        self.source_ids.insert(handle.id());
         self.handles.push(handle);
         self.discovered = true;
         self.discovery_changed = true;
@@ -74,6 +77,7 @@ impl WorldScenarios {
             self.photo_sets.insert(set.id, handle.clone());
         }
         self.discovered = true;
+        self.source_ids.insert(handle.id());
         self.handles.push(handle);
     }
 

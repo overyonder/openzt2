@@ -5,21 +5,20 @@
 use bevy::prelude::*;
 use openzt2_game_assets::{
     application_lifecycle::GamePhase,
-    behavior::behavior_asset_types::BehaviorDocumentAsset,
     world_definitions::{
         world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions,
         world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset,
     },
 };
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::AssetId;
 use openzt2_world_state::{
     application_schedule::FixedGameSet, simulation_time::simulation_clock_types::ZooClock,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorDestroyTarget, RunBehaviorMorphTarget, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::{
-    behavior_task_execution_types::{
-        advance_behavior_task_to_next_action, find_current_behavior_task_action,
-        BehaviorTaskExecutionState, PendingBehaviorTaskFailure,
-    },
+    behavior_task_execution_types::{BehaviorTaskExecutionState, PendingBehaviorTaskFailure},
     placement::{
         placed_object_types::PlacedObjectDefinitionReference,
         placement_transaction_types::DestroyPlacedObject,
@@ -46,12 +45,21 @@ pub(super) fn register_target_morph_execution(application: &mut App) {
 fn morph_current_behavior_targets(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     world_assets: Res<Assets<WorldDefinitionAsset>>,
     world_definitions: Res<WorldDefinitions>,
-    mut actors: Query<
-        (&mut BehaviorTaskExecutionState, &GlobalTransform),
-        Without<PendingBehaviorTaskFailure>,
+    actors: Query<
+        (
+            Entity,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &GlobalTransform,
+            Option<&RunBehaviorMorphTarget>,
+            Has<RunBehaviorDestroyTarget>,
+        ),
+        (
+            Without<PendingBehaviorTaskFailure>,
+            Or<(With<RunBehaviorMorphTarget>, With<RunBehaviorDestroyTarget>)>,
+        ),
     >,
     grid: Res<openzt2_zoo_state::topology::topology_graph_types::TopologyGrid>,
     mut fences: Query<&mut FenceEdge>,
@@ -64,28 +72,20 @@ fn morph_current_behavior_targets(
     let Some(definitions) = world_definitions.get(&world_assets) else {
         return;
     };
-    for (mut task, actor_transform) in &mut actors {
+    for (actor, task, instruction, actor_transform, morph, destroy) in &actors {
         if task.next_action_tick > clock.tick {
             continue;
         }
-        let breaks = match documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        {
-            Some(&BehaviorAction::MorphTarget(attribute)) => {
-                debug!(target = ?task.target(), ?attribute, "behavior target morph");
-                attribute == AssetId::from_key("s_broken")
+        if !instruction.is_current(task) {
+            continue;
+        }
+        if destroy {
+            if let Some(target) = task.target().filter(|target| placed.contains(*target)) {
+                debug!(?target, "building destroyed by an animal");
+                destroyed.write(DestroyPlacedObject { entity: target });
             }
-            Some(BehaviorAction::DestroyTarget) => {
-                if let Some(target) = task.target().filter(|target| placed.contains(*target)) {
-                    debug!(?target, "building destroyed by an animal");
-                    destroyed.write(DestroyPlacedObject { entity: target });
-                }
-                // A guest or staff target isn't killed yet.
-                true
-            }
-            _ => continue,
-        };
+        }
+        let breaks = destroy || morph.is_some_and(|morph| morph.0 == AssetId::from_key("s_broken"));
         if breaks {
             if let Some(mut edge) = task.target().and_then(|target| fences.get_mut(target).ok()) {
                 let broken = definitions
@@ -117,6 +117,6 @@ fn morph_current_behavior_targets(
                 }
             }
         }
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
     }
 }

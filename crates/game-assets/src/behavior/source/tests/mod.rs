@@ -360,3 +360,37 @@ fn a_locomotion_switch_keeps_its_default_row_and_skips_carrying_rows() {
     assert_eq!(switch.default, Some(AssetId::from_key("wait_land")));
     assert_eq!(switch.ground, Some(AssetId::from_key("wait_land")));
 }
+
+#[test]
+fn traversal_and_named_morph_keep_the_authored_suffix() {
+    use openzt2_game_data::behavior::action_record::BehaviorAction;
+    let source = parse_blue_fang_source_document(
+        AssetPath::new("ai/tasks/test-traversal.beh"),
+        br#"<BehaviorSets><Traverse><behaviors>
+          <BFBehDockTAP targetAnim="walk" subjectNode="floor" targetTAP="enter"/>
+          <BFBehAnimateTAP subjectNode="floor" targetTAP="enter" exitTap="false"/>
+          <BFBehAnimateTAP subjectNode="floor" targetTAP="exit" exitTAP="true"/>
+          <ZTBehMorph morphEntity="Egg" morphTargetEntityType="Young" morphPeriod="2"/>
+          <BFBehKill killSubject="true"/>
+        </behaviors></Traverse></BehaviorSets>"#,
+    )
+    .unwrap();
+    let BehaviorDocument::Sets(sets) = lower_behavior_source_document(&source).unwrap() else {
+        panic!("expected behavior sets");
+    };
+    let [BehaviorAction::DockTraversal { target_path, .. }, BehaviorAction::AnimateTraversal { exit: false, .. }, BehaviorAction::AnimateTraversal { exit: true, .. }, BehaviorAction::MorphEntity {
+        recipient,
+        definition,
+        period,
+        ..
+    }, BehaviorAction::Termination(_)] = sets[0].actions.lowered_actions()
+    else {
+        panic!("expected all authored actions");
+    };
+    assert_eq!(target_path, "enter");
+    assert!(matches!(recipient,
+        openzt2_game_data::behavior::action_record::BehaviorMorphRecipient::NamedChild(id)
+            if *id == openzt2_game_data::AssetId::from_key("egg")));
+    assert_eq!(*definition, openzt2_game_data::AssetId::from_key("young"));
+    assert_eq!(*period, std::time::Duration::from_secs(2));
+}

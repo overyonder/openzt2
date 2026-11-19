@@ -129,6 +129,116 @@ pub(super) fn rewrite_translated_shader_with_gpu_semantic_registers(
     Ok(shader.text)
 }
 
+/// Apply the D3D9 sampler bias to Naga's translated texture instructions.
+pub(super) fn apply_translated_sampler_biases(
+    shader: &mut String,
+    binding_layout: d3d9_effects::shader_types::D3d9ShaderBindingLayout,
+    biases: &[f32; 8],
+) -> io::Result<()> {
+    let mut names = Vec::new();
+    let group = format!("@group({})", binding_layout.descriptor_set);
+    for (stage, &bias) in (0_u32..).zip(biases) {
+        if bias == 0.0 {
+            continue;
+        }
+        let binding = format!("@binding({})", binding_layout.first_sampler_binding + stage);
+        let Some(attributes) = shader.find(&format!("{group} {binding}")) else {
+            continue;
+        };
+        let declaration = &shader[attributes + group.len() + binding.len() + 1..];
+        let name = declaration
+            .trim_start()
+            .strip_prefix("var ")
+            .and_then(|variable| variable.split_once(':'))
+            .map(|(name, _)| name.trim())
+            .ok_or_else(|| invalid("translated sampler declaration has no name"))?;
+        names.push((
+            name.to_owned(),
+            format!("bitcast<f32>(0x{:08x}u)", bias.to_bits()),
+        ));
+    }
+    let mut offset = 0;
+    while let Some(index) = shader[offset..].find("textureSample") {
+        let start = offset + index;
+        let tail = &shader[start..];
+        let end_name = tail
+            .find(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
+            .unwrap_or(tail.len());
+        let name = &tail[..end_name];
+        let Some(arguments_text) = tail[end_name..].strip_prefix('(') else {
+            offset = start + end_name;
+            continue;
+        };
+        offset = start + end_name + 1;
+        if !matches!(
+            name,
+            "textureSample" | "textureSampleBias" | "textureSampleLevel" | "textureSampleGrad"
+        ) {
+            continue;
+        }
+        let (argument_end, arguments) = translated_texture_sample_arguments(arguments_text)
+            .ok_or_else(|| invalid("translated texture sample has unbalanced arguments"))?;
+        let Some((_, bias)) = arguments
+            .get(1)
+            .and_then(|sampler| names.iter().find(|(name, _)| name == sampler))
+        else {
+            continue;
+        };
+        let mut arguments = arguments
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        let replacement = match name {
+            "textureSample" if arguments.len() >= 3 => {
+                arguments.insert(3, bias.clone());
+                "textureSampleBias"
+            }
+            "textureSampleBias" | "textureSampleLevel" if arguments.len() >= 4 => {
+                arguments[3] = format!("({}) + {bias}", arguments[3]);
+                name
+            }
+            "textureSampleGrad" if arguments.len() >= 5 => {
+                for gradient in &mut arguments[3..5] {
+                    *gradient = format!("({gradient}) * exp2({bias})");
+                }
+                name
+            }
+            _ => {
+                return Err(invalid(
+                    "translated texture sample has an unsupported argument layout",
+                ))
+            }
+        };
+        let replacement_call = format!("{replacement}({})", arguments.join(", "));
+        let end = offset + argument_end + 1;
+        offset = start + replacement.len() + 1;
+        shader.replace_range(start..end, &replacement_call);
+    }
+    Ok(())
+}
+
+fn translated_texture_sample_arguments(text: &str) -> Option<(usize, Vec<&str>)> {
+    let mut depth = 0;
+    let mut start = 0;
+    let mut arguments = Vec::new();
+    for (index, character) in text.char_indices() {
+        match character {
+            '(' | '[' => depth += 1,
+            ')' if depth == 0 => {
+                arguments.push(text[start..index].trim());
+                return Some((index, arguments));
+            }
+            ')' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                arguments.push(text[start..index].trim());
+                start = index + 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
 impl TranslatedShaderText {
     fn from_spirv(spirv: &[u8]) -> io::Result<Self> {
         // Read the SPIR-V as wgpu does. The translated shader already writes

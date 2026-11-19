@@ -295,6 +295,7 @@ impl ActiveTerrainDerivedNavigationGraph {
     /// nearest the recipient first. Route reachability remains the planner's job.
     pub fn collect_dry_ground_candidates(
         &self,
+        tank_water: Option<&crate::aquatic::tank_navigation_water::TankNavigationWater>,
         region: &crate::habitat::habitat_types::HabitatRegion,
         grid: crate::topology::topology_graph_types::TopologyGrid,
         agent: &NavAgent,
@@ -320,7 +321,7 @@ impl ActiveTerrainDerivedNavigationGraph {
             let Some(index) = graph.calculate_navigation_node_for_terrain_cell(terrain_cell) else {
                 continue;
             };
-            let Some(node) = graph.find_navigation_node(index) else {
+            let Some(node) = graph.effective_navigation_node(index, tank_water) else {
                 continue;
             };
             if node.eligibility_flags.0 & agent.capabilities.0 & NavFlags::ELIGIBILITY_BITS == 0
@@ -373,16 +374,17 @@ impl ActiveTerrainDerivedNavigationGraph {
 
     /// Returns eligible node positions in the terrain tile containing the
     /// supplied world-space position.
-    pub fn candidate_positions(
-        &self,
+    pub fn candidate_positions<'a>(
+        &'a self,
         position_cm: [i32; 3],
         eligibility: NavFlags,
-    ) -> impl Iterator<Item = [i32; 3]> + '_ {
+        tank_water: Option<&'a crate::aquatic::tank_navigation_water::TankNavigationWater>,
+    ) -> impl Iterator<Item = [i32; 3]> + 'a {
         self.terrain_derived_navigation_graph
             .find_candidate_node_indices_in_containing_terrain_tile(position_cm)
             .filter_map(move |index| {
                 self.terrain_derived_navigation_graph
-                    .find_navigation_node(index)
+                    .effective_navigation_node(index, tank_water)
                     .filter(|node| node.eligibility_flags.contains(eligibility))
                     .and_then(|_| {
                         self.terrain_derived_navigation_graph

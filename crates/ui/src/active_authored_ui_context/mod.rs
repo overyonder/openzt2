@@ -9,7 +9,7 @@ use super::{
     authored_reusable_list_and_table_runtime_types::UiListRow,
     authored_ui_focus_state::UiFocusable,
     authored_ui_interaction_enabled_state::UiInteractionEnabled,
-    authored_ui_node_projection_components::{UiDocumentOwner, UiNodeId},
+    authored_ui_node_projection_components::UiDocumentOwner,
 };
 
 #[derive(SystemParam)]
@@ -21,14 +21,9 @@ pub struct ActiveAuthoredUiContext<'w, 's> {
     enabled: Query<'w, 's, &'static UiInteractionEnabled>,
     focusables: Query<'w, 's, &'static UiFocusable>,
     visibility: Query<'w, 's, &'static InheritedVisibility>,
+    layouts: Query<'w, 's, &'static Node>,
     modals: Query<'w, 's, (Entity, &'static UiAuthoredModalPresentation)>,
     stack_indices: Query<'w, 's, &'static bevy::ui::ComputedStackIndex>,
-    nodes: Query<
-        'w,
-        's,
-        (Entity, &'static UiDocumentOwner, &'static UiNodeId),
-        With<InheritedVisibility>,
-    >,
 }
 
 impl ActiveAuthoredUiContext<'_, '_> {
@@ -43,6 +38,12 @@ impl ActiveAuthoredUiContext<'_, '_> {
             .get(entity)
             .is_ok_and(|visible| visible.get())
             && self.enabled(entity)
+            && self.ancestors(entity).all(|node| {
+                !self
+                    .layouts
+                    .get(node)
+                    .is_ok_and(|node| node.display == Display::None)
+            })
     }
 
     /// No disabled node on the path to the root, whether or not it is shown.
@@ -86,7 +87,10 @@ impl ActiveAuthoredUiContext<'_, '_> {
     }
 
     pub fn active_scope(&self) -> Option<Entity> {
-        let modal = self.top_modal();
+        self.active_scope_with_modal(self.top_modal())
+    }
+
+    pub(super) fn active_scope_with_modal(&self, modal: Option<Entity>) -> Option<Entity> {
         self.stack.uinodes.iter().rev().find_map(|entity| {
             (self.focusables.contains(*entity)
                 && self.visible_and_enabled(*entity)
@@ -124,22 +128,6 @@ impl ActiveAuthoredUiContext<'_, '_> {
 
     pub fn navigation_order(&self, entity: Entity) -> u32 {
         self.stack_position(entity).unwrap_or(0) as u32
-    }
-
-    pub fn hotkey_receiver_is_eligible(
-        &self,
-        owner: Entity,
-        receiver_index: u32,
-        scope: Option<Entity>,
-        modal: Option<Entity>,
-    ) -> bool {
-        self.nodes.iter().any(|(entity, node_owner, node_id)| {
-            node_owner.0 == owner
-                && node_id.index == receiver_index
-                && self.visible_and_enabled(entity)
-                && scope.is_none_or(|scope| self.document_scope(owner) == scope)
-                && modal.is_none_or(|modal| self.ancestors(entity).any(|node| node == modal))
-        })
     }
 }
 

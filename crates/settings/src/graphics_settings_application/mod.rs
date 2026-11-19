@@ -25,7 +25,7 @@ pub(super) fn validate_and_accept_requested_graphics_settings(
 
 pub(super) fn project_shadow_detail_to_environment_lights(
     settings: Res<GraphicsSettings>,
-    mut shadow_map: ResMut<DirectionalLightShadowMap>,
+    shadow_map: ResMut<DirectionalLightShadowMap>,
     mut lights: Query<(&mut DirectionalLight, Ref<EnvironmentLight>)>,
 ) {
     let enabled = settings.shadow_detail != ShadowDetail::Off;
@@ -39,7 +39,7 @@ pub(super) fn project_shadow_detail_to_environment_lights(
             .map_unchanged(|map| &mut map.size)
             .set_if_neq(size);
     }
-    for (mut light, environment_light) in &mut lights {
+    for (light, environment_light) in &mut lights {
         if settings.is_changed() || environment_light.is_added() || light.is_added() {
             light
                 .map_unchanged(|light| &mut light.shadow_maps_enabled)

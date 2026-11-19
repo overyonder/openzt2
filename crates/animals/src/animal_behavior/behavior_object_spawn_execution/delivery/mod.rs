@@ -1,8 +1,10 @@
 use super::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorSpawnObject, RunningBehaviorInstruction,
+};
 
 pub(super) fn deliver_behavior_object_spawns(
     mut commands: Commands,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
@@ -18,7 +20,7 @@ pub(super) fn deliver_behavior_object_spawns(
     pose_validation: super::spawn_pose::SpawnPoseValidation,
     mut actors: Query<
         (
-            &mut BehaviorTaskExecutionState,
+            (&BehaviorTaskExecutionState, &RunningBehaviorInstruction, &RunBehaviorSpawnObject),
             &mut PendingBehaviorObjectSpawn,
             &WorldMember,
             &mut openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream,
@@ -29,9 +31,14 @@ pub(super) fn deliver_behavior_object_spawns(
     let mut failed = bevy::platform::collections::HashSet::new();
     for rejection in rejected.read() {
         let actor = rejection.animation_subject_entity;
-        if actors.get(actor).is_ok_and(|(task, pending, _, _)| {
-            pending.owns(&task) && pending.request == Some(rejection.request_id)
-        }) {
+        if actors
+            .get(actor)
+            .is_ok_and(|((task, instruction, _), pending, _, _)| {
+                instruction.is_current(task)
+                    && pending.owns(task, instruction)
+                    && pending.request == Some(rejection.request_id)
+            })
+        {
             failed.insert(actor);
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }
@@ -44,12 +51,15 @@ pub(super) fn deliver_behavior_object_spawns(
             continue;
         };
         let actor = owner.gameplay_entity;
-        let Ok((task, mut pending, world, mut random)) = actors.get_mut(actor) else {
+        let Ok(((task, instruction, action), mut pending, world, mut random)) =
+            actors.get_mut(actor)
+        else {
             continue;
         };
         if failed.contains(&actor)
             || pending.spawned
-            || !pending.owns(&task)
+            || !instruction.is_current(task)
+            || !pending.owns(task, instruction)
             || pending.request.is_none()
             || pending.request != event.request_id
             || playback.explicit_clip_request_id != event.request_id
@@ -57,17 +67,12 @@ pub(super) fn deliver_behavior_object_spawns(
         {
             continue;
         }
-        let Some(BehaviorAction::SpawnObject {
+        let RunBehaviorSpawnObject {
             entity,
             subject_node,
             pose,
             ..
-        }) = documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
-            continue;
-        };
+        } = action;
         let spawn = (|| {
             let view = definitions.get(&definition_assets)?;
             let object = view.find_object(*entity)?;
@@ -157,18 +162,19 @@ pub(super) fn deliver_behavior_object_spawns(
             continue;
         };
         let actor = owner.gameplay_entity;
-        let Ok((mut task, pending, _, _)) = actors.get_mut(actor) else {
+        let Ok(((task, instruction, _), pending, _, _)) = actors.get_mut(actor) else {
             continue;
         };
         if failed.contains(&actor)
-            || !pending.owns(&task)
+            || !instruction.is_current(task)
+            || !pending.owns(task, instruction)
             || pending.request.is_none()
             || pending.request != event.explicit_clip_request_id
         {
             continue;
         }
         if pending.spawned {
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
         } else {
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         }

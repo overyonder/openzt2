@@ -42,7 +42,10 @@ impl AssetLoader for MaterialAssetLoader {
     type Settings = ();
     type Error = io::Error;
 
-    #[cfg_attr(feature = "tracing", tracing::instrument(name = "load_authored_material", skip_all))]
+    #[cfg_attr(
+        feature = "tracing",
+        tracing::instrument(name = "load_authored_material", skip_all)
+    )]
     async fn load(
         &self,
         reader: &mut dyn Reader,

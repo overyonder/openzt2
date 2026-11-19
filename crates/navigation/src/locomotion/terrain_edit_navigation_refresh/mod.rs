@@ -121,13 +121,17 @@ pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrai
     for z in minimum_terrain_cell.y..=maximum_terrain_cell.y {
         for x in minimum_terrain_cell.x..=maximum_terrain_cell.x {
             let local_terrain_cell = UVec2::new(x, z);
-            let Some((height_centimetres, contains_water, minimum_triangle_normal_y)) =
-                read_navigation_cell_geometry_from_terrain_samples(
-                    terrain_chunk,
-                    terrain_asset,
-                    edited_terrain_samples,
-                    local_terrain_cell,
-                )
+            let Some((
+                height_centimetres,
+                contains_water,
+                depth_centimetres,
+                minimum_triangle_normal_y,
+            )) = read_navigation_cell_geometry_from_terrain_samples(
+                terrain_chunk,
+                terrain_asset,
+                edited_terrain_samples,
+                local_terrain_cell,
+            )
             else {
                 continue;
             };
@@ -148,17 +152,21 @@ pub(super) fn refresh_terrain_derived_navigation_graph_cells_from_changed_terrai
             else {
                 continue;
             };
-            assert!(
-                terrain_derived_navigation_graph
-                    .update_navigation_node_from_changed_terrain_cell(
-                        global_terrain_cell,
-                        height_centimetres,
-                        contains_water,
-                        minimum_triangle_normal_y,
-                    )
-                    .is_some(),
-                "indexed terrain cell must exist in the active terrain-derived navigation graph"
-            );
+            let node = terrain_derived_navigation_graph
+                .calculate_navigation_node_for_terrain_cell(global_terrain_cell.to_array())
+                .expect("indexed terrain cell must exist in the active terrain-derived navigation graph");
+            terrain_derived_navigation_graph
+                .update_navigation_node_from_changed_terrain_cell(
+                    global_terrain_cell,
+                    height_centimetres,
+                    contains_water,
+                    minimum_triangle_normal_y,
+                )
+                .expect("validated terrain cell");
+            terrain_derived_navigation_graph
+                .find_navigation_node_mut(node)
+                .expect("validated navigation node")
+                .water_depth_centimetres = depth_centimetres;
         }
     }
 }

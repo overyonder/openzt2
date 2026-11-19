@@ -6,7 +6,11 @@ use openzt2_zoo_state::animal_behavior::interaction_container_membership::reques
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
 };
 
-use openzt2_game_data::{behavior::action_record::BehaviorAction, AssetId};
+use openzt2_game_data::AssetId;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorEnterInteractionContainer, RunBehaviorPlaySet, RunBehaviorRandomSet,
+    RunningBehaviorInstruction, SelectedBehaviorSet,
+};
 
 use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
 use openzt2_game_assets::behavior::behavior_asset_types::LoadedBehaviorDocumentCollection;
@@ -14,9 +18,6 @@ use openzt2_game_assets::world_definitions::world_definition_document_asset_and_
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_zoo_state::animal_lifecycle::types::SpeciesHandle;
 use openzt2_zoo_state::animal_behavior::interaction_container_membership::InteractionContainerMemberships;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionPhase;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestArchetype;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestRng;
@@ -40,15 +41,28 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     transforms: Query<&GlobalTransform>,
     children: Query<&Children>,
     attachment_transforms: super::behavior_docking_execution::NamedNodeTransforms,
-    mut actors: Query<(
-        Entity,
-        &mut BehaviorTaskExecutionState,
-        Option<&SpeciesHandle>,
-        Option<&StaffRole>,
-        Option<&GuestArchetype>,
-        Option<&mut GuestRng>,
-        Option<&mut BehaviorRandomStream>,
-    )>,
+    mut actors: Query<
+        (
+            Entity,
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            (
+                Option<&RunBehaviorEnterInteractionContainer>,
+                Option<&RunBehaviorPlaySet>,
+                Option<&RunBehaviorRandomSet>,
+            ),
+            Option<&SpeciesHandle>,
+            Option<&StaffRole>,
+            Option<&GuestArchetype>,
+            Option<&mut GuestRng>,
+            Option<&mut BehaviorRandomStream>,
+        ),
+        Or<(
+            With<RunBehaviorEnterInteractionContainer>,
+            With<RunBehaviorPlaySet>,
+            With<RunBehaviorRandomSet>,
+        )>,
+    >,
 ) {
     let (Some(behavior_declarations), Some(world_definitions)) = (
         behavior_documents.create_declaration_index_view(&behavior_document_assets),
@@ -56,39 +70,42 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
     ) else {
         return;
     };
-    for (actor, mut task, species, staff_role, guest, mut guest_random, mut behavior_random) in
-        &mut actors
+    for (
+        actor,
+        task,
+        instruction,
+        (entry, play, random_set),
+        species,
+        staff_role,
+        guest,
+        mut guest_random,
+        mut behavior_random,
+    ) in &mut actors
     {
         if task.next_action_tick > simulation_clock.tick {
             continue;
         }
-        let Some(action) = behavior_document_assets
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, &task))
-        else {
-            continue;
-        };
-        if !matches!(
-            &action,
-            BehaviorAction::EnterInteractionContainer { .. }
-                | BehaviorAction::PlaySet(_)
-                | BehaviorAction::RandomSet { .. }
-        ) {
+        if !instruction.is_current(task) {
             continue;
         }
+        let mut remaining = task.repetitions;
         let target_object = task.target().and_then(|target| {
             target_definitions
                 .get(target)
                 .ok()
                 .and_then(|reference| world_definitions.find_object(reference.0))
         });
-        let requested_behavior_set = match action {
-            BehaviorAction::RandomSet {
-                weighted_sets,
-                minimum_plays,
-                maximum_plays,
-                looping,
-            } => {
+        let requested_behavior_set = match (entry, play, random_set) {
+            (
+                _,
+                _,
+                Some(RunBehaviorRandomSet {
+                    weighted_sets,
+                    minimum_plays,
+                    maximum_plays,
+                    looping,
+                }),
+            ) => {
                 let Some(random) = guest_random
                     .as_deref_mut()
                     .map(|random| &mut random.0)
@@ -102,12 +119,12 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     *minimum_plays,
                     *maximum_plays,
                     *looping,
-                    &mut task.repetitions,
+                    &mut remaining,
                     random,
                 ) {
                     Ok(Some(index)) => weighted_sets[index].0,
                     Ok(None) => {
-                        advance_behavior_task_to_next_action(&mut task, simulation_clock.tick);
+                        instruction.complete(actor, simulation_clock.tick, &mut commands);
                         continue;
                     }
                     Err(()) => {
@@ -116,10 +133,14 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     }
                 }
             }
-            BehaviorAction::EnterInteractionContainer {
-                container,
-                entrance_behavior_set,
-            } => {
+            (
+                Some(RunBehaviorEnterInteractionContainer {
+                    container,
+                    entrance_behavior_set,
+                }),
+                _,
+                _,
+            ) => {
                 let Some(target) = task.target() else {
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
@@ -128,8 +149,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
                     continue;
                 };
-                let reservation_tag =
-                    container.or_else(|| task.reservation_tag(&behavior_document_assets));
+                let reservation_tag = container.or_else(|| instruction.reservation_tag());
                 let Ok(actor_transform) = transforms.get(actor) else {
                     continue;
                 };
@@ -155,7 +175,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                     queue_service_slots: Vec::new(),
                 };
                 let entrance_behavior_set = *entrance_behavior_set;
-                let instruction = BehaviorAdmissionInstruction::new(actor, &task);
+                let instruction = BehaviorAdmissionInstruction::new(actor, &task, instruction);
                 commands.queue(move |world: &mut World| {
                     if instruction.is_current(world) {
                         let outcome = request.commit(world);
@@ -169,7 +189,7 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
                 });
                 continue;
             }
-            BehaviorAction::PlaySet(play_set) => {
+            (_, Some(RunBehaviorPlaySet(play_set)), _) => {
                 if play_set.behavior_set_asset_id == AssetId::from_key("usecontainer") {
                     let Some(target_object) = target_object else {
                         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
@@ -205,21 +225,18 @@ pub(super) fn enter_authored_interaction_containers_and_play_selected_behavior_s
             mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
             continue;
         };
-        let return_action = if matches!(action, BehaviorAction::RandomSet { .. }) {
-            task.action
-        } else {
-            task.action.saturating_add(1)
-        };
-        if !enter_behavior_set(
-            &mut task,
-            requested_behavior_set,
-            document,
-            declaration,
-            return_action,
-            simulation_clock.tick,
-        ) {
-            mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-        }
+        instruction.enter_set(
+            actor,
+            SelectedBehaviorSet {
+                program: requested_behavior_set,
+                document,
+                declaration,
+                tick: simulation_clock.tick,
+                repeat: random_set.map(|_| remaining),
+                target: None,
+            },
+            &mut commands,
+        );
     }
 }
 
@@ -243,24 +260,28 @@ pub(super) fn apply_interaction_container_entry(
     clock: Res<ZooClock>,
     target_definitions: Query<&DefinitionId>,
     memberships: InteractionContainerMemberships,
-    mut actors: Query<(
-        &mut BehaviorTaskExecutionState,
+    actors: Query<(
+        &BehaviorTaskExecutionState,
+        &RunningBehaviorInstruction,
         Option<&SpeciesHandle>,
         Option<&StaffRole>,
         Option<&GuestArchetype>,
     )>,
 ) {
     let actor = entered.actor;
-    let Ok((mut task, species, staff, guest)) = actors.get_mut(actor) else {
+    let Ok((task, instruction, species, staff, guest)) = actors.get(actor) else {
         return;
     };
+    if !instruction.is_current(task) {
+        return;
+    }
     let InteractionContainerAdmissionOutcome::Granted { slot, .. } = entered.outcome else {
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    task.interaction_slot = Some(slot);
+    instruction.bind_interaction_slot(actor, slot, &mut commands);
     if memberships.is_docked(entered.target, actor) {
-        advance_behavior_task_to_next_action(&mut task, clock.tick);
+        instruction.complete(actor, clock.tick, &mut commands);
         return;
     }
     let (Some(behavior_declarations), Some(world_definitions)) = (
@@ -296,37 +317,16 @@ pub(super) fn apply_interaction_container_entry(
         mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
         return;
     };
-    let return_action = task.action.saturating_add(1);
-    if !enter_behavior_set(
-        &mut task,
-        set,
-        document,
-        declaration,
-        return_action,
-        clock.tick,
-    ) {
-        mark_behavior_task_for_failure_and_stop_navigation(actor, &mut commands);
-    }
-}
-
-fn enter_behavior_set(
-    task: &mut BehaviorTaskExecutionState,
-    set: AssetId,
-    document: Handle<BehaviorDocumentAsset>,
-    declaration: usize,
-    return_action: usize,
-    tick: u64,
-) -> bool {
-    let return_frame = task.create_return_frame_after_action(return_action);
-    if !task.push_return_frame(return_frame) {
-        return false;
-    }
-    task.program = set;
-    task.document = document;
-    task.declaration = declaration;
-    task.phase = BehaviorTaskExecutionPhase::Set;
-    task.action = 0;
-    task.repetitions = 0;
-    task.next_action_tick = tick.saturating_add(1);
-    true
+    instruction.enter_set(
+        actor,
+        SelectedBehaviorSet {
+            program: set,
+            document,
+            declaration,
+            tick: clock.tick,
+            repeat: None,
+            target: None,
+        },
+        &mut commands,
+    );
 }

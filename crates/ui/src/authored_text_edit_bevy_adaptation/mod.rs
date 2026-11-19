@@ -2,7 +2,7 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 use std::time::Duration;
 
 use bevy::{
-    input_focus::{FocusCause, InputFocus},
+    input_focus::{tab_navigation::TabIndex, InputFocus},
     prelude::*,
     text::{ComputedTextBlock, EditableText, EditableTextFilter, TextCursorStyle},
     ui::widget::TextNodeFlags,
@@ -11,9 +11,9 @@ use bevy::{
 
 use openzt2_interface_state::input::input_types::ActionSource;
 
-use super::authored_ui_focus_state::{UiFocusPresentation, UiFocusScope, UiFocusable};
+use super::authored_ui_focus_state::UiFocusable;
 use super::authored_ui_interaction_enabled_state::UiInteractionEnabled;
-use super::authored_ui_node_projection_components::{UiDocumentOwner, UiNodeId};
+use super::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_activation_contracts::UiNodeActivated;
 
 /// Retains only the authored settings needed after an edit has been lowered
@@ -103,7 +103,7 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
                     order: node_id.index,
                     enabled: enabled.0,
                 },
-                UiFocusPresentation::default(),
+                TabIndex(i32::try_from(node_id.index).unwrap_or(i32::MAX)),
             ));
         }
         if policy.select_all_on_focus {
@@ -114,84 +114,6 @@ pub(super) fn initialize_authored_text_edits_as_bevy_editable_text(
                 is_legal_authored_filename_character,
             ));
         }
-    }
-}
-
-/// Bridges the document-local UI focus fact to Bevy's input-focus owner.
-/// This is the only focus adaptation needed for Bevy's keyboard, pointer, and
-/// IME observers to target the authored edit entity.
-pub(super) fn synchronize_document_focus_into_bevy_text_input_focus(
-    scopes: Query<(Entity, &UiFocusScope), Changed<UiFocusScope>>,
-    edits: Query<
-        (
-            &UiDocumentOwner,
-            &UiInteractionEnabled,
-            &InheritedVisibility,
-        ),
-        With<EditableText>,
-    >,
-    mut input_focus: ResMut<InputFocus>,
-) {
-    if input_focus
-        .get()
-        .and_then(|focused| edits.get(focused).ok())
-        .is_some_and(|(_, enabled, visibility)| !enabled.0 || !visibility.get())
-    {
-        input_focus.clear();
-    }
-    for (root, scope) in &scopes {
-        let next = scope.focused.filter(|focused| {
-            edits
-                .get(*focused)
-                .is_ok_and(|(owner, enabled, visibility)| {
-                    owner.0 == root && enabled.0 && visibility.get()
-                })
-        });
-        if let Some(next) = next {
-            if input_focus.get() != Some(next) {
-                input_focus.set(next, FocusCause::Navigated);
-            }
-        } else if input_focus
-            .get()
-            .and_then(|focused| edits.get(focused).ok())
-            .is_some_and(|(owner, _, _)| owner.0 == root)
-        {
-            input_focus.clear();
-        }
-    }
-}
-
-/// Clicking another control or the zoo relinquishes text capture. Keep the
-/// authored scope and Bevy's input owner in agreement, including across documents.
-pub(super) fn release_text_focus_after_pointer_press_elsewhere(
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
-    capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
-    edits: Query<(), With<EditableText>>,
-    parents: Query<&ChildOf>,
-    mut scopes: Query<&mut UiFocusScope>,
-    mut input_focus: ResMut<InputFocus>,
-) {
-    if !primary_pointer.just_pressed {
-        return;
-    }
-    let clicked_edit = capture.target.and_then(|target| {
-        std::iter::once(target)
-            .chain(parents.iter_ancestors::<ChildOf>(target))
-            .find(|entity| edits.contains(*entity))
-    });
-    for mut scope in &mut scopes {
-        if scope.focused.is_some_and(|focused| edits.contains(focused))
-            && scope.focused != clicked_edit
-        {
-            scope.focused = None;
-        }
-    }
-    if input_focus
-        .get()
-        .is_some_and(|focused| edits.contains(focused))
-        && input_focus.get() != clicked_edit
-    {
-        input_focus.clear();
     }
 }
 

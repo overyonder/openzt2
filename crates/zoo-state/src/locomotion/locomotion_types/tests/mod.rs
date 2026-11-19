@@ -40,6 +40,7 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
     };
     let mut candidates = Vec::new();
     navigation.collect_dry_ground_candidates(
+        None,
         &region,
         TopologyGrid::default(),
         &agent,
@@ -52,6 +53,7 @@ fn shore_candidates_respect_water_clearance_capabilities_and_terrain_changes() {
         .update_navigation_node_from_changed_terrain_cell(UVec2::new(3, 0), 0, true, 1.0)
         .unwrap();
     navigation.collect_dry_ground_candidates(
+        None,
         &region,
         TopologyGrid::default(),
         &agent,

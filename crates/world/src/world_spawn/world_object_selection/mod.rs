@@ -1,6 +1,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCast;
 use bevy::picking::mesh_picking::ray_cast::MeshRayCastSettings;
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 
 use openzt2_interface_state::camera::world_pointer_ray_types::WorldPointerRay;
@@ -16,7 +17,7 @@ use openzt2_world_state::world_spawn::{
 use openzt2_zoo_state::placement::placement_preview_types::RelocatingPlacedObject;
 
 pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    mut pointer_inputs: MessageReader<PointerInput>,
     tool: Option<
         Res<openzt2_zoo_state::construction::construction_tool_and_placement_policy_types::ConstructionTool>,
     >,
@@ -37,7 +38,11 @@ pub(super) fn request_selection_of_clicked_world_object_or_inspectable_ancestor(
     inspectable_world_objects: Query<(), (With<Inspectable>, With<WorldMember>)>,
     mut selection_requests: MessageWriter<SelectionRequest>,
 ) {
-    if !primary_pointer.just_pressed || ui_pointer_capture.over_ui {
+    let primary_just_pressed = pointer_inputs.read().any(|input| {
+        input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
+    });
+    pointer_inputs.clear();
+    if !primary_just_pressed || ui_pointer_capture.over_ui {
         return;
     }
     // This click recycles what it hits, starts or extends a road or sky tram

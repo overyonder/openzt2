@@ -12,6 +12,7 @@ pub(super) fn detach_slot_objects(
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
     memberships: &InteractionContainerMemberships,
+    world_releases: Option<&BehaviorWorldReleaseSupport>,
     commands: &mut Commands,
 ) -> bool {
     memberships.members_in_slot(holder, slot).all(|item| {
@@ -22,6 +23,7 @@ pub(super) fn detach_slot_objects(
             definitions,
             objects,
             transforms,
+            world_releases,
             commands,
         )
     })
@@ -36,6 +38,7 @@ pub(super) fn detach_object(
     definitions: &WorldDefinitionsView<'_>,
     objects: &Query<(&ContainedObject, &DefinitionId, Option<&WorldMember>)>,
     transforms: &Query<&GlobalTransform>,
+    world_releases: Option<&BehaviorWorldReleaseSupport>,
     commands: &mut Commands,
 ) -> bool {
     let Ok((contained, definition, world)) = objects.get(item) else {
@@ -69,29 +72,44 @@ pub(super) fn detach_object(
         .submit(commands);
         return true;
     };
-    // Do not partially execute an unsupported authored outcome. Official
-    // consumables create Trash/Recyclable directly in inventory.
     if rule
         .created_objects
         .iter()
-        .any(|(_, destination)| !matches!(destination, WorldObjectDetachDestination::Container(_)))
+        .any(|(_, destination)| match destination {
+            WorldObjectDetachDestination::Container(_) => false,
+            WorldObjectDetachDestination::Drop => {
+                !BehaviorWorldReleaseMotion::Drop.available(world_releases)
+            }
+            WorldObjectDetachDestination::Fall => {
+                !BehaviorWorldReleaseMotion::Fall.available(world_releases)
+            }
+            WorldObjectDetachDestination::Kill => true,
+        })
         || (!rule.created_objects.is_empty() && world.is_none())
     {
         return false;
     }
+    let needs_joint = !rule.created_objects.is_empty()
+        || matches!(
+            rule.destination,
+            WorldObjectDetachDestination::Drop | WorldObjectDetachDestination::Fall
+        );
+    let prepared_pose = if needs_joint {
+        let Ok(joint) = transforms.get(contained.joint.unwrap_or(holder)) else {
+            return false;
+        };
+        Some(*joint)
+    } else {
+        None
+    };
     let created_transform = if rule.created_objects.is_empty() {
         None
     } else {
         let Ok(holder_transform) = transforms.get(holder) else {
             return false;
         };
-        let Ok(joint_transform) = transforms.get(contained.joint.unwrap_or(holder)) else {
-            return false;
-        };
-        Some((
-            *joint_transform,
-            joint_transform.reparented_to(holder_transform),
-        ))
+        let joint = prepared_pose.expect("creation requires a joint");
+        Some((joint, joint.reparented_to(holder_transform)))
     };
     let detached = (|| {
         match rule.destination {
@@ -143,10 +161,45 @@ pub(super) fn detach_object(
                 )
                 .submit(commands);
             }
-            // Drop/fall need the native placement/physics handoff, not a guessed
-            // gravity switch or terrain snap.
             WorldObjectDetachDestination::Drop | WorldObjectDetachDestination::Fall => {
-                return false;
+                let motion = if rule.destination == WorldObjectDetachDestination::Drop {
+                    BehaviorWorldReleaseMotion::Drop
+                } else {
+                    BehaviorWorldReleaseMotion::Fall
+                };
+                let Some(world) = world.filter(|_| motion.available(world_releases)) else {
+                    return false;
+                };
+                let pose = prepared_pose
+                    .expect("release requires a joint")
+                    .mul_transform(contained.relative_transform)
+                    .compute_transform();
+                DetachMembershipRequest::Release {
+                    member: item,
+                    despawn: false,
+                }
+                .submit(commands);
+                commands.entity(item).queue_silenced(
+                    move |mut item: bevy::ecs::world::EntityWorldMut<'_>| {
+                        item.remove::<ContainedObject>();
+                        if let Some(mut transform) = item.get_mut::<Transform>() {
+                            transform.set_if_neq(pose);
+                        } else {
+                            item.insert(pose);
+                        }
+                        if let Some(mut visibility) = item.get_mut::<Visibility>() {
+                            visibility.set_if_neq(Visibility::Inherited);
+                        } else {
+                            item.insert(Visibility::Inherited);
+                        }
+                    },
+                );
+                commands.trigger(BehaviorWorldObjectReleased {
+                    object: item,
+                    world: world.root,
+                    pose,
+                    motion,
+                });
             }
         }
         true
@@ -231,6 +284,7 @@ pub(super) fn release_objects_from_destroyed_holders(
 /// the later key cannot disappear merely because its item did not exist yet.
 pub(super) fn apply_delivered_detach_after_object_admission(
     mut commands: Commands,
+    world_releases: Option<Res<BehaviorWorldReleaseSupport>>,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     delivered: Query<Entity, With<DeliveredAttachmentDetach>>,
@@ -262,6 +316,7 @@ pub(super) fn apply_delivered_detach_after_object_admission(
             &objects,
             &transforms,
             &memberships,
+            world_releases.as_deref(),
             &mut commands,
         ) {
             mark_behavior_task_for_failure_and_stop_navigation(holder, &mut commands);

@@ -18,11 +18,9 @@ use super::{
         interpolate_unsigned_normalized_u16, select_cyclic_daylight_curve_sample,
     },
     daylight_environment_sampling::{
-        calculate_environment_visual_sample_projection,
         calculate_weather_light_and_fog_multipliers, interpolate_f32,
-        interpolate_wrapped_angle_radians, sample_environment_ambient_light_at_daylight_fraction,
-        sample_environment_directional_light_at_daylight_fraction,
-        sample_environment_fog_at_daylight_fraction,
+        interpolate_wrapped_angle_radians, EnvironmentLightCurves, EnvironmentVisualCurves,
+        EnvironmentVisualProjections,
     },
     environment_presentation_types::{
         AboveWaterFog, EnvironmentCameraRelativeVisual, EnvironmentPresentationPending,
@@ -51,40 +49,84 @@ pub(super) fn sample_environment_daylight_fraction(
 pub(super) fn sample_authored_object_ambient_light(
     mut commands: Commands,
     daylight: Res<EnvironmentDaylightFraction>,
-    assets: Res<Assets<WorldDefinitionAsset>>,
-    active: Res<WorldDefinitions>,
     mut environments: Query<(
         Entity,
-        Ref<WorldEnvironment>,
+        Ref<EnvironmentLightCurves>,
         Option<&mut ObjectAmbientLight>,
     )>,
 ) {
-    let (Some(fraction), Some(definitions)) = (daylight.0, active.get(&assets)) else {
+    let Some(fraction) = daylight.0 else { return };
+    for (entity, curves, existing) in &mut environments {
+        if existing.is_some() && !curves.is_changed() && !daylight.is_changed() {
+            continue;
+        }
+        let next = ObjectAmbientLight(
+            curves.ambient(EnvironmentLightTarget::Object, fraction),
+            curves.first_object_light_weighted_rgb(fraction),
+        );
+        if let Some(mut existing) = existing {
+            existing.set_if_neq(next);
+        } else {
+            commands.entity(entity).insert(next);
+        }
+    }
+}
+
+pub(super) fn sample_authored_environment_visual_curves(
+    mut commands: Commands,
+    fraction: Res<EnvironmentDaylightFraction>,
+    assets: Res<Assets<WorldDefinitionAsset>>,
+    active: Res<WorldDefinitions>,
+    mut source_events: MessageReader<AssetEvent<WorldDefinitionAsset>>,
+    mut environments: Query<(
+        Entity,
+        Ref<WorldEnvironment>,
+        Option<&mut EnvironmentLightCurves>,
+        Option<&mut EnvironmentVisualCurves>,
+        Option<&mut EnvironmentVisualProjections>,
+    )>,
+) {
+    let definition_revision = source_events.read().fold(false, |changed, event| {
+        changed || !matches!(event, AssetEvent::Unused { .. })
+    });
+    let (Some(fraction_value), Some(definitions)) = (fraction.0, active.get(&assets)) else {
         return;
     };
-    for (entity, environment, existing) in &mut environments {
-        if existing.is_some()
-            && !environment.is_changed()
-            && !daylight.is_changed()
-            && !assets.is_changed()
-            && !active.is_changed()
-        {
+    for (entity, environment, light, curves, projections) in &mut environments {
+        let prepare = light.is_none()
+            || curves.is_none()
+            || definition_revision
+            || active.is_changed()
+            || environment.is_changed();
+        if !prepare && !fraction.is_changed() && projections.is_some() {
             continue;
         }
         let Some(definition) = definitions.find_environment(environment.definition) else {
-            if existing.is_some() {
-                commands.entity(entity).remove::<ObjectAmbientLight>();
-            }
             continue;
         };
-        let next = ObjectAmbientLight(sample_environment_ambient_light_at_daylight_fraction(
-            definitions,
-            definition,
-            EnvironmentLightTarget::Object,
-            fraction,
-        ));
-        if let Some(mut existing) = existing {
-            existing.set_if_neq(next);
+        if prepare {
+            let next = EnvironmentLightCurves::new(definitions, definition);
+            if let Some(mut light) = light {
+                *light = next;
+            } else {
+                commands.entity(entity).insert(next);
+            }
+        }
+        let prepared = prepare.then(|| EnvironmentVisualCurves::from_definition(definition));
+        let next = prepared
+            .as_ref()
+            .or(curves.as_deref())
+            .expect("visual curves prepared for this environment")
+            .sample(definition, fraction_value);
+        if let Some(prepared) = prepared {
+            if let Some(mut curves) = curves {
+                *curves = prepared;
+            } else {
+                commands.entity(entity).insert(prepared);
+            }
+        }
+        if let Some(mut projections) = projections {
+            projections.set_if_neq(next);
         } else {
             commands.entity(entity).insert(next);
         }
@@ -184,12 +226,19 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         Option<&EnvironmentPresentationPending>,
         Option<&Children>,
         Option<&EnvironmentVisuals>,
+        Ref<EnvironmentVisualProjections>,
+        Ref<EnvironmentLightCurves>,
         &mut AboveWaterFog,
         Ref<ObjectAmbientLight>,
         Option<&mut PrefabAmbientLightContribution>,
     )>,
     mut lights: Query<
-        (&mut EnvironmentLight, &mut DirectionalLight, &mut Transform),
+        (
+            &mut EnvironmentLight,
+            &mut DirectionalLight,
+            &mut Transform,
+            Option<&mut EnvironmentSpecularLightColor>,
+        ),
         Without<EnvironmentSky>,
     >,
     mut skies: Query<
@@ -225,6 +274,8 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         pending,
         children,
         visuals,
+        visual_projections,
+        light_curves,
         mut fog,
         ambient,
         contribution,
@@ -235,6 +286,8 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         };
         if daylight.fraction == fraction
             && !ambient.is_changed()
+            && !visual_projections.is_changed()
+            && !light_curves.is_changed()
             && !weather.as_ref().is_some_and(|weather| weather.is_changed())
             && transition.is_none()
             && pending.is_none()
@@ -295,15 +348,14 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                 + (right_illuminance - left_illuminance) * sample.interpolation_fraction)
                 * light_multiplier;
             for child in children.into_iter().flat_map(|children| children.iter()) {
-                if let Ok((mut marker, mut light, mut transform)) = lights.get_mut(child) {
+                if let Ok((mut marker, mut light, mut transform, specular)) = lights.get_mut(child)
+                {
                     if marker.kind_rank != 0 {
                         continue;
                     }
                     marker.keyframe = sample.left_keyframe_index as u16;
                     light.color = color;
-                    commands
-                        .entity(child)
-                        .insert(EnvironmentSpecularLightColor(color));
+                    update_specular(&mut commands, child, specular, color);
                     light.illuminance = illuminance;
                     if direction != Vec3::ZERO {
                         transform.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, direction);
@@ -313,18 +365,12 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         }
         if light_rows.is_empty() {
             for child in children.into_iter().flat_map(|children| children.iter()) {
-                let Ok((mut marker, mut light, mut transform)) = lights.get_mut(child) else {
+                let Ok((mut marker, mut light, mut transform, specular)) = lights.get_mut(child)
+                else {
                     continue;
                 };
                 let Some(sampled_directional_light) =
-                    sample_environment_directional_light_at_daylight_fraction(
-                        definitions,
-                        definition,
-                        marker.target,
-                        marker.kind_rank,
-                        None,
-                        fraction,
-                    )
+                    light_curves.directional(marker.target, marker.kind_rank, None, fraction)
                 else {
                     continue;
                 };
@@ -374,9 +420,11 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                     * light_multiplier;
                 marker.keyframe = sampled_directional_light.left_keyframe_index as u16;
                 light.color = color;
-                commands
-                    .entity(child)
-                    .insert(EnvironmentSpecularLightColor(Color::linear_rgb(
+                update_specular(
+                    &mut commands,
+                    child,
+                    specular,
+                    Color::linear_rgb(
                         interpolate_f32(
                             left_keyframe.specular[0],
                             right_keyframe.specular[0],
@@ -392,7 +440,8 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                             right_keyframe.specular[2],
                             interpolation_fraction,
                         ),
-                    )));
+                    ),
+                );
                 light.illuminance = illuminance;
                 // The authored object rig has one shadow factor shared by
                 // its lights. Only its sun casts the map; side and back are
@@ -410,12 +459,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         }
         let ambient = ambient.0;
         terrain_ambient.set_if_neq(EnvironmentTerrainAmbientLight(Some(
-            sample_environment_ambient_light_at_daylight_fraction(
-                definitions,
-                definition,
-                EnvironmentLightTarget::Terrain,
-                fraction,
-            ) * light_multiplier,
+            light_curves.ambient(EnvironmentLightTarget::Terrain, fraction) * light_multiplier,
         )));
         if ambient.length_squared() > 0.0 {
             let next = PrefabAmbientLightContribution {
@@ -474,9 +518,7 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
             });
         }
         if fog_rows.is_empty() {
-            if let Some(sampled_fog) =
-                sample_environment_fog_at_daylight_fraction(definitions, definition, fraction)
-            {
+            if let Some(sampled_fog) = light_curves.fog(fraction) {
                 let left_keyframe = sampled_fog.left_keyframe;
                 let right_keyframe = sampled_fog.right_keyframe;
                 let interpolation_fraction = sampled_fog.interpolation_fraction;
@@ -590,25 +632,32 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
         }
         let mut samples =
             visual_samples.iter_many_mut(visuals.into_iter().flat_map(RelationshipTarget::iter));
-        while let Some((sample, tint, camera_relative, texture, mut transform, mut visibility)) =
-            samples.fetch_next()
-        {
-            let projection = calculate_environment_visual_sample_projection(
-                definition,
-                sample.0 as usize,
-                fraction,
-            );
-            *visibility = if projection.active {
+        while let Some(item) = samples.fetch_next() {
+            let Ok((sample, tint, camera_relative, texture, mut transform, mut visibility)) = item
+            else {
+                continue;
+            };
+            let Some(projection) = visual_projections.0.get(sample.0 as usize) else {
+                continue;
+            };
+            visibility.set_if_neq(if projection.active {
                 Visibility::Inherited
             } else {
                 Visibility::Hidden
-            };
-            transform.scale = Vec3::splat(projection.scale);
+            });
+            let scale = Vec3::splat(projection.scale);
+            if transform.scale != scale {
+                transform.scale = scale;
+            }
             if let Some(mut camera_relative) = camera_relative {
-                camera_relative.projected_scale = projection.scale;
+                if camera_relative.projected_scale != projection.scale {
+                    camera_relative.projected_scale = projection.scale;
+                }
             }
             if let Some(mut tint) = tint {
-                tint.0 = projection.color;
+                if tint.0 != projection.color {
+                    tint.0 = projection.color;
+                }
             }
             if let Some(texture) = texture {
                 if let Some(mut material) = texture
@@ -616,13 +665,32 @@ pub(super) fn project_current_daylight_weather_and_sky_into_bevy_renderer(
                     .as_ref()
                     .and_then(|handle| materials.get_mut(handle))
                 {
-                    material.base_color = projection.color;
-                    material.emissive = projection.color.to_linear();
+                    if material.base_color != projection.color {
+                        material.base_color = projection.color;
+                        material.emissive = projection.color.to_linear();
+                    }
                 }
             }
         }
         commands
             .entity(entity)
             .remove::<EnvironmentPresentationPending>();
+    }
+}
+
+fn update_specular(
+    commands: &mut Commands,
+    entity: Entity,
+    current: Option<Mut<EnvironmentSpecularLightColor>>,
+    color: Color,
+) {
+    if let Some(mut current) = current {
+        if current.0 != color {
+            current.0 = color;
+        }
+    } else {
+        commands
+            .entity(entity)
+            .insert(EnvironmentSpecularLightColor(color));
     }
 }

@@ -4,14 +4,14 @@ use bevy::prelude::*;
 use bevy_hanabi::prelude::{
     AccelModifier, Attribute, BoxedModifier, ColorOverLifetimeModifier,
     EffectAsset as HanabiEffectAsset, ExprWriter, FlipbookModifier, Gradient, KillSphereModifier,
-    LinearDragModifier, ModifierContext, OrientMode, OrientModifier, RenderModifier, ScalarType,
-    SetAttributeModifier, SetColorModifier, SetPositionCircleModifier, SetPositionSphereModifier,
-    SetSizeModifier, ShapeDimension, SizeOverLifetimeModifier, SpawnerSettings, ValueType,
-    VectorType,
+    LinearDragModifier, ModifierContext, OrientMode, OrientModifier, ParticleTextureModifier,
+    RenderModifier, ScalarType, SetAttributeModifier, SetColorModifier, SetPositionCircleModifier,
+    SetPositionSphereModifier, SetSizeModifier, ShapeDimension, SizeOverLifetimeModifier,
+    SpawnerSettings, ValueType, VectorType,
 };
 use openzt2_game_data::particle::authored_particle_system::{
-    AuthoredParticleEmitterShape, AuthoredParticleRendererKind, AuthoredParticleSpawnPolicy,
-    AuthoredParticleSystemEmitter, AuthoredParticleSystemModifier,
+    AuthoredParticleEmitterShape, AuthoredParticleRenderer, AuthoredParticleRendererKind,
+    AuthoredParticleSpawnPolicy, AuthoredParticleSystemEmitter, AuthoredParticleSystemModifier,
 };
 
 use super::hanabi_custom_particle_modifiers::{
@@ -21,6 +21,7 @@ use super::hanabi_custom_particle_modifiers::{
 
 pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
     authored_particle_system_emitter: &AuthoredParticleSystemEmitter,
+    renderer: Option<&AuthoredParticleRenderer>,
     collision_spawn_initialization: Option<CollisionSpawnParticleInitialization>,
     wave_surface: bool,
 ) -> HanabiEffectAsset {
@@ -346,32 +347,29 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
                     .expr(),
                 )))
             }
-            AuthoredParticleSystemModifier::Renderer {
-                kind,
-                width,
-                height,
-                columns,
-                rows,
-                minimum_height,
-                ..
-            } => {
-                particle_render_modifiers.push(Box::new(SetSizeModifier {
-                    size: Vec3::new(*width, height.max(*minimum_height), 1.0).into(),
-                }));
-                if *columns > 1 || *rows > 1 {
-                    particle_render_modifiers.push(Box::new(FlipbookModifier {
-                        sprite_grid_size: UVec2::new(u32::from(*columns), u32::from(*rows)),
-                    }));
-                }
-                match kind {
-                    AuthoredParticleRendererKind::Billboard => orient_to_camera = true,
-                    AuthoredParticleRendererKind::VelocityAligned => orient_along_velocity = true,
-                    AuthoredParticleRendererKind::Decal | AuthoredParticleRendererKind::Mesh => {}
-                }
-            }
             AuthoredParticleSystemModifier::EmitWindow { .. }
             | AuthoredParticleSystemModifier::DieWhenEmpty { .. }
             | AuthoredParticleSystemModifier::Overflow { .. } => {}
+        }
+    }
+    if let Some(renderer) = renderer {
+        particle_render_modifiers.push(Box::new(SetSizeModifier {
+            size: Vec3::new(
+                renderer.width,
+                renderer.height.max(renderer.minimum_height),
+                1.0,
+            )
+            .into(),
+        }));
+        if renderer.columns > 1 || renderer.rows > 1 {
+            particle_render_modifiers.push(Box::new(FlipbookModifier {
+                sprite_grid_size: UVec2::new(u32::from(renderer.columns), u32::from(renderer.rows)),
+            }));
+        }
+        match renderer.kind {
+            AuthoredParticleRendererKind::Billboard => orient_to_camera = true,
+            AuthoredParticleRendererKind::VelocityAligned => orient_along_velocity = true,
+            AuthoredParticleRendererKind::Decal | AuthoredParticleRendererKind::Mesh => {}
         }
     }
     // Velocity alignment ignores an in-plane spin, so it wins over billboards.
@@ -431,6 +429,9 @@ pub(super) fn prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
     if wave_surface {
         expression_module.add_texture_slot_with_clamp_linear("wave_ripple", true);
         expression_module.add_texture_slot_with_clamp_linear("wave_mask", true);
+    } else if renderer.is_some_and(|renderer| !renderer.material.is_empty()) {
+        expression_module.add_texture_slot_with_clamp_linear("authored_texture", false);
+        particle_render_modifiers.push(Box::new(ParticleTextureModifier::new(0)));
     }
     let mut hanabi_effect_asset = HanabiEffectAsset::new(
         authored_particle_system_emitter.capacity.max(1),
@@ -461,72 +462,63 @@ mod tests {
     use openzt2_game_data::particle::authored_particle_system::ParticleEffectSimulationClock;
     use openzt2_game_data::AssetId;
 
-    fn orient_modes(modifiers: Vec<AuthoredParticleSystemModifier>) -> Vec<(OrientMode, bool)> {
-        let emitter = AuthoredParticleSystemEmitter {
-            emitter_id: AssetId::default(),
-            capacity: 16,
-            spawn: AuthoredParticleSpawnPolicy::Once,
-            clock: ParticleEffectSimulationClock::Presentation,
-            shape: AuthoredParticleEmitterShape::Point,
-            material: String::new(),
-            modifiers,
-        };
-        prepare_authored_particle_system_emitter_as_hanabi_effect_asset(&emitter, None, false)
-            .render_modifiers()
-            .filter_map(|modifier| {
-                modifier
-                    .as_modifier()
-                    .as_reflect()
-                    .downcast_ref::<OrientModifier>()
-            })
-            .map(|orient| (orient.mode, orient.rotation.is_some()))
-            .collect()
-    }
-
-    fn renderer(kind: AuthoredParticleRendererKind) -> AuthoredParticleSystemModifier {
-        AuthoredParticleSystemModifier::Renderer {
+    fn orient_modes(
+        kind: AuthoredParticleRendererKind,
+        modifiers: Vec<AuthoredParticleSystemModifier>,
+    ) -> Vec<(OrientMode, bool)> {
+        let renderer = AuthoredParticleRenderer {
             kind,
+            material: String::new(),
             width: 1.0,
             height: 1.0,
             columns: 1,
             rows: 1,
             sort_by_distance: false,
             minimum_height: 0.0,
-        }
+        };
+        let emitter = AuthoredParticleSystemEmitter {
+            emitter_id: AssetId::default(),
+            capacity: 16,
+            spawn: AuthoredParticleSpawnPolicy::Once,
+            clock: ParticleEffectSimulationClock::Presentation,
+            shape: AuthoredParticleEmitterShape::Point,
+            renderers: vec![renderer],
+            modifiers,
+        };
+        prepare_authored_particle_system_emitter_as_hanabi_effect_asset(
+            &emitter,
+            emitter.renderers.first(),
+            None,
+            false,
+        )
+        .render_modifiers()
+        .filter_map(|modifier| {
+            modifier
+                .as_modifier()
+                .as_reflect()
+                .downcast_ref::<OrientModifier>()
+        })
+        .map(|orient| (orient.mode, orient.rotation.is_some()))
+        .collect()
     }
 
     #[test]
     fn effects_carry_a_single_orient_modifier() {
-        let spin = || AuthoredParticleSystemModifier::Spin {
+        let spin = AuthoredParticleSystemModifier::Spin {
             min_rate: 1.0,
             max_rate: 2.0,
         };
-        // A spinning billboard previously emitted two `let cam_rot`.
         assert_eq!(
-            orient_modes(vec![
-                spin(),
-                renderer(AuthoredParticleRendererKind::Billboard)
-            ]),
+            orient_modes(AuthoredParticleRendererKind::Billboard, vec![spin]),
             [(OrientMode::ParallelCameraDepthPlane, true)]
         );
         assert_eq!(
-            orient_modes(vec![
-                renderer(AuthoredParticleRendererKind::Billboard),
-                spin()
-            ]),
-            [(OrientMode::ParallelCameraDepthPlane, true)]
-        );
-        // Two velocity alignments previously emitted two `let dir`.
-        assert_eq!(
-            orient_modes(vec![
-                AuthoredParticleSystemModifier::OrientToVelocity,
-                renderer(AuthoredParticleRendererKind::VelocityAligned),
-            ]),
+            orient_modes(
+                AuthoredParticleRendererKind::VelocityAligned,
+                vec![AuthoredParticleSystemModifier::OrientToVelocity]
+            ),
             [(OrientMode::AlongVelocity, false)]
         );
-        assert_eq!(
-            orient_modes(vec![renderer(AuthoredParticleRendererKind::Mesh)]),
-            []
-        );
+        assert_eq!(orient_modes(AuthoredParticleRendererKind::Mesh, vec![]), []);
     }
 }

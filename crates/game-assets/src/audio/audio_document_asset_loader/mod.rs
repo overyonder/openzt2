@@ -7,7 +7,12 @@ use bevy::{
 use openzt2_game_data::audio::VARIANT_CUE_REFERENCE;
 
 use crate::{
-    asset_source::AssetArchives,
+    asset_source::{
+        archive_entry_asset_path::{
+            archive_entry_asset_source_path, ARCHIVE_ENTRY_ASSET_EXTENSION,
+        },
+        AssetArchives,
+    },
     source_document::{
         blue_fang_source_document_parsing::parse_blue_fang_source_document, path::AssetPath,
     },
@@ -41,7 +46,13 @@ impl AssetLoader for AudioDocumentAssetLoader {
     ) -> Result<Self::Asset, Self::Error> {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes).await?;
-        let source_path = context.path().path();
+        let (source_path, _, _) = archive_entry_asset_source_path(context.path().path())
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "expected an archived audio document",
+                )
+            })?;
         let path = source_path.to_string_lossy().replace('\\', "/");
         let document = parse_blue_fang_source_document(AssetPath::new(&path), &bytes)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
@@ -72,6 +83,6 @@ impl AssetLoader for AudioDocumentAssetLoader {
     }
 
     fn extensions(&self) -> &[&str] {
-        &["xml"]
+        &[ARCHIVE_ENTRY_ASSET_EXTENSION]
     }
 }

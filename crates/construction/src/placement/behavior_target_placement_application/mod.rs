@@ -4,8 +4,7 @@
 //! The object is paid for through its authored `build` transaction when the
 //! placement set returns, and only then enters the world. Behavior placement
 //! never edits terrain: an object that a player placement would flatten under
-//! is put down on the terrain as it stands. Definitions that need a path, wall
-//! or headroom are rejected rather than placed without that policy.
+//! is put down on the terrain as it stands.
 
 use crate::placement::ground_path_placement_stomp::{GroundPathPlacementAction, GroundPathPlacementStomp};
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
@@ -23,10 +22,11 @@ use openzt2_zoo_state::placement::placed_object_types::PlacedObjectFootprintOccu
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementEditMutationKind;
 use openzt2_zoo_state::placement::placement_transaction_types::PreparedObjectPlacementMutation;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorTargetPlacementPaymentState;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorTargetPlacementSite;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::BehaviorTargetPlacementStage;
-use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::PendingBehaviorTargetPlacement;
+use openzt2_zoo_state::animal_behavior::behavior_target_placement_types::{
+    BehaviorPlacementAwaitingPayment, BehaviorPlacementOf, BehaviorPlacementPutDown,
+    BehaviorPlacementRecipient, BehaviorPlacementResult, BehaviorPlacementSiting,
+    BehaviorTargetPlacement, BehaviorTargetPlacementSite,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity;
@@ -63,16 +63,29 @@ use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::Ter
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitionsView;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
-use openzt2_game_data::world_definitions::economy_transactions::EconomyTransactionCostBasis;
-use openzt2_game_data::world_definitions::economy_transactions::EconomyTransactionKind;
+use openzt2_game_data::world_definitions::economy_transactions::{
+    EconomyTransactionDefinition, EconomyTransactionKind,
+};
+use openzt2_zoo_state::animal_behavior::behavior_random_stream_state::BehaviorRandomStream;
 use openzt2_game_data::world_definitions::object_placement::PlaceableDefinition;
-use openzt2_game_data::world_definitions::object_placement::PlacementConstraints;
+use openzt2_game_data::world_definitions::object_placement::{FootprintCellFlags, PlacementConstraints};
+use openzt2_zoo_state::placement::object_placement_definition_queries::authored_object_entrance_definitions;
+use openzt2_zoo_state::placement::object_placement_validation::{
+    calculate_object_placement_footprint_origin, rotate_object_placement_cell_by_quarter_turns,
+};
+use openzt2_zoo_state::topology::topology_graph_types::{EdgeKey, TopologyIndex};
+use openzt2_zoo_state::economy::authored_transaction_amount::{
+    authored_currency_to_money, evaluate_authored_transaction_amount,
+};
+use avian3d::prelude::{SpatialQuery, SpatialQueryFilter};
 use openzt2_game_data::AssetId;
 
-/// Payment for one behavior placement; the actor's pending placement owns it.
+/// Payment for one placement operation.
 #[derive(Component)]
 pub(super) struct BehaviorTargetPlacementPayment {
-    actor: Entity,
+    placement: Entity,
+    definition_price: i64,
+    terms: Vec<EconomyTransactionDefinition>,
 }
 
 /// Return of a payment whose placement could not be completed.
@@ -102,10 +115,17 @@ pub(super) struct BehaviorTargetPlacementWorld<'w, 's> {
     >,
     actor_transforms: Query<'w, 's, &'static GlobalTransform>,
     agents: Query<'w, 's, &'static NavAgent>,
+    tank_water: Query<
+        'w,
+        's,
+        &'static openzt2_zoo_state::aquatic::tank_navigation_water::TankNavigationWater,
+    >,
     navigation: Option<Res<'w, ActiveTerrainDerivedNavigationGraph>>,
     habitats: Res<'w, HabitatIndex>,
     regions: Query<'w, 's, &'static HabitatRegion>,
     grid: Res<'w, TopologyGrid>,
+    topology: Res<'w, TopologyIndex>,
+    spatial: SpatialQuery<'w, 's>,
 }
 
 #[derive(SystemParam)]
@@ -127,112 +147,174 @@ pub(super) struct BehaviorTargetPlacementCreation<'w, 's> {
     payments: MessageWriter<'w, TransactionRequest>,
 }
 
+#[derive(SystemParam)]
+pub(super) struct BehaviorTargetPlacementActions<'w, 's> {
+    actors: Query<
+        'w,
+        's,
+        (&'static BehaviorTaskExecutionState, &'static WorldMember),
+        Without<PendingBehaviorTaskFailure>,
+    >,
+    siting: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static BehaviorPlacementOf,
+            &'static BehaviorPlacementRecipient,
+            &'static BehaviorTargetPlacement,
+            &'static mut BehaviorPlacementSiting,
+        ),
+    >,
+    put_down: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static BehaviorPlacementOf,
+            &'static BehaviorPlacementRecipient,
+            &'static BehaviorTargetPlacement,
+            &'static BehaviorTargetPlacementSite,
+        ),
+        (
+            With<BehaviorPlacementPutDown>,
+            Without<BehaviorPlacementAwaitingPayment>,
+            Without<BehaviorPlacementResult>,
+        ),
+    >,
+}
+
 pub(super) fn apply_behavior_target_placements(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
     definition_assets: Res<Assets<WorldDefinitionAsset>>,
     world: BehaviorTargetPlacementWorld,
     mut creation: BehaviorTargetPlacementCreation,
-    mut actors: Query<
-        (
-            Entity,
-            &BehaviorTaskExecutionState,
-            &WorldMember,
-            &mut PendingBehaviorTargetPlacement,
-        ),
-        Without<PendingBehaviorTaskFailure>,
-    >,
+    mut actions: BehaviorTargetPlacementActions,
+    mut random_streams: Query<&mut BehaviorRandomStream>,
 ) {
     let Some(catalogue) = definitions.get(&definition_assets) else {
         return;
     };
     let mut created = HashMap::new();
-    for (actor, task, actor_world, mut pending) in &mut actors {
-        if !pending.owns(task, actor_world) || !pending.is_current(task) {
+    for (operation, owner, recipient, placement, mut siting) in &mut actions.siting {
+        let actor = owner.0;
+        if !actions.actors.get(actor).is_ok_and(|(task, world)| {
+            placement.execution_id == task.execution_id
+                && placement.root == world.root
+                && placement.is_current(task)
+        }) {
             continue;
         }
-        let next = match &pending.stage {
-            BehaviorTargetPlacementStage::Siting { prefab } => {
-                if prefab.is_none() {
-                    let prefab = catalogue
-                        .find_object(pending.definition)
-                        .and_then(|object| catalogue.scene(object.prefab));
-                    pending.stage = BehaviorTargetPlacementStage::Siting { prefab };
-                }
-                match choose_behavior_target_placement_site(
-                    actor,
-                    &pending,
+        let prefab = catalogue
+            .find_object(placement.definition)
+            .and_then(|object| catalogue.scene(object.prefab));
+        if siting.0 != prefab {
+            siting.0 = prefab;
+        }
+        match choose_behavior_target_placement_site(
+            actor,
+            recipient.0,
+            placement,
+            catalogue,
+            definitions.is_complete(),
+            &world,
+            &creation,
+            &created,
+        ) {
+            SiteChoice::Pending => {}
+            SiteChoice::Chosen(site) => {
+                commands
+                    .entity(operation)
+                    .remove::<BehaviorPlacementSiting>()
+                    .insert(site);
+            }
+            SiteChoice::Rejected => {
+                commands
+                    .entity(operation)
+                    .remove::<BehaviorPlacementSiting>()
+                    .insert(BehaviorPlacementResult(false));
+            }
+        }
+    }
+    for (operation, owner, recipient, placement, site) in &actions.put_down {
+        let actor = owner.0;
+        if !actions.actors.get(actor).is_ok_and(|(task, world)| {
+            placement.execution_id == task.execution_id
+                && placement.root == world.root
+                && placement.is_current(task)
+        }) {
+            continue;
+        }
+        let Some((object, terms)) = authored_build_terms(catalogue, placement.definition) else {
+            commands
+                .entity(operation)
+                .insert(BehaviorPlacementResult(false));
+            continue;
+        };
+        let mut random = random_streams.get_mut(actor).ok();
+        let charge = authored_build_charge(&terms, object.price_cents, || {
+            random.as_deref_mut().map(BehaviorRandomStream::next_u32)
+        });
+        if let Some(amount) = charge.filter(|amount| amount.is_positive()) {
+            if !site.uses_current_prefab(catalogue, placement.definition)
+                || !site_is_still_valid(
+                    recipient.0,
+                    placement,
+                    site,
                     catalogue,
-                    definitions.is_complete(),
                     &world,
                     &creation,
                     &created,
-                ) {
-                    SiteChoice::Pending => continue,
-                    SiteChoice::Chosen(site) => BehaviorTargetPlacementStage::Sited(site),
-                    SiteChoice::Rejected => BehaviorTargetPlacementStage::Rejected,
-                }
+                )
+            {
+                commands
+                    .entity(operation)
+                    .insert(BehaviorPlacementResult(false));
+                continue;
             }
-            BehaviorTargetPlacementStage::PuttingDown {
-                site,
-                payment: BehaviorTargetPlacementPaymentState::Unrequested,
-            } => {
-                let charge = authored_build_charge(catalogue, pending.definition);
-                if let Some(amount) = charge.filter(|amount| amount.is_positive()) {
-                    if !site.uses_current_prefab(catalogue, pending.definition)
-                        || !site_is_still_valid(
-                            &pending, site, catalogue, &world, &creation, &created,
-                        )
-                    {
-                        pending.stage = BehaviorTargetPlacementStage::Rejected;
-                        continue;
-                    }
-                    let operation = commands
-                        .spawn(BehaviorTargetPlacementPayment { actor })
-                        .id();
-                    creation.payments.write(TransactionRequest {
-                        operation,
-                        debit: Account::Zoo,
-                        credit: Account::External,
-                        amount,
-                        kind: TransactionKind::Service,
-                        subject: Some(actor),
-                    });
-                    BehaviorTargetPlacementStage::PuttingDown {
-                        site: site.clone(),
-                        payment: BehaviorTargetPlacementPaymentState::Requested(operation),
-                    }
-                } else if charge.is_some() {
-                    create_or_refund(
-                        &mut commands,
-                        actor,
-                        actor_world.root,
-                        &pending,
-                        site,
-                        Money::ZERO,
-                        catalogue,
-                        &world,
-                        &mut creation,
-                        &mut created,
-                    )
-                } else {
-                    BehaviorTargetPlacementStage::Rejected
-                }
-            }
-            _ => continue,
-        };
-        pending.stage = next;
+            let payment = commands
+                .spawn(BehaviorTargetPlacementPayment {
+                    placement: operation,
+                    definition_price: object.price_cents,
+                    terms: terms.into_iter().cloned().collect::<Vec<_>>(),
+                })
+                .id();
+            creation.payments.write(TransactionRequest {
+                operation: payment,
+                debit: Account::Zoo,
+                credit: Account::External,
+                amount,
+                kind: TransactionKind::Service,
+                subject: Some(actor),
+            });
+            commands
+                .entity(operation)
+                .insert(BehaviorPlacementAwaitingPayment(payment));
+        } else {
+            let accepted = charge.is_some()
+                && create_or_refund(
+                    &mut commands,
+                    actor,
+                    recipient.0,
+                    placement.root,
+                    placement,
+                    site,
+                    Money::ZERO,
+                    catalogue,
+                    &world,
+                    &mut creation,
+                    &mut created,
+                );
+            commands
+                .entity(operation)
+                .insert(BehaviorPlacementResult(accepted));
+        }
     }
 }
 
-/// Settles placement payments and puts paid objects down in the same step,
-/// so no paid state outlives the instruction. A payment whose placement was
-/// interrupted, or whose site became invalid, is returned: the zoo is never
-/// charged for an object that was not put down.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "settlement borrows the placement owner's live state"
-)]
+/// Settles payment before creating the object. A stale or invalid placement
+/// returns the payment to the zoo.
 pub(super) fn settle_behavior_target_placement_payments(
     mut commands: Commands,
     definitions: Res<WorldDefinitions>,
@@ -243,14 +325,20 @@ pub(super) fn settle_behavior_target_placement_payments(
     mut rejected: MessageReader<TransactionRejected>,
     payments: Query<&BehaviorTargetPlacementPayment>,
     refunds: Query<(), With<BehaviorTargetPlacementRefund>>,
-    mut placements: Query<
+    placements: Query<
         (
-            &BehaviorTaskExecutionState,
-            &WorldMember,
-            &mut PendingBehaviorTargetPlacement,
+            &BehaviorPlacementOf,
+            &BehaviorPlacementRecipient,
+            &BehaviorTargetPlacement,
+            &BehaviorTargetPlacementSite,
+            &BehaviorPlacementAwaitingPayment,
         ),
-        Without<PendingBehaviorTaskFailure>,
+        (
+            With<BehaviorPlacementPutDown>,
+            Without<BehaviorPlacementResult>,
+        ),
     >,
+    actors: Query<(&BehaviorTaskExecutionState, &WorldMember), Without<PendingBehaviorTaskFailure>>,
 ) {
     let catalogue = definitions.get(&definition_assets);
     let mut created = HashMap::new();
@@ -263,53 +351,58 @@ pub(super) fn settle_behavior_target_placement_payments(
             continue;
         };
         commands.entity(payment.operation).despawn();
-        let owned = placements
-            .get_mut(owner.actor)
-            .ok()
-            .filter(|(task, actor_world, pending)| {
-                pending.owns(task, actor_world)
-                    && pending.is_current(task)
-                    && matches!(
-                        pending.stage,
-                        BehaviorTargetPlacementStage::PuttingDown {
-                            payment: BehaviorTargetPlacementPaymentState::Requested(operation),
-                            ..
-                        } if operation == payment.operation
-                    )
+        let owned =
+            placements
+                .get(owner.placement)
+                .ok()
+                .filter(|(owner, _, placement, _, awaiting)| {
+                    awaiting.0 == payment.operation
+                        && actors.get(owner.0).is_ok_and(|(task, world)| {
+                            placement.execution_id == task.execution_id
+                                && placement.root == world.root
+                                && placement.is_current(task)
+                        })
+                });
+        let (Some((actor, recipient, placement, site, _)), Some(catalogue)) = (owned, catalogue)
+        else {
+            request_behavior_target_placement_refund(
+                &mut commands,
+                &mut creation.payments,
+                payment.amount,
+            );
+            continue;
+        };
+        let terms_still_match =
+            authored_build_terms(catalogue, placement.definition).is_some_and(|(object, terms)| {
+                object.price_cents == owner.definition_price
+                    && terms.into_iter().eq(owner.terms.iter())
             });
-        let (Some((_, actor_world, mut pending)), Some(catalogue)) = (owned, catalogue) else {
+        let accepted = if terms_still_match {
+            create_or_refund(
+                &mut commands,
+                actor.0,
+                recipient.0,
+                placement.root,
+                placement,
+                site,
+                payment.amount,
+                catalogue,
+                &world,
+                &mut creation,
+                &mut created,
+            )
+        } else {
             request_behavior_target_placement_refund(
                 &mut commands,
                 &mut creation.payments,
                 payment.amount,
             );
-            continue;
+            false
         };
-        let BehaviorTargetPlacementStage::PuttingDown { site, .. } = &pending.stage else {
-            continue;
-        };
-        if authored_build_charge(catalogue, pending.definition) != Some(payment.amount) {
-            request_behavior_target_placement_refund(
-                &mut commands,
-                &mut creation.payments,
-                payment.amount,
-            );
-            pending.stage = BehaviorTargetPlacementStage::Rejected;
-            continue;
-        }
-        let site = site.clone();
-        pending.stage = create_or_refund(
-            &mut commands,
-            owner.actor,
-            actor_world.root,
-            &pending,
-            &site,
-            payment.amount,
-            catalogue,
-            &world,
-            &mut creation,
-            &mut created,
-        );
+        commands
+            .entity(owner.placement)
+            .remove::<BehaviorPlacementAwaitingPayment>()
+            .insert(BehaviorPlacementResult(accepted));
     }
     for payment in rejected.read() {
         if refunds.contains(payment.operation) {
@@ -321,16 +414,14 @@ pub(super) fn settle_behavior_target_placement_payments(
             continue;
         };
         commands.entity(payment.operation).despawn();
-        if let Ok((_, _, mut pending)) = placements.get_mut(owner.actor) {
-            if matches!(
-                pending.stage,
-                BehaviorTargetPlacementStage::PuttingDown {
-                    payment: BehaviorTargetPlacementPaymentState::Requested(operation),
-                    ..
-                } if operation == payment.operation
-            ) {
-                pending.stage = BehaviorTargetPlacementStage::Rejected;
-            }
+        if placements
+            .get(owner.placement)
+            .is_ok_and(|(_, _, _, _, awaiting)| awaiting.0 == payment.operation)
+        {
+            commands
+                .entity(owner.placement)
+                .remove::<BehaviorPlacementAwaitingPayment>()
+                .insert(BehaviorPlacementResult(false));
         }
     }
 }
@@ -343,7 +434,8 @@ enum SiteChoice {
 
 fn choose_behavior_target_placement_site(
     actor: Entity,
-    pending: &PendingBehaviorTargetPlacement,
+    recipient: Entity,
+    pending: &BehaviorTargetPlacement,
     catalogue: WorldDefinitionsView<'_>,
     catalogue_is_complete: bool,
     world: &BehaviorTargetPlacementWorld,
@@ -360,9 +452,6 @@ fn choose_behavior_target_placement_site(
             SiteChoice::Pending
         };
     };
-    if !behavior_placement_supports_definition(definition) {
-        return SiteChoice::Rejected;
-    }
     let Some(handle) = catalogue.scene(object.prefab) else {
         return if catalogue_is_complete {
             SiteChoice::Rejected
@@ -411,8 +500,8 @@ fn choose_behavior_target_placement_site(
             SiteChoice::Pending
         };
     }
-    let (Ok((recipient_world, recipient, habitat)), Ok(subject)) = (
-        world.recipients.get(pending.recipient),
+    let (Ok((recipient_world, recipient_transform, habitat)), Ok(subject)) = (
+        world.recipients.get(recipient),
         world.actor_transforms.get(actor),
     ) else {
         return SiteChoice::Rejected;
@@ -435,16 +524,17 @@ fn choose_behavior_target_placement_site(
             return SiteChoice::Pending;
         };
         navigation.collect_dry_ground_candidates(
+            world.tank_water.get(pending.root).ok(),
             region,
             *world.grid,
             agent,
-            recipient.translation(),
+            recipient_transform.translation(),
             &mut candidates,
         );
     }
     // Preserve the recipient site when valid, then try dry shore nodes. The
     // authored placement set still navigates to and docks at the chosen site.
-    for candidate in std::iter::once(recipient.translation()).chain(candidates) {
+    for candidate in std::iter::once(recipient_transform.translation()).chain(candidates) {
         let position = candidate.xz();
         let Some(point) = sample_behavior_placement_terrain(world, position) else {
             continue;
@@ -458,6 +548,7 @@ fn choose_behavior_target_placement_site(
         let step = authored_rotation_step_degrees(definition);
         let yaw = (toward_subject.x.atan2(toward_subject.y).to_degrees() / step).round() * step;
         let site = BehaviorTargetPlacementSite {
+            rules: definition.clone(),
             transform: Transform {
                 translation: Vec3::new(position.x, point.0, position.y),
                 rotation: Quat::from_rotation_y(yaw.to_radians()),
@@ -465,7 +556,9 @@ fn choose_behavior_target_placement_site(
             },
             prefab: handle.clone(),
         };
-        if site_is_still_valid(pending, &site, catalogue, world, creation, created) {
+        if site_is_still_valid(
+            recipient, pending, &site, catalogue, world, creation, created,
+        ) {
             return SiteChoice::Chosen(site);
         }
     }
@@ -473,7 +566,8 @@ fn choose_behavior_target_placement_site(
 }
 
 fn site_is_still_valid(
-    pending: &PendingBehaviorTargetPlacement,
+    recipient: Entity,
+    pending: &BehaviorTargetPlacement,
     site: &BehaviorTargetPlacementSite,
     catalogue: WorldDefinitionsView<'_>,
     world: &BehaviorTargetPlacementWorld,
@@ -484,7 +578,7 @@ fn site_is_still_valid(
     else {
         return false;
     };
-    let Ok((recipient_world, _, habitat)) = world.recipients.get(pending.recipient) else {
+    let Ok((recipient_world, _, habitat)) = world.recipients.get(recipient) else {
         return false;
     };
     if recipient_world.root != pending.root {
@@ -507,6 +601,72 @@ fn site_is_still_valid(
     };
     let paths = world.ground_paths.overlaps(definition, catalogue);
     let geometry = world.footprints.resolve(definition, Some(&site.prefab));
+    let Some(origin) =
+        calculate_object_placement_footprint_origin(geometry, &site.transform, turns)
+    else {
+        return false;
+    };
+    let constraints = definition.constraints;
+    let occupied = || {
+        geometry
+            .cells(turns)
+            .iter()
+            .filter(|cell| cell.flags.contains_all(FootprintCellFlags::OCCUPIED))
+            .map(|cell| {
+                let local = IVec2::new(i32::from(cell.offset[0]), i32::from(cell.offset[1]));
+                origin + rotate_object_placement_cell_by_quarter_turns(local, turns / 2)
+            })
+    };
+    let path_valid = !constraints.contains_all(PlacementConstraints::REQUIRE_PATH)
+        || authored_object_entrance_definitions(definition)
+            .iter()
+            .any(|entrance| {
+                let local_position =
+                    Vec3::from_array(entrance.position_cm.map(|value| f32::from(value) * 0.01));
+                let local_forward = Vec3::from_array(
+                    entrance
+                        .forward_snorm
+                        .map(|value| f32::from(value) / f32::from(i16::MAX)),
+                )
+                .normalize_or_zero();
+                let position = site.transform.transform_point(local_position);
+                let forward = site
+                    .transform
+                    .rotation
+                    .mul_vec3(local_forward)
+                    .normalize_or_zero();
+                [position, position + forward]
+                    .into_iter()
+                    .any(|point| world.topology.paths.contains_key(&point.round().as_ivec3()))
+            });
+    let wall_valid = !constraints.contains_all(PlacementConstraints::REQUIRE_WALL)
+        || occupied().any(|cell| {
+            let cell = IVec3::new(
+                cell.x,
+                site.transform.translation.round().as_ivec3().y,
+                cell.y,
+            );
+            [IVec3::X, IVec3::NEG_X, IVec3::Z, IVec3::NEG_Z]
+                .into_iter()
+                .filter_map(|offset| EdgeKey::new(cell, cell + offset))
+                .any(|edge| world.topology.edges.contains_key(&edge))
+        });
+    let clearance = definition.minimum_headroom_metres;
+    let headroom_valid = clearance <= f32::EPSILON
+        || occupied().all(|cell| {
+            let cell = cell.as_vec2();
+            let ray_origin = Vec3::new(cell.x, site.transform.translation.y + 0.01, cell.y);
+            world
+                .spatial
+                .cast_ray(
+                    ray_origin,
+                    Dir3::Y,
+                    clearance,
+                    true,
+                    &SpatialQueryFilter::DEFAULT,
+                )
+                .is_none()
+        });
     let validity = validate_object_placement_footprint_cells(
         geometry,
         geometry.cells(turns),
@@ -551,8 +711,8 @@ fn site_is_still_valid(
             habitat: habitat.map(|member| member.habitat_entity),
             unlocked: true,
             affordable: true,
-            topology_valid: false,
-            headroom_valid: false,
+            topology_valid: path_valid && wall_valid,
+            headroom_valid,
             surface_valid: true,
         },
     );
@@ -566,26 +726,27 @@ fn site_is_still_valid(
 fn create_or_refund(
     commands: &mut Commands,
     actor: Entity,
+    recipient: Entity,
     root: Entity,
-    pending: &PendingBehaviorTargetPlacement,
+    pending: &BehaviorTargetPlacement,
     site: &BehaviorTargetPlacementSite,
     paid: Money,
     catalogue: WorldDefinitionsView<'_>,
     world: &BehaviorTargetPlacementWorld,
     creation: &mut BehaviorTargetPlacementCreation,
     created: &mut HashMap<Entity, AssetId>,
-) -> BehaviorTargetPlacementStage {
+) -> bool {
     if create_behavior_target_placement_object(
-        commands, actor, root, pending, site, catalogue, world, creation, created,
+        commands, actor, recipient, root, pending, site, catalogue, world, creation, created,
     )
     .is_some()
     {
-        return BehaviorTargetPlacementStage::Placed;
+        return true;
     }
     if paid.is_positive() {
         request_behavior_target_placement_refund(commands, &mut creation.payments, paid);
     }
-    BehaviorTargetPlacementStage::Rejected
+    false
 }
 
 #[allow(
@@ -595,8 +756,9 @@ fn create_or_refund(
 fn create_behavior_target_placement_object(
     commands: &mut Commands,
     actor: Entity,
+    recipient: Entity,
     root: Entity,
-    pending: &PendingBehaviorTargetPlacement,
+    pending: &BehaviorTargetPlacement,
     site: &BehaviorTargetPlacementSite,
     catalogue: WorldDefinitionsView<'_>,
     world: &BehaviorTargetPlacementWorld,
@@ -604,7 +766,9 @@ fn create_behavior_target_placement_object(
     created: &mut HashMap<Entity, AssetId>,
 ) -> Option<Entity> {
     if !site.uses_current_prefab(catalogue, pending.definition)
-        || !site_is_still_valid(pending, site, catalogue, world, creation, created)
+        || !site_is_still_valid(
+            recipient, pending, site, catalogue, world, creation, created,
+        )
     {
         return None;
     }
@@ -668,34 +832,51 @@ fn request_behavior_target_placement_refund(
     });
 }
 
-/// The object's authored `build` debit. Keeper food authors it against its
-/// own price (`costType="parent"`); other cost forms are not mapped here.
-fn authored_build_charge(
+fn authored_build_terms(
     catalogue: WorldDefinitionsView<'_>,
     definition: AssetId,
-) -> Option<Money> {
+) -> Option<(
+    &openzt2_game_data::world_definitions::world_objects::WorldObjectDefinition,
+    Vec<&EconomyTransactionDefinition>,
+)> {
     let object = catalogue.find_object(definition)?;
-    let Some(build) = object
-        .transactions
-        .iter()
-        .find(|transaction| transaction.name == AssetId::from_key("build"))
-    else {
-        return Some(Money::ZERO);
-    };
-    (build.kind == EconomyTransactionKind::Debit
-        && build.cost_basis == EconomyTransactionCostBasis::Parent
-        && build.next_transaction.is_none()
-        && object.price_cents >= 0)
-        .then_some(Money(object.price_cents))
+    let mut next = Some(AssetId::from_key("build"));
+    let mut terms = Vec::new();
+    for step in 0..=object.transactions.len() {
+        let Some(name) = next else {
+            return Some((object, terms));
+        };
+        let Some(transaction) = object
+            .transactions
+            .iter()
+            .find(|transaction| transaction.name == name)
+        else {
+            return (step == 0).then_some((object, terms));
+        };
+        if transaction.kind != EconomyTransactionKind::Debit || transaction.target.is_some() {
+            return None;
+        }
+        terms.push(transaction);
+        next = transaction.next_transaction;
+    }
+    None
 }
 
-fn behavior_placement_supports_definition(definition: &PlaceableDefinition) -> bool {
-    !definition.moving_footprint
-        && definition.minimum_headroom_metres <= 0.0
-        && !definition.constraints.contains_any(
-            PlacementConstraints::REQUIRE_PATH
-                .with_additional_flags(PlacementConstraints::REQUIRE_WALL),
-        )
+fn authored_build_charge(
+    terms: &[&EconomyTransactionDefinition],
+    definition_price: i64,
+    mut random: impl FnMut() -> Option<u32>,
+) -> Option<Money> {
+    terms.iter().try_fold(Money::ZERO, |sum, transaction| {
+        let amount = evaluate_authored_transaction_amount(
+            transaction,
+            None,
+            definition_price,
+            None,
+            &mut random,
+        )?;
+        sum.checked_add(authored_currency_to_money(amount)?)
+    })
 }
 
 /// The smallest turn that is both an authored rotation increment and a

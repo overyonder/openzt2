@@ -1,3 +1,4 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 use openzt2_game_data::species::Sex;
 use openzt2_zoo_state::placement::placement_surface_site::PlacementSiteQueries;
@@ -279,7 +280,7 @@ pub(super) fn validate_selected_species_adoption_placement_preview(
 
 pub(super) fn confirm_selected_species_adoption_into_habitat(
     mut commands: Commands,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    mut pointer_inputs: MessageReader<PointerInput>,
     ui_pointer_capture: Res<UiPointerCapture>,
     construction_tool: Res<ConstructionTool>,
     construction_cursors: Query<(
@@ -309,8 +310,12 @@ pub(super) fn confirm_selected_species_adoption_into_habitat(
         ),
     >,
 ) {
+    let primary_just_pressed = pointer_inputs.read().any(|input| {
+        input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
+    });
+    pointer_inputs.clear();
     if *construction_tool != ConstructionTool::Placement
-        || !primary_pointer.just_pressed
+        || !primary_just_pressed
         || ui_pointer_capture.over_ui
     {
         return;

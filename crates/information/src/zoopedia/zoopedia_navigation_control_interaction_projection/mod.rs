@@ -1,6 +1,5 @@
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::information::UiInformationAction;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::ui::authored_ui_action_projection_components::UiInformationActions;
@@ -21,10 +20,9 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
         &UiDocumentOwner,
         &mut UiInteractionEnabled,
         Option<&mut UiFocusable>,
-        &mut UiPointerInteraction,
     )>,
 ) {
-    for (authored_actions, document_owner, mut interaction_enabled, focusable, mut interaction) in
+    for (authored_actions, document_owner, mut interaction_enabled, focusable) in
         &mut authored_navigation_controls
     {
         let Ok(history) = zoopedia_histories.get(document_owner.0) else {
@@ -54,9 +52,6 @@ pub(crate) fn project_zoopedia_history_availability_to_authored_navigation_contr
         interaction_enabled.0 = availability;
         if let Some(mut focusable) = focusable {
             focusable.enabled = availability;
-        }
-        if !availability {
-            *interaction = UiPointerInteraction::None;
         }
     }
 }

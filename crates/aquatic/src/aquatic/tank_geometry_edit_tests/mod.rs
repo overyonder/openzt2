@@ -10,6 +10,10 @@ use openzt2_game_data::{
     AssetId,
 };
 
+use bevy::camera::NormalizedRenderTarget;
+use bevy::picking::pointer::{
+    Location, PointerAction, PointerButton, PointerId, PointerInput, PointerMap,
+};
 use openzt2_construction::construction::ConstructionPlugin;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::terrain::terrain_test_asset::terrain_test_asset;
@@ -24,7 +28,6 @@ use openzt2_game_data::terrain::{
     TerrainGrid, TerrainPresentation, TerrainSample, TerrainSlopeTile, TerrainUnits,
     TerrainWaterDepth,
 };
-use openzt2_interface_state::input::input_types::PrimaryPointerInputState;
 use openzt2_interface_state::ui::input_frame_capture_types::AuthoredModalInputCapture;
 use openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
@@ -90,7 +93,8 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .init_resource::<Time>()
         .init_resource::<Assets<WorldDefinitionAsset>>()
         .init_resource::<WorldDefinitions>()
-        .init_resource::<PrimaryPointerInputState>()
+        .init_resource::<PointerMap>()
+        .add_message::<PointerInput>()
         .init_resource::<UiPointerCapture>()
         .init_resource::<AuthoredModalInputCapture>()
         .init_resource::<TopologyGrid>()
@@ -122,12 +126,18 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
         .add_message::<TransportTrackConstructionEditPreparationRejected>()
         .add_message::<TransportTrackConstructionEditApplicationAcknowledged>()
         .add_plugins(ConstructionPlugin)
+        .init_resource::<super::tank_height_bounds::TankPathClearance>()
+        .add_observer(super::tank_height_bounds::record_path_clearance)
+        .add_observer(super::tank_height_bounds::discard_path_clearance)
         .insert_resource(ConstructionTool::TankEdit)
         .insert_resource(ConstructionPlacementPolicy {
             tank_edit: kind,
             ..default()
         })
-        .add_systems(TankPointerStep, update_tank_geometry_gesture)
+        .add_systems(
+            TankPointerStep,
+            (PointerInput::receive, update_tank_geometry_gesture).chain(),
+        )
         .add_systems(
             TankProjectionStep,
             project_changed_tank_depth_into_show_eligibility,
@@ -145,6 +155,7 @@ fn tank_geometry_construction_fixture(kind: TankEditKind) -> (App, Entity, Entit
                 .in_set(FixedConstructionSet::Apply)
                 .after(openzt2_zoo_state::construction::ConstructionFailureRollbackDispatchSet),
         );
+    app.world_mut().spawn(PointerId::Mouse);
     let definition = AssetId::from_key("test/tank");
     let document = WorldDefinitionDocument {
         tanks: vec![TankDefinition {
@@ -333,19 +344,24 @@ pub(super) fn install_flat_terrain(app: &mut App, side: u16) {
     });
 }
 
-fn pointer_step(
-    app: &mut App,
-    pressed: bool,
-    just_pressed: bool,
-    just_released: bool,
-    seconds: f32,
-) {
-    app.world_mut().insert_resource(PrimaryPointerInputState {
-        pressed,
-        just_pressed,
-        just_released,
-        ..default()
-    });
+fn write_primary_pointer_input(app: &mut App, action: PointerAction) {
+    app.world_mut().write_message(PointerInput::new(
+        PointerId::Mouse,
+        Location {
+            target: NormalizedRenderTarget::None {
+                width: 1,
+                height: 1,
+            },
+            position: Vec2::ZERO,
+        },
+        action,
+    ));
+}
+
+fn pointer_step(app: &mut App, action: Option<PointerAction>, seconds: f32) {
+    if let Some(action) = action {
+        write_primary_pointer_input(app, action);
+    }
     app.world_mut()
         .resource_mut::<Time>()
         .advance_by(Duration::from_secs_f32(seconds));
@@ -356,10 +372,18 @@ fn pointer_step(
 fn floor_release_commits_once_and_history_reverses_canonical_geometry_and_show_eligibility() {
     let (mut app, tank, other) = tank_geometry_construction_fixture(TankEditKind::LowerFloor);
     let before = *app.world().get::<TankGeometry>(tank).unwrap();
-    pointer_step(&mut app, true, true, false, 0.0);
-    pointer_step(&mut app, true, false, false, 1.0);
+    pointer_step(
+        &mut app,
+        Some(PointerAction::Press(PointerButton::Primary)),
+        0.0,
+    );
+    pointer_step(&mut app, None, 1.0);
     assert_eq!(*app.world().get::<TankGeometry>(tank).unwrap(), before);
-    pointer_step(&mut app, false, false, true, 0.0);
+    pointer_step(
+        &mut app,
+        Some(PointerAction::Release(PointerButton::Primary)),
+        0.0,
+    );
     app.world_mut().run_schedule(FixedUpdate);
     app.world_mut().run_schedule(TankProjectionStep);
     let after = *app.world().get::<TankGeometry>(tank).unwrap();

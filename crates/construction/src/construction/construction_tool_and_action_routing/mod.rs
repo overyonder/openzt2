@@ -1,3 +1,4 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
 
 use openzt2_interface_state::input::input_types::ActionRequest;
@@ -110,7 +111,7 @@ pub(super) fn route_construction_actions(
 /// controls retain the press when Bevy marks any control as pressed, so
 /// choosing a catalogue row or toolbar action cannot also place an object.
 pub(super) fn route_pointer_construction_action(
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    mut pointer_inputs: MessageReader<PointerInput>,
     ui_capture: Res<UiPointerCapture>,
     mut tool: ResMut<ConstructionTool>,
     previews: Query<(Entity, &ConstructionPreview)>,
@@ -120,6 +121,10 @@ pub(super) fn route_pointer_construction_action(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mut cancel: MessageWriter<CancelConstruction>,
 ) {
+    let primary_just_pressed = pointer_inputs.read().any(|input| {
+        input.pointer_id.is_mouse() && input.button_just_pressed(PointerButton::Primary)
+    });
+    pointer_inputs.clear();
     // The right mouse button puts down whatever is on the cursor.
     if mouse_buttons.just_pressed(MouseButton::Right)
         && !ui_capture.over_ui
@@ -129,7 +134,7 @@ pub(super) fn route_pointer_construction_action(
         *tool = ConstructionTool::Inspect;
         return;
     }
-    if !primary_pointer.just_pressed || ui_capture.over_ui {
+    if !primary_just_pressed || ui_capture.over_ui {
         return;
     }
     if *tool == ConstructionTool::Delete {

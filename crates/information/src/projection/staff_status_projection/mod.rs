@@ -8,7 +8,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValue
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiValueBinding;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiVisibleBinding;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 use openzt2_ui::authored_ui_selection_binding::UiSelectedBinding;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooCalendar;
 use openzt2_zoo_state::staff::staff_assignment_types::CleansFilters;
@@ -22,11 +21,12 @@ use openzt2_zoo_state::staff::staff_job_types::CurrentJob;
 use openzt2_zoo_state::staff::staff_job_types::JobProgress;
 use openzt2_zoo_state::staff::staff_job_types::StaffJob;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 /// Updates the selected maintenance worker’s duty checkboxes.
 pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     workers: Query<
         (
             Has<CleansFilters>,
@@ -49,12 +49,7 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
     mut removed_recycling: RemovedComponents<CleansRecycling>,
     mut removed_trash: RemovedComponents<EmptiesTrash>,
     mut removed_sweeping: RemovedComponents<SweepsTrash>,
-    mut nodes: Query<(
-        &UiDocumentOwner,
-        &UiSelectedBinding,
-        &mut UiSelected,
-        &mut UiPreviousSelection,
-    )>,
+    mut nodes: Query<(&UiDocumentOwner, &UiSelectedBinding, &mut UiSelected)>,
 ) {
     let filters_removed = removed_filters.read().count() != 0;
     let recycling_removed = removed_recycling.read().count() != 0;
@@ -65,14 +60,17 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
         || recycling_removed
         || trash_removed
         || sweeping_removed;
-    for (panel_entity, panel, visible) in &panels {
-        if !visible.get() || (!panel.is_changed() && !duties_changed) {
-            continue;
-        }
-        let Ok((filters, recycling, trash, sweeping)) = workers.get(panel.subject) else {
+    for (panel_entity, parent, visible) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
             continue;
         };
-        for (owner, binding, mut selected, mut previous) in &mut nodes {
+        if !visible.get() || (!selection.is_changed() && !visible.is_changed() && !duties_changed) {
+            continue;
+        }
+        let Ok((filters, recycling, trash, sweeping)) = workers.get(selection.0) else {
+            continue;
+        };
+        for (owner, binding, mut selected) in &mut nodes {
             if owner.0 != panel_entity {
                 continue;
             }
@@ -85,7 +83,6 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
             };
             if selected.0 != current {
                 selected.0 = current;
-                previous.synchronize_with_non_authored_selection_change(current);
             }
         }
     }
@@ -93,7 +90,8 @@ pub(crate) fn project_maintenance_worker_duties_to_information_panel_controls(
 
 pub(crate) fn project_live_staff_status_to_visible_information_panels(
     calendar: Res<ZooCalendar>,
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     workers: Query<
         (
             Ref<Employment>,
@@ -109,11 +107,14 @@ pub(crate) fn project_live_staff_status_to_visible_information_panels(
     let current_month_ordinal = u32::from(calendar.year)
         .saturating_mul(12)
         .saturating_add(u32::from(calendar.month.saturating_sub(1)));
-    for (panel_entity, panel, visible) in &panels {
+    for (panel_entity, parent, visible) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !visible.get() {
             continue;
         }
-        let Ok((employment, assignment, current_job)) = workers.get(panel.subject) else {
+        let Ok((employment, assignment, current_job)) = workers.get(selection.0) else {
             continue;
         };
         let job = current_job

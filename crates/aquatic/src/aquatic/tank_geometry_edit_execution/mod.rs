@@ -168,21 +168,18 @@ pub(super) fn prepare_tank_geometry_construction_edits(
                         &bounds,
                         true,
                         |walls, limits| {
-                            for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in
-                                &tanks
-                            {
-                                if adjacent_member.root == preview_member.root
-                                    && tank_habitat_seed_cell(adjacent_region)
-                                        != Some(edit.seed_cell)
-                                {
-                                    bounds.include_adjacent_tank_water_in_wall_minima(
-                                        walls,
-                                        adjacent_region,
-                                        adjacent_geometry.water_height,
-                                        limits,
-                                    );
-                                }
-                            }
+                            bounds.include_adjacent_tank_water_in_wall_minima(
+                                walls,
+                                region,
+                                limits,
+                                |entity| {
+                                    let (_, geometry, adjacent, _, world) =
+                                        tanks.get(entity).ok()?;
+                                    (world.root == preview_member.root
+                                        && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
+                                    .then_some(geometry.water_height)
+                                },
+                            );
                         },
                     )
                 });
@@ -285,18 +282,17 @@ pub(super) fn apply_tank_geometry_construction_edits(
                     &bounds,
                     forward,
                     |walls, limits| {
-                        for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {
-                            if adjacent_member.root == member.root
-                                && tank_habitat_seed_cell(adjacent_region) != Some(edit.seed_cell)
-                            {
-                                bounds.include_adjacent_tank_water_in_wall_minima(
-                                    walls,
-                                    adjacent_region,
-                                    adjacent_geometry.water_height,
-                                    limits,
-                                );
-                            }
-                        }
+                        bounds.include_adjacent_tank_water_in_wall_minima(
+                            walls,
+                            region,
+                            limits,
+                            |entity| {
+                                let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
+                                (world.root == member.root
+                                    && tank_habitat_seed_cell(adjacent) != Some(edit.seed_cell))
+                                .then_some(geometry.water_height)
+                            },
+                        );
                     },
                 )
             })

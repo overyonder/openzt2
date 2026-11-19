@@ -14,7 +14,10 @@ use openzt2_interface_state::ui::{
     ui_document_lifecycle_contracts::ShowUiDocument,
 };
 
-use super::authored_document_projection::project_document_on_entity;
+use super::{
+    authored_document_projection::project_document_on_entity,
+    document_asset_readiness::{document_dependencies_resolved, UiDocumentAssetEvents},
+};
 use crate::{
     authored_image_selection_diagnostic_override::UiAuthoredImageSelectionDiagnosticOverride,
     authored_ui_layout_participation::UiAuthoredLayoutDisplay,
@@ -59,10 +62,9 @@ pub(crate) fn reconcile_changed_ui_list_row_counts(
                 .map(|row| row.index)
                 .or_else(|_| pending.get(child).map(|row| row.0));
             if let Ok(index) = index {
-                if let Some(occupied) = occupied.get_mut(usize::from(index)) {
-                    *occupied = true;
-                } else {
-                    commands.entity(child).despawn();
+                match occupied.get_mut(usize::from(index)) {
+                    Some(slot) if !*slot => *slot = true,
+                    _ => commands.entity(child).despawn(),
                 }
             }
         }
@@ -76,21 +78,27 @@ pub(crate) fn reconcile_changed_ui_list_row_counts(
 
 pub(crate) fn materialize_ready_ui_list_rows(
     mut commands: Commands,
-    lists: Query<&UiListPolicy>,
+    lists: Query<Ref<UiListPolicy>>,
+    server: Res<AssetServer>,
+    mut asset_events: UiDocumentAssetEvents,
     pending: Query<(Entity, Ref<PendingUiListRow>, &ChildOf)>,
     documents: Res<Assets<UiDocumentAsset>>,
     active_localization: Res<LocalizationPrecedenceIndex>,
     localizations: Res<Assets<LocalizationAsset>>,
     image_selection: Option<Res<UiAuthoredImageSelectionDiagnosticOverride>>,
 ) {
+    let changes = asset_events.collect_changes();
     let Some(localization) = active_localization.borrow_loaded_localization_view(&localizations)
     else {
         return;
     };
-    if !documents.is_changed()
-        && !localizations.is_changed()
-        && !active_localization.is_changed()
-        && !pending.iter().any(|(_, row, _)| row.is_added())
+    if changes.is_empty()
+        && !pending.iter().any(|(_, row, parent)| {
+            row.is_added()
+                || lists
+                    .get(parent.parent())
+                    .is_ok_and(|policy| policy.is_changed())
+        })
     {
         return;
     }
@@ -105,6 +113,11 @@ pub(crate) fn materialize_ready_ui_list_rows(
         let Some(handle) = &policy.row_document else {
             continue;
         };
+        if (!pending.is_added() && !policy.is_changed() && !changes.affects(handle.id()))
+            || !document_dependencies_resolved(&server, handle)
+        {
+            continue;
+        }
         let Some(document) = documents.get(handle) else {
             continue;
         };

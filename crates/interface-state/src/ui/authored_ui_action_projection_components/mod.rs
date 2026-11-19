@@ -13,6 +13,7 @@ use openzt2_game_data::ui_document::{
         simulation_time::UiSimulationActionRecord, staff_management::UiStaffActionRecord,
         transportation::UiTransportActionRecord, UiActionRecord,
     },
+    timed_presentation::UiTimedEventAction,
     widget::UiWidgetRecord,
 };
 
@@ -65,12 +66,15 @@ fn canonical_ui_action_records_for_projection_source(
             .nodes
             .get(node as usize)
             .and_then(|node| {
-                let UiWidgetRecord::TimedSequence { events } = &node.widget else {
+                let UiWidgetRecord::TimedSequence { events, .. } = &node.widget else {
                     return None;
                 };
                 events.get(event as usize)
             })
-            .map_or(&[], |event| std::slice::from_ref(&event.action)),
+            .map_or(&[], |event| match &event.action {
+                UiTimedEventAction::Ui(action) => std::slice::from_ref(action),
+                UiTimedEventAction::ScenarioScript(_) => &[],
+            }),
     }
 }
 

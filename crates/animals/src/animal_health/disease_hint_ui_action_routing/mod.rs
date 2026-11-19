@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use openzt2_game_data::ui_document::action::scenarios::UiScenarioAction;
 
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 
@@ -17,7 +17,7 @@ pub(super) fn route_authored_increment_disease_hint_ui_actions_to_selected_anima
     ui_document_assets: Res<Assets<UiDocumentAsset>>,
     scenario_action_nodes: Query<(&UiScenarioActions, &UiDocumentOwner)>,
     ui_document_roots: Query<&UiDocumentRoot>,
-    selected_entity: Res<SelectedEntity>,
+    selected_entity: WorldUiSelection,
     mut animal_diseases: Query<&mut Disease>,
 ) {
     for activated_ui_node in activated_ui_nodes.read() {
@@ -43,7 +43,7 @@ pub(super) fn route_authored_increment_disease_hint_ui_actions_to_selected_anima
             {
                 continue;
             }
-            let Some(selected_entity) = selected_entity.0 else {
+            let Some(selected_entity) = selected_entity.subject() else {
                 continue;
             };
             if let Ok(mut selected_animal_disease) = animal_diseases.get_mut(selected_entity) {

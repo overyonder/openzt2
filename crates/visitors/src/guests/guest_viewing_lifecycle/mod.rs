@@ -7,28 +7,25 @@ use super::guest_simulation_types::{
     Guest, GuestDestination, GuestNavigationRequest, GuestPhase, GuestViewingTarget, Viewing,
     ViewingOpportunity,
 };
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_behavior::behavior_set_start_request_types::PendingBehaviorSet;
 use openzt2_zoo_state::animal_lifecycle::types::Animal;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorViewAnimals, RunningBehaviorInstruction,
+};
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::economy::service_types::ServiceReservation;
 use openzt2_zoo_state::locomotion::locomotion_types::Destination;
 
 pub(super) fn viewing_owned_by_current_view_action(
     task: &BehaviorTaskExecutionState,
     viewing: &Viewing,
-    documents: &Assets<BehaviorDocumentAsset>,
+    instruction: &RunningBehaviorInstruction,
 ) -> bool {
     viewing.area.is_some()
         && viewing.task_execution_id == Some(task.execution_id)
         && viewing.area == task.target()
-        && documents
-            .get(&task.document)
-            .and_then(|document| find_current_behavior_task_action(document, task))
-            .is_some_and(|action| matches!(action, BehaviorAction::ViewAnimals(_)))
+        && instruction.is_current(task)
 }
 
 pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
@@ -42,7 +39,7 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
             Option<&GuestViewingTarget>,
             Option<&GuestPhase>,
             Option<&WorldMember>,
-            Has<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>,
+            Has<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>,
         ),
         (
             With<Guest>,
@@ -50,7 +47,7 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
             Or<(
                 With<Viewing>,
                 With<GuestDestination>,
-                With<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>,
+                With<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>,
             )>,
         ),
     >,
@@ -65,8 +62,10 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
     >,
     subjects: Query<&WorldMember, With<Animal>>,
     areas: Query<&WorldMember, With<ViewingOpportunity>>,
-    tasks: Query<&BehaviorTaskExecutionState>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
+    tasks: Query<
+        (&BehaviorTaskExecutionState, &RunningBehaviorInstruction),
+        With<RunBehaviorViewAnimals>,
+    >,
 ) {
     for (guest, viewing, destination, request, target, phase, world, meter) in &guests {
         let navigating = request.is_some_and(|request| request.0.is_some());
@@ -74,7 +73,7 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
             if meter {
                 commands
                     .entity(guest)
-                    .remove::<openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter>();
+                    .remove::<openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress>();
             }
             // Removing the subject removes the relationship through Bevy's hook.
             // Release only an arrived observation, never a replacement route.
@@ -88,9 +87,9 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
             continue;
         };
         // An authored view action owns the observation of the path it stands on.
-        let owned_by_view_action = tasks
-            .get(guest)
-            .is_ok_and(|task| viewing_owned_by_current_view_action(task, viewing, &documents));
+        let owned_by_view_action = tasks.get(guest).is_ok_and(|(task, instruction)| {
+            viewing_owned_by_current_view_action(task, viewing, instruction)
+        });
         if owned_by_view_action
             && phase == Some(&GuestPhase::Visiting)
             && world.is_some_and(|world| {
@@ -124,7 +123,7 @@ pub(super) fn revoke_unowned_guest_observations<Filter: QueryFilter>(
         }
         commands.entity(guest).remove::<(
             Viewing,
-            openzt2_zoo_state::guests::guest_simulation_types::ActiveGuestAnimalViewingMeter,
+            openzt2_zoo_state::behavior_task_execution_types::running_actions::BehaviorViewingProgress,
         )>();
         if owns_destination && !navigating {
             commands

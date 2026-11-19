@@ -2,7 +2,6 @@ use bevy::ecs::system::SystemParam;
 use bevy::gltf::Gltf;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
-use openzt2_game_data::world_definitions::object_placement::placement_stomp_rules::PlacementStompAction;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectBiomeAutomaticPlacementClass;
 use openzt2_game_data::world_definitions::world_objects::WorldObjectPropertyFlags;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
@@ -35,14 +34,12 @@ use crate::placement::ground_path_placement_stomp::{
     GroundPathPlacementStomp, GroundPathStompRemovals,
 };
 use crate::placement::stomped_object_edit_preparation::{
-    StompablePlacedObject, prepare_stomped_object_removals,
+    object_stomp_prevents_placement_at_cell, prepare_stomped_object_removals, StompablePlacedObject,
 };
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
+use openzt2_zoo_state::placement::object_placement_validation::validate_object_placement_footprint_cells;
 use openzt2_zoo_state::placement::object_placement_validation::ObjectPlacementAuthoritativeFacts;
-use openzt2_zoo_state::placement::object_placement_validation::{
-    object_placement_stomp_action, validate_object_placement_footprint_cells,
-};
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementCellCollectionScratch;
 use openzt2_zoo_state::placement::placement_transaction_types::ObjectPlacementEditPrepared;
@@ -396,17 +393,14 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 |occupied_cell| {
                     created_cells.contains(&occupied_cell)
                         || path_overlaps.prevents_placement(occupied_cell)
-                        || placement
-                            .entities_occupying_cell(occupied_cell)
-                            .filter(|entity| !removed_entities.contains(entity))
-                            .any(|entity| {
-                                let target = placed
-                                    .get(entity)
-                                    .ok()
-                                    .map(|(_, reference, _, _, _)| reference.definition);
-                                object_placement_stomp_action(definition, catalogue, target)
-                                    == PlacementStompAction::Prevent
-                            })
+                        || object_stomp_prevents_placement_at_cell(
+                            occupied_cell,
+                            definition,
+                            catalogue,
+                            &placement,
+                            &placed,
+                            |entity| removed_entities.contains(&entity),
+                        )
                 },
                 ObjectPlacementAuthoritativeFacts {
                     habitat: None,
@@ -443,11 +437,9 @@ pub(super) fn prepare_biome_automatic_object_placement_edits(
                 &cells,
                 definition,
                 catalogue,
-                &footprints,
                 &placement,
                 &placed,
                 |entity| removed_entities.contains(&entity),
-                &mut scratch.cells,
             ) else {
                 continue;
             };

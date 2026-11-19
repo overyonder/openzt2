@@ -1,9 +1,9 @@
 //! Creates, hydrates, synchronizes, and animates object-placement previews.
 
 use bevy::prelude::*;
-use openzt2_game_data::AssetId;
 use openzt2_game_data::species::LifeStage;
 use openzt2_game_data::species::SpeciesVariant;
+use openzt2_game_data::AssetId;
 use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
 
 use openzt2_game_assets::scene_prefab::ScenePrefabAsset;

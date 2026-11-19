@@ -7,6 +7,7 @@ use openzt2_zoo_state::animal_behavior::interaction_container_membership::reques
     InteractionContainerAdmissionOutcome, InteractionContainerAdmissionRequest,
     ReleaseInteractionContainerMember,
 };
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::RunningBehaviorInstruction;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorLocomotionModifier;
 
 pub(super) struct NewAttachedObject {
@@ -140,10 +141,10 @@ impl DetachMembershipRequest {
 }
 
 pub(super) fn apply_object_attachment_admissions(
-    mut commands: Commands,
     result: On<InteractionContainerAttachmentAdmission>,
+    mut commands: Commands,
     mut pending: Query<&mut PendingAttachmentAdmission>,
-    mut tasks: Query<&mut BehaviorTaskExecutionState>,
+    tasks: Query<(&BehaviorTaskExecutionState, &RunningBehaviorInstruction)>,
     prefabs: Res<Assets<ScenePrefabAsset>>,
     mut playback: MessageWriter<AnimationClipPlaybackRequest>,
     entities: &Entities,
@@ -212,8 +213,10 @@ pub(super) fn apply_object_attachment_admissions(
                     commands
                         .entity(actor)
                         .try_remove::<PendingObjectAttachment>();
-                    if let Ok(mut task) = tasks.get_mut(actor) {
-                        advance_behavior_task_to_next_action(&mut task, tick);
+                    if let Ok((task, instruction)) = tasks.get(actor) {
+                        if instruction.is_current(task) {
+                            instruction.complete(actor, tick, &mut commands);
+                        }
                     }
                 }
                 AttachmentAfterAdmission::FoodProp(food) => {
@@ -221,7 +224,7 @@ pub(super) fn apply_object_attachment_admissions(
                         actor,
                         member,
                         food,
-                        &mut tasks,
+                        &tasks,
                         &mut playback,
                         &mut commands,
                     );

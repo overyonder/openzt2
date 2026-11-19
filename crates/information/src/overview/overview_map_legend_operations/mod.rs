@@ -1,10 +1,10 @@
+use bevy::picking::{events::PointerPress, pointer::PointerButton};
 use bevy::prelude::*;
 use openzt2_game_data::ui_document::{
     overview_map_presentation::UiMapLayerRecord, widget::UiWidgetRecord,
     widget_live_collection::UiWidgetLiveCollectionSource,
 };
 use openzt2_game_data::AssetId;
-use openzt2_interface_state::ui::pointer_capture_types::UiPointerInteraction;
 
 use openzt2_game_assets::{
     localization::{
@@ -22,7 +22,6 @@ use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocum
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiNodeId;
 use openzt2_interface_state::ui::authored_ui_selection_state::UiSelected;
 use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
-use openzt2_ui::authored_ui_change_activation_dispatch::UiPreviousSelection;
 
 use openzt2_interface_state::information::overview::overview_types::OverviewLegendListState;
 use openzt2_interface_state::information::overview::overview_types::OverviewLegendRow;
@@ -113,7 +112,12 @@ pub(crate) fn request_authored_overview_map_legend_row_entities(
 }
 
 pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
-    legend_rows: Query<(Entity, Ref<UiListRow>, Option<&OverviewLegendRow>)>,
+    legend_rows: Query<(
+        Entity,
+        Ref<UiListRow>,
+        Ref<ChildOf>,
+        Option<&OverviewLegendRow>,
+    )>,
     legend_list_owners: Query<&UiDocumentOwner>,
     ui_document_roots: Query<&UiDocumentRoot>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
@@ -133,11 +137,11 @@ pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
     };
     let legend_text_node_id = AssetId::from_key("ui/role/fragment/node/textname");
     let legend_checkbox_node_id = AssetId::from_key("ui/role/fragment/node/checkbox");
-    for (row_entity, list_row, current_legend_row) in &legend_rows {
-        if !list_row.is_added() && current_legend_row.is_some() {
+    for (row_entity, list_row, parent, current_legend_row) in &legend_rows {
+        if !list_row.is_changed() && !parent.is_changed() && current_legend_row.is_some() {
             continue;
         }
-        let Ok(document_owner) = legend_list_owners.get(list_row.list) else {
+        let Ok(document_owner) = legend_list_owners.get(parent.parent()) else {
             continue;
         };
         let Some((ui_document, layer_index, layer_record)) = ui_document_roots
@@ -183,7 +187,6 @@ pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
                 commands.entity(projected_node).insert((
                     legend_row_presentation,
                     UiSelected(legend_row_presentation.visible),
-                    UiPreviousSelection::from_current_selection(legend_row_presentation.visible),
                 ));
                 if let Some(layer_icon) = layer_icon.clone() {
                     for visual_layer_entity in &visual_layer_entities {
@@ -204,14 +207,8 @@ pub(crate) fn bind_authored_overview_map_layer_data_to_legend_rows(
 }
 
 pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
-    mut pressed_legend_rows: Query<
-        (
-            &mut OverviewLegendRow,
-            &UiPointerInteraction,
-            Option<&mut UiSelected>,
-        ),
-        Changed<UiPointerInteraction>,
-    >,
+    mut presses: MessageReader<PointerPress>,
+    mut pressed_legend_rows: Query<(&mut OverviewLegendRow, Option<&mut UiSelected>)>,
     ui_document_roots: Query<&UiDocumentRoot>,
     ui_documents: Res<Assets<UiDocumentAsset>>,
     mut overview_map_canvases: Query<(&OverviewMapCanvas, &mut Visibility)>,
@@ -220,10 +217,13 @@ pub(crate) fn toggle_overview_map_layers_from_pressed_legend_rows(
         Without<OverviewMapCanvas>,
     >,
 ) {
-    for (mut legend_row, interaction, selected_state) in &mut pressed_legend_rows {
-        if *interaction != UiPointerInteraction::Pressed {
+    for press in presses
+        .read()
+        .filter(|press| press.pointer.id.is_mouse() && press.button == PointerButton::Primary)
+    {
+        let Ok((mut legend_row, selected_state)) = pressed_legend_rows.get_mut(press.entity) else {
             continue;
-        }
+        };
         legend_row.visible = !legend_row.visible;
         if let Some(mut selected_state) = selected_state {
             selected_state.0 = legend_row.visible;

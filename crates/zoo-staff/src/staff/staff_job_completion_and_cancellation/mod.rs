@@ -3,13 +3,7 @@ use openzt2_game_data::world_definitions::staff_management::StaffJobKind;
 
 use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
 use openzt2_zoo_state::animal_health::types::Dead;
-use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorAnimationClipCompletion;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorDockingCompletion;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorMoveCompletion;
-use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
-use openzt2_zoo_state::locomotion::locomotion_types::Destination;
-use openzt2_zoo_state::locomotion::locomotion_types::Docking;
+use openzt2_zoo_state::behavior_task_execution_types::abandon_behavior_task_for_reconsideration;
 use openzt2_zoo_state::maintenance::maintenance_types::AppliedHabitatWasteCleanup;
 
 use super::{
@@ -17,6 +11,7 @@ use super::{
     staff_job_types::{CurrentJob, JobClaim, JobProgress, StaffJob, StaffJobBehaviorTask},
     staff_lifecycle_messages::{CancelStaffJobRequest, StaffJobCancelled, StaffJobCompleted},
 };
+use openzt2_zoo_state::behavior_task_execution_types::AppliedBehaviorLitterKill;
 
 pub(crate) fn release_staff_and_despawn_completed_jobs(
     mut commands: Commands,
@@ -51,6 +46,7 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
         Option<&JobClaim>,
         Option<&StaffJobBehaviorTask>,
         Option<&AppliedHabitatWasteCleanup>,
+        Option<&AppliedBehaviorLitterKill>,
     )>,
     staff: Query<(Entity, Option<&CurrentJob>), With<Staff>>,
     world_members: Query<(), With<WorldMember>>,
@@ -60,13 +56,17 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
 ) {
     explicitly_requested_jobs.clear();
     explicitly_requested_jobs.extend(cancellation_requests.read().map(|request| request.job));
-    for (job_entity, job, claim, behavior, applied_cleanup) in &jobs {
+    for (job_entity, job, claim, behavior, applied_cleanup, applied_litter) in &jobs {
         let target_is_live = world_members.get(job.target).is_ok()
             && !(job.kind == StaffJobKind::Treat && dead_animals.contains(job.target));
-        let target_was_consumed = job.kind == StaffJobKind::CleanHabitat
-            && claim.is_some()
-            && applied_cleanup.is_some_and(|applied| {
-                behavior.is_some_and(|behavior| behavior.execution_id == Some(applied.execution_id))
+        let target_was_consumed = claim.is_some()
+            && behavior.is_some_and(|behavior| match job.kind {
+                StaffJobKind::CleanHabitat => applied_cleanup
+                    .is_some_and(|applied| behavior.execution_id == Some(applied.execution_id)),
+                StaffJobKind::SweepLitter => {
+                    applied_litter.is_some_and(|applied| behavior.execution_id == Some(applied.0))
+                }
+                _ => false,
             });
         let claimed_staff_is_valid = claim.is_none_or(|claim| {
             staff.get(claim.staff).is_ok_and(|(_, current_job)| {
@@ -100,16 +100,8 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
                 .get(claim.staff)
                 .is_ok_and(|(_, current)| current.is_some_and(|current| current.job == job_entity))
             {
-                commands.entity(claim.staff).remove::<(
-                    CurrentJob,
-                    BehaviorTaskExecutionState,
-                    PendingBehaviorAnimationClipCompletion,
-                    PendingBehaviorDockingCompletion,
-                    PendingBehaviorMoveCompletion,
-                    PendingBehaviorTaskFailure,
-                    Destination,
-                    Docking,
-                )>();
+                abandon_behavior_task_for_reconsideration(claim.staff, &mut commands);
+                commands.entity(claim.staff).remove::<CurrentJob>();
                 commands.entity(claim.staff).insert(AvailableForWork);
             }
         }
@@ -122,16 +114,8 @@ pub fn cancel_requested_jobs_and_jobs_with_invalid_world_relations(
         if jobs.get(current_job.job).is_ok() {
             continue;
         }
-        commands.entity(staff_entity).remove::<(
-            CurrentJob,
-            BehaviorTaskExecutionState,
-            PendingBehaviorAnimationClipCompletion,
-            PendingBehaviorDockingCompletion,
-            PendingBehaviorMoveCompletion,
-            PendingBehaviorTaskFailure,
-            Destination,
-            Docking,
-        )>();
+        abandon_behavior_task_for_reconsideration(staff_entity, &mut commands);
+        commands.entity(staff_entity).remove::<CurrentJob>();
         commands.entity(staff_entity).insert(AvailableForWork);
     }
 }

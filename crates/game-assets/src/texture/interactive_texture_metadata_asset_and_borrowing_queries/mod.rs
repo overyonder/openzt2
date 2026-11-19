@@ -8,6 +8,7 @@ use openzt2_game_data::image::{
 #[derive(Asset, TypePath, Clone, Debug)]
 pub struct InteractiveTextureMetadataAsset {
     pub(in crate::texture) metadata: InteractiveImageMetadata,
+    #[dependency]
     pub(in crate::texture) cursor_atlas_image: Option<Handle<Image>>,
 }
 

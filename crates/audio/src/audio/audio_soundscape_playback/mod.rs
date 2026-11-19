@@ -57,11 +57,9 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
     mut stop_requests: MessageWriter<StopAudioCue>,
 ) {
     let audio_assets_changed = audio_asset_index.is_changed();
-    let Some(audio_asset_view) = audio_asset_index.get(&audio_assets) else {
-        return;
-    };
+    let audio_asset_view = audio_asset_index.get(&audio_assets);
     let delay_range = audio_asset_view
-        .ambient()
+        .and_then(|view| view.ambient())
         .map_or([4.0, 6.0], |policy| policy.delay_seconds);
     for (soundscape_owner, selected_soundscape, member, applied) in &soundscapes {
         let preset = presets.get(member.root).ok();
@@ -85,7 +83,7 @@ pub(super) fn project_changed_audio_soundscapes_into_playback_and_schedules(
             Some(preset) => audio_assets
                 .get(&preset.0)
                 .and_then(AudioAsset::soundscape_content),
-            None => audio_asset_view.soundscape(selected_soundscape.biome),
+            None => audio_asset_view.and_then(|view| view.soundscape(selected_soundscape.biome)),
         };
         let Some(soundscape) = soundscape else {
             commands
@@ -139,14 +137,10 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
     presets: Query<&WorldAudioPreset>,
     mut play_requests: MessageWriter<PlayAudioCue>,
 ) {
-    let Some(audio_asset_view) = audio_asset_index.get(&audio_assets) else {
-        return;
-    };
-    let delay_range = audio_asset_view
-        .ambient()
-        .map_or([4.0, 6.0], |policy| policy.delay_seconds);
-    let playback_probability = audio_asset_view
-        .ambient()
+    let audio_asset_view = audio_asset_index.get(&audio_assets);
+    let ambient = audio_asset_view.and_then(|view| view.ambient());
+    let delay_range = ambient.map_or([4.0, 6.0], |policy| policy.delay_seconds);
+    let playback_probability = ambient
         .map_or(1.0, |policy| policy.probability)
         .clamp(0.0, 1.0);
     for (soundscape_owner, selected_soundscape, member, mut schedule) in &mut soundscapes {
@@ -158,7 +152,7 @@ pub(super) fn advance_audio_soundscape_cue_schedules(
             Ok(preset) => audio_assets
                 .get(&preset.0)
                 .and_then(AudioAsset::soundscape_content),
-            Err(_) => audio_asset_view.soundscape(selected_soundscape.biome),
+            Err(_) => audio_asset_view.and_then(|view| view.soundscape(selected_soundscape.biome)),
         };
         let Some(soundscape) = soundscape else {
             continue;

@@ -1,4 +1,6 @@
+use bevy::picking::pointer::{PointerButton, PointerInput};
 use bevy::prelude::*;
+use openzt2_interface_state::input::input_types::MousePointer;
 
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
@@ -201,7 +203,7 @@ pub(super) fn apply_path_placement_requests_to_construction_previews(
 /// the construction transaction performs final validation.
 pub fn drive_selected_topology_placement_pointer_sequence(
     mut commands: Commands,
-    primary_pointer: Res<openzt2_interface_state::input::input_types::PrimaryPointerInputState>,
+    (pointer, mut pointer_inputs): (MousePointer, MessageReader<PointerInput>),
     ui_capture: Res<openzt2_interface_state::ui::pointer_capture_types::UiPointerCapture>,
     (tool, policy): (Res<ConstructionTool>, Res<ConstructionPlacementPolicy>),
     grid: Res<TopologyGrid>,
@@ -223,6 +225,19 @@ pub fn drive_selected_topology_placement_pointer_sequence(
         Option<Res<RectangularEnclosureGatePrompt>>,
     ),
 ) {
+    let mut primary_just_released = false;
+    let mut primary_press = None;
+    for input in pointer_inputs
+        .read()
+        .filter(|input| input.pointer_id.is_mouse())
+    {
+        primary_just_released |= input.button_just_released(PointerButton::Primary);
+        if input.button_just_pressed(PointerButton::Primary) {
+            primary_press = Some(input);
+        }
+    }
+    let primary_just_pressed = primary_press.is_some();
+    let primary_pressed = pointer.primary_is_pressed();
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -256,15 +271,15 @@ pub fn drive_selected_topology_placement_pointer_sequence(
     let gate = matches!(*tool, ConstructionTool::Fence(definition)
         if fence_definition_is_gate(definitions, definition));
     let Ok((preview, fence, path)) = previews.single() else {
-        if gate || primary_pointer.just_pressed && !ui_capture.over_ui {
-            if let (ConstructionTool::Fence(definition), Some(diagnostics), false) =
-                (*tool, anchor_diagnostics.as_mut(), gate)
+        if gate || primary_just_pressed && !ui_capture.over_ui {
+            if let (ConstructionTool::Fence(definition), Some(diagnostics), Some(pointer), false) =
+                (*tool, anchor_diagnostics.as_mut(), primary_press, gate)
             {
                 diagnostics.record_press(InitialFenceAnchorPress {
                     root,
                     definition,
                     grid: *grid,
-                    pointer: *primary_pointer,
+                    pointer: pointer.clone(),
                     cursor: *cursor,
                     ui_capture: *ui_capture,
                     cell,
@@ -321,7 +336,7 @@ pub fn drive_selected_topology_placement_pointer_sequence(
                 to,
             });
         }
-        if primary_pointer.just_pressed && !ui_capture.over_ui {
+        if primary_just_pressed && !ui_capture.over_ui {
             commits.write(CommitConstruction { preview });
         }
     } else if let Some(fence) = fence {
@@ -333,11 +348,11 @@ pub fn drive_selected_topology_placement_pointer_sequence(
                 to: cell,
             });
         }
-        if primary_pointer.just_pressed && !ui_capture.over_ui {
+        if primary_just_pressed && !ui_capture.over_ui {
             commits.write(CommitConstruction { preview });
         }
     } else if let Some(path) = path {
-        if !ui_capture.over_ui && path.to != cell && (ground_aligned || primary_pointer.pressed) {
+        if !ui_capture.over_ui && path.to != cell && (ground_aligned || primary_pressed) {
             paths.write(PlacePath {
                 preview,
                 definition,
@@ -347,9 +362,9 @@ pub fn drive_selected_topology_placement_pointer_sequence(
         }
         if !ui_capture.over_ui
             && if ground_aligned {
-                primary_pointer.just_pressed
+                primary_just_pressed
             } else {
-                primary_pointer.just_released
+                primary_just_released
             }
         {
             commits.write(CommitConstruction { preview });

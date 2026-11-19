@@ -1,5 +1,4 @@
 use super::*;
-use arrayvec::ArrayVec;
 use bevy::asset::{
     io::{
         memory::{Dir, MemoryAssetReader},
@@ -7,6 +6,8 @@ use bevy::asset::{
     },
     AssetLoader, LoadContext,
 };
+use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
+use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_game_data::{
     behavior::{
         action::spawn::BehaviorSpawnPosePolicy,
@@ -134,6 +135,7 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
     dir.insert_asset(Path::new("trash.testprefab"), Vec::<u8>::new());
     let gate = Arc::new(AtomicBool::new(false));
     let mut app = App::new();
+    app.add_observer(openzt2_zoo_state::behavior_task_execution_types::running_actions::apply_behavior_instruction_completion);
     app.register_asset_source(
         AssetSourceId::Default,
         AssetSourceBuilder::new(move || Box::new(MemoryAssetReader { root: dir.clone() })),
@@ -238,7 +240,7 @@ fn dropped_litter_waits_for_its_model_and_spawns_once() {
                 repetitions: 0,
                 next_action_tick: 0,
                 interaction_slot: None,
-                stack: ArrayVec::new(),
+                depth: 0,
             },
         ))
         .id();

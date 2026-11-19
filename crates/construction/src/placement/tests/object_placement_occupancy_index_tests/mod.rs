@@ -9,6 +9,7 @@ use openzt2_zoo_state::construction::construction_interaction_types::PlacementVa
 use openzt2_zoo_state::economy::money_types::Money;
 
 use crate::placement::object_placement_preview_validation::request_changed_object_placement_preview_evaluations;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprintChanged;
 use openzt2_zoo_state::placement::placement_occupancy_index::PlacedObjectFootprintOccupancyIndex;
 use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPreviewPermissionFacts;
 use openzt2_zoo_state::placement::placement_transaction_types::EvaluateObjectPlacementPreviewRequest;
@@ -23,6 +24,7 @@ fn occupancy_index_change_revalidates_an_unchanged_continuing_preview() {
         .init_resource::<WorldDefinitions>()
         .add_message::<openzt2_zoo_state::terrain::terrain_edit_types::TerrainChanged>()
         .add_message::<openzt2_zoo_state::habitat::habitat_types::ContainmentChanged>()
+        .add_message::<ScenePlacementFootprintChanged>()
         .add_message::<EvaluateObjectPlacementPreviewRequest>()
         .add_systems(Update, request_changed_object_placement_preview_evaluations);
     app.world_mut().spawn((

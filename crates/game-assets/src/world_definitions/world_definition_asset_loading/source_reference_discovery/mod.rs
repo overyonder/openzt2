@@ -42,7 +42,6 @@ pub(super) fn authored_biome_automatic_placement_supplement_source_paths(
     );
     let mut paths = archives
         .resolved_paths()
-        .1
         .iter()
         .filter(|candidate| {
             let candidate = candidate
@@ -105,7 +104,6 @@ pub(super) fn authored_hireable_generic_binder_family_variant_source_paths(
     let family_prefix = format!("{directory}/{stem}_");
     let mut paths = archives
         .resolved_paths()
-        .1
         .iter()
         .filter(|candidate| {
             let candidate = candidate

@@ -1,6 +1,6 @@
 use crate::source_document::ui::model::{SourceUiHotkeyTrigger, SourceUiNode};
 use crate::ui_document::source::lower::authored_ui_document_lowering::AuthoredUiDocument;
-use crate::ui_document::source::lower::authored_ui_event_action_lowering;
+use crate::ui_document::source::lower::authored_ui_event_collection_lowering::flatten_event;
 use crate::ui_document::source::lower::authored_ui_node_tree_lowering::BuildOutput;
 use crate::ui_document::source::lower::authored_ui_scalar_value_lowering::invalid_at;
 use openzt2_game_data::ui_document::action::UiTrigger;
@@ -13,27 +13,32 @@ use std::io;
 
 pub(super) fn add_lowered_hotkey_definitions_to_current_ui_node(
     node: &SourceUiNode,
+    node_index: u32,
     node_id_value: AssetId,
     role: UiDocumentRole,
     output: &mut BuildOutput,
     input: &AuthoredUiDocument,
+    confirmation_scope: Option<&str>,
 ) -> io::Result<()> {
     for hotkey in &node.hotkeys {
-        let Some(action) =
-            authored_ui_event_action_lowering::lower_authored_ui_event_to_canonical_action(
-                UiTrigger::Press,
-                &hotkey.event,
-                role,
-                node_id_value,
-                node.name.as_deref().unwrap_or_default(),
-                node_id_value,
-                output,
-                input,
-                None,
-            )?
-        else {
+        let first = output.actions.len();
+        let receiver = flatten_event(
+            UiTrigger::Press,
+            &hotkey.event,
+            role,
+            node_id_value,
+            node.name.as_deref().unwrap_or_default(),
+            node_id_value,
+            None,
+            output,
+            input,
+            confirmation_scope,
+            &[],
+        )?;
+        if output.actions.len() == first {
             continue;
-        };
+        }
+        let action = output.actions.pop().expect("action emitted by lowering");
         // Keys are matched without Shift, so `<char key="c">` and `key="C">` are one binding.
         let character = hotkey
             .character
@@ -67,6 +72,12 @@ pub(super) fn add_lowered_hotkey_definitions_to_current_ui_node(
             action,
         };
         if !output.hotkeys.contains(&definition) {
+            if !receiver.nodes.is_empty() {
+                let record = output.nodes[node_index as usize].actions.len() + output.hotkeys.len();
+                output
+                    .action_receivers
+                    .insert((node_index, record), receiver);
+            }
             output.hotkeys.push(definition);
         }
     }

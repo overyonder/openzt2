@@ -11,6 +11,8 @@ use openzt2_zoo_state::construction::construction_transaction_types::PrepareCons
 use openzt2_zoo_state::economy::money_types::Money;
 use openzt2_zoo_state::placement::object_placement_definition_queries::collect_occupied_placement_cells_for_transform;
 use openzt2_zoo_state::placement::object_placement_definition_queries::resolve_object_placeable_definition;
+use openzt2_zoo_state::placement::object_placement_geometry::ScenePlacementFootprints;
+use openzt2_zoo_state::placement::placement_preview_types::ObjectPlacementPrefabSource;
 
 use openzt2_zoo_state::terrain::terrain_chunk_identity_type::TerrainChunkId;
 use openzt2_zoo_state::terrain::terrain_chunk_types::EditedTerrainSamples;
@@ -32,9 +34,13 @@ use openzt2_zoo_state::terrain::terrain_world_sampling::terrain_chunk_at;
 pub(super) fn prepare_authored_object_placement_terrain_flattening(
     mut commands: Commands,
     mut requests: MessageReader<PrepareConstruction>,
-    previews: Query<&ConstructionPreview, Without<TankGeometryEdit>>,
+    previews: Query<
+        (&ConstructionPreview, Option<&ObjectPlacementPrefabSource>),
+        Without<TankGeometryEdit>,
+    >,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
+    scene_footprints: Option<Res<ScenePlacementFootprints>>,
     terrain_index: Res<TerrainIndex>,
     terrain_assets: Res<Assets<TerrainAsset>>,
     chunks: Query<(
@@ -49,7 +55,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         return;
     };
     for request in requests.read() {
-        let Ok(preview) = previews.get(request.preview) else {
+        let Ok((preview, scene)) = previews.get(request.preview) else {
             continue;
         };
         let Some(definition) = resolve_object_placeable_definition(catalogue, preview.definition)
@@ -62,9 +68,14 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         {
             continue;
         }
+        let geometry = scene_footprints
+            .as_ref()
+            .map_or(definition.into(), |footprints| {
+                footprints.resolve(definition, scene.map(|source| &source.0))
+            });
         let mut occupied_cells = Vec::new();
         let Some(occupied_cells) = collect_occupied_placement_cells_for_transform(
-            definition,
+            geometry,
             &preview.transform,
             &mut occupied_cells,
         ) else {
@@ -106,6 +117,7 @@ pub(super) fn prepare_authored_object_placement_terrain_flattening(
         }
         let mut deltas = chunks
             .iter_many(candidate_chunks)
+            .flatten()
             .filter_map(|(chunk, edited, persistent)| {
                 prepare_authored_object_placement_terrain_flattening_delta(
                     persistent,

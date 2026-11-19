@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use bevy::prelude::*;
+use bevy::{ecs::relationship::RelationshipTarget, prelude::*};
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::terrain::terrain_asset_types_and_borrowing_queries::TerrainAsset;
 use openzt2_zoo_state::terrain::terrain_chunk_types::TerrainChunk;
@@ -9,7 +9,9 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
     TerrainWaterRegionSource, TerrainWaterRegionView,
 };
 use openzt2_zoo_state::terrain::terrain_water_shoreline_geometry_types::TerrainShorelinePatch;
-use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::TerrainWaterShorelineSurface;
+use openzt2_zoo_state::terrain::terrain_water_shoreline_presentation_types::TerrainShorelineDraws;
+
+use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged;
 
 use super::mesh_construction::construct_shoreline_mesh_groups;
 use super::source_geometry::construct_source_region_shoreline_patches;
@@ -18,7 +20,8 @@ use super::ConstructedTerrainShorelineMeshGroup;
 /// Derived meshes awaiting material dependencies, on their canonical row owner.
 #[derive(Component)]
 pub(crate) struct PreparedTerrainShorelineMeshGroups {
-    pub(crate) groups: Vec<(Entity, ConstructedTerrainShorelineMeshGroup)>,
+    pub(crate) groups: Vec<(Entity, usize, ConstructedTerrainShorelineMeshGroup)>,
+    pub(crate) slots: Vec<(Entity, usize)>,
 }
 
 #[derive(Component)]
@@ -28,7 +31,9 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
     mut commands: Commands,
     assets: Res<Assets<TerrainAsset>>,
     graphics_settings: Res<GraphicsSettings>,
-    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
+    indexes: Query<&TerrainWaterMembershipIndex>,
+    mut membership: MessageReader<TerrainWaterMembershipChanged>,
+    mut asset_events: MessageReader<AssetEvent<TerrainAsset>>,
     regions: TerrainWaterRegionQuery,
     changed_regions: Query<
         (),
@@ -37,11 +42,11 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
             Changed<TerrainWaterRegionEdit>,
         )>,
     >,
-    projection_states: Query<
+    mut projection_states: Query<
         (
             Entity,
             Option<&TerrainShorelineGeometryProjected>,
-            Option<&PreparedTerrainShorelineMeshGroups>,
+            Option<&mut PreparedTerrainShorelineMeshGroups>,
         ),
         Or<(
             With<TerrainShorelineGeometryProjected>,
@@ -49,8 +54,10 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
         )>,
     >,
     chunks: Query<(Entity, Ref<TerrainChunk>)>,
-    surfaces: Query<(Entity, &TerrainWaterShorelineSurface)>,
+    surfaces: Query<&TerrainShorelineDraws>,
 ) {
+    let membership: Vec<_> = membership.read().collect();
+    let changed_assets: Vec<_> = asset_events.read().collect();
     for (owner, _, _) in &projection_states {
         if regions.get(owner).is_none() {
             discard_row_meshes(&mut commands, owner, &surfaces);
@@ -61,7 +68,9 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
         }
     }
     for (owner, source) in regions.iter() {
-        let (_, projected, pending) = projection_states.get(owner).unwrap_or((owner, None, None));
+        let (_, projected, pending) = projection_states
+            .get_mut(owner)
+            .unwrap_or((owner, None, None));
         let index = indexes
             .iter()
             .find(|index| index.terrain() == source.terrain().id());
@@ -80,39 +89,51 @@ pub(crate) fn project_changed_terrain_shoreline_geometry(
             .any(|(_, chunk)| chunk.asset.id() == source.terrain().id() && chunk.is_changed());
         if projected.is_some()
             && !changed_regions.contains(owner)
-            && !index.is_changed()
-            && !assets.is_changed()
+            && !membership
+                .iter()
+                .any(|change| change.affects_region(source.terrain().id(), owner))
+            && !changed_assets.iter().any(|event| {
+                event.is_added(source.terrain().id())
+                    || event.is_modified(source.terrain().id())
+                    || event.is_loaded_with_dependencies(source.terrain().id())
+            })
             && !graphics_settings.is_changed()
             && !chunks_changed
         {
             continue;
         }
-        discard_row_meshes(&mut commands, owner, &surfaces);
-        commands.entity(owner).remove::<(
-            TerrainShorelineGeometryProjected,
-            PreparedTerrainShorelineMeshGroups,
-        )>();
         let Some(asset) = assets.get(source.terrain()) else {
             continue;
         };
-        let Some(groups) = construct_chunk_groups(asset, &index, owner, &source, &chunks) else {
+        let Some(groups) = construct_chunk_groups(asset, index, owner, &source, &chunks) else {
             continue;
         };
-        commands.entity(owner).insert((
-            TerrainShorelineGeometryProjected,
-            PreparedTerrainShorelineMeshGroups { groups },
-        ));
+        let slots = groups
+            .iter()
+            .map(|(parent, slot, _)| (*parent, *slot))
+            .collect();
+        let next = PreparedTerrainShorelineMeshGroups { groups, slots };
+        if let Some(mut current) = pending {
+            *current = next;
+        } else {
+            commands.entity(owner).insert(next);
+        }
+        if projected.is_none() {
+            commands
+                .entity(owner)
+                .insert(TerrainShorelineGeometryProjected);
+        }
     }
 }
 
 fn discard_row_meshes(
     commands: &mut Commands,
     owner: Entity,
-    surfaces: &Query<(Entity, &TerrainWaterShorelineSurface)>,
+    surfaces: &Query<&TerrainShorelineDraws>,
 ) {
-    for (entity, surface) in surfaces {
-        if surface.material_owner == owner {
-            commands.entity(entity).despawn();
+    if let Ok(draws) = surfaces.get(owner) {
+        for draw in draws.iter() {
+            commands.entity(draw).try_despawn();
         }
     }
 }
@@ -123,7 +144,7 @@ fn construct_chunk_groups(
     owner: Entity,
     source: &TerrainWaterRegionView<'_>,
     chunks: &Query<(Entity, Ref<TerrainChunk>)>,
-) -> Option<Vec<(Entity, ConstructedTerrainShorelineMeshGroup)>> {
+) -> Option<Vec<(Entity, usize, ConstructedTerrainShorelineMeshGroup)>> {
     let cells_per_chunk = u32::from(asset.terrain_chunk_cells_per_side()?);
     if cells_per_chunk == 0 || cells_per_chunk % 4 != 0 {
         return None;
@@ -152,7 +173,8 @@ fn construct_chunk_groups(
         groups.extend(
             construct_shoreline_mesh_groups(patches, biome_index, plane)
                 .into_iter()
-                .map(|group| (parent, group)),
+                .enumerate()
+                .map(|(slot, group)| (parent, slot, group)),
         );
     }
     Some(groups)

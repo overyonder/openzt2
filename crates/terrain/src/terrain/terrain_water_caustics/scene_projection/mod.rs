@@ -1,11 +1,12 @@
 mod invalidation;
 use bevy::camera::visibility::RenderLayers;
-use bevy::ecs::entity::EntityHashMap;
+use bevy::ecs::{entity::EntityHashMap, relationship::RelationshipTarget};
 use bevy::mesh::skinning::SkinnedMesh;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
 use bevy::transform::helper::TransformHelper;
+pub(in crate::terrain) use invalidation::invalidate_bounds_after_dependency_discard;
 use invalidation::*;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::{MaterialAsset, MaterialModeTarget};
@@ -297,10 +298,10 @@ pub(in crate::terrain) struct SceneCausticWorldBound(Option<PrefabBoundingSphere
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn project_scene_caustic_targets(
     mut commands: Commands,
-    roots: Query<(
+    mut roots: Query<(
         Entity,
         &PrefabCausticPolicy,
-        Option<&TerrainWaterCausticSceneTarget>,
+        Option<&mut TerrainWaterCausticSceneTarget>,
     )>,
     nodes: BoundNodes,
     skins: Query<&'static SkinnedMesh>,
@@ -313,38 +314,36 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
     parents: Query<&'static ChildOf>,
     mut changes: BoundChanges,
     mut water: WaterChanges,
-    mut cache: Local<BoundCache>,
+    dependencies: BoundDependencies,
     targets: Query<Entity, With<TerrainWaterCausticSceneTarget>>,
     mut world_bounds: Query<(Entity, &mut SceneCausticWorldBound)>,
 ) {
-    if !indexes.iter().any(|index| index.has_water_sides()) || regions.iter().next().is_none() {
-        if cache.active {
-            *cache = BoundCache::default();
-        }
-        for entity in &targets {
-            commands
-                .entity(entity)
-                .remove::<TerrainWaterCausticSceneTarget>();
-        }
-        return;
-    }
     let mut dirty = HashSet::new();
-    if !cache.active {
-        dirty.extend(roots.iter().map(|(root, ..)| root));
-        cache.active = true;
-    }
-    changes.collect(&cache, &mut dirty);
+    changes.collect(&dependencies, &mut dirty);
     dirty.extend(changes.policies.iter());
+    dirty.extend(
+        roots
+            .iter()
+            .filter_map(|(entity, ..)| (!world_bounds.contains(entity)).then_some(entity)),
+    );
+    for entity in &dependencies.invalidated {
+        dirty.insert(entity);
+        commands
+            .entity(entity)
+            .try_remove::<SceneBoundInvalidated>();
+    }
     for root in changes.removed_policies.read() {
-        cache.deps.affected(BoundInput::Node(root), &mut dirty);
+        dependencies.mark_users(BoundInput::Node(root), &mut dirty);
         dirty.insert(root);
     }
     let mut membership = HashSet::new();
     let mut added_bounds = EntityHashMap::default();
     for root in dirty {
         let Ok((_, policy, _)) = roots.get(root) else {
-            cache.deps.remove(root);
-            cache.regions.remove(root);
+            dependencies.replace(&mut commands, root, HashSet::new());
+            if dependencies.water_source.contains(root) {
+                commands.entity(root).try_remove::<SceneWaterBoundSource>();
+            }
             if world_bounds.contains(root) {
                 commands.entity(root).remove::<SceneCausticWorldBound>();
             }
@@ -375,7 +374,7 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
                     context.world_transform(root)?.to_matrix(),
                 ))
             });
-        cache.deps.record(root, context.inputs.into_inner());
+        dependencies.replace(&mut commands, root, context.inputs.into_inner());
         if let Ok((_, mut bound)) = world_bounds.get_mut(root) {
             bound.set_if_neq(SceneCausticWorldBound(sphere));
         } else {
@@ -386,7 +385,9 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
     }
     let removed_index = changes.gone_index.read().count() != 0;
     for region in water.regions() {
-        cache.regions.affected(region, &mut membership);
+        if let Ok(users) = dependencies.water.get(region) {
+            membership.extend(users.iter());
+        }
     }
     let changed_terrain = water
         .terrain
@@ -397,10 +398,10 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
         membership.extend(world_bounds.iter().map(|(root, _)| root));
     }
     for root in membership {
-        let Ok((_, _, old)) = roots.get(root) else {
+        let Ok((_, _, old)) = roots.get_mut(root) else {
             continue;
         };
-        let mut region_inputs = HashSet::new();
+        let mut water_input = None;
         let target = (|| {
             let bound = added_bounds
                 .get(&root)
@@ -410,7 +411,7 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
             for index in &indexes {
                 let asset = terrains.get(index.terrain())?;
                 let owner = index.owner_at_world_xz(center.xz(), asset)??;
-                region_inputs.insert(owner);
+                water_input = Some(owner);
                 let source = regions.get(owner)?;
                 if source.terrain().id() != index.terrain() {
                     continue;
@@ -421,16 +422,31 @@ pub(in crate::terrain) fn project_scene_caustic_targets(
             }
             None
         })();
-        cache.regions.record(root, region_inputs);
-        if target.as_ref() == old {
-            continue;
+        let previous = dependencies
+            .water_source
+            .get(root)
+            .ok()
+            .map(|source| source.0);
+        if water_input != previous {
+            if let Some(owner) = water_input {
+                commands.entity(root).insert(SceneWaterBoundSource(owner));
+            } else {
+                commands.entity(root).remove::<SceneWaterBoundSource>();
+            }
         }
-        if let Some(target) = target {
-            commands.entity(root).insert(target);
-        } else {
-            commands
-                .entity(root)
-                .remove::<TerrainWaterCausticSceneTarget>();
+        match (old, target) {
+            (Some(mut old), Some(next)) => {
+                old.set_if_neq(next);
+            }
+            (None, Some(next)) => {
+                commands.entity(root).insert(next);
+            }
+            (Some(_), None) => {
+                commands
+                    .entity(root)
+                    .remove::<TerrainWaterCausticSceneTarget>();
+            }
+            (None, None) => {}
         }
     }
 }
@@ -447,7 +463,12 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
     policies: Query<(), With<PrefabCausticPolicy>>,
     parents: Query<&ChildOf>,
     mut changes: PassChanges,
-    mut cache: Local<PassCache>,
+    (mut asset_dependencies, root_primitives, primitive_roots, draws): (
+        Query<(Entity, &mut SceneCausticMaterialDependencies)>,
+        Query<&SceneCausticPrimitives>,
+        Query<&SceneCausticPhysicalRoot>,
+        Query<(), With<TerrainWaterCausticScenePass>>,
+    ),
     regions: TerrainWaterRegionQuery,
     terrains: Res<Assets<TerrainAsset>>,
     materials: Res<Assets<MaterialAsset>>,
@@ -463,17 +484,6 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
     mut effects: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    if targets.is_empty() {
-        if cache.quality.is_some() {
-            for draws in cache.draws.values() {
-                for &entity in draws {
-                    commands.entity(entity).try_despawn();
-                }
-            }
-            *cache = PassCache::default();
-        }
-        return;
-    }
     let mut dirty = HashSet::new();
     let mut subtrees = HashSet::new();
     let mut views: Vec<_> = cameras
@@ -486,13 +496,17 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
         })
         .collect();
     views.sort_unstable();
-    if cache.views != views || cache.quality != Some(settings.effects) {
-        cache.views = views;
-        cache.quality = Some(settings.effects);
+    let views_changed = !changes.changed_views.is_empty()
+        | (changes.removed_views.read().count() != 0)
+        | (changes.removed_cameras.read().count() != 0)
+        | (changes.removed_zoo_cameras.read().count() != 0);
+    if views_changed || settings.is_changed() {
         subtrees.extend(targets.iter().map(|(root, _)| root));
     }
     for root in changes.targets.iter().chain(changes.removed_targets.read()) {
-        cache.deps.affected(PassInput::Root(root), &mut dirty);
+        if let Ok(primitives) = root_primitives.get(root) {
+            dirty.extend(primitives.iter());
+        }
         if targets.contains(root) {
             subtrees.insert(root);
         }
@@ -503,13 +517,10 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
         .chain(changes.removed_parents.read())
         .chain(changes.removed_policies.read())
     {
-        cache.deps.affected(PassInput::Ancestor(node), &mut dirty);
-        if (primitives.contains(node) || changes.children.contains(node))
-            && std::iter::once(node)
-                .chain(parents.iter_ancestors::<ChildOf>(node))
-                .find(|e| policies.contains(*e))
-                .is_some_and(|e| targets.contains(e))
-        {
+        if let Ok(primitives) = root_primitives.get(node) {
+            dirty.extend(primitives.iter());
+        }
+        if primitives.contains(node) || changes.children.contains(node) {
             subtrees.insert(node);
         }
     }
@@ -529,79 +540,91 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
         .chain(changes.removed_material.read())
         .chain(changes.removed_handle.read())
     {
-        if cache.deps.contains(source) {
+        if asset_dependencies.contains(source) || primitive_roots.contains(source) {
             dirty.insert(source);
         }
     }
-    for entity in changes.removed_draws.read() {
-        if let Some(&source) = cache.sources.get(&entity) {
-            dirty.insert(source);
+    let changed_regions: HashSet<_> = changes.water.regions().collect();
+    if !changed_regions.is_empty() {
+        for (root, target) in &targets {
+            if changed_regions.contains(&target.water_owner) {
+                if let Ok(primitives) = root_primitives.get(root) {
+                    dirty.extend(primitives.iter());
+                }
+            }
         }
     }
-    for owner in changes.water.regions() {
-        cache.deps.affected(PassInput::Region(owner), &mut dirty);
-    }
-    for id in changes
+    let mut assets: HashSet<_> = changes
         .water
         .terrain
         .read()
         .filter_map(changed_asset)
-        .map(|id| id.untyped())
+        .map(|id| PassAssetInput::Asset(id.untyped()))
         .chain(
             changes
                 .materials
                 .read()
                 .filter_map(changed_asset)
-                .map(|id| id.untyped()),
+                .map(|id| PassAssetInput::Asset(id.untyped())),
         )
-    {
-        cache.deps.affected(PassInput::Asset(id), &mut dirty);
-    }
+        .collect();
     for event in changes.effects.read() {
         if let Some(id) = changed_asset(event) {
-            cache
-                .deps
-                .affected(PassInput::Asset(id.untyped()), &mut dirty);
-            // Live source sampling is copied by update_scene_caustic_bindings.
+            assets.insert(PassAssetInput::Asset(id.untyped()));
+            // A modified source transform is copied by the live binding update.
             if !matches!(event, AssetEvent::Modified { .. }) {
-                cache.deps.affected(PassInput::SourceEffect(id), &mut dirty);
+                assets.insert(PassAssetInput::SourceEffect(id));
             }
         }
     }
+    if !assets.is_empty() {
+        dirty.extend(
+            asset_dependencies
+                .iter()
+                .filter_map(|(entity, dependencies)| {
+                    (!dependencies.0.is_disjoint(&assets)).then_some(entity)
+                }),
+        );
+    }
     for primitive in dirty {
-        cache.deps.remove(primitive);
-        if let Some(draws) = cache.draws.remove(&primitive) {
-            for entity in draws {
-                cache.sources.remove(&entity);
-                commands.entity(entity).try_despawn();
+        if let Ok(children) = changes.children.get(primitive) {
+            for child in children.iter().filter(|&child| draws.contains(child)) {
+                commands.entity(child).try_despawn();
             }
         }
-        let Ok((_, mesh, source_material, source_pass)) = primitives.get(primitive) else {
-            continue;
-        };
-        let mut inputs = HashSet::new();
-        let Some(root) = std::iter::once(primitive)
+        let previous_root = primitive_roots.get(primitive).ok().map(|root| root.0);
+        let root = std::iter::once(primitive)
             .chain(parents.iter_ancestors::<ChildOf>(primitive))
-            .inspect(|entity| {
-                inputs.insert(PassInput::Ancestor(*entity));
-            })
             .find(|entity| policies.contains(*entity))
+            .and_then(|root| targets.get(root).ok());
+        let (Ok((_, mesh, source_material, source_pass)), Some((root, target))) =
+            (primitives.get(primitive), root)
         else {
+            if previous_root.is_some() {
+                commands
+                    .entity(primitive)
+                    .try_remove::<SceneCausticPhysicalRoot>();
+            }
+            if asset_dependencies.contains(primitive) {
+                commands
+                    .entity(primitive)
+                    .try_remove::<SceneCausticMaterialDependencies>();
+            }
             continue;
         };
-        let Ok((_, target)) = targets.get(root) else {
-            continue;
-        };
-        inputs.insert(PassInput::Root(root));
-        inputs.insert(PassInput::Region(target.water_owner));
-        let mut draws = Vec::new();
+        if previous_root != Some(root) {
+            commands
+                .entity(primitive)
+                .insert(SceneCausticPhysicalRoot(root));
+        }
+        let mut inputs = HashSet::new();
         // Unavailable dependencies remain indexed so that asset arrival retries the projection.
         (|| -> Option<()> {
             let source = regions.get(target.water_owner)?;
-            inputs.insert(PassInput::Asset(source.terrain().id().untyped()));
+            inputs.insert(PassAssetInput::Asset(source.terrain().id().untyped()));
             let asset = terrains.get(source.terrain())?;
             let water = source.biome(asset)?.water_presentation.as_ref()?;
-            inputs.insert(PassInput::Asset(source_material.0.id().untyped()));
+            inputs.insert(PassAssetInput::Asset(source_material.0.id().untyped()));
             let original = materials.get(&source_material.0)?;
             let mode = match original.mode("caustic") {
                 Some(MaterialModeTarget::ThisMaterial) => original,
@@ -610,24 +633,25 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
                         Some(MaterialModeTarget::Material(handle)) => handle,
                         _ => asset.water_material("causticdefault")?,
                     };
-                    inputs.insert(PassInput::Asset(handle.id().untyped()));
+                    inputs.insert(PassAssetInput::Asset(handle.id().untyped()));
                     materials.get(handle)?
                 }
             };
-            inputs.insert(PassInput::SourceEffect(source_pass.0.id()));
+            inputs.insert(PassAssetInput::SourceEffect(source_pass.0.id()));
             let source_effect = effects.get(&source_pass.0)?.clone();
             let templates =
                 mode.evaluated_pass_material_assets_for_effect_quality(settings.effects);
             for handle in templates {
-                inputs.insert(PassInput::Asset(handle.id().untyped()));
+                inputs.insert(PassAssetInput::Asset(handle.id().untyped()));
             }
-            for &(camera, layer) in &cache.views {
+            for &(camera, layer) in &views {
                 let mut prepared = Vec::new();
                 for handle in templates {
                     let Some(mut pass) = effects.get(handle).cloned() else {
                         prepared.clear();
                         break;
                     };
+                    pass.retain_authored_draw_order();
                     pass.recreate_uniform_buffers_for_runtime_material(&mut buffers);
                     if !super::bind_caustic_textures(
                         &mut pass,
@@ -638,7 +662,7 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
                         break;
                     }
                     if !copy_source_sampling(&mut pass, &source_effect).unwrap_or(false) {
-                        inputs.insert(PassInput::Asset(source_pass.0.id().untyped()));
+                        inputs.insert(PassAssetInput::Asset(source_pass.0.id().untyped()));
                         prepared.clear();
                         break;
                     }
@@ -648,21 +672,17 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
                 for (index, pass) in prepared.into_iter().enumerate() {
                     let entity = commands
                         .spawn((
-                            TerrainWaterCausticScenePass {
-                                physical_presentation: root,
-                                source_primitive: primitive,
-                                water_owner: target.water_owner,
-                                render_view: camera,
-                            },
+                            TerrainWaterCausticScenePass,
                             Mesh3d(mesh.0.clone()),
                             MeshMaterial3d(effects.add(pass)),
                             Transform::IDENTITY,
                             Visibility::Hidden,
                             RenderLayers::layer(layer),
                             ChildOf(primitive),
+                            SceneCausticWaterOwner(target.water_owner),
+                            SceneCausticRenderView(camera),
                         ))
                         .id();
-                    draws.push(entity);
                     let invocation = *invocation.get_or_insert(entity);
                     commands.entity(entity).insert(
                         AuthoredEffectTechniquePassSubmissionOrder::new(invocation, index)
@@ -675,12 +695,11 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
             }
             Some(())
         })();
-        cache.deps.record(primitive, inputs);
-        for &draw in &draws {
-            cache.sources.insert(draw, primitive);
-        }
-        if !draws.is_empty() {
-            cache.draws.insert(primitive, draws);
+        let next = SceneCausticMaterialDependencies(inputs);
+        if let Ok((_, mut current)) = asset_dependencies.get_mut(primitive) {
+            current.set_if_neq(next);
+        } else {
+            commands.entity(primitive).insert(next);
         }
     }
 }
@@ -688,31 +707,40 @@ pub(in crate::terrain) fn project_scene_caustic_passes(
 pub(in crate::terrain) fn update_scene_caustic_bindings(
     sources: Query<&MeshMaterial3d<EffectPassMaterial>, Without<TerrainWaterCausticScenePass>>,
     targets: Query<&TerrainWaterCausticSceneTarget>,
+    roots: Query<&SceneCausticPhysicalRoot>,
     regions: TerrainWaterRegionQuery,
     lighting: Query<(&TerrainWaterCausticAnimation, &TerrainWaterRegionLight)>,
     terrains: Res<Assets<TerrainAsset>>,
     cameras: Query<&Camera>,
     transforms: TransformHelper,
-    mut passes: Query<(
-        &TerrainWaterCausticScenePass,
-        &MeshMaterial3d<EffectPassMaterial>,
-        &mut Visibility,
-    )>,
+    mut passes: Query<
+        (
+            &ChildOf,
+            &SceneCausticRenderView,
+            &SceneCausticWaterOwner,
+            &MeshMaterial3d<EffectPassMaterial>,
+            &mut Visibility,
+        ),
+        With<TerrainWaterCausticScenePass>,
+    >,
     mut effects: ResMut<Assets<EffectPassMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
 ) {
-    for (pass, handle, mut visibility) in &mut passes {
+    for (primitive, view, water, handle, mut visibility) in &mut passes {
         let bound = (|| -> std::io::Result<bool> {
+            let Ok(root) = roots.get(primitive.parent()) else {
+                return Ok(false);
+            };
             if !targets
-                .get(pass.physical_presentation)
-                .is_ok_and(|target| target.water_owner == pass.water_owner)
+                .get(root.0)
+                .is_ok_and(|target| target.water_owner == water.0)
             {
                 return Ok(false);
             }
-            let Some(source) = regions.get(pass.water_owner) else {
+            let Some(source) = regions.get(water.0) else {
                 return Ok(false);
             };
-            let Ok((animation, light)) = lighting.get(pass.water_owner) else {
+            let Ok((animation, light)) = lighting.get(water.0) else {
                 return Ok(false);
             };
             let Some(asset) = terrains.get(source.terrain()) else {
@@ -727,17 +755,17 @@ pub(in crate::terrain) fn update_scene_caustic_bindings(
             let Some(height) = source.surface_height(asset) else {
                 return Ok(false);
             };
-            let Ok(camera) = cameras.get(pass.render_view) else {
+            let Ok(camera) = cameras.get(view.0) else {
                 return Ok(false);
             };
             if !camera.is_active {
                 return Ok(false);
             }
-            let Ok(camera_transform) = transforms.compute_global_transform(pass.render_view) else {
+            let Ok(camera_transform) = transforms.compute_global_transform(view.0) else {
                 return Ok(false);
             };
             let Some(source_effect) = sources
-                .get(pass.source_primitive)
+                .get(primitive.parent())
                 .ok()
                 .and_then(|handle| effects.get(&handle.0))
                 .cloned()

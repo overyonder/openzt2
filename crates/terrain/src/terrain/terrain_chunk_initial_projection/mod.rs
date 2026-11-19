@@ -164,6 +164,7 @@ pub(super) fn validate_index_and_project_loaded_terrain_chunks(
         let Some(projected_terrain_effect_passes) = terrain_effect_passes
             .into_iter()
             .map(|mut pass| {
+                pass.retain_authored_draw_order();
                 pass.configure_for_authored_terrain_surface(
                     texture.clone(),
                     detail_texture.clone(),
@@ -278,6 +279,7 @@ pub(super) fn apply_changed_effect_quality_to_projected_terrain_chunks(
         let Some(mut projected_materials) = selected_passes
             .into_iter()
             .map(|mut pass| {
+                pass.retain_authored_draw_order();
                 pass.configure_for_authored_terrain_surface(
                     surface_image.0.clone(),
                     detail_texture.clone(),

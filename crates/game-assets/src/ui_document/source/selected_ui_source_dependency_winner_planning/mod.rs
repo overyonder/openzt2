@@ -152,6 +152,19 @@ pub(super) fn plan_selected_ui_source_dependency_winners_and_image_dimensions(
             let selected_winner_path = selected_winner_path.to_string_lossy().replace('\\', "/");
             insert_selected_dependency_winner(authored_reference, selected_winner_path);
         }
+        if source_document_node.name.eq_ignore_ascii_case("ZTGlobe")
+            && source_document_node.attribute("screamThreshold").is_some()
+        {
+            const SCREAM: &str = "ui/sound/WorldScreams.wav";
+            if let Some(path) =
+                asset_archives.resolve_ui_reference(Path::new(source_document_path), SCREAM)
+            {
+                insert_selected_dependency_winner(
+                    SCREAM,
+                    path.to_string_lossy().replace('\\', "/"),
+                );
+            }
+        }
         drop(insert_selected_dependency_winner);
         source_document_node
             .element_children()

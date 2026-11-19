@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use openzt2_game_assets::application_lifecycle::GamePhase;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::application_schedule::GameSet;
+use openzt2_zoo_state::environment::environment_state_types::ZooTickAdvanced;
 
 pub struct SimulationTimePlugin;
 
@@ -32,6 +33,7 @@ impl Plugin for SimulationTimePlugin {
             .add_message::<SimulationPauseRequest>()
             .add_message::<SimulationControlChanged>()
             .add_message::<ZooDayAdvanced>()
+            .add_message::<ZooTickAdvanced>()
             .add_message::<ZooYearAdvanced>()
             .add_systems(
                 Update,

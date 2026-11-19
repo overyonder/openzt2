@@ -1,7 +1,12 @@
+use crate::terrain::terrain_chunk_mesh_construction::construct_terrain_chunk_mesh;
+use crate::terrain::water_regions::authored_membership::TerrainWaterMembershipChanged;
 use bevy::asset::AssetEvent;
+use bevy::camera::visibility::RenderLayers;
+use bevy::platform::collections::HashMap;
 use bevy::platform::collections::HashSet;
 use bevy::prelude::*;
 use bevy::render::storage::ShaderBuffer;
+use bevy::tasks::{ComputeTaskPool, TaskPool};
 use bevy::transform::helper::TransformHelper;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
 use openzt2_game_assets::material::material_asset_types::MaterialAsset;
@@ -22,7 +27,9 @@ use openzt2_zoo_state::terrain::terrain_water_presentation_types::{
 };
 
 use super::ground_mesh::construct_caustic_ground_mesh;
-use super::pass_projection::spawn_camera_specific_caustic_ground_passes;
+use super::pass_projection::{
+    reconcile_camera_specific_caustic_ground_passes, GroundCausticPassIndex,
+};
 use super::{
     advance_caustic_animation, bind_caustic_camera_projection, bind_caustic_textures,
     caustic_world_projection_matrices, initialize_caustic_animation,
@@ -93,6 +100,130 @@ pub(in crate::terrain) fn advance_terrain_caustic_animation(
     }
 }
 
+#[derive(Component)]
+pub(in crate::terrain) struct TerrainCausticGroundMeshes(Vec<(Entity, Mesh)>);
+
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+pub(in crate::terrain) fn prepare_changed_terrain_caustic_ground_meshes(
+    mut commands: Commands,
+    assets: Res<Assets<TerrainAsset>>,
+    chunks: Query<(Entity, &TerrainChunk, Option<&EditedTerrainSamples>), With<TerrainRenderChunk>>,
+    changed_chunks: Query<(), Or<(Added<TerrainRenderChunk>, Changed<TerrainDirty>)>>,
+    indexes: Query<&TerrainWaterMembershipIndex>,
+    regions: TerrainWaterRegionQuery,
+    mut membership_changes: MessageReader<TerrainWaterMembershipChanged>,
+    mut terrain_changes: MessageReader<AssetEvent<TerrainAsset>>,
+    mut prepared: Query<&mut TerrainCausticGroundMeshes>,
+) {
+    let membership_changes: Vec<_> = membership_changes.read().collect();
+    let changed_assets: HashSet<_> = terrain_changes
+        .read()
+        .filter_map(|event| match *event {
+            AssetEvent::Added { id }
+            | AssetEvent::Modified { id }
+            | AssetEvent::LoadedWithDependencies { id }
+            | AssetEvent::Removed { id } => Some(id),
+            AssetEvent::Unused { .. } => None,
+        })
+        .collect();
+    let mut jobs = Vec::new();
+    for (entity, chunk, edited) in &chunks {
+        let id = chunk.asset.id();
+        let index = indexes.iter().find(|index| index.terrain() == id);
+        let (Some(index), Some(asset)) = (index, assets.get(id)) else {
+            if prepared.contains(entity) {
+                commands
+                    .entity(entity)
+                    .remove::<TerrainCausticGroundMeshes>();
+            }
+            continue;
+        };
+        let dirty_region = membership_changes.iter().any(|change| {
+            change.affects_chunk(chunk)
+                || (change.terrain == id
+                    && change.regions.as_ref().is_some_and(|owners| {
+                        owners.iter().any(|owner| {
+                            let cells = u32::from(chunk.side.saturating_sub(1)).max(1);
+                            index
+                                .render_tiles(*owner)
+                                .any(|tile| (tile * 4 / cells).as_ivec2() == chunk.source_coord)
+                        })
+                    }))
+        });
+        if prepared.contains(entity)
+            && !changed_chunks.contains(entity)
+            && !changed_assets.contains(&id)
+            && !dirty_region
+        {
+            continue;
+        }
+        let mut owners = Vec::new();
+        for (owner, source) in regions.iter() {
+            if source.terrain().id() != id {
+                continue;
+            }
+            let cells = u32::from(chunk.side.saturating_sub(1)).max(1);
+            if !index
+                .render_tiles(owner)
+                .any(|tile| (tile * 4 / cells).as_ivec2() == chunk.source_coord)
+            {
+                continue;
+            }
+            if let Some(water) = source
+                .biome(asset)
+                .and_then(|biome| biome.water_presentation.as_ref())
+            {
+                owners.push((
+                    owner,
+                    water
+                        .surface_material
+                        .configuration
+                        .caustics
+                        .terrain_tint_rgba,
+                ));
+            }
+        }
+        jobs.push((entity, chunk, edited, asset, index, owners));
+    }
+    let results: Vec<_> = ComputeTaskPool::get_or_init(TaskPool::default).scope(|scope| {
+        for (entity, chunk, edited, asset, index, owners) in jobs {
+            scope.spawn(async move {
+                let mut meshes = Vec::new();
+                if !owners.is_empty() {
+                    let ground = construct_terrain_chunk_mesh(chunk, asset, edited)?;
+                    let width = asset.canonical_terrain_grid().width;
+                    for (owner, tint) in owners {
+                        let tiles: HashSet<_> = index.render_tiles(owner).collect();
+                        if let Some(mesh) = construct_caustic_ground_mesh(
+                            chunk,
+                            asset,
+                            &ground,
+                            tint,
+                            |point| {
+                                index.point_owner(UVec2::new(
+                                    point as u32 % width,
+                                    point as u32 / width,
+                                )) == Some(owner)
+                            },
+                            |tile| tiles.contains(&tile),
+                        ) {
+                            meshes.push((owner, mesh));
+                        }
+                    }
+                }
+                Some((entity, TerrainCausticGroundMeshes(meshes)))
+            });
+        }
+    });
+    for (entity, next) in results.into_iter().flatten() {
+        if let Ok(mut current) = prepared.get_mut(entity) {
+            *current = next;
+        } else {
+            commands.entity(entity).insert(next);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
     mut commands: Commands,
@@ -106,64 +237,89 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
         (
             Entity,
             &TerrainChunk,
-            Option<&EditedTerrainSamples>,
+            Option<Ref<TerrainCausticGroundMeshes>>,
             Has<TerrainCausticGroundProjectionPending>,
             Option<&Children>,
         ),
         With<TerrainRenderChunk>,
     >,
-    changed_chunks: Query<(), Or<(Added<TerrainRenderChunk>, Changed<TerrainDirty>)>>,
-    indexes: Query<Ref<TerrainWaterMembershipIndex>>,
     regions: TerrainWaterRegionQuery,
-    caustic_passes: Query<(), With<TerrainWaterCausticPass>>,
+    mut draws: Query<(
+        &TerrainWaterCausticPass,
+        &GroundCausticPassIndex,
+        &mut Mesh3d,
+        &mut MeshMaterial3d<EffectPassMaterial>,
+        &mut RenderLayers,
+    )>,
     cameras: Query<
         (
             Entity,
             Ref<Camera>,
-            Option<&EffectPassMaterialRenderView>,
+            Option<Ref<EffectPassMaterialRenderView>>,
             Has<ZooCamera>,
         ),
         With<Camera3d>,
     >,
+    mut removed_views: RemovedComponents<EffectPassMaterialRenderView>,
 ) {
-    let render_views = cameras
+    let new_views = cameras.iter().any(|(_, camera, view, _)| {
+        camera.is_added() || view.is_some_and(|view| view.is_changed())
+    }) | (removed_views.read().count() > 0);
+    let views: Vec<_> = cameras
         .iter()
         .filter_map(|(entity, _, view, primary)| {
             view.map(|view| (entity, view.render_layer))
                 .or_else(|| primary.then_some((entity, PRIMARY_EFFECT_PASS_RENDER_VIEW_LAYER)))
         })
-        .collect::<Vec<_>>();
-    let new_camera = cameras.iter().any(|(_, camera, _, _)| camera.is_added());
-    for (chunk_entity, chunk, edited, pending, children) in &chunks {
-        let membership = indexes
-            .iter()
-            .find(|index| index.terrain() == chunk.asset.id());
-        let unchanged = membership.as_ref().is_some_and(|index| !index.is_changed())
-            && !pending
-            && !changed_chunks.contains(chunk_entity)
+        .collect();
+    for (entity, chunk, prepared, pending, children) in &chunks {
+        let mut existing: HashMap<_, _> = children
+            .into_iter()
+            .flat_map(|children| children.iter())
+            .filter_map(|child| {
+                let (pass, index, ..) = draws.get(child).ok()?;
+                Some(((pass.water_owner, pass.render_view, index.0), child))
+            })
+            .collect();
+        let Some(prepared) = prepared else {
+            for draw in existing.into_values() {
+                commands.entity(draw).try_despawn();
+            }
+            continue;
+        };
+        if !pending
+            && !prepared.is_changed()
             && !graphics.is_changed()
-            && !assets.is_changed()
-            && !new_camera;
-        if unchanged {
+            && !new_views
+            && existing.keys().all(|(owner, view, _)| {
+                regions.get(*owner).is_some() && views.iter().any(|(camera, _)| camera == view)
+            })
+        {
             continue;
         }
-        for child in children.into_iter().flat_map(|children| children.iter()) {
-            if caustic_passes.contains(child) {
-                commands.entity(child).despawn();
+        if views.is_empty() {
+            for draw in existing.into_values() {
+                commands.entity(draw).try_despawn();
             }
+            continue;
         }
         if !pending {
             commands
-                .entity(chunk_entity)
+                .entity(entity)
                 .insert(TerrainCausticGroundProjectionPending);
         }
-        // An absent index is unresolved; no saved membership is substituted.
-        let (Some(index), Some(asset)) = (membership, assets.get(&chunk.asset)) else {
-            continue;
-        };
-        if render_views.is_empty() {
+        if prepared.0.is_empty() {
+            for draw in existing.into_values() {
+                commands.entity(draw).try_despawn();
+            }
+            commands
+                .entity(entity)
+                .remove::<TerrainCausticGroundProjectionPending>();
             continue;
         }
+        let Some(asset) = assets.get(&chunk.asset) else {
+            continue;
+        };
         let Some(material) = asset
             .water_material("Materials/causticterrain.bfmat")
             .and_then(|handle| authored_materials.get(handle))
@@ -178,63 +334,45 @@ pub(in crate::terrain) fn project_changed_terrain_caustic_ground_passes(
         else {
             continue;
         };
-        let mut prepared = Vec::new();
         let mut ready = true;
-        for (owner, source) in regions.iter() {
-            if source.terrain().id() != chunk.asset.id() {
+        for (owner, mesh) in &prepared.0 {
+            let Some(source) = regions.get(*owner) else {
                 continue;
-            }
+            };
             let Some(water) = source
                 .biome(asset)
                 .and_then(|biome| biome.water_presentation.as_ref())
             else {
-                ready = false;
-                break;
-            };
-            let configuration = &water.surface_material.configuration.caustics;
-            let tiles: HashSet<_> = index.render_tiles(owner).collect();
-            let width = asset.canonical_terrain_grid().width;
-            let Some(mesh) = construct_caustic_ground_mesh(
-                chunk,
-                asset,
-                edited,
-                configuration.terrain_tint_rgba,
-                |point| {
-                    index.point_owner(UVec2::new(point as u32 % width, point as u32 / width))
-                        == Some(owner)
-                },
-                |tile| tiles.contains(&tile),
-            ) else {
                 continue;
             };
             let mut passes = templates.clone();
-            if !passes
-                .iter_mut()
-                .all(|pass| bind_caustic_textures(pass, asset, configuration))
-            {
+            if !passes.iter_mut().all(|pass| {
+                bind_caustic_textures(pass, asset, &water.surface_material.configuration.caustics)
+            }) {
                 ready = false;
-                break;
+                continue;
             }
-            prepared.push((owner, mesh, passes));
-        }
-        if !ready {
-            continue;
-        }
-        for (owner, mesh, passes) in prepared {
-            spawn_camera_specific_caustic_ground_passes(
+            reconcile_camera_specific_caustic_ground_passes(
                 &mut commands,
-                chunk_entity,
-                owner,
-                meshes.add(mesh),
+                entity,
+                *owner,
+                meshes.add(mesh.clone()),
                 &passes,
-                &render_views,
+                &views,
                 &mut materials,
                 &mut buffers,
+                &mut existing,
+                &mut draws,
             );
         }
-        commands
-            .entity(chunk_entity)
-            .remove::<TerrainCausticGroundProjectionPending>();
+        if ready {
+            for draw in existing.into_values() {
+                commands.entity(draw).try_despawn();
+            }
+            commands
+                .entity(entity)
+                .remove::<TerrainCausticGroundProjectionPending>();
+        }
     }
 }
 
@@ -301,18 +439,5 @@ pub(in crate::terrain) fn update_terrain_caustic_view_bindings(
         } else {
             Visibility::Hidden
         });
-    }
-}
-
-pub(in crate::terrain) fn despawn_caustic_passes_without_owner_or_view(
-    mut commands: Commands,
-    regions: TerrainWaterRegionQuery,
-    cameras: Query<(), With<Camera>>,
-    passes: Query<(Entity, &TerrainWaterCausticPass)>,
-) {
-    for (entity, pass) in &passes {
-        if regions.get(pass.water_owner).is_none() || !cameras.contains(pass.render_view) {
-            commands.entity(entity).despawn();
-        }
     }
 }

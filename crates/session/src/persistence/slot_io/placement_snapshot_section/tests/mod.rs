@@ -123,7 +123,7 @@ fn document() -> WorldDefinitionDocument {
             entrances: vec![],
             moving_footprint: false,
             automatic_footprint: false,
-            ground_paths_block_placement: false,
+            stomp: Default::default(),
             dock_arrow: None,
         }],
         ..Default::default()
@@ -512,6 +512,8 @@ fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydrati
         definitions,
         expected[0].definition,
         &expected[0].transform,
+        None,
+        None,
         false,
         true
     ));
@@ -519,6 +521,8 @@ fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydrati
         definitions,
         expected[0].definition,
         &expected[0].transform,
+        None,
+        None,
         false,
         false
     ));
@@ -526,6 +530,8 @@ fn restored_tilted_world_pose_preserves_transform_and_completes_non_grid_hydrati
         definitions,
         expected[0].definition,
         &Transform::IDENTITY,
+        None,
+        None,
         false,
         true
     ));

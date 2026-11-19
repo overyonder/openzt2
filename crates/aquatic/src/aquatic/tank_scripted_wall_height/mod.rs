@@ -64,18 +64,16 @@ pub(super) fn apply_scripted_tank_wall_heights(
         let Some(bounds) = height_queries.tank_height_bounds(region, limits, &wall_heights) else {
             continue;
         };
-        for (_, adjacent_geometry, adjacent_region, _, adjacent_member) in &tanks {
-            if adjacent_member.root == member.root
-                && tank_habitat_seed_cell(adjacent_region) != Some(seed_cell)
-            {
-                height_queries.include_adjacent_tank_water_in_wall_minima(
-                    &mut wall_heights,
-                    adjacent_region,
-                    adjacent_geometry.water_height,
-                    limits,
-                );
-            }
-        }
+        height_queries.include_adjacent_tank_water_in_wall_minima(
+            &mut wall_heights,
+            region,
+            limits,
+            |entity| {
+                let (_, geometry, adjacent, _, world) = tanks.get(entity).ok()?;
+                (world.root == member.root && tank_habitat_seed_cell(adjacent) != Some(seed_cell))
+                    .then_some(geometry.water_height)
+            },
+        );
         let rim = geometry.water_height + limits.water_offset_m;
         let kind = if target >= rim {
             TankEditKind::RaiseWall

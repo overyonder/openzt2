@@ -5,7 +5,7 @@ use openzt2_game_data::ui_document::action::animal_shows::UiShowAction;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
-use openzt2_interface_state::information::entity_selection_types::SelectedEntity;
+use openzt2_interface_state::information::entity_selection_types::WorldUiSelection;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentOwner;
 use openzt2_interface_state::ui::authored_ui_node_projection_components::UiDocumentRoot;
 use openzt2_world_state::world_spawn::persistent_id_assignment::AssignPersistentId;
@@ -58,7 +58,7 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
     documents: Res<Assets<UiDocumentAsset>>,
     world_definition_assets: Res<Assets<WorldDefinitionAsset>>,
     active_world_definitions: Res<WorldDefinitions>,
-    selected: Res<SelectedEntity>,
+    selected: WorldUiSelection,
     inputs: AuthoredShowScheduleActionRoutingInputs,
     mut persistent_ids: MessageWriter<AssignPersistentId>,
 ) {
@@ -83,8 +83,10 @@ pub(super) fn route_authored_show_schedule_actions_into_rows_and_editor_selectio
             continue;
         };
         let controller = parent.map_or(owner.0, ChildOf::parent);
-        let selected_stage = selected.0.filter(|entity| stages.contains(*entity));
-        let selected_schedule = selected.0.filter(|entity| scheduled.contains(*entity));
+        let selected_stage = selected.subject().filter(|entity| stages.contains(*entity));
+        let selected_schedule = selected
+            .subject()
+            .filter(|entity| scheduled.contains(*entity));
         if let Some(entry) = selected_schedule {
             commands
                 .entity(controller)

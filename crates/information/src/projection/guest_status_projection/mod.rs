@@ -15,10 +15,11 @@ use openzt2_zoo_state::guests::guest_simulation_types::GuestSocial;
 use openzt2_zoo_state::guests::guest_simulation_types::GuestThirst;
 use openzt2_zoo_state::guests::guest_simulation_types::VisitTime;
 
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_live_guest_status_to_visible_information_panels(
-    panels: Query<(Entity, Ref<InfoPanel>, &InheritedVisibility)>,
+    panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     guests: Query<
         (
             Ref<GuestHunger>,
@@ -35,11 +36,14 @@ pub(crate) fn project_live_guest_status_to_visible_information_panels(
     >,
     mut values: Query<(&UiDocumentOwner, &UiValueBinding, &mut UiValue)>,
 ) {
-    for (panel_entity, panel, visible) in &panels {
+    for (panel_entity, parent, visible) in &panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !visible.get() {
             continue;
         }
-        let Ok(status) = guests.get(panel.subject) else {
+        let Ok(status) = guests.get(selection.0) else {
             continue;
         };
         for (owner, binding, mut value) in &mut values {

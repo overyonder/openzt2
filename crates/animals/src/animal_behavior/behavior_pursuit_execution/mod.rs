@@ -1,17 +1,15 @@
 use bevy::prelude::*;
+use openzt2_zoo_state::behavior_task_execution_types::running_actions::{
+    RunBehaviorPursuit, RunningBehaviorInstruction,
+};
 
 use openzt2_game_assets::application_lifecycle::GamePhase;
-use openzt2_game_assets::behavior::behavior_asset_types::BehaviorDocumentAsset;
-use openzt2_game_data::behavior::action::movement::BehaviorPursuitAction;
-use openzt2_game_data::behavior::action_record::BehaviorAction;
 use openzt2_world_state::application_schedule::FixedGameSet;
 use openzt2_world_state::simulation_time::simulation_clock_types::ZooClock;
 use openzt2_world_state::world_spawn::world_entity_crating::WorldEntityIsCrated;
 use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::BehaviorPursuitLeg;
 use openzt2_zoo_state::animal_behavior::behavior_pursuit_types::PendingBehaviorPursuit;
 use openzt2_zoo_state::animal_behavior::behavior_task_effective_score_types::BehaviorTaskEffectiveScore;
-use openzt2_zoo_state::behavior_task_execution_types::advance_behavior_task_to_next_action;
-use openzt2_zoo_state::behavior_task_execution_types::find_current_behavior_task_action;
 use openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState;
 use openzt2_zoo_state::behavior_task_execution_types::PendingBehaviorTaskFailure;
 use openzt2_zoo_state::locomotion::locomotion_types::Arrived;
@@ -52,19 +50,6 @@ pub(super) fn register_pursuit_execution(application: &mut App) {
     );
 }
 
-fn current_pursuit_action<'a>(
-    documents: &'a Assets<BehaviorDocumentAsset>,
-    task: &BehaviorTaskExecutionState,
-) -> Option<&'a BehaviorPursuitAction> {
-    match documents
-        .get(&task.document)
-        .and_then(|document| find_current_behavior_task_action(document, task))
-    {
-        Some(BehaviorAction::Pursuit(action)) => Some(action),
-        _ => None,
-    }
-}
-
 /// Applies locomotion's arrivals and failures to the legs the pursuit owns.
 /// A refused direct line is answered by its route, so it is not a failure.
 fn record_pursuit_navigation_results(
@@ -72,15 +57,19 @@ fn record_pursuit_navigation_results(
     mut arrivals: MessageReader<Arrived>,
     mut failures: MessageReader<NavigationFailed>,
     mut pursuers: Query<
-        (&BehaviorTaskExecutionState, &mut PendingBehaviorPursuit),
+        (
+            &BehaviorTaskExecutionState,
+            &RunningBehaviorInstruction,
+            &mut PendingBehaviorPursuit,
+        ),
         Without<PendingBehaviorTaskFailure>,
     >,
 ) {
     for failure in failures.read() {
-        let Ok((task, pending)) = pursuers.get(failure.entity) else {
+        let Ok((task, instruction, pending)) = pursuers.get(failure.entity) else {
             continue;
         };
-        if !pending.still_owns_exact_task_frame(task)
+        if !pending.owns(task, instruction)
             || !pending
                 .leg
                 .navigation_request_ids()
@@ -93,10 +82,10 @@ fn record_pursuit_navigation_results(
         mark_behavior_task_for_failure_and_stop_navigation(failure.entity, &mut commands);
     }
     for arrival in arrivals.read() {
-        let Ok((task, mut pending)) = pursuers.get_mut(arrival.entity) else {
+        let Ok((task, instruction, mut pending)) = pursuers.get_mut(arrival.entity) else {
             continue;
         };
-        if !pending.still_owns_exact_task_frame(task) {
+        if !pending.owns(task, instruction) {
             continue;
         }
         let arrived = arrival.request_id;
@@ -128,11 +117,14 @@ fn record_pursuit_navigation_results(
 fn fail_pursuits_of_unavailable_targets(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     pursuers: Query<
         (
             Entity,
-            &BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorPursuit,
+            ),
             Option<&BehaviorTaskEffectiveScore>,
         ),
         Without<PendingBehaviorTaskFailure>,
@@ -144,9 +136,8 @@ fn fail_pursuits_of_unavailable_targets(
         Option<&BehaviorTaskEffectiveScore>,
     )>,
 ) {
-    for (pursuer, task, score) in &pursuers {
-        if task.next_action_tick > clock.tick || current_pursuit_action(&documents, task).is_none()
-        {
+    for (pursuer, (task, instruction, _), score) in &pursuers {
+        if task.next_action_tick > clock.tick || !instruction.is_current(task) {
             continue;
         }
         let Some(Ok((crated, relocating, target_task, target_score))) =
@@ -176,36 +167,43 @@ fn advance_current_pursuit_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
     time: Res<Time<Fixed>>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     mut sequence: ResMut<NavigationRequestSequence>,
     mut route_requests: MessageWriter<NavigateTo>,
     mut pursuit_requests: MessageWriter<PursueEntity>,
     mut actors: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                Option<&BehaviorTaskExecutionState>,
+                Option<(&RunningBehaviorInstruction, &RunBehaviorPursuit)>,
+            ),
             &GlobalTransform,
             Has<NavAgent>,
             Option<&mut PendingBehaviorPursuit>,
             Option<&Destination>,
         ),
-        Without<PendingBehaviorTaskFailure>,
+        (
+            Without<PendingBehaviorTaskFailure>,
+            Or<(With<RunBehaviorPursuit>, With<PendingBehaviorPursuit>)>,
+        ),
     >,
     transforms: Query<&GlobalTransform>,
 ) {
-    for (actor, mut task, transform, has_agent, pending, destination) in &mut actors {
-        let action = current_pursuit_action(&documents, &task);
-        let owned = action.is_some()
-            && pending
-                .as_deref()
-                .is_some_and(|pending| pending.still_owns_exact_task_frame(&task));
+    for (actor, (task, running), transform, has_agent, pending, destination) in &mut actors {
+        let running = task
+            .zip(running)
+            .filter(|(task, (instruction, _))| instruction.is_current(task));
+        let owned = running
+            .zip(pending.as_deref())
+            .is_some_and(|((task, (instruction, _)), pending)| pending.owns(task, instruction));
         if let Some(stale) = pending.as_deref().filter(|_| !owned) {
             stop_pursuit_navigation(actor, stale.leg, destination, &mut commands);
             commands.entity(actor).remove::<PendingBehaviorPursuit>();
         }
-        let Some(action) = action else {
+        let Some((task, (instruction, running))) = running else {
             continue;
         };
+        let action = &running.0;
         if task.next_action_tick > clock.tick {
             continue;
         }
@@ -245,9 +243,7 @@ fn advance_current_pursuit_actions(
                 let request_id = request.sequence.next();
                 (
                     PendingBehaviorPursuit {
-                        execution_id: task.execution_id,
-                        origin: task.create_return_frame_after_action(task.action),
-                        stack_depth: task.stack.len(),
+                        instruction: instruction.id(),
                         poll_remaining_seconds: 0.0,
                         leg: BehaviorPursuitLeg::Route { request_id },
                     },
@@ -299,7 +295,7 @@ fn advance_current_pursuit_actions(
             {
                 stop_pursuit_navigation(actor, state.leg, destination, &mut commands);
                 commands.entity(actor).remove::<PendingBehaviorPursuit>();
-                advance_behavior_task_to_next_action(&mut task, clock.tick);
+                instruction.complete(actor, clock.tick, &mut commands);
                 continue;
             }
             // Arrival ended the steering short of the hit radius; it resumes.
@@ -343,11 +339,14 @@ fn advance_current_pursuit_actions(
 fn settle_pursuits_after_navigation_acceptance(
     mut commands: Commands,
     clock: Res<ZooClock>,
-    documents: Res<Assets<BehaviorDocumentAsset>>,
     mut pursuers: Query<
         (
             Entity,
-            &mut BehaviorTaskExecutionState,
+            (
+                &BehaviorTaskExecutionState,
+                &RunningBehaviorInstruction,
+                &RunBehaviorPursuit,
+            ),
             &GlobalTransform,
             &mut PendingBehaviorPursuit,
             &Destination,
@@ -356,11 +355,13 @@ fn settle_pursuits_after_navigation_acceptance(
     >,
     transforms: Query<&GlobalTransform>,
 ) {
-    for (actor, mut task, transform, mut pending, destination) in &mut pursuers {
-        let Some(action) = current_pursuit_action(&documents, &task) else {
+    for (actor, (task, instruction, running), transform, mut pending, destination) in &mut pursuers
+    {
+        if !instruction.is_current(task) {
             continue;
-        };
-        if !pending.still_owns_exact_task_frame(&task) {
+        }
+        let action = &running.0;
+        if !pending.owns(task, instruction) {
             continue;
         }
         let leg = pending.leg.settled_by_destination(destination.request_id);
@@ -387,7 +388,7 @@ fn settle_pursuits_after_navigation_acceptance(
             commands
                 .entity(actor)
                 .remove::<(PendingBehaviorPursuit, Destination)>();
-            advance_behavior_task_to_next_action(&mut task, clock.tick);
+            instruction.complete(actor, clock.tick, &mut commands);
         }
     }
 }

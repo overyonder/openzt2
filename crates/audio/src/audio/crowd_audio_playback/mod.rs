@@ -60,18 +60,18 @@ pub(super) fn project_current_crowd_into_audio_playback(
     else {
         return;
     };
-    let Some(catalogue) = catalogue.get(&assets) else {
-        return;
-    };
+    let catalogue_policy = catalogue
+        .get(&assets)
+        .and_then(|catalogue| catalogue.crowd());
     for (entity, soundscape, member, playback) in &soundscapes {
         let policy = match presets.get(member.root) {
             Ok(preset) => {
                 let Some(preset) = assets.get(&preset.0) else {
                     continue;
                 };
-                preset.crowd_policy().or_else(|| catalogue.crowd())
+                preset.crowd_policy().or(catalogue_policy)
             }
-            Err(_) => catalogue.crowd(),
+            Err(_) => catalogue_policy,
         };
         let band = policy.and_then(|policy| {
             select_crowd_band(count, playback.and_then(|playback| playback.band), policy)

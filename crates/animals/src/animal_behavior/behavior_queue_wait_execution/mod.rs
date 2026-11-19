@@ -36,14 +36,15 @@ struct ActiveQueueWait {
 }
 
 impl ActiveQueueWait {
-    fn still_owns_task(&self, task: &BehaviorTaskExecutionState) -> bool {
+    fn still_owns_task(
+        &self,
+        actor: Entity,
+        task: &BehaviorTaskExecutionState,
+        frames: &openzt2_zoo_state::behavior_task_execution_types::continuations::BehaviorContinuationFrames,
+    ) -> bool {
         self.execution_id == task.execution_id
             && task.target() == Some(self.target)
-            && task.is_at_or_nested_under(&self.origin, self.stack_depth)
-    }
-
-    fn restore_wait_instruction(&self, task: &mut BehaviorTaskExecutionState, tick: u64) {
-        task.restore_suspended_instruction(&self.origin, self.stack_depth, tick);
+            && frames.owns(actor, task, &self.origin, self.stack_depth)
     }
 }
 

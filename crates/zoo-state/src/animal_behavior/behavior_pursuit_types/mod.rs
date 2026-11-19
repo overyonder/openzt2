@@ -2,17 +2,16 @@
 
 use bevy::prelude::*;
 
+use crate::behavior_task_execution_types::running_actions::{
+    BehaviorInstructionId, RunningBehaviorInstruction,
+};
 use crate::behavior_task_execution_types::BehaviorTaskExecutionState;
-use crate::behavior_task_execution_types::BehaviorTaskReturnFrame;
 
 /// Present from the pursuit's first update until it completes, fails or its
 /// task frame is left.
 #[derive(Component, Debug, Clone)]
 pub struct PendingBehaviorPursuit {
-    /// Root task execution that started the pursuit.
-    pub execution_id: u64,
-    pub origin: BehaviorTaskReturnFrame,
-    pub stack_depth: usize,
+    pub instruction: BehaviorInstructionId,
     /// Counts down by fixed-step seconds; a negative value runs the authored
     /// poll. It starts at zero, so the first update polls.
     pub poll_remaining_seconds: f32,
@@ -118,9 +117,11 @@ impl BehaviorPursuitLeg {
 }
 
 impl PendingBehaviorPursuit {
-    pub fn still_owns_exact_task_frame(&self, task: &BehaviorTaskExecutionState) -> bool {
-        task.execution_id == self.execution_id
-            && task.stack.len() == self.stack_depth
-            && task.is_at_or_nested_under(&self.origin, self.stack_depth)
+    pub fn owns(
+        &self,
+        task: &BehaviorTaskExecutionState,
+        step: &RunningBehaviorInstruction,
+    ) -> bool {
+        self.instruction == step.id() && step.is_current(task)
     }
 }

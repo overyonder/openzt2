@@ -56,20 +56,25 @@ pub(super) fn request_save_slot_catalogue_list_row_count_updates(
 pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
     mut commands: Commands,
     save_slot_catalogue: Res<SaveSlotCatalogue>,
-    ui_list_rows: Query<(Entity, Ref<UiListRow>, Option<&SavedGameSource>)>,
+    ui_list_rows: Query<(
+        Entity,
+        Ref<UiListRow>,
+        Ref<ChildOf>,
+        Option<&SavedGameSource>,
+    )>,
     ui_lists: Query<(&UiListPolicy, &UiDocumentOwner)>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,
     ui_node_children: Query<&Children>,
     mut ui_text_nodes: Query<&mut Text>,
 ) {
-    for (ui_list_row_entity, ui_list_row, current_value) in &ui_list_rows {
+    for (ui_list_row_entity, ui_list_row, parent, current_value) in &ui_list_rows {
         if !save_slot_catalogue.is_changed() && !ui_list_row.is_added() && !ui_list_row.is_changed()
         {
             continue;
         }
         if !ui_lists
-            .get(ui_list_row.list)
+            .get(parent.parent())
             .is_ok_and(|(policy, _)| policy.source == UiWidgetLiveCollectionSource::SavedGameSlots)
         {
             continue;
@@ -86,7 +91,7 @@ pub(super) fn project_save_slot_catalogue_records_onto_saved_game_list_rows(
                 )
             })
             .or_else(|| {
-                let (_, owner) = ui_lists.get(ui_list_row.list).ok()?;
+                let (_, owner) = ui_lists.get(parent.parent()).ok()?;
                 if !presents_originals(owner.0, &roots, &documents) {
                     return None;
                 }
@@ -185,12 +190,12 @@ fn apply_save_slot_identifier_and_label_to_ui_row_descendants(
 
 pub(super) fn selected_save_slot_in_document(
     document_root: Entity,
-    rows: &Query<(&UiListRow, &UiSelected, &SavedGameSource)>,
+    rows: &Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
     lists: &Query<(&UiDocumentOwner, &UiListPolicy)>,
 ) -> Option<SavedGameSource> {
-    rows.iter().find_map(|(row, selected, value)| {
+    rows.iter().find_map(|(parent, selected, value)| {
         (selected.0
-            && lists.get(row.list).is_ok_and(|(owner, policy)| {
+            && lists.get(parent.parent()).is_ok_and(|(owner, policy)| {
                 owner.0 == document_root
                     && policy.source == UiWidgetLiveCollectionSource::SavedGameSlots
             }))
@@ -200,7 +205,7 @@ pub(super) fn selected_save_slot_in_document(
 
 pub(super) fn load_save_slot_from_submitted_row(
     mut activations: MessageReader<UiNodeActivated>,
-    rows: Query<(&UiListRow, &SavedGameSource)>,
+    rows: Query<(&ChildOf, &SavedGameSource), With<UiListRow>>,
     lists: Query<&UiListPolicy>,
     mut loads: MessageWriter<LoadWorldSnapshotFromSlot>,
     mut original_loads: MessageWriter<LoadOriginalSavedGame>,
@@ -209,11 +214,11 @@ pub(super) fn load_save_slot_from_submitted_row(
         if activation.trigger != UiTrigger::Submit {
             continue;
         }
-        let Ok((row, value)) = rows.get(activation.node) else {
+        let Ok((parent, value)) = rows.get(activation.node) else {
             continue;
         };
         if !lists
-            .get(row.list)
+            .get(parent.parent())
             .is_ok_and(|policy| policy.source == UiWidgetLiveCollectionSource::SavedGameSlots)
         {
             continue;
@@ -250,7 +255,7 @@ pub(super) struct OriginalSaveDeleteControlState {
 
 pub(super) fn project_original_save_delete_control_state(
     mut commands: Commands,
-    rows: Query<(&UiListRow, &UiSelected, &SavedGameSource)>,
+    rows: Query<(&ChildOf, &UiSelected, &SavedGameSource), With<UiListRow>>,
     lists: Query<(&UiDocumentOwner, &UiListPolicy)>,
     roots: Query<&UiDocumentRoot>,
     documents: Res<Assets<UiDocumentAsset>>,

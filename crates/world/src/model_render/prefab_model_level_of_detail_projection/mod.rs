@@ -1,6 +1,7 @@
 use bevy::ecs::entity::EntityHashSet;
 use bevy::prelude::*;
 use openzt2_game_assets::graphics_settings_types::{GraphicsSettings, ThreeLevelGraphicsDetail};
+use openzt2_world_state::model_render::prefab_render_lod_tier::PrefabRenderLodSelection;
 use openzt2_world_state::world_spawn::prefab_model_level_of_detail_visibility_range::{
     PrefabLodRanges, PrefabModelLevelOfDetailVisibilityRange,
 };
@@ -17,6 +18,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         Or<(
             Changed<PrefabCameraRenderLayers>,
             Changed<PrefabModelLevelOfDetailVisibilityRange>,
+            Changed<PrefabRenderLodSelection>,
         )>,
     >,
     mut removed_layers: RemovedComponents<PrefabCameraRenderLayers>,
@@ -24,6 +26,7 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         &GlobalTransform,
         &PrefabModelLevelOfDetailVisibilityRange,
         Option<&PrefabCameraRenderLayers>,
+        Option<&PrefabRenderLodSelection>,
         &mut Visibility,
     )>,
     mut changed_groups: Local<EntityHashSet>,
@@ -66,9 +69,12 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
         let mut previous_depth = None;
         let mut selected = None;
         for member in members.iter() {
-            let Ok((fallback, range, layers, _)) = lods.get(member) else {
+            let Ok((fallback, range, layers, tier_selection, _)) = lods.get(member) else {
                 continue;
             };
+            if tier_selection.is_some_and(|selection| !selection.0) {
+                continue;
+            }
             let matches = range.active_without_range || {
                 let layers = layers.map(|layers| &layers.0).unwrap_or_default();
                 cameras.for_level_of_detail(layers).is_some_and(|camera| {
@@ -98,12 +104,16 @@ pub(super) fn project_prefab_model_level_of_detail_visibility(
             }
         }
         for member in members.iter() {
-            if let Ok((_, range, _, mut visibility)) = lods.get_mut(member) {
-                visibility.set_if_neq(if Some(range.ordinal) == selected {
-                    Visibility::Inherited
-                } else {
-                    Visibility::Hidden
-                });
+            if let Ok((_, range, _, tier_selection, mut visibility)) = lods.get_mut(member) {
+                visibility.set_if_neq(
+                    if Some(range.ordinal) == selected
+                        && tier_selection.is_none_or(|selection| selection.0)
+                    {
+                        Visibility::Inherited
+                    } else {
+                        Visibility::Hidden
+                    },
+                );
             }
         }
     }

@@ -19,8 +19,8 @@ use openzt2_interface_state::ui::authored_ui_visual_types::UiVisualLayer;
 use super::text_replacement_operations::{
     replace_projected_editable_ui_text_if_changed, replace_projected_ui_text_if_changed,
 };
-use openzt2_interface_state::information::entity_selection_types::InfoPanel;
 use openzt2_interface_state::information::entity_selection_types::Inspectable;
+use openzt2_interface_state::information::entity_selection_types::{InfoPanel, SelectedSubject};
 
 pub(crate) fn project_live_zoo_name_to_authored_editable_fields(
     zoos: Query<&Name, With<openzt2_world_state::world_spawn::world_membership_types::WorldRoot>>,
@@ -41,7 +41,8 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     inspectable_world_subjects: Query<&Inspectable>,
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
     image_nodes: Query<(Entity, &UiDocumentOwner, &UiImageBinding)>,
     children: Query<&Children>,
@@ -53,12 +54,15 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
         let world_definition = inspectable_world_subjects
-            .get(information_panel.subject)
+            .get(selection.0)
             .ok()
             .and_then(|subject| world_definitions?.find_object(subject.definition));
         // A newly selected or reloading subject must never retain another
@@ -131,16 +135,19 @@ pub(crate) fn project_authored_definition_name_to_selected_entity_panel(
 
 /// Uses the live name when present, otherwise the definition name.
 pub(crate) fn project_live_name_to_selected_entity_panel(
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
     mut text_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut Text)>,
 ) {
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
-        let Ok((_, Some(subject_name))) = inspectable_world_subjects.get(information_panel.subject)
-        else {
+        let Ok((_, Some(subject_name))) = inspectable_world_subjects.get(selection.0) else {
             continue;
         };
         for (document_owner, text_binding, mut text) in &mut text_nodes {
@@ -162,18 +169,22 @@ pub(crate) fn project_selected_entity_name_to_authored_editable_fields(
     active_localization: Res<LocalizationPrecedenceIndex>,
     localization_assets: Res<Assets<LocalizationAsset>>,
     inspectable_world_subjects: Query<(&Inspectable, Option<&Name>)>,
-    information_panels: Query<(Entity, &InfoPanel, &InheritedVisibility)>,
+    information_panels: Query<(Entity, &ChildOf, Ref<InheritedVisibility>), With<InfoPanel>>,
+    selections: Query<Ref<SelectedSubject>>,
     mut editable_name_nodes: Query<(&UiDocumentOwner, &UiTextBinding, &mut EditableText)>,
 ) {
     let world_definitions = active_world_definitions.get(&world_definition_assets);
     let active_localization =
         active_localization.borrow_loaded_localization_view(&localization_assets);
-    for (panel_entity, information_panel, inherited_visibility) in &information_panels {
+    for (panel_entity, parent, inherited_visibility) in &information_panels {
+        let Ok(selection) = selections.get(parent.parent()) else {
+            continue;
+        };
         if !inherited_visibility.get() {
             continue;
         }
         let selected_entity_name = inspectable_world_subjects
-            .get(information_panel.subject)
+            .get(selection.0)
             .ok()
             .and_then(|(subject, live_name)| {
                 live_name.map(Name::as_str).or_else(|| {

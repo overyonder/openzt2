@@ -32,12 +32,8 @@ pub(super) struct StaffRequestThresholdState {
 
 #[derive(Component, Debug, Default)]
 pub(super) struct StaffRequestRuntimeBinding {
-    pub(super) revision: u64,
     pub(super) rows: Vec<StaffRequestRuntimeState>,
 }
-
-#[derive(Component, Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct StaffRequestBindingPending;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct StaffRequestJobKey {

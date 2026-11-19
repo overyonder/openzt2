@@ -15,12 +15,15 @@ use openzt2_game_data::ui_document::action::UiTrigger;
 
 use super::active_authored_ui_context::ActiveAuthoredUiContext;
 use super::authored_hotkey_keyboard_activation::UiAuthoredHotkeyKeyboardActivationBinding;
-use super::authored_ui_action_projection_components::UiPresentationActions;
 use super::authored_ui_action_projection_components::UiShellActions;
+use super::authored_ui_action_projection_components::{
+    UiInformationActions, UiPresentationActions,
+};
 use super::authored_ui_activation_contracts::UiNodeActivated;
 use super::authored_ui_node_projection_components::UiDocumentOwner;
 use super::authored_ui_node_projection_components::UiDocumentRoot;
 use super::authored_ui_node_projection_components::UiNodeId;
+use super::authored_ui_target_lookup::AuthoredUiTargetLookup;
 use openzt2_game_assets::ui_document::ui_document_asset_types_and_borrowing_queries::UiDocumentAsset;
 use openzt2_interface_state::input::input_types::ActionRequest;
 use openzt2_interface_state::input::input_types::ActionSource;
@@ -38,18 +41,29 @@ pub(super) struct UiCancellationReceivers<'w, 's> {
     documents: Res<'w, Assets<UiDocumentAsset>>,
     roots: Query<'w, 's, &'static UiDocumentRoot>,
     owners: Query<'w, 's, &'static UiDocumentOwner>,
+    children: Query<'w, 's, &'static Children>,
     nodes: Query<
         'w,
         's,
         (Entity, &'static UiDocumentOwner, &'static UiNodeId),
         With<InheritedVisibility>,
     >,
-    bindings: Query<
+    targets: AuthoredUiTargetLookup<'w, 's>,
+    settings: Query<
         'w,
         's,
         (
             Entity,
             &'static UiDocumentOwner,
+            &'static UiInformationActions,
+        ),
+    >,
+    bindings: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static ChildOf,
             &'static UiAuthoredHotkeyKeyboardActivationBinding,
             Option<&'static UiPresentationActions>,
             Option<&'static UiShellActions>,
@@ -88,49 +102,111 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
         return;
     };
     let modal = capture.0.or_else(|| context.top_modal());
-    let scope = match modal {
-        Some(entity) => owners
-            .get(entity)
-            .ok()
-            .map(|owner| context.document_scope(owner.0)),
-        // A visible edit is focusable even while nobody is typing. Only actual
-        // text input focus captures keyboard Escape for its document. Otherwise
-        // choose an eligible authored receiver, including the zoo view beneath
-        // an inspection panel whose name edit has no Escape binding.
-        None if source == ActionSource::KeyboardMouse => ui
-            .input_focus
-            .get()
-            .filter(|focused| {
-                ui.text_edits.contains(*focused) && context.visible_and_enabled(*focused)
-            })
-            .and_then(|focused| owners.get(focused).ok())
-            .map(|owner| context.document_scope(owner.0))
-            .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
-        // Controllers retain their active document and inferred cancel button.
-        None => context
-            .active_scope()
-            .or_else(|| topmost_cancel_hotkey_receiver_scope(&ui)),
-    };
-    let handled_by_hotkey = scope.is_some_and(|scope| {
-        activate_cancel_hotkey_receiver(&ui, scope, modal, source, &mut activated)
+    let edit = ui
+        .input_focus
+        .get()
+        .filter(|node| ui.text_edits.contains(*node) && context.visible_and_enabled(*node));
+    let active_scope = context.active_scope_with_modal(modal);
+    let scope = modal
+        .and_then(|entity| owners.get(entity).ok())
+        .or_else(|| edit.and_then(|entity| owners.get(entity).ok()))
+        .map(|owner| context.document_scope(owner.0))
+        .or_else(|| {
+            matches!(source, ActionSource::Controller(_))
+                .then_some(active_scope)
+                .flatten()
+        });
+    let candidates = ui
+        .bindings
+        .iter()
+        .filter_map(|(_, parent, binding, _, shell)| {
+            let receiver = parent.parent();
+            let owner = owners.get(receiver).ok()?.0;
+            if !binding.is_cancel_activation()
+                || !context.visible_and_enabled(receiver)
+                || modal.is_some_and(|modal| !context.is_in_modal(receiver, modal))
+                || scope.is_some_and(|scope| context.document_scope(owner) != scope)
+                || (!ui.overhead_mode.0 && binding_opens_overhead_options(&ui, owner, shell))
+            {
+                return None;
+            }
+            let application_root = roots
+                .get(owner)
+                .ok()
+                .and_then(|root| documents.get(&root.document))
+                .is_some_and(|document| {
+                    document.canonical_ui_document().role
+                        == openzt2_game_data::ui_document::document::UiDocumentRole::ApplicationRoot
+                });
+            Some((receiver, owner, application_root))
+        });
+    let receiver = candidates.max_by_key(|(receiver, _, application_root)| {
+        (!*application_root, context.navigation_order(*receiver))
     });
-    info!(
-        target: "openzt2_ui",
-        ?source, ?modal, ?scope, handled_by_hotkey,
-        "routed authored UI cancellation"
-    );
-    if handled_by_hotkey {
+    if source == ActionSource::KeyboardMouse
+        && receiver.is_none_or(|(_, owner, _)| Some(context.document_scope(owner)) != active_scope)
+    {
+        if let Some(scope) = active_scope {
+            if let Some((node, _, _)) = ui.settings.iter().find(|(node, owner, actions)| {
+                if !context.eligible_in_scope(*node, scope, modal) {
+                    return false;
+                }
+                let Some(document) = roots
+                    .get(owner.0)
+                    .ok()
+                    .and_then(|root| documents.get(&root.document))
+                else {
+                    return false;
+                };
+                let press = || {
+                    actions
+                        .authored_action_records(document)
+                        .filter(|record| record.trigger == UiTrigger::Press)
+                };
+                press().any(|record| {
+                    matches!(
+                        record.action,
+                        UiInformationAction::ApplySetting {
+                            setting: InformationSettingAction::Back
+                        }
+                    )
+                }) && !press().any(|record| {
+                    matches!(
+                        record.action,
+                        UiInformationAction::ApplySetting {
+                            setting: InformationSettingAction::Accept
+                        }
+                    )
+                })
+            }) {
+                activated.write(UiNodeActivated {
+                    node,
+                    source,
+                    trigger: UiTrigger::Press,
+                });
+                return;
+            }
+        }
+    }
+    if let Some((receiver, owner, _)) = receiver {
+        activate_cancel_hotkey_receiver(&ui, receiver, owner, modal, source, &mut activated);
         return;
     }
-    let Some(scope) = scope else {
+    if source == ActionSource::KeyboardMouse {
+        if let Some(node) = ui.input_focus.get().filter(|node| {
+            active_scope.is_some_and(|scope| context.eligible_in_scope(*node, scope, modal))
+        }) {
+            activated.write(UiNodeActivated {
+                node,
+                source,
+                trigger: UiTrigger::Cancel,
+            });
+        }
+        return;
+    }
+    let Some(scope) = scope.or(active_scope) else {
         return;
     };
-    // The keyboard follows authored Escape bindings only. Controllers have no
-    // Escape key, so they may also infer a dialog's cancel button.
-    if source == ActionSource::KeyboardMouse {
-        return;
-    }
-
     let modal_id = modal
         .and_then(|modal| nodes.get(modal).ok())
         .map(|(_, _, id)| id.id);
@@ -178,23 +254,6 @@ pub(super) fn dismiss_one_active_ui_activity_from_cancel_requests(
     }
 }
 
-/// Whether this receiver holds an Escape binding that may act now. The zoo
-/// view's own Escape (`ZT_ESCAPE_KEY`) exists only in overhead mode.
-fn receiver_holds_active_cancel_binding(
-    ui: &UiCancellationReceivers,
-    owner: Entity,
-    index: u32,
-) -> bool {
-    ui.bindings
-        .iter()
-        .any(|(_, binding_owner, binding, _, shell)| {
-            binding_owner.0 == owner
-                && binding.receiver_index() == index
-                && binding.is_cancel_activation()
-                && (ui.overhead_mode.0 || !binding_opens_overhead_options(ui, owner, shell))
-        })
-}
-
 fn binding_opens_overhead_options(
     ui: &UiCancellationReceivers,
     owner: Entity,
@@ -215,128 +274,68 @@ fn binding_opens_overhead_options(
     })
 }
 
-fn topmost_cancel_hotkey_receiver_scope(ui: &UiCancellationReceivers) -> Option<Entity> {
-    ui.nodes
-        .iter()
-        .filter(|(entity, owner, id)| {
-            ui.context.visible_and_enabled(*entity)
-                && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
-        })
-        .inspect(|(entity, owner, id)| {
-            let document = ui.roots.get(owner.0).ok()
-                .and_then(|root| ui.documents.get(&root.document))
-                .map(|document| document.canonical_ui_document());
-            debug!(
-                receiver = ?entity, owner = ?owner.0,
-                role = ?document.map(|document| document.role),
-                name = ?document.and_then(|document| document.nodes.get(id.index as usize)).map(|node| node.name.as_str()),
-                order = ui.context.navigation_order(*entity),
-                "eligible authored UI cancellation receiver");
-        })
-        .max_by_key(|(entity, owner, _)| {
-            // The application-wide binding is a fallback for screens without
-            // their own receiver, even when its root follows them in UiStack.
-            let application_root = ui.roots.get(owner.0).ok()
-                .and_then(|root| ui.documents.get(&root.document))
-                .is_some_and(|document| document.canonical_ui_document().role
-                    == openzt2_game_data::ui_document::document::UiDocumentRole::ApplicationRoot);
-            (!application_root, ui.context.navigation_order(*entity))
-        })
-        .map(|(_, owner, _)| ui.context.document_scope(owner.0))
-}
-
 fn activate_cancel_hotkey_receiver(
     ui: &UiCancellationReceivers,
-    scope: Entity,
+    receiver: Entity,
+    owner: Entity,
     modal: Option<Entity>,
     source: ActionSource,
     activated: &mut MessageWriter<UiNodeActivated>,
-) -> bool {
-    let UiCancellationReceivers {
-        context,
-        documents,
-        roots,
-        nodes,
-        bindings,
-        ..
-    } = ui;
-    // A hotkey may lower to several action proxies. Keep that receiver's
-    // complete action group, but never activate other Escape receivers too.
-    let receiver = nodes
-        .iter()
-        .filter(|(entity, owner, id)| {
-            context.eligible_in_scope(*entity, scope, modal)
-                && receiver_holds_active_cancel_binding(ui, owner.0, id.index)
-        })
-        .max_by_key(|(entity, _, _)| context.navigation_order(*entity));
-    let Some((receiver, owner, id)) = receiver else {
-        return false;
+) {
+    let Some(document) = ui
+        .roots
+        .get(owner)
+        .ok()
+        .and_then(|root| ui.documents.get(&root.document))
+    else {
+        return;
     };
-    debug!( ?receiver, owner = ?owner.0, receiver_index = id.index,
-        "selected authored UI cancellation receiver");
+    let scope = ui.context.document_scope(owner);
     let mut forwarded_targets = std::collections::HashSet::new();
-    for (entity, binding_owner, binding, presentation, _) in bindings {
-        if binding_owner.0 != owner.0
-            || binding.receiver_index() != id.index
+    for (entity, parent, binding, presentation, shell) in ui
+        .children
+        .get(receiver)
+        .into_iter()
+        .flat_map(|children| children.iter())
+        .filter_map(|child| ui.bindings.get(child).ok())
+    {
+        if parent.parent() != receiver
             || !binding.is_cancel_activation()
+            || (!ui.overhead_mode.0 && binding_opens_overhead_options(ui, owner, shell))
         {
             continue;
         }
-        let forwarded_target = roots
-            .get(owner.0)
-            .ok()
-            .and_then(|root| documents.get(&root.document))
-            .and_then(|document| {
-                presentation.and_then(|actions| actions.authored_action_records(document).next())
-            })
+        let forwarded = presentation
+            .and_then(|actions| actions.authored_action_records(document).next())
             .and_then(|record| match record.action {
                 UiPresentationAction::ActivateTargetNodeWithPress { target_node } => {
                     Some(target_node)
                 }
                 _ => None,
             });
-        let target = if let Some(target_id) = forwarded_target {
-            let named = |_: Entity, target_owner: &UiDocumentOwner, id: &UiNodeId| {
-                target_owner.0 == owner.0 && id.id == target_id
-            };
-            nodes
-                .iter()
-                .find_map(|(target, target_owner, id)| {
-                    (named(target, target_owner, id)
-                        && context.eligible_in_scope(target, scope, modal))
-                    .then_some(target)
-                })
-                // Text buttons such as the in-game options Cancel stay hidden
-                // until hovered. Escape presses them if they are enabled.
+        let node = if let Some(target) = forwarded {
+            ui.targets
+                .candidates(owner, target)
+                .find(|entity| ui.context.eligible_in_scope(*entity, scope, modal))
                 .or_else(|| {
-                    nodes.iter().find_map(|(target, target_owner, id)| {
-                        (named(target, target_owner, id)
-                            && context.enabled(target)
-                            && modal.is_none_or(|modal| context.is_in_modal(target, modal)))
-                        .then_some(target)
+                    ui.targets.candidates(owner, target).find(|entity| {
+                        ui.context.enabled(*entity)
+                            && modal.is_none_or(|modal| ui.context.is_in_modal(*entity, modal))
                     })
                 })
         } else {
             Some(entity)
         };
-        if let Some(node) = target {
-            if forwarded_target.is_some() && !forwarded_targets.insert(node) {
-                continue;
+        if let Some(node) = node {
+            if forwarded.is_none() || forwarded_targets.insert(node) {
+                activated.write(UiNodeActivated {
+                    node,
+                    source,
+                    trigger: UiTrigger::Press,
+                });
             }
-            activated.write(UiNodeActivated {
-                node,
-                source,
-                trigger: UiTrigger::Press,
-            });
-            debug!(
-                ?receiver,
-                ?node,
-                ?forwarded_target,
-                "forwarded authored UI cancellation"
-            );
         }
     }
-    true
 }
 
 fn cancellation_action(

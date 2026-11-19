@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 use openzt2_game_data::{world_definitions::environment::WeatherDefinition, AssetId};
 use openzt2_zoo_state::environment::environment_state_types::Wind;
-use openzt2_zoo_state::environment::environment_state_types::WorldEnvironment;
+use openzt2_zoo_state::environment::environment_state_types::{WorldEnvironment, ZooTickAdvanced};
 
 use openzt2_game_assets::effect::SpawnParticleEffectEmitter;
 use openzt2_game_assets::effect::StopParticleEffectsAttachedToEntity;
@@ -164,6 +164,7 @@ pub(super) fn apply_requested_weather_transitions(
 
 pub(super) fn advance_automatic_and_requested_weather_transitions(
     mut commands: Commands,
+    mut ticks: MessageReader<ZooTickAdvanced>,
     clock: Res<ZooClock>,
     definitions: Res<Assets<WorldDefinitionAsset>>,
     active_definitions: Res<WorldDefinitions>,
@@ -184,6 +185,9 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
     mut effects: MessageWriter<SpawnParticleEffectEmitter>,
     mut stop_effects: MessageWriter<StopParticleEffectsAttachedToEntity>,
 ) {
+    let Some(&ZooTickAdvanced(tick)) = ticks.read().last() else {
+        return;
+    };
     let Some(definitions) = active_definitions.get(&definitions) else {
         return;
     };
@@ -200,7 +204,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
     ) in &mut environments
     {
         if let Some(transition) = transition {
-            if !weather_transition_has_reached_completion_tick(clock.tick, *transition) {
+            if !weather_transition_has_reached_completion_tick(tick, *transition) {
                 continue;
             }
             let Some(weather_definition) = definitions.find_weather(transition.to) else {
@@ -236,7 +240,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
                 environment_entity,
                 weather_definition,
                 definitions,
-                clock.tick,
+                tick,
                 &mut audio,
                 &mut effects,
                 &mut stop_effects,
@@ -291,7 +295,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
                 environment_entity,
                 weather_definition,
                 definitions,
-                clock.tick,
+                tick,
                 &mut audio,
                 &mut effects,
                 &mut stop_effects,
@@ -302,7 +306,7 @@ pub(super) fn advance_automatic_and_requested_weather_transitions(
                 .insert(WeatherTransition {
                     from: weather.definition,
                     to: target_weather_identifier,
-                    start_tick: clock.tick,
+                    start_tick: tick,
                     duration_ticks: selected_transition.transition_ticks,
                 });
         }

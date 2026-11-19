@@ -5,58 +5,15 @@ use openzt2_game_data::world_definitions::camera_definitions::CameraTuningDefini
 use openzt2_game_assets::world_definitions::world_definition_document_asset_and_demand_loaded_dependency_paths::WorldDefinitionAsset;
 use openzt2_game_assets::world_definitions::world_definition_asset_set_state_and_borrowing_queries::WorldDefinitions;
 use openzt2_game_assets::graphics_settings_types::GraphicsSettings;
-use openzt2_world_state::world_spawn::world_membership_types::WorldMember;
-use openzt2_world_state::world_spawn::world_membership_types::WorldRoot;
 use openzt2_world_state::world_spawn::world_terrain_hydration::WorldTerrainHorizontalBounds;
 
 use super::super::camera_runtime_state_types::CameraDefinition;
 use super::super::camera_runtime_state_types::OverheadRig;
 use super::super::camera_runtime_state_types::ZooCamera;
 use super::super::fixed_aspect_perspective_projection::FixedAspectPerspectiveProjection;
-use super::super::math::clamp_rig;
 use super::overhead_camera_zoom_policy::select_three_level_graphics_detail_value;
 use crate::camera::camera_execution_types::CameraBounds;
 use crate::camera::camera_execution_types::CameraTuning;
-
-/// Updates projection and movement settings when a mode selects a different camera definition.
-pub(crate) fn apply_authored_camera_definition_to_runtime_components(
-    definitions: Res<Assets<WorldDefinitionAsset>>,
-    active_definitions: Res<WorldDefinitions>,
-    graphics: Res<GraphicsSettings>,
-    roots: Query<&WorldTerrainHorizontalBounds, With<WorldRoot>>,
-    mut cameras: Query<
-        (
-            &CameraDefinition,
-            &WorldMember,
-            &mut Projection,
-            &mut CameraTuning,
-            &mut CameraBounds,
-            &mut OverheadRig,
-        ),
-        (With<ZooCamera>, Changed<CameraDefinition>),
-    >,
-) {
-    let Some(definitions) = active_definitions.get(&definitions) else {
-        return;
-    };
-    for (selected, member, mut projection, mut tuning, mut bounds, mut rig) in &mut cameras {
-        let Ok(world_bounds) = roots.get(member.root) else {
-            continue;
-        };
-        let Some(definition) = definitions.find_camera(selected.0) else {
-            continue;
-        };
-        let Some((next_projection, next_tuning, _, next_bounds)) =
-            camera_runtime_components_from_authored_definition(definition, world_bounds, &graphics)
-        else {
-            continue;
-        };
-        *projection = next_projection;
-        *tuning = next_tuning;
-        *bounds = next_bounds;
-        clamp_rig(&mut rig, &tuning, &bounds);
-    }
-}
 
 /// Moves the far plane of the live zoo cameras when the view distance option
 /// changes, leaving the rest of the authored projection untouched.

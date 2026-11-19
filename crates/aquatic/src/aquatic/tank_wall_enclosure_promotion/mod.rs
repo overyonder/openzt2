@@ -213,7 +213,7 @@ pub(super) fn promote_or_restore_habitats_enclosed_by_tank_walls(
         return;
     };
     for habitat in candidates {
-        let Ok((region, member, tank, existing_geometry, water, environment, quality)) =
+        let Ok((region, _, tank, existing_geometry, water, environment, quality)) =
             habitats.get_mut(habitat)
         else {
             continue;

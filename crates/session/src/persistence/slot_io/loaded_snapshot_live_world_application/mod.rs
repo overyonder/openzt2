@@ -65,6 +65,7 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
         placements,
         placement_models,
         placement_readiness,
+        placement_footprints,
         photo_baseline,
         baseline_waste,
         prefabs,
@@ -104,18 +105,20 @@ pub(super) fn decode_validate_and_apply_snapshot_to_loaded_baseline_world(
             return Ok(false);
         };
         let hydrated = identifiers.iter().all(|id| {
-            placement_readiness
-                .iter()
-                .any(|(candidate, definition, transform, placed, dock)| {
+            placement_readiness.iter().any(
+                |(candidate, definition, transform, prefab, placed, dock)| {
                     candidate.0 == *id
                         && super::placement_snapshot_section::placement_hydration_complete(
                             definitions,
                             definition.0,
                             transform,
+                            prefab.map(|prefab| &prefab.0),
+                            placement_footprints.as_deref(),
                             placed,
                             dock,
                         )
-                })
+                },
+            )
         });
         if !hydrated {
             return Ok(false);

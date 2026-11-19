@@ -34,7 +34,12 @@ use super::super::{
 /// Populates visible rows after sorting the eligible world entities.
 pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
     information_list_panels: Query<(Entity, &InformationEntityListPanel, &InheritedVisibility)>,
-    reusable_information_list_rows: Query<(Entity, &UiListRow, Option<&InformationEntitySource>)>,
+    reusable_information_list_rows: Query<(
+        Entity,
+        &UiListRow,
+        &ChildOf,
+        Option<&InformationEntitySource>,
+    )>,
     animals: Query<
         (
             Entity,
@@ -187,10 +192,10 @@ pub(crate) fn project_live_world_entities_to_visible_information_list_rows(
             list: panel_entity,
             count: projection_candidates.len().min(usize::from(u16::MAX)) as u16,
         });
-        for (row_entity, reusable_row, current_information_entity_source) in
+        for (row_entity, reusable_row, parent, current_information_entity_source) in
             &reusable_information_list_rows
         {
-            if reusable_row.list != panel_entity {
+            if parent.parent() != panel_entity {
                 continue;
             }
             if let Some(projection_candidate) =
