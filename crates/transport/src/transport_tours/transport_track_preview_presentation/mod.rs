@@ -211,7 +211,7 @@ pub(super) fn project_transport_track_construction_preview_authored_prefabs(
 /// (255, 255, 0, 255). The road decal ignores vertex colour, so the preview
 /// draws with a copy of its material lit only by that colour, which
 /// multiplies the road texture; it stays as opaque as the road.
-// ponytail: the two colours are copied from modes.xml, not lowered from it.
+// The two colours are copied from modes.xml, not lowered from it.
 fn invalid_track_preview_tint(
     validity: openzt2_zoo_state::construction::construction_interaction_types::PlacementValidity,
 ) -> Option<[f32; 4]> {

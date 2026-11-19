@@ -354,7 +354,7 @@ pub(super) fn project_person_motion_to_walk_animation(
                 }
                 // A gait row's rate also sets the agent's speed below, so
                 // scaling it speeds the person up or slows them down.
-                // ponytail: people without a gait row move at their
+                // People without a gait row move at their
                 // NavAgent speed and keep it; scale that too if one appears.
                 let rate = if let Some(rate) = sampled_rate {
                     (f32::from(rate) * CaffeineMode::speed_factor(caffeine_modes.get(person).ok()))
