@@ -88,7 +88,7 @@ pub(super) fn fit_eligible_static_objects_to_changed_terrain_surfaces(
             let ground_height = point.height_m + surface.height_offset_m;
             // A `floatOnWater` fit rests at its offset from the water surface,
             // but never below the ground.
-            // ponytail: refits on transform and terrain changes only, not when
+            // Refits on transform and terrain changes only, not when
             // a tank's water level changes.
             transform.translation.y = surface
                 .water_offset_m

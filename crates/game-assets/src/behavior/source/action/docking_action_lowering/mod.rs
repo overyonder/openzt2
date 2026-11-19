@@ -100,7 +100,7 @@ pub(super) fn lower_docking_action_source_node(
     }
     let fence = docking_action_source_node.name == "ZTBehDockFence";
     let radial_distance_m = if fence {
-        // ponytail: the fence line blocks navigation, so the animal stops this
+        // The fence line blocks navigation, so the animal stops this
         // far short of it on its own side; read a per-species reach if one
         // turns up in the data.
         Some(FENCE_DOCK_DISTANCE_M)
@@ -143,7 +143,7 @@ pub(super) fn lower_docking_action_source_node(
                 },
             )
             .transpose()?;
-    // ponytail: a fence dock's subject node (`Node_Front`, `p_FenceJumpNode`)
+    // A fence dock's subject node (`Node_Front`, `p_FenceJumpNode`)
     // is often no model node, and a radial dock without it fails; the animal
     // docks its origin on the fence instead. Align the node once the
     // position attributes are read.

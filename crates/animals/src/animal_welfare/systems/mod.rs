@@ -174,7 +174,7 @@ pub(crate) fn initialize_animal_needs(
     }
 }
 
-// ponytail: `animal.xml`'s `f_NeedPointUpdateInterval`, `f_NeedPointGoodDelta`,
+// `animal.xml`'s `f_NeedPointUpdateInterval`, `f_NeedPointGoodDelta`,
 // `f_NeedPointBadDelta` and `f_NeedPointMax`; read them from the animal
 // family if a species ever authors its own.
 const NEED_POINT_UPDATE_SECONDS: f32 = 3.0;
