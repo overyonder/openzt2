@@ -68,6 +68,13 @@ use openzt2_world_state::animation_playback::{
 };
 use openzt2_zoo_state::locomotion::locomotion_types::{CaffeineMode, NavAgent};
 
+/// How long a walking person may stand still before the walk becomes a stand.
+const WALK_STOP_GRACE_S: f32 = 0.25;
+
+/// The time left before a paused walk turns into a stand.
+#[derive(Component, Clone, Copy)]
+pub(super) struct PersonStopGrace(f32);
+
 /// Slower than this, a behavior clip's root drift is posture, not a walk.
 const BEHAVIOR_CLIP_MOTION_MIN_MPS: f32 = 0.05;
 
@@ -142,6 +149,7 @@ pub(super) fn project_person_motion_to_walk_animation(
         Option<&AnimationGraphEnabled>,
         Option<&mut ConsumedLocomotionRootMotion>,
         Option<&mut PersonGaitPlayback>,
+        Option<&PersonStopGrace>,
     )>,
     parents: Query<&ChildOf>,
     children: Query<&Children>,
@@ -168,7 +176,8 @@ pub(super) fn project_person_motion_to_walk_animation(
     mut playback_requests: MessageWriter<AnimationClipPlaybackRequest>,
     caffeine_modes: Query<&CaffeineMode>,
 ) {
-    for (controller_entity, controller, enabled, mut consumed, mut gait) in &mut controllers {
+    for (controller_entity, controller, enabled, mut consumed, mut gait, grace) in &mut controllers
+    {
         let Some(person) = parents
             .iter_ancestors(controller_entity)
             .find(|ancestor| people.contains(*ancestor))
@@ -198,6 +207,27 @@ pub(super) fn project_person_motion_to_walk_animation(
         }
         let task_animation = awaited_clip || held_clip;
         let moving = navigating || direct;
+        // A walk that pauses for a moment, such as between two tasks that
+        // both walk, keeps its stride instead of flicking to a stand and back.
+        if !moving
+            && !task_animation
+            && enabled.is_none_or(|enabled| enabled.0)
+            && source.is_some_and(|source| source.controller == controller_entity)
+        {
+            let remaining = grace.map_or(WALK_STOP_GRACE_S, |grace| grace.0)
+                - assets.time.as_ref().map_or(0.0, |time| time.delta_secs());
+            if remaining > 0.0 {
+                commands
+                    .entity(controller_entity)
+                    .insert(PersonStopGrace(remaining));
+                continue;
+            }
+        }
+        if grace.is_some() {
+            commands
+                .entity(controller_entity)
+                .remove::<PersonStopGrace>();
+        }
         if !moving || task_animation || enabled.is_some_and(|enabled| !enabled.0) {
             if source.is_some_and(|source| source.controller == controller_entity) {
                 commands
