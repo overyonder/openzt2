@@ -13,6 +13,10 @@ use openzt2_zoo_state::locomotion::locomotion_types::MAX_STEERING_NEIGHBORS;
 
 /// The largest agent radius separation looks out for.
 const LARGEST_NEIGHBOR_RADIUS_M: f32 = 3.0;
+/// How many touching distances ahead a walker starts stepping aside.
+const AVOIDANCE_LOOK_AHEAD: f32 = 3.0;
+/// The sideways step's share of walking speed when about to touch.
+const AVOIDANCE_WEIGHT: f32 = 0.6;
 
 pub(super) fn calculate_route_following_and_separation_steering(
     spatial_grid: Res<SpatialGrid>,
@@ -53,8 +57,8 @@ pub(super) fn calculate_route_following_and_separation_steering(
         if locomotion_mode.copied().unwrap_or_default() != LocomotionMode::Flight {
             route_target_offset.y = 0.0;
         }
-        let mut desired_velocity =
-            route_target_offset.normalize_or_zero() * navigation_agent.max_speed_mps;
+        let route_direction = route_target_offset.normalize_or_zero();
+        let mut desired_velocity = route_direction * navigation_agent.max_speed_mps;
         desired_velocity +=
             contact_steering.direction * navigation_agent.max_speed_mps * contact_steering.factor;
         let mut visited_neighbor_count = 0;
@@ -89,6 +93,20 @@ pub(super) fn calculate_route_following_and_separation_steering(
                             neighboring_agent_offset.length_squared();
                         let required_separation_distance =
                             navigation_agent.radius_m + neighboring_navigation_agent.radius_m;
+                        // Step aside from someone ahead before reaching them.
+                        // Everyone steps to the same side of their own heading,
+                        // so two people meeting head-on pass each other.
+                        let look_ahead = required_separation_distance * AVOIDANCE_LOOK_AHEAD;
+                        let ahead = -neighboring_agent_offset.xz().dot(route_direction.xz());
+                        if ahead > 0.0
+                            && neighboring_agent_distance_squared < look_ahead * look_ahead
+                        {
+                            let aside = Vec3::new(route_direction.z, 0.0, -route_direction.x);
+                            desired_velocity += aside
+                                * navigation_agent.max_speed_mps
+                                * AVOIDANCE_WEIGHT
+                                * (1.0 - neighboring_agent_distance_squared.sqrt() / look_ahead);
+                        }
                         if neighboring_agent_distance_squared > 0.0001
                             && neighboring_agent_distance_squared
                                 < required_separation_distance * required_separation_distance
@@ -194,5 +212,61 @@ pub(super) fn separate_overlapping_idle_guests(
         if let Ok((_, _, _, _, mut transform, _)) = guests.get_mut(guest) {
             transform.translation += push;
         }
+    }
+}
+
+#[cfg(test)]
+mod avoidance_tests {
+    use super::*;
+
+    #[test]
+    fn people_meeting_head_on_step_to_opposite_sides() {
+        let mut world = World::new();
+        let agent = NavAgent {
+            radius_m: 0.3,
+            max_speed_mps: 1.0,
+            acceleration_mps2: 1.0,
+            capabilities: openzt2_zoo_state::locomotion::locomotion_types::NavFlags::GUEST,
+        };
+        let walker = |world: &mut World, from: f32, to: f32| {
+            let mut route = Route::with_capacity(1);
+            route.points.push(Vec3::new(to, 0.0, 0.0));
+            world
+                .spawn((
+                    agent,
+                    GlobalTransform::from_translation(Vec3::new(from, 0.0, 0.0)),
+                    SpatialCell(0),
+                    route,
+                    Destination {
+                        request_id: 1,
+                        world: Vec3::new(to, 0.0, 0.0),
+                        arrival_radius_m: 0.1,
+                    },
+                    ContactSteering {
+                        direction: Vec3::ZERO,
+                        factor: 0.0,
+                        recovery_delay_s: 0.0,
+                    },
+                    Steering::default(),
+                ))
+                .id()
+        };
+        let east = walker(&mut world, -0.5, 10.0);
+        let west = walker(&mut world, 0.5, -10.0);
+        world.insert_resource(SpatialGrid {
+            width: 1,
+            height: 1,
+            cell_offsets: Box::new([0, 2]),
+            write_cursors: Box::new([2]),
+            entities: vec![east, west],
+            ..SpatialGrid::default()
+        });
+        let mut system = IntoSystem::into_system(calculate_route_following_and_separation_steering);
+        system.initialize(&mut world);
+        system.run((), &mut world).unwrap();
+        let steer = |entity| world.get::<Steering>(entity).unwrap().desired_velocity;
+        // The same side of each heading: -Z going east, +Z going west.
+        assert!(steer(east).z < 0.0, "{:?}", steer(east));
+        assert!(steer(west).z > 0.0, "{:?}", steer(west));
     }
 }
