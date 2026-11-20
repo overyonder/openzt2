@@ -139,11 +139,12 @@ pub(super) fn calculate_route_following_and_separation_steering(
 /// How far an overlapping idle guest moves aside in one update.
 const IDLE_SEPARATION_STEP_M: f32 = 0.02;
 
-/// Guests standing still, such as several watching an animal from one spot,
-/// step apart until they no longer stand in each other. A guest holding an
-/// interaction slot, such as a stand's counter or a bench, stays put.
+/// People standing still, such as several guests watching an animal from one
+/// spot or two keepers idling at the same place, step apart until they no
+/// longer stand in each other. Someone holding an interaction slot, such as a
+/// stand's counter or a bench, stays put.
 #[allow(clippy::type_complexity)]
-pub(super) fn separate_overlapping_idle_guests(
+pub(super) fn separate_overlapping_idle_people(
     spatial_grid: Res<SpatialGrid>,
     mut guests: Query<
         (
@@ -155,7 +156,10 @@ pub(super) fn separate_overlapping_idle_guests(
             Option<&openzt2_zoo_state::behavior_task_execution_types::BehaviorTaskExecutionState>,
         ),
         (
-            With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+            Or<(
+                With<openzt2_zoo_state::guests::guest_simulation_types::Guest>,
+                With<openzt2_zoo_state::staff::staff_employment_types::Staff>,
+            )>,
             Without<Destination>,
             Without<openzt2_zoo_state::locomotion::locomotion_types::Docking>,
             Without<DirectLocomotion>,

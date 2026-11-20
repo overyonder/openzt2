@@ -80,6 +80,11 @@ fn finish_wander_navigation_requests(
     }
 }
 
+/// A finished wander's route, kept so the actor walks on until its next task
+/// either wanders somewhere new or does something else.
+#[derive(Component)]
+struct LingeringWanderDestination(u64);
+
 fn execute_current_wander_actions(
     mut commands: Commands,
     clock: Res<ZooClock>,
@@ -117,6 +122,7 @@ fn execute_current_wander_actions(
             Has<Dead>,
             Has<Staff>,
             Has<openzt2_zoo_state::animal_health::types::Escaped>,
+            Option<&LingeringWanderDestination>,
         ),
         Or<(With<Animal>, With<Staff>)>,
     >,
@@ -136,8 +142,30 @@ fn execute_current_wander_actions(
         dead,
         staff,
         escaped,
+        lingering,
     ) in &mut animals
     {
+        if let Some(lingering) = lingering {
+            let lingers =
+                destination.is_some_and(|destination| destination.request_id == lingering.0);
+            let wanders = task.as_deref().is_some_and(|task| {
+                matches!(
+                    documents
+                        .get(&task.document)
+                        .and_then(|document| find_current_behavior_task_action(document, task)),
+                    Some(BehaviorAction::Wander(_))
+                )
+            });
+            if !lingers || (task.is_some() && !wanders) || failing || crated || tranquilized || dead
+            {
+                if lingers {
+                    commands.entity(actor).remove::<Destination>();
+                }
+                commands
+                    .entity(actor)
+                    .remove::<LingeringWanderDestination>();
+            }
+        }
         let mut task = task;
         let mut wandering = wandering;
         let immobilized = crated || tranquilized || dead;
@@ -176,22 +204,28 @@ fn execute_current_wander_actions(
             .is_some_and(|wandering| clock.tick >= wandering.until_tick)
         {
             advance_behavior_task_to_next_action(task, clock.tick);
-            // Another wander leg next keeps walking on this route until its
-            // own destination replaces it, instead of stopping for a moment.
-            let wanders_next = matches!(
-                documents
-                    .get(&task.document)
-                    .and_then(|document| find_current_behavior_task_action(document, task)),
-                Some(BehaviorAction::Wander(_))
-            );
-            if !wanders_next
-                && wandering.as_ref().is_some_and(|wandering| {
-                    destination.is_some_and(|destination| {
-                        wandering.request_id == Some(destination.request_id)
-                    })
-                })
-            {
-                commands.entity(actor).remove::<Destination>();
+            // Another wander leg next, or the end of this task, keeps walking
+            // on this route until a new destination replaces it, instead of
+            // stopping for a moment in between.
+            let next = documents
+                .get(&task.document)
+                .and_then(|document| find_current_behavior_task_action(document, task));
+            let owned = wandering.as_ref().and_then(|wandering| {
+                destination
+                    .filter(|destination| wandering.request_id == Some(destination.request_id))
+            });
+            if let Some(owned) = owned {
+                match next {
+                    Some(BehaviorAction::Wander(_)) => {}
+                    None => {
+                        commands
+                            .entity(actor)
+                            .insert(LingeringWanderDestination(owned.request_id));
+                    }
+                    Some(_) => {
+                        commands.entity(actor).remove::<Destination>();
+                    }
+                }
             }
             commands
                 .entity(actor)
